@@ -58,7 +58,12 @@ scene = route × person × state × viewport.
   later runs replay them. Volatile URL/body values (timestamps, cache busters, nonces) are normalized before
   recording. A replay miss is logged as *capture drift*, never as a UI defect, and offers a re-record.
   Server-side requests (SSR/RSC) are not covered in 0.1: those cells show *not seen: server render*.
-- Third-party requests (analytics, ads, payment widgets) are blocked and listed.
+- Third-party requests (analytics, ads, payment widgets) are blocked and listed. The browser itself runs
+  under a PAC policy: the app's host and local hosts go direct, font hosts go direct or through the user's
+  proxy, everything else (including the browser's own update and telemetry traffic) goes to a closed port.
+- Timing-dependent measurements are kept out of the deterministic evidence: layout shift is stored as the
+  web.dev band (good ≤ 0.1, needs-improvement ≤ 0.25, poor) and the raw value goes to `volatile.json`.
+  Layout shift is read before nunchi scrolls or injects styles.
 - Cookies, auth headers and tokens are stripped from HAR and evidence before they are written.
 - Gate: same build, two runs → byte-identical screenshots.
 
@@ -113,7 +118,7 @@ Later packs override earlier ones (ESLint-style `extends`).
 | L5 copy consistency | same situation different words, same concept different names, mixed tone, different verbs for the same action | AI | b |
 | L6 copy quality | errors that don't say what happened and what to do, confirms that don't say what is deleted, `undefined`/`NaN`/`[object Object]`, raw errors | rule + AI | a / b |
 | L7 vibe-coding leftovers | Lorem ipsum, John Doe, example.com, TODO on screen, "Coming soon" sprawl, `href="#"`, empty `onClick`, hard-coded fake numbers, debug UI, drifted copies of nav/footer | rule + AI | a / b |
-| L8 accessibility | axe (contrast, names, alt, labels, duplicate ids), visible targets < 44px, no focus style | rule | a |
+| L8 accessibility | axe (contrast, names, alt, labels, duplicate ids), target size (WCAG 2.5.8: < 24px medium, < 44px low; links inline in text exempt), no focus style | rule | a |
 | L9 safety | destructive action without confirm/undo, `window.confirm`, input lost on leave, secret-shaped strings in client JS (location and kind only, value masked) | rule + AI | a / b |
 | L10 parity | control on desktop missing on phone, fixed element covering content, primary action missing from phone first view | computed + AI | a / b |
 
@@ -213,7 +218,7 @@ hunting model cannot read them.
 
 | Step | Contents | Done when |
 |---|---|---|
-| 0.1-a | plugin skeleton ✔ · discover ✔ · recorded login · record/replay · forced states · evidence pack · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map · benchmark app · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
+| 0.1-a | plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login · record/replay · forced states · evidence pack · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map · benchmark app · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
 | 0.1-b | inventory extractor · AI lenses · verifier · canaries · decoys · ledger · fingerprints · trust metrics · lens packs · budget | AI-lens recall, precision, fingerprint stability gates |
 | 0.1-c | fix loop · guards · board (mock-ups agreed) · exports · `check` · fast first run · batch decisions | fix-loop gate, field test, all gates |
 

@@ -11,7 +11,7 @@ was checked and what's left.
 Built for people who make web apps with AI coding tools (Claude Code, Cursor, Codex, Lovable, Bolt, v0)
 and don't write tests.
 
-> **Status: planning → 0.1 in progress.** Nothing is usable yet.
+> **Status: 0.1 in progress.** Route discovery and deterministic capture with rule checks work; AI lenses, the fix loop and the board are not built yet.
 > The 0.1 spec will live in `docs/spec-0.1.md`.
 
 ## Install (Claude Code)
@@ -20,7 +20,7 @@ and don't write tests.
 /plugin install nunchi --marketplace wonchance-art/nunchi
 ```
 
-Then run `/nunchi` in your app's folder. (Pre-release: only route discovery works today.)
+Then run `/nunchi` in your app's folder. (Pre-release: route discovery and capture with rule checks work today.)
 
 ## What it will do (0.1)
 

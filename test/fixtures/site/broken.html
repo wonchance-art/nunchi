@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pebble Tasks — inbox</title>
+<style>
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1d1f23; background: #ffffff; }
+  main { padding: 16px; }
+  .wide { width: 900px; height: 24px; background: #e8ecf2; }
+  .faint { color: #b8b8b8; }
+  .tiny { width: 20px; height: 20px; padding: 0; border: 0; background: #e8ecf2; }
+  .small { width: 32px; height: 32px; padding: 0; border: 0; background: #e8ecf2; }
+  .clip { width: 80px; overflow: hidden; white-space: nowrap; }
+  .bare { width: 48px; height: 48px; border: 0; background: #e8ecf2; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Inbox</h1>
+  <div class="wide"></div>
+  <p>Something went wrong: TypeError: Cannot read properties of undefined (reading 'id')</p>
+  <p>Total: NaN tasks this week</p>
+  <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>
+  <img src="/missing-photo.png" alt="Team photo" width="120" height="80">
+  <p class="faint">Last synced a while ago</p>
+  <button type="button" class="tiny" aria-label="Close">×</button>
+  <button type="button" class="small" aria-label="Pin">📌</button>
+  <button type="button" class="bare"></button>
+  <a href="#">Archive</a>
+  <div class="clip">This label is far too long for its box</div>
+</main>
+<script>
+  fetch('/api/tasks-missing').catch(() => {});
+  window.confirm('Delete everything?');
+  setTimeout(() => { null.boom(); }, 0);
+</script>
+<script src="/app.js"></script>
+</body>
+</html>
