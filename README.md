@@ -14,6 +14,14 @@ and don't write tests.
 > **Status: planning → 0.1 in progress.** Nothing is usable yet.
 > The 0.1 spec will live in `docs/spec-0.1.md`.
 
+## Install (Claude Code)
+
+```
+/plugin install nunchi --marketplace wonchance-art/nunchi
+```
+
+Then run `/nunchi` in your app's folder. (Pre-release: only route discovery works today.)
+
 ## What it will do (0.1)
 
 - Discover every route (Next.js, TanStack Start, Vite + React Router, or crawl)
