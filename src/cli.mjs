@@ -4,6 +4,8 @@
 import { resolve, join } from 'node:path';
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { discover } from './discover.mjs';
+import { buildSourceMap, affectedRoutes } from './sourcemap.mjs';
+import { execFileSync } from 'node:child_process';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -27,6 +29,9 @@ Usage:
     --allow-host <list>   extra backend hosts the app calls from the browser (Supabase, Firebase,
                           Convex, Appwrite and Clerk hosts are recognised already)
     --json                print the summary as JSON
+    --changed-since <ref> only screens whose source changed since a git ref (plus uncommitted changes)
+    --plan                print the screens that would be captured and exit (no browser)
+  nunchi map [--root <dir>] [--json]        Which source files each route renders (source ↔ scene map)
   nunchi login --url <base> [--path /login] [--out .nunchi/auth.json]
                                             open a browser window, sign in once with a test account,
                                             save the login for signed-in scenes
@@ -40,8 +45,9 @@ function parse(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--json') args.json = true;
+    else if (a === '--plan') args.plan = true;
     else if (a === '--root') args.root = argv[++i];
-    else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
+    else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a === '--version' || a === '-v') args.version = true;
     else args._.push(a);
@@ -69,12 +75,30 @@ const cmd = args._[0];
 if (args.version) { console.log(pkg.version); process.exit(0); }
 if (args.help || !cmd) { console.log(HELP); process.exit(args.help ? 0 : 1); }
 
-if (cmd === 'discover') {
+function changedFiles(root, ref) {
+  const git = args => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' });
+  const prefix = git(['rev-parse', '--show-prefix']).trim();
+  const strip = f => (prefix && f.startsWith(prefix) ? f.slice(prefix.length) : f);
+  const diff = git(['diff', '--name-only', ref]).split('\n');
+  const untracked = git(['ls-files', '--others', '--exclude-standard']).split('\n');
+  return [...new Set([...diff.map(strip), ...untracked].filter(Boolean))].sort();
+}
+
+if (cmd === 'map') {
+  const root = resolve(args.root || process.cwd());
+  const map = buildSourceMap(root, discover(root).routes);
+  if (args.json) console.log(JSON.stringify(map, null, 2));
+  else {
+    const entries = Object.entries(map.routes);
+    console.log(`routes: ${entries.length} · source files reached: ${Object.keys(map.files).length}`);
+    for (const [route, files] of entries) console.log(`  ${route.padEnd(32)} ${files.length} files`);
+  }
+} else if (cmd === 'discover') {
   const result = discover(resolve(args.root || process.cwd()));
   console.log(args.json ? JSON.stringify(result, null, 2) : printDiscover(result));
 } else if (cmd === 'capture') {
   const { capture } = await import('./capture.mjs');
-  if (!args.url) { console.error('nunchi capture: --url is required (your local or preview server, never production)'); process.exit(1); }
+  if (!args.url && !args.plan) { console.error('nunchi capture: --url is required (your local or preview server, never production)'); process.exit(1); }
   const root = resolve(args.root || process.cwd());
   const samples = args.samples ? JSON.parse(readFileSync(resolve(args.samples), 'utf8')) : {};
   const skipped = [];
@@ -89,8 +113,20 @@ if (cmd === 'discover') {
     }
   }
   const auth = args.auth ? resolve(args.auth) : existsSync(resolve('.nunchi/auth.json')) ? resolve('.nunchi/auth.json') : null;
+  if (args.changedSince) {
+    const map = buildSourceMap(root, discover(root).routes);
+    let changed;
+    try { changed = changedFiles(root, args.changedSince); }
+    catch (e) { console.error(`nunchi capture: could not read git changes since ${args.changedSince}: ${String(e.message).split('\n')[0]}`); process.exit(1); }
+    const hit = affectedRoutes(map, changed);
+    const keep = new Set(hit.routes);
+    for (const s of scenes) if (!keep.has(s.route)) skipped.push({ route: s.route, reason: 'unchanged' });
+    scenes = scenes.filter(s => keep.has(s.route));
+    console.log(`changed since ${args.changedSince}: ${changed.length} file(s) → ${scenes.length} route(s)${hit.reason ? ` (${hit.reason})` : ''}`);
+  }
   const persons = auth ? ['guest', 'signed-in'] : ['guest'];
   const all = scenes.flatMap(s => persons.map(person => ({ ...s, person })));
+  if (args.plan) { console.log(JSON.stringify({ scenes: all, skipped }, null, 2)); process.exit(0); }
   const out = resolve(args.out || '.nunchi/evidence/latest');
   // Evidence holds screenshots of the user's app and login state holds tokens: never committed.
   const nunchiDir = resolve('.nunchi');
@@ -107,6 +143,7 @@ if (cmd === 'discover') {
     });
     const by = { blocker: 0, high: 0, medium: 0, low: 0 };
     for (const f of r.findings) by[f.severity]++;
+    if (!args.routes) { const { writeStable } = await import('./stable.mjs'); writeStable(join(out, 'source-map.json'), buildSourceMap(root, discover(root).routes)); }
     const misses = r.manifest.scenes.reduce((n, x) => n + (x.replayMisses || 0), 0);
     const summary = { out, scenes: r.manifest.scenes.length, network: r.manifest.network, replayMisses: misses, skipped, findings: by, seconds: Math.round(r.totalMs / 100) / 10 };
     if (args.json) console.log(JSON.stringify(summary, null, 2));
