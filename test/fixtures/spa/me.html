@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Pebble Tasks — account</title>
+<style>body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1d1f23; background: #fff; } main { padding: 16px; }</style></head>
+<body><main><h1>Account</h1><p id="who"></p></main>
+<script>
+  const m = document.cookie.match(/(?:^|; )pebble_session=([^;]+)/);
+  document.getElementById('who').textContent = m ? 'Signed in as ' + decodeURIComponent(m[1]) : 'Please sign in.';
+</script>
+</body>
+</html>

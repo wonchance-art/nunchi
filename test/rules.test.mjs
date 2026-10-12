@@ -7,7 +7,7 @@ const clean = () => ({
   pageErrors: [], nativeDialogs: [], requests: [], axe: [],
   measure: {
     viewport: { width: 390, height: 844 }, scrollWidth: 390, cls: 0,
-    text: 'Tasks\nWater the fern\nAdd task', clipped: [], images: [], fonts: [{ family: 'Inter', weight: '400', style: 'normal', status: 'loaded' }],
+    text: 'Tasks\nWater the fern\nAdd task', mainText: 'Tasks\nWater the fern\nAdd task', clipped: [], images: [], fonts: [{ family: 'Inter', weight: '400', style: 'normal', status: 'loaded' }],
     controls: [{ selector: 'button.add', tag: 'button', name: 'Add task', hasText: true, box: [16, 100, 120, 44], href: null }],
   },
 });
@@ -97,4 +97,22 @@ test('secrets: kinds found, values masked, service_role JWT recognised, anon JWT
   ]);
   for (const x of f) assert.ok(!JSON.stringify(x).includes(stripe.slice(8)), 'secret value must not appear in a finding');
   assert.equal(mask('sk_live_abcdef'), 'sk_l…');
+});
+
+test('L1: failures nunchi forced (error/offline states) are not reported as failed requests', () => {
+  const ev = clean();
+  ev.state = 'error';
+  ev.requests = [{ path: '/api/tasks', method: 'GET', status: 500, sameOrigin: true, document: false }];
+  assert.deepEqual(ruleFindings(ev), []);
+  ev.state = 'normal';
+  assert.deepEqual(rules(ruleFindings(ev)), ['failed-request']);
+});
+
+test('L2: a forced state that leaves the main area blank', () => {
+  const ev = clean();
+  ev.state = 'empty';
+  ev.measure.mainText = '   ';
+  assert.deepEqual(rules(ruleFindings(ev)), ['blank-state']);
+  ev.state = 'normal';
+  assert.deepEqual(ruleFindings(ev), []);
 });

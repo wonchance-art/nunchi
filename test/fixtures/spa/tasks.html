@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pebble Tasks — today</title>
+<style>body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1d1f23; background: #fff; } main { padding: 16px; }</style>
+</head>
+<body>
+<main>
+  <h1>Today</h1>
+  <div id="list">Loading…</div>
+</main>
+<script>
+  fetch('/api/tasks?_=' + Date.now()).then(async r => {
+    const el = document.getElementById('list');
+    if (!r.ok) { el.textContent = 'Error: ' + await r.text(); return; }
+    const data = await r.json();
+    if (!data.items.length) { el.textContent = 'No tasks yet. Add your first one.'; return; }
+    el.innerHTML = '<ul>' + data.items.map(t => '<li>' + t.title + '</li>').join('') + '</ul><p>Synced #' + data.sync + '</p>';
+  }).catch(() => { document.getElementById('list').textContent = 'You are offline.'; });
+</script>
+</body>
+</html>

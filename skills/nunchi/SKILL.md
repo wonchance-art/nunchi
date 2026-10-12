@@ -11,25 +11,32 @@ nunchi notices what's off in every corner of a web app. The deterministic work
 is the judgment: pick sample values for dynamic routes, hunt defects through the
 lenses, and turn confirmed findings into fixes.
 
-> Status: 0.1-a in progress. `discover` and `capture` (rule lenses only) work. Recorded login,
-> record/replay, forced states and AI lenses are not built yet. Do not claim captures, findings or
-> fixes that the engine did not produce.
+> Status: 0.1-a in progress. `discover`, `login` and `capture` (record/replay, forced states, rule
+> lenses) work. AI lenses, the ledger, the fix loop and the board are not built yet. Do not claim
+> captures, findings or fixes that the engine did not produce.
 
 ## Steps
 
-1. From the app's root, run the engine bundled with this plugin:
-   `node "${CLAUDE_SKILL_DIR}/../../src/cli.mjs" discover --json`. Read the route list.
-   Never run `npx nunchi` from the registry inside this skill: the bundled engine is the
-   reviewed one.
+The engine is bundled with this plugin. Run it as
+`node "${CLAUDE_SKILL_DIR}/../../src/cli.mjs" <command>` from the app's root.
+Never run `npx nunchi` from the registry inside this skill: the bundled engine is the reviewed one.
+
+1. `discover --json`. Read the route list.
 2. For each dynamic route, choose one sample value from seed data, fixtures or source and write
    `.nunchi/samples.json` (`{"/posts/[id]": "/posts/1"}`). If none is findable, ask the user once
    for all missing values together.
-3. Make sure the app is running locally or on a preview URL (never production). Then run
-   `node "${CLAUDE_SKILL_DIR}/../../src/cli.mjs" capture --url <base> --samples .nunchi/samples.json`.
-   If it reports that Chromium is missing, tell the user the one install command it prints.
-4. Read `.nunchi/evidence/latest/findings.json`. Report the blocker and high findings first, each with
-   its scene, selector and evidence. Group findings with the same rule and selector across scenes.
-   Say which routes were skipped and why.
+3. If screens sit behind a login and `.nunchi/auth.json` does not exist, ask the user to run
+   `login --url <base> --path /login` in their own terminal (it opens a browser window) and sign in
+   with a **test account**. Never ask for or type their password yourself.
+4. Make sure the app runs locally or on a preview URL (never production), then run
+   `capture --url <base> --samples .nunchi/samples.json`. The first run records the app's data
+   responses; later runs replay them so screens are comparable. Screens that load data are also
+   captured in forced empty, error, slow and offline states. If Chromium is missing, relay the one
+   install command it prints.
+5. Read `.nunchi/evidence/latest/findings.json`. Report blocker and high first, each with scene,
+   selector and evidence. Group the same rule + selector across scenes. Say which routes were
+   skipped and why, and how many replay misses there were (a miss means the recording is stale:
+   suggest `--network record`).
 
 ## Rules
 

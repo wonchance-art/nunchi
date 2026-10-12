@@ -54,8 +54,13 @@ scene = route × person × state × viewport.
 
 - Frozen clock, seeded `Math.random`, animations/transitions/caret off, service workers blocked,
   toast timers paused, fonts awaited, lazy content scrolled into view.
-- **Network record/replay (H1):** the first run records responses to HAR (`routeFromHAR`, update mode);
-  later runs replay them. Volatile URL/body values (timestamps, cache busters, nonces) are normalized before
+- **Network record/replay (H1):** the first run records the app's *data* responses (fetch/XHR to the app's
+  origin or a recognised backend: Supabase, Firebase, Convex, Appwrite, Clerk, plus `--allow-host`) to
+  `.nunchi/har/<person>.json`; later runs replay them. Documents, scripts, styles and RSC payloads are never
+  recorded: they are code, and replaying them would hide the fix a re-capture is meant to confirm.
+  Matching is method + normalized URL + body hash, ordinal within one page load (Meticulous-style), so the
+  subset of scenes captured never changes what a scene sees. The recording is nunchi's own JSON rather than
+  HAR because replay needs this normalization and forced states need to rewrite responses. Volatile URL/body values (timestamps, cache busters, nonces) are normalized before
   recording. A replay miss is logged as *capture drift*, never as a UI defect, and offers a re-record.
   Server-side requests (SSR/RSC) are not covered in 0.1: those cells show *not seen: server render*.
 - Third-party requests (analytics, ads, payment widgets) are blocked and listed. The browser itself runs
@@ -73,10 +78,10 @@ Derived from the recording, so they work with any auth:
 
 | State | How | Looks for |
 |---|---|---|
-| empty | array responses → `[]`, list-like fields emptied | blank areas, no next-step guidance |
-| error | data requests → 500 | raw error text, endless skeleton, error that looks empty, no retry |
+| empty | array responses → `[]`, list fields emptied and count fields zeroed (two levels deep) | blank areas, no next-step guidance |
+| error | data requests → 500 `{"message":"Internal Server Error"}` | raw error text, endless skeleton, error that looks empty (`error-looks-empty`), no retry |
 | slow | hold responses, capture at 1.5 s | no loading indicator, layout shift, double-submit risk |
-| offline | `context.setOffline(true)` | no offline message |
+| offline | `context.setOffline(true)` after load | no offline message (`no-offline-notice`) |
 
 ### 2.4 Evidence pack (per scene × viewport)
 
@@ -218,7 +223,7 @@ hunting model cannot read them.
 
 | Step | Contents | Done when |
 |---|---|---|
-| 0.1-a | plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login · record/replay · forced states · evidence pack · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map · benchmark app · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
+| 0.1-a | plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login ✔ · record/replay ✔ · forced states ✔ · evidence pack ✔ · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map · benchmark app · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
 | 0.1-b | inventory extractor · AI lenses · verifier · canaries · decoys · ledger · fingerprints · trust metrics · lens packs · budget | AI-lens recall, precision, fingerprint stability gates |
 | 0.1-c | fix loop · guards · board (mock-ups agreed) · exports · `check` · fast first run · batch decisions | fix-loop gate, field test, all gates |
 

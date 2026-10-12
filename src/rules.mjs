@@ -49,7 +49,12 @@ export function ruleFindings(ev) {
   if (m.clsBand && m.clsBand !== 'good') add({ lens: 'L1', id: 'layout-shift', severity: m.clsBand === 'poor' ? 'high' : 'medium', evidence: { band: m.clsBand, threshold: 0.1 } });
   for (const e of ev.pageErrors) add({ lens: 'L1', id: 'page-error', severity: 'high', evidence: { message: e } });
   const brokenSrcs = new Set(m.images.map(i => { try { return new URL(i.src, 'http://x').pathname; } catch { return i.src; } }));
-  for (const r of ev.requests.filter(r => r.sameOrigin && r.status >= 400 && !r.document && !brokenSrcs.has(r.path.split('?')[0]))) add({ lens: 'L1', id: 'failed-request', severity: 'medium', evidence: { url: r.path, status: r.status, method: r.method } });
+  // In the forced error and offline states the failures are nunchi's own doing, not findings.
+  const forcedFailures = ev.state === 'error' || ev.state === 'offline';
+  for (const r of ev.requests.filter(r => !forcedFailures && r.sameOrigin && r.status >= 400 && !r.document && !brokenSrcs.has(r.path.split('?')[0]))) add({ lens: 'L1', id: 'failed-request', severity: 'medium', evidence: { url: r.path, status: r.status, method: r.method } });
+
+  // L2 states (measurable part): a forced state that leaves the main area blank
+  if (ev.state && ev.state !== 'normal' && !(m.mainText || '').trim()) add({ lens: 'L2', id: 'blank-state', severity: 'high', selector: 'main', evidence: { state: ev.state } });
 
   // L6 copy quality (measurable part)
   const raw = snippet(m.text, RAW_ERROR);
