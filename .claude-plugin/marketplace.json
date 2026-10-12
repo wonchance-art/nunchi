@@ -1,0 +1,16 @@
+{
+  "name": "nunchi",
+  "owner": {
+    "name": "wonchance-art"
+  },
+  "metadata": {
+    "description": "nunchi notices what's off in every corner of your web app, then helps fix it and checks again."
+  },
+  "plugins": [
+    {
+      "name": "nunchi",
+      "source": "./",
+      "description": "Find, verify, fix and re-check UI defects across every screen of your web app, with a progress board."
+    }
+  ]
+}

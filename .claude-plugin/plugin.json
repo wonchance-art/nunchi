@@ -1,0 +1,10 @@
+{
+  "name": "nunchi",
+  "version": "0.0.1",
+  "description": "Find, verify, fix and re-check UI defects across every screen of your web app, with a progress board.",
+  "author": { "name": "wonchance-art" },
+  "homepage": "https://github.com/wonchance-art/nunchi",
+  "repository": "https://github.com/wonchance-art/nunchi",
+  "license": "MIT",
+  "keywords": ["ui", "qa", "visual-testing", "accessibility", "design-consistency", "playwright"]
+}

@@ -1,0 +1,5 @@
+node_modules/
+.nunchi/auth.json
+.nunchi/evidence/
+.nunchi/har/
+*.log

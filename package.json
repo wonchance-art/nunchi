@@ -1,0 +1,18 @@
+{
+  "name": "nunchi",
+  "version": "0.0.1",
+  "description": "nunchi notices what's off in every corner of your web app: find, verify, fix and re-check UI defects across every screen.",
+  "license": "MIT",
+  "author": "wonchance-art",
+  "homepage": "https://github.com/wonchance-art/nunchi",
+  "repository": { "type": "git", "url": "git+https://github.com/wonchance-art/nunchi.git" },
+  "type": "module",
+  "bin": { "nunchi": "src/cli.mjs" },
+  "files": ["src", "LICENSE", "README.md"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test",
+    "validate:plugin": "claude plugin validate --strict ."
+  },
+  "keywords": ["ui", "qa", "visual-testing", "accessibility", "design-consistency", "playwright", "claude-code"]
+}
