@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pebble Tasks — archive</title>
+<style>body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1d1f23; background: #fff; } main { padding: 16px; }</style>
+</head>
+<body>
+<main>
+  <h1>Archive</h1>
+  <div id="list"></div>
+</main>
+<script>
+  fetch('/api/tasks').then(r => r.ok ? r.json() : { items: [] }).then(data => {
+    const el = document.getElementById('list');
+    el.textContent = data.items.length ? data.items.map(t => t.title).join(', ') : 'Nothing here.';
+  });
+</script>
+</body>
+</html>
