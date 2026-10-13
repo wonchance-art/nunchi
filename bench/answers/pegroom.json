@@ -1,0 +1,816 @@
+{
+  "app": "pegroom",
+  "note": "Answer key for bench/heldout/pegroom, a held-out benchmark app: never read by the people or agents who tune nunchi (see bench/heldout/README.md). Kept outside the app folder so a hunter pointed at the app never reads it. 'rule' names the rule or computed lens expected to catch the defect; defects with rule null are for the AI lenses. 'ai': how bench/ai-gate.mjs matches a claim to the seed — same lens and route, a state in 'states' when given, a viewport in 'viewports' when given, and either a checklist id in 'rules' or one of 'match' in the claim, selector or source (case-insensitive).",
+  "clean": [
+    "/about",
+    "/help",
+    "/history"
+  ],
+  "defects": [
+    {
+      "id": "PG01",
+      "lens": "L1",
+      "rule": "horizontal-overflow",
+      "route": "/book",
+      "person": "signed-in",
+      "state": "normal",
+      "viewport": "m",
+      "what": "on the phone the week grid keeps seven 72px day columns and the page scrolls sideways"
+    },
+    {
+      "id": "PG02",
+      "lens": "L1",
+      "rule": "clipped-text",
+      "route": "/loans",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "long tool names in the loans list are cut off (nowrap, overflow hidden, no ellipsis)"
+    },
+    {
+      "id": "PG03",
+      "lens": "L1",
+      "rule": "broken-image",
+      "route": "/tools",
+      "person": "guest",
+      "state": "normal",
+      "what": "the biscuit joiner's photo points at a file that was never added"
+    },
+    {
+      "id": "PG04",
+      "lens": "L1",
+      "rule": "page-error",
+      "route": "/bookings",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "restoring the list scroll position reads a sessionStorage entry that was never saved and throws a TypeError"
+    },
+    {
+      "id": "PG05",
+      "lens": "L1",
+      "rule": "failed-request",
+      "route": "/dashboard",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "the streak widget calls /api/me/streak, an endpoint the server renamed (404)"
+    },
+    {
+      "id": "PG06",
+      "lens": "L1",
+      "rule": "layout-shift",
+      "route": "/",
+      "person": "guest",
+      "state": "normal",
+      "what": "the closure notice is inserted above the page 350 ms after its data arrives and pushes everything down"
+    },
+    {
+      "id": "PG07",
+      "lens": "L1",
+      "rule": "http-status",
+      "route": "/workshops",
+      "person": "guest",
+      "state": "normal",
+      "what": "the server's SPA route list misses /workshops: a direct load answers 404 although the page renders"
+    },
+    {
+      "id": "PG08",
+      "lens": "L1",
+      "rule": "font-not-loaded",
+      "route": "/plans",
+      "person": "guest",
+      "state": "normal",
+      "what": "the price numerals font points at a file that does not exist"
+    },
+    {
+      "id": "PG09",
+      "lens": "L2",
+      "rule": "blank-state",
+      "route": "/loans",
+      "person": "signed-in",
+      "state": "error",
+      "what": "when the loans request fails the page renders nothing at all"
+    },
+    {
+      "id": "PG10",
+      "lens": "L2",
+      "rule": "error-looks-empty",
+      "route": "/bookings",
+      "person": "signed-in",
+      "state": "error",
+      "what": "a failed load is caught and shown as 'No bookings yet.'"
+    },
+    {
+      "id": "PG11",
+      "lens": "L2",
+      "rule": "no-offline-notice",
+      "route": "/book",
+      "person": "signed-in",
+      "state": "offline",
+      "what": "the booking flow's own layout has no offline notice, so going offline changes nothing"
+    },
+    {
+      "id": "PG12",
+      "lens": "L3",
+      "rule": "unreachable-route",
+      "route": "/workshops",
+      "what": "nothing links to the Workshops page: it was built as a stand-alone page and never added to the header, footer or any screen"
+    },
+    {
+      "id": "PG13",
+      "lens": "L3",
+      "rule": "link-to-missing-route",
+      "route": "/plans",
+      "what": "'Read the late-return policy' links to /policies/late-returns, which has no page"
+    },
+    {
+      "id": "PG14",
+      "lens": "L3",
+      "rule": "link-to-missing-route",
+      "route": "/dashboard",
+      "what": "'View all loans' links to the old path /my-loans"
+    },
+    {
+      "id": "PG15",
+      "lens": "L3",
+      "rule": "signed-in-bounced",
+      "route": "/account/billing",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "the billing API still checks the session cookie name from before the rename, so a signed-in member is sent to sign in"
+    },
+    {
+      "id": "PG16",
+      "lens": "L4",
+      "rule": "one-off-button-shape",
+      "route": "/book",
+      "what": "'Confirm booking' is 44px tall with a 4px radius and weight 500, unlike every other button"
+    },
+    {
+      "id": "PG17",
+      "lens": "L4",
+      "rule": "one-off-heading-color",
+      "route": "/loans",
+      "what": "the Loans h1 is in the accent rust colour; every other h1 is ink"
+    },
+    {
+      "id": "PG18",
+      "lens": "L4",
+      "rule": "one-off-heading-size",
+      "route": "/bookings/:id",
+      "what": "the booking title h1 is 32px where every other h1 is 28px (24px on the phone)"
+    },
+    {
+      "id": "PG19",
+      "lens": "L6",
+      "rule": "raw-error-text",
+      "route": "/settings",
+      "person": "signed-in",
+      "state": "error",
+      "what": "the error boundary prints the TypeError message ('Cannot read properties of undefined …')"
+    },
+    {
+      "id": "PG20",
+      "lens": "L6",
+      "rule": "missing-value",
+      "route": "/bookings/:id",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "Duration reads 'NaN h': the page divides a field the API does not send"
+    },
+    {
+      "id": "PG21",
+      "lens": "L6",
+      "rule": "missing-value",
+      "route": "/tools",
+      "person": "guest",
+      "state": "normal",
+      "what": "one tool's location is an object and shows 'Kept at [object Object]'"
+    },
+    {
+      "id": "PG22",
+      "lens": "L6",
+      "rule": "missing-value",
+      "route": "/dashboard",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "the welcome line shows the unreplaced template 'Welcome back, {{first_name}}!'"
+    },
+    {
+      "id": "PG23",
+      "lens": "L7",
+      "rule": "placeholder-text",
+      "route": "/workshops",
+      "person": "guest",
+      "state": "normal",
+      "what": "a workshop description is Lorem ipsum"
+    },
+    {
+      "id": "PG24",
+      "lens": "L7",
+      "rule": "placeholder-text",
+      "route": "/sign-in",
+      "person": "guest",
+      "state": "normal",
+      "what": "the sign-in help line gives desk@example.org"
+    },
+    {
+      "id": "PG25",
+      "lens": "L7",
+      "rule": "placeholder-text",
+      "route": "/settings",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "'FIXME: explain what the newsletter includes' is on screen"
+    },
+    {
+      "id": "PG26",
+      "lens": "L7",
+      "rule": "coming-soon-sprawl",
+      "route": "/tools",
+      "person": "guest",
+      "state": "normal",
+      "what": "three 'coming soon' category chips"
+    },
+    {
+      "id": "PG27",
+      "lens": "L7",
+      "rule": "dead-href",
+      "route": "/",
+      "person": "guest",
+      "state": "normal",
+      "what": "'See the full timetable' links to '#'"
+    },
+    {
+      "id": "PG28",
+      "lens": "L8",
+      "rule": "axe-color-contrast",
+      "route": "/plans",
+      "person": "guest",
+      "state": "normal",
+      "what": "the price fine print is #a3a9b1 on the page background"
+    },
+    {
+      "id": "PG29",
+      "lens": "L8",
+      "rule": "axe-button-name",
+      "route": "/loans",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "the renew buttons are an icon with no accessible name"
+    },
+    {
+      "id": "PG30",
+      "lens": "L8",
+      "rule": "axe-image-alt",
+      "route": "/",
+      "person": "guest",
+      "state": "normal",
+      "what": "the 'How it works' illustration has no alt"
+    },
+    {
+      "id": "PG31",
+      "lens": "L8",
+      "rule": "axe-label",
+      "route": "/settings",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "the emergency contact field has a caption that is not its label, and no other name"
+    },
+    {
+      "id": "PG32",
+      "lens": "L8",
+      "rule": "axe-select-name",
+      "route": "/bookings",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "the bench filter select has no label"
+    },
+    {
+      "id": "PG33",
+      "lens": "L8",
+      "rule": "target-size-min",
+      "route": "/bookings",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "the page numbers are about 10×16px links 4px apart"
+    },
+    {
+      "id": "PG34",
+      "lens": "L8",
+      "rule": "placeholder-as-label",
+      "route": "/tools",
+      "person": "guest",
+      "state": "normal",
+      "what": "the catalogue search field has only a placeholder (axe accepts a placeholder as the name)"
+    },
+    {
+      "id": "PG35",
+      "lens": "L9",
+      "rule": "native-dialog",
+      "route": "/loans",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "the overdue reminder is a window.alert on load"
+    },
+    {
+      "id": "PG36",
+      "lens": "L9",
+      "rule": "secret-in-client-bundle",
+      "route": null,
+      "person": null,
+      "state": null,
+      "what": "payment secret key inlined into the client bundle (vite.config.js keeps the NEXT_PUBLIC_ env prefix)",
+      "evidence": {
+        "kind": "stripe-live-secret-key"
+      }
+    },
+    {
+      "id": "PG37",
+      "lens": "L10",
+      "rule": "missing-on-phone",
+      "route": "/dashboard",
+      "what": "'Report a broken tool' is in the desktop quick actions and hidden on the phone"
+    },
+    {
+      "id": "PG38",
+      "lens": "L10",
+      "rule": "missing-on-phone",
+      "route": "/bookings/:id",
+      "what": "'Add to calendar' is on desktop and hidden on the phone"
+    },
+    {
+      "id": "PG39",
+      "lens": "L1",
+      "rule": null,
+      "route": "/",
+      "what": "the hero line is white text on a pale sawdust photo and cannot be read",
+      "ai": {
+        "rules": [
+          "L1.unreadable-text"
+        ],
+        "match": [
+          "hero",
+          "drills, sanders",
+          "white text",
+          "pale",
+          "sawdust"
+        ]
+      }
+    },
+    {
+      "id": "PG40",
+      "lens": "L1",
+      "rule": null,
+      "route": "/bookings/:id",
+      "what": "on desktop the 'What to bring' column is squeezed to 56px, its text one or two letters per line",
+      "ai": {
+        "viewports": [
+          "d"
+        ],
+        "rules": [
+          "L1.collapsed-layout",
+          "L1.unreadable-text"
+        ],
+        "match": [
+          "what to bring",
+          "squeez",
+          "narrow",
+          "one or two"
+        ]
+      }
+    },
+    {
+      "id": "PG41",
+      "lens": "L1",
+      "rule": null,
+      "route": "/plans",
+      "what": "the 'Most popular' badge sits on top of the Workshop plan's name and hides it",
+      "ai": {
+        "rules": [
+          "L1.overlap"
+        ],
+        "match": [
+          "most popular",
+          "badge"
+        ]
+      }
+    },
+    {
+      "id": "PG42",
+      "lens": "L2",
+      "rule": null,
+      "route": "/dashboard",
+      "what": "when the dashboard request fails, 'Loading your workshop…' stays on screen for ever",
+      "ai": {
+        "states": [
+          "error"
+        ],
+        "rules": [
+          "L2.endless-loading"
+        ],
+        "match": [
+          "loading"
+        ]
+      }
+    },
+    {
+      "id": "PG43",
+      "lens": "L2",
+      "rule": null,
+      "route": "/loans",
+      "what": "the empty loans screen says 'You have no tools on loan.' and offers no way to browse or borrow one",
+      "ai": {
+        "states": [
+          "empty"
+        ],
+        "rules": [
+          "L2.next-step"
+        ],
+        "match": [
+          "no tools on loan",
+          "browse",
+          "borrow"
+        ]
+      }
+    },
+    {
+      "id": "PG44",
+      "lens": "L2",
+      "rule": null,
+      "route": "/tools",
+      "what": "while the catalogue is still loading it says 'No tools match your search.'",
+      "ai": {
+        "states": [
+          "slow"
+        ],
+        "rules": [
+          "L2.no-loading-indicator"
+        ],
+        "match": [
+          "no tools match",
+          "loading"
+        ]
+      }
+    },
+    {
+      "id": "PG45",
+      "lens": "L2",
+      "rule": null,
+      "route": "/book",
+      "what": "when availability fails to load, every slot shows 'Full', as if the week were booked out",
+      "ai": {
+        "states": [
+          "error"
+        ],
+        "rules": [
+          "L2.looks-normal",
+          "L2.what-happened"
+        ],
+        "match": [
+          "full",
+          "booked",
+          "availability"
+        ]
+      }
+    },
+    {
+      "id": "PG46",
+      "lens": "L4",
+      "rule": null,
+      "route": "/settings",
+      "what": "settings text is 15px where the rest of the app uses 16px",
+      "ai": {
+        "rules": [
+          "L4.near-duplicate-size"
+        ],
+        "match": [
+          "15px",
+          "15 px"
+        ]
+      }
+    },
+    {
+      "id": "PG47",
+      "lens": "L4",
+      "rule": null,
+      "route": "/bookings/:id",
+      "what": "the status is a grey square uppercase tag ('CONFIRMED') where the bookings list shows a green rounded pill",
+      "ai": {
+        "match": [
+          "confirmed",
+          "pill",
+          "badge",
+          "status"
+        ]
+      }
+    },
+    {
+      "id": "PG48",
+      "lens": "L4",
+      "rule": null,
+      "route": "/tools",
+      "what": "the Reserve buttons are rgb(43, 95, 139), one step off the brand blue rgb(43, 95, 138)",
+      "ai": {
+        "rules": [
+          "L4.near-duplicate-color"
+        ],
+        "match": [
+          "reserve",
+          "43, 95, 139",
+          "2b5f8b"
+        ]
+      }
+    },
+    {
+      "id": "PG49",
+      "lens": "L5",
+      "rule": null,
+      "route": "/bookings/:id",
+      "what": "the detail page says 'Cancel booking' for what the bookings list calls 'Release slot'",
+      "ai": {
+        "rules": [
+          "L5.same-action-different-verb"
+        ],
+        "match": [
+          "release",
+          "cancel booking"
+        ]
+      }
+    },
+    {
+      "id": "PG50",
+      "lens": "L5",
+      "rule": null,
+      "route": "/loans",
+      "what": "the Loans page calls the tools 'kit' ('3 kit items out')",
+      "ai": {
+        "rules": [
+          "L5.same-concept-different-name"
+        ],
+        "match": [
+          "kit"
+        ]
+      }
+    },
+    {
+      "id": "PG51",
+      "lens": "L5",
+      "rule": null,
+      "route": "/book",
+      "what": "the booking form speaks of 'the member' in the third person where the rest of the app says 'you'",
+      "ai": {
+        "rules": [
+          "L5.mixed-tone"
+        ],
+        "match": [
+          "the member",
+          "third person"
+        ]
+      }
+    },
+    {
+      "id": "PG52",
+      "lens": "L5",
+      "rule": null,
+      "route": "/dashboard",
+      "what": "'Book A Bench' is in Title Case where every other button is in Sentence case (the sidebar says 'Book a bench')",
+      "ai": {
+        "rules": [
+          "L5.mixed-capitalisation"
+        ],
+        "match": [
+          "book a bench",
+          "title case"
+        ]
+      }
+    },
+    {
+      "id": "PG53",
+      "lens": "L6",
+      "rule": null,
+      "route": "/tools",
+      "what": "a failed catalogue load says only 'Oops! Something broke.'",
+      "ai": {
+        "states": [
+          "error"
+        ],
+        "rules": [
+          "L6.vague-error"
+        ],
+        "match": [
+          "oops",
+          "something broke"
+        ]
+      }
+    },
+    {
+      "id": "PG54",
+      "lens": "L6",
+      "rule": null,
+      "route": "/bookings/:id",
+      "what": "'Cancel booking' asks a bare 'Proceed?' that does not say which booking is cancelled (native confirm on click)",
+      "ai": {
+        "rules": [
+          "L6.unclear-confirm"
+        ],
+        "match": [
+          "proceed"
+        ]
+      }
+    },
+    {
+      "id": "PG55",
+      "lens": "L6",
+      "rule": null,
+      "route": "/dashboard",
+      "what": "the membership status is shown as the internal code 'MBR_ACTIVE_PAID'",
+      "ai": {
+        "match": [
+          "mbr_active_paid",
+          "mbr_active",
+          "active_paid"
+        ]
+      }
+    },
+    {
+      "id": "PG56",
+      "lens": "L6",
+      "rule": null,
+      "route": "/settings",
+      "what": "'Member since Invalid Date': the profile date comes in a format the page cannot parse",
+      "ai": {
+        "match": [
+          "invalid date"
+        ]
+      }
+    },
+    {
+      "id": "PG57",
+      "lens": "L7",
+      "rule": null,
+      "route": "/plans",
+      "what": "a fourth plan card is template content: 'Plan name', £0, 'Feature 1', 'Feature 2', 'Feature 3'",
+      "ai": {
+        "rules": [
+          "L7.template-copy"
+        ],
+        "match": [
+          "plan name",
+          "feature 1"
+        ]
+      }
+    },
+    {
+      "id": "PG58",
+      "lens": "L7",
+      "rule": null,
+      "route": "/dashboard",
+      "what": "'Workshop activity' repeats one hard-coded sample row three times",
+      "ai": {
+        "rules": [
+          "L7.fake-data"
+        ],
+        "match": [
+          "sam p",
+          "workshop activity",
+          "repeated"
+        ]
+      }
+    },
+    {
+      "id": "PG59",
+      "lens": "L7",
+      "rule": null,
+      "route": "/book",
+      "what": "a debug line ('debug: benches=4 slots=28 tz=UTC build=dev') and a 'Reset mock data' button are left on the form",
+      "ai": {
+        "rules": [
+          "L7.debug-ui"
+        ],
+        "match": [
+          "debug",
+          "mock data"
+        ]
+      }
+    },
+    {
+      "id": "PG60",
+      "lens": "L7",
+      "rule": null,
+      "route": "/workshops",
+      "what": "the Workshops page has an old copy of the footer: '© 2024' and only About and Plans (no Help)",
+      "ai": {
+        "rules": [
+          "L7.drifted-nav"
+        ],
+        "match": [
+          "footer",
+          "2024"
+        ]
+      }
+    },
+    {
+      "id": "PG61",
+      "lens": "L9",
+      "rule": null,
+      "route": "/settings",
+      "what": "'Delete account' deletes the account at once, with no confirmation and no undo",
+      "ai": {
+        "rules": [
+          "L9.destructive-without-confirm"
+        ],
+        "match": [
+          "delete account"
+        ]
+      }
+    },
+    {
+      "id": "PG62",
+      "lens": "L9",
+      "rule": null,
+      "route": "/bookings",
+      "what": "'Release slot' gives up a booking at once, with no confirmation and no undo",
+      "ai": {
+        "rules": [
+          "L9.destructive-without-confirm"
+        ],
+        "match": [
+          "release"
+        ]
+      }
+    },
+    {
+      "id": "PG63",
+      "lens": "L9",
+      "rule": null,
+      "route": "/book",
+      "what": "the long project description has no draft or autosave, and 'Back to dashboard' sits above the form",
+      "ai": {
+        "rules": [
+          "L9.input-lost-on-leave"
+        ],
+        "match": [
+          "project description",
+          "back to dashboard",
+          "draft"
+        ]
+      }
+    },
+    {
+      "id": "PG64",
+      "lens": "L10",
+      "rule": null,
+      "route": "/bookings",
+      "what": "on the phone a fixed 88px 'Get the Pegroom app' banner covers the top of the navigation",
+      "ai": {
+        "viewports": [
+          "m"
+        ],
+        "rules": [
+          "L10.fixed-covers-content"
+        ],
+        "match": [
+          "install",
+          "get the pegroom app",
+          "app banner"
+        ]
+      }
+    },
+    {
+      "id": "PG65",
+      "lens": "L10",
+      "rule": null,
+      "route": "/book",
+      "what": "on the phone 'Confirm booking' comes after the whole form, out of the first view; on desktop it is in the first view",
+      "ai": {
+        "viewports": [
+          "m"
+        ],
+        "rules": [
+          "L10.primary-not-in-first-view"
+        ],
+        "match": [
+          "confirm booking"
+        ]
+      }
+    },
+    {
+      "id": "PG66",
+      "lens": "L10",
+      "rule": null,
+      "route": "/plans",
+      "what": "on the phone a fixed 120px 'Join now' bar covers the plan cards, and the page leaves no room for it",
+      "ai": {
+        "viewports": [
+          "m"
+        ],
+        "rules": [
+          "L10.fixed-covers-content"
+        ],
+        "match": [
+          "join now",
+          "first induction"
+        ]
+      }
+    }
+  ]
+}

@@ -614,8 +614,90 @@ id or words). The inventory does not yet treat "empty" as a destructive verb (P5
 
 *Verdict:* every AI lens reaches the recall gate on the benchmark's seeds (≥75%, mean of three runs; L1 after the
 evidence fix). Still open before the gate counts for release: the held-out benchmark (a second app never opened
-during development), the precision gate (a human-labelled sample of 50 verified findings), and the Codex CLI
+during development; measured in §9.4), the precision gate (a human-labelled sample of 50 verified findings), and the Codex CLI
 comparison (§8).
+
+### 9.4 Held-out benchmark, first measurement (2026-10-13 KST)
+
+*The app:* `bench/heldout/pegroom/`, an invented community tool library (borrow tools, book workbench slots). A
+separate agent built it and wrote its answer key, `bench/answers/pegroom.json`, from the lens and rule
+definitions. The session that measured it read neither, and nothing was tuned on it. It is not in CI; see
+`bench/heldout/README.md`.
+- *Stack:* a React Router SPA built with Vite, with a dependency-free Node server and cookie sessions. Pebble is Next.js.
+- *Size:* 15 routes in one route-object config; 180 scenes plus 3 canary copies.
+- *Seeds:* 38 rule seeds across 32 rule ids, 28 AI seeds (3–4 per AI lens), and 3 clean routes.
+
+Run with `node bench/run.mjs --app bench/heldout/pegroom --twice`. The runner and AI gate now read build, start,
+samples, login and answer key from each app's `bench.json`.
+
+*Rule and computed lenses (0.1-a gates):*
+
+| Gate | Target | Result |
+|---|---|---|
+| Rule-lens recall | 100% | 37/38 (97.4%) — **fails** |
+| False positives on clean scenes | ≤ 0.1 per scene | 0 on 20 scenes |
+| Determinism (2 runs) | identical | identical (1,837 files) |
+| Fingerprint stability | ≥ 95% | 100% (42/42) |
+
+The miss is `signed-in-bounced` on `/account/billing`. The app sends a signed-in member to
+`/sign-in?next=%2Faccount%2Fbilling`, but the rule's pattern `(log-?in|sign-?in|auth)(\/|$)` is tested against a
+path that still includes the query string, so it never matches. This is an engine bug, not a seed error. Capture
+took 253 s.
+
+*AI lenses:* same method as §9.3, run on the same capture. Per run, the gate picked 137 of 288 units.
+- Run 1 hunted every picked unit: 44 packets (the canary packet split into four canary-only packets).
+- Runs 2 and 3 hunted only the seed and canary units (31 packets each); the clean-screen units ran in run 1 only,
+  by the owner's call on cost.
+- Cost: 106 hunters in total, about 15M subagent tokens.
+
+| Lens | Seeds | Found (run 1 / 2 / 3) | Mean | Gate |
+|---|---|---|---|---|
+| L1 | 3 | 3 / 3 / 3 | 100% | pass |
+| L2 | 4 | 4 / 4 / 3 | 92% | pass |
+| L4 | 3 | 2 / 2 / 2 | 67% | **fail** |
+| L5, L6, L7 | 4 each | 4 / 4 / 4 each | 100% | pass |
+| L9, L10 | 3 each | 3 / 3 / 3 each | 100% | pass |
+
+- *L4 miss (all three runs):* on `/bookings/:id` the status is a grey square uppercase tag, while the bookings
+  list shows the same status as a green rounded pill. No hunter claimed it. The inconsistency lives between two
+  screens, and the unit's reference scene was not the list screen, so the counterpart was never in view. Fix
+  direction: give L4 units references that share components with the scene under review.
+- *L2 miss (run 3 only):* the hunter found the seed (a failed availability load drawn as a fully booked week)
+  but cited `aria=group "Week of 19 January"`, and the claim was rejected. The aria.yml line is
+  `group "Week of 19 January": Week of 19 January Mon 19 …`, with inline text after the colon. The engine indexes
+  the whole line, so the node is not addressable by its role and name. This is an engine bug: 4 claims rejected,
+  2 cells left unseen.
+- *Canaries, as scored: 1 of 3 hit per run.* `vague-error` on the plans error screen was hit in every run. The
+  other two failures are in the canaries, not the hunt:
+  - `fixed-cover` (`/tools`, desktop) was flagged by every hunter in every run, with the right bar and band. Each
+    claim cited the elements the bar covers once the page scrolls (tool cards, footer links), not ones inside the
+    first-view band the scorer checks, so the scorer counts a miss.
+  - `blank-state` (dashboard error screen) blanks a message, which the `blank-state` rule already reports. The
+    hunters said exactly that and, as L2 instructs, did not repeat it. They also flagged the missing next step.
+    This kind of canary cannot test an AI lens.
+- *Clean screens (run 1):* 5 claims, both kinds traceable to the engine rather than to hunter judgement:
+  - L6 unclear-confirm on `/help` and `/history`. The `confirm("Proceed?")` belongs to the booking detail page. With
+    every route in one React Router config file, the source map gives every route the whole app's files, so each
+    screen's source slice carries every screen's strings.
+  - L5 'cancel' vs 'Release slot' on `/help`. This is a real cross-screen wording difference seen from Help; a
+    human should label it.
+
+*Engine issues found, not fixed here.* Fixing them would turn this app into a tuning set; the numbers above stay
+as the held-out result, and a later re-measure on pegroom is reported as not blind.
+1. `signed-in-bounced` must strip `?` and `#` before matching the sign-in pattern.
+2. aria.yml nodes of the form `role "name": text` must be addressable as `aria=role "name"`.
+3. React Router source map: route each config entry to its `element` component, not to the config file.
+   Otherwise source slices and `dead-end` see the whole app on every route.
+4. L4 references: pick a scene that shares components with the one under review.
+5. Canary scoring: a `fixed-cover` hit should also count claims on elements under the bar at any scroll
+   position; `blank-state` should not be planted where a rule reports the same thing.
+6. When an app throws on `!res.ok` without reading the body, Chromium never marks the request finished, so the
+   `networkidle` waits run to their timeouts. This only slows the capture.
+
+*Verdict:* the held-out app fails two gates: rule recall (37/38, one engine bug) and L4 recall (67%). Seven of
+eight AI lenses pass. Determinism, fingerprint stability and clean-screen false positives hold. Release still
+needs the fixes above and a fresh held-out app for a blind re-measure, besides the precision gate and the Codex
+comparison.
 
 ## 10. Open items
 
