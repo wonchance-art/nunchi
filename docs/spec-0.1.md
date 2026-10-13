@@ -707,6 +707,10 @@ Status after the fix PR (2026-10-14 KST), each with a synthetic fixture that tri
 6. *Does not reproduce.* In the pegroom capture, error-state scenes took a median of 1.09 s, normal ones 1.08 s,
    and no scene took more than 2.1 s. The networkidle waits did not run to their timeouts. No change.
 
+*Re-check after the fixes (2026-10-14 KST, not blind):* Pebble unchanged (rule recall 34/34, identical, 100%);
+pegroom rule recall 38/38, 0 false positives on 20 clean scenes, identical (1,837 files), fingerprints 100% (43/43).
+The AI-lens re-measure waits for a fresh held-out app.
+
 *Verdict:* the held-out app fails two gates: rule recall (37/38, one engine bug) and L4 recall (67%). Seven of
 eight AI lenses pass. Determinism, fingerprint stability and clean-screen false positives hold. Release still
 needs a fresh held-out app for a blind re-measure with the fixes above, besides the precision gate and the Codex
