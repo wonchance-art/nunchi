@@ -171,7 +171,7 @@ neighbour scenes for regression checks after a fix. The board header shows *evid
 ## 3. Lenses
 
 A lens is a data file (H8): id, definition of a defect, checklist items, good/bad examples, severity rubric,
-method. Packs: built-in, project (`.nunchi/lenses/`), external (pinned by sha256). Packs cannot execute code.
+method. Packs: built-in, external (pinned by sha256), project (`.nunchi/lenses/`, last word). Packs cannot execute code.
 Later packs override earlier ones (ESLint-style `extends`).
 
 | Lens | Defect | Method | Step |
@@ -238,6 +238,31 @@ visible `aria-controls` toggle opens) is `missing-on-phone` (medium; evidence sa
 `measure.json` keeps the page's hidden named controls (`hiddenControls`) for this. Fixed elements covering
 content and the phone's first view are AI-lens checks (0.1-b).
 
+
+### 3.3 Lens packs (built 2026-10-13 KST, 0.1-b)
+
+`src/lenses.mjs` loads `lenses/*.json` (built-in) → the files listed in `.nunchi/lenses.lock.json`
+(`{"packs": [{"path", "sha256"}]}`, paths inside the project; a hash mismatch refuses the whole load; nothing is
+downloaded) → `.nunchi/lenses/*.json` (project). Files are read in name order; a file holds one lens or `{"lenses": [...]}`. A
+later lens with the same id replaces the earlier one; one with `extends` (its own id — ids are L1…L10) merges into
+it: scalars replaced, `scenes`/`severityRubric` merged by key, examples appended, checklist items replaced by id,
+appended, or removed with `{"id", "off": true}`. The project's own packs load last (decided 2026-10-13 KST): a pack the
+project adopted never overrides what the project itself wrote.
+
+Schema (strict: unknown keys are refused, keys that look executable — `on…`, `script`, `exec`, `run`, … — are named
+as such, only plain JSON values, length limits): `id`, `name`, `definition`, `checklist` (`{id: "L6.kebab-name",
+question, scenes?}`), `examples` (`good`/`bad` text), `severityRubric` (blocker/high/medium/low → text), `method`
+(`ai`/`rule`/`computed`), `scenes` (`{states?, viewports?, persons?}`; `{}` = all), and `evidence` — the per-scene files
+the hunter reads (added to the list above because L1 needs images and L5 does not). Only `method: "ai"` lenses are
+hunted.
+
+Built-in packs cover the AI parts: L1 (visual: overlap, unreadable text, collapsed layout, distorted media,
+unstyled), L2 (forced states only: what happened, next step, failure that looks normal, endless loading, no loading
+indicator when slow), L4 (same component with two looks, near-duplicate colours and sizes), L5, L6, L7 (template
+copy, demo data, debug UI, nav/footer drifted from the reference screen's), L9 (destructive action without
+confirm/undo, input lost on leave) and L10 (fixed element covering content, primary action not in the phone's first
+view). Each names the rule findings it must not repeat. Their recall is unmeasured until the AI-lens gate runs (§8).
+
 ## 4. Hunting and verification (0.1-b)
 
 - **Work unit (H4):** 1–3 scenes × 1 lens. Input = lens definition + checklist + the scenes' evidence +
@@ -260,16 +285,59 @@ content and the phone's first view are AI-lens checks (0.1-b).
 - **Budget (H14):** per-run token cap; estimate shown before a deep sweep; hitting the cap leaves cells
   *not seen: budget*, never silently skipped.
 
+**Built (2026-10-13 KST): `nunchi hunt --plan` and `--record`** (`src/hunt.mjs`). Canaries, decoys, the verifier and
+trust are not built.
+- *Plan* (`hunt --plan [--run] [--lens] [--budget] [--json]`, writes `hunt-plan.json` into the run): per AI lens,
+  scenes matching its `scenes` filter are grouped by route + person + state across viewports (≤3 per unit). Each unit
+  gets one reference scene: another route, same person and viewport, same state if one exists else normal, picked
+  by a hash of the group (deterministic, spread over the app). Files are listed reference first, the scenes under
+  review last (only the lens's `evidence` files; the reference gets `top.jpg` instead of `full.jpg`). Checklist items
+  with their own `scenes` filter list the scenes they apply to. Scenes not captured, not seen or redirected are
+  listed as not seen with that reason. Unit id = hash of lens content, scenes, reference and items.
+- *Estimate:* text files bytes/4; JPEGs width × height / 750 after scaling to ≤1568 px long edge and ≤1.15 MP (max
+  1,600; read from the JPEG header); per unit, the lens text (bytes/4) + 80 tokens per checklist item per scene for
+  the answer. An estimate, not a measurement. Units are spent in a fixed order — normal screens first, then error,
+  empty, slow, offline; by route; guest first; by lens — and from the first unit that does not fit, every later unit
+  is *not seen: budget*. No default budget yet.
+- *Record* (`hunt --record <answers.json|dir> [--root]`, writes `ai-findings.json` and `coverage.json`): every item
+  must be answered `defect`/`none`/`cannot-judge`; a defect needs a scene under review, a claim, a severity and a
+  ground — a selector found verbatim in that scene's controls/styles/links/measure JSON or an `aria=<node>` line of
+  aria.yml, and/or a `file:line` that exists under the app root (not `.nunchi/`, `node_modules/`, `.git/`; symlinks
+  must stay inside). Anything else is listed in `rejected` with a reason; an item whose only defects were rejected
+  counts as unanswered, so the unit stays *not seen: incomplete*. Findings use the rule-finding shape plus
+  `source: "ai"`, `status: "claimed"`; box comes from controls.json or measure.json when the selector has one.
+  Answers naming another plan id are refused. Answers are parsed and compared as strings only.
+
 ## 5. Ledger (0.1-b)
 
-- One finding per file: `.nunchi/findings/<fingerprint>.json`, sorted keys, schema version, committed to git.
-  Evidence and auth are not committed.
-- Fingerprint = lens + rule + location (route template + landmark path + selector without nth) + normalized
-  evidence (numbers bucketed, ids/hashes stripped). Root-cause fingerprint = file + symbol. No line numbers.
-  Collision → counter suffix.
-- States: `new → confirmed → (human) fix | keep | false-positive → fixing → fixed → guarded`, and
-  `fixed/guarded → regressed` when the fingerprint matches again. *keep* and *false-positive* are remembered
-  and never raised again.
+Revised after the board review (N1, N2, N7, N8) and the first field test (1,082 findings on 34 screens are
+unreadable one by one). Built in `src/ledger.mjs`:
+
+- **Fingerprint** (`fp`, v1) = lens + rule + route template + the element (selector without `:nth-*`, React/Radix
+  ids, CSS-module/emotion/styled-components hashes, digits) + evidence with measurement values removed (sizes,
+  notes, the page's data in quoted text; numbers bucketed to powers of two). Person, viewport and state are not
+  part of it: the same defect on the phone and the desktop, in normal and error state, is one. Every finding in a
+  run's `findings.json` carries its `fp`.
+- **Group** = the fingerprint without the route: a shared component's defect on 17 screens is one group, the
+  unit a person decides on and the fix loop fixes. Low contrast groups by its colour pair (the design token),
+  not by element. Root-cause groups by source file + symbol come with the inventory (§2.4).
+- **Decisions** are append-only files, `.nunchi/decisions/<group-…|fp-…>/<id>.json` (committed; two people
+  never edit the same file): `fix`, `keep` (reason `intended` | `out-of-scope`), `false-positive` (reason
+  `not-a-problem` | `wrong-place`), `hold`, `reopen`; who and when (KST). The latest decision on the fingerprint
+  or its group wins; a group decision covers screens found later.
+- **Provenance (N1):** decisions made with `nunchi decide` on this machine are recorded in
+  `.nunchi/state/approved.json` (git-ignored). Anything else came through git: it is shown, but it cannot dismiss
+  a blocker or an L9 (safety/secret) finding, and the fix loop will not act on an unapproved `fix` until
+  `nunchi approve`.
+- **Status is computed, never committed:** each complete run is folded into `.nunchi/state/ledger.json`:
+  `open` → `fixed` when a run that looked again (the route in scope, the same persons, the app reachable, the
+  login working) no longer finds it → `regressed` when it comes back. With decisions: `to-fix`, `kept`,
+  `dismissed`, `held`. `fingerprintVersion` and each fingerprint's inputs are stored so a future v2 can migrate
+  decisions instead of orphaning them.
+- **CLI:** `nunchi findings` (one row per kind; `--rule <rule>` lists its groups; `--status`, `--all`, `--json`),
+  `nunchi decide <id…> <decision> [--reason] [--note]`, `nunchi approve <id…>|--all`, `nunchi trust`.
+
+Field app 1 (§9.2) after this: 1,082 findings → 578 unique defects → 99 groups → 9 kinds on one screen of text.
 
 ## 6. Fix loop (0.1-c)
 
@@ -313,7 +381,7 @@ fills the board live.
 | Precision after verification | ≥85% on a 50-finding human-labelled sample |
 | False positives on clean scenes | ≤0.1 confirmed false positives per defect-free scene |
 | Determinism | same build, 2 runs → byte-identical screenshots |
-| Fingerprint stability | ≥95% identical fingerprints across 3 runs with no code change |
+| Fingerprint stability | ≥95% identical fingerprints across runs with no code change (bench: 2 runs, 100%, 54/54) |
 | Fix loop | ≥90% of seeded defects marked *fix* are gone on re-capture, 0 caused regressions |
 | Time | 25 routes: first run ≤15 min, incremental ≤3 min |
 | Decision time | median ≤10 s per human decision |
@@ -330,7 +398,7 @@ hunting model cannot read them.
 | Step | Contents | Done when |
 |---|---|---|
 | 0.1-a | computed lenses L3 flow ✔ L4 measured design system ✔ L10 parity ✔ · runs + run health + scene ids + URL redaction + scroll-area boxes ✔ · plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login ✔ · record/replay ✔ · forced states ✔ · evidence pack ✔ · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map ✔ · benchmark app ✔ · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
-| 0.1-b | inventory extractor · AI lenses · verifier · canaries · decoys · ledger · fingerprints · trust metrics · lens packs · budget | AI-lens recall, precision, fingerprint stability gates |
+| 0.1-b | inventory extractor · AI lenses · verifier · canaries · decoys · ledger ✔ · fingerprints ✔ · trust metrics ✔ · lens packs · budget | AI-lens recall, precision, fingerprint stability gates |
 | 0.1-c | fix loop · guards · board (mock-ups agreed) · exports · `check` · fast first run · batch decisions | fix-loop gate, field test, all gates |
 
 Later: 0.2 baseline comparison (Argos-style flake handling), fake sessions + synthetic data (Supabase first),

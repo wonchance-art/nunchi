@@ -41,11 +41,14 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
   `alert`/`confirm`, dead links, links to routes that don't exist, screens nothing links to, dead ends, redirect
   loops, signed-in users bounced to the login page, secret keys in the browser bundle, one-off button shapes and
   heading styles against your app's own measured design system, and desktop controls missing on the phone
+- **One line per problem, not per screen**: findings are fingerprinted and grouped, so a shared component's
+  defect on 17 screens is one row (`nunchi findings`); your decisions (`nunchi decide <id> fix|keep|…`) are small
+  files you commit, and what got fixed or came back is computed from the next capture
 - **Runs** you can compare: each capture is its own folder with the commit and working-tree state it came from;
   a login that expired or an app that isn't running is reported once, not as a hundred findings
 
-Not yet (0.1): AI lenses (copy, states, visual judgment) with a separate verifier, a ledger that remembers your
-decisions, the fix-and-re-capture loop, and the local progress board.
+Not yet (0.1): AI lenses (copy, states, visual judgment) with a separate verifier, the fix-and-re-capture loop,
+and the local progress board.
 
 ## Benchmark
 
