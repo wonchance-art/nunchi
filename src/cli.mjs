@@ -37,10 +37,25 @@ Usage:
     --json                print the summary as JSON
     --changed-since <ref> only screens whose source changed since a git ref (plus uncommitted changes)
     --plan                print the screens that would be captured and exit (no browser)
+    --canaries <n>        plant known defects in copies of n scenes, to measure the AI hunt   default: 3
+                          (tagged \`canary\` in manifest.json, listed in canaries.json, never in findings.json)
     exit code 3 when the run is not usable (login expired, app unreachable); the run is kept
   nunchi runs [--json]                      List captured runs (newest last) and which is latest
   nunchi gc [--keep 5]                      Delete old runs, keep the newest N and the latest
   nunchi map [--root <dir>] [--json]        Which source files each route renders (source ↔ scene map)
+  nunchi canaries --score [--run <id>] [--json]
+                                            Score the AI hunt (ai-findings.json) against the run's canaries:
+                                            hit rate per lens, an upper bound of recall; a missed canary
+                                            voids *seen* for its batch in coverage.json
+  nunchi verify --plan [--run <id>] [--json]
+                                            One packet per claimed AI finding (claim + evidence, no hunter
+                                            reasoning) with decoys mixed in → verify-packets.json; the answer
+                                            key goes to verify-key.json, which the verifier never reads
+  nunchi verify --record <verdicts.json> [--run <id>] [--vendor <name>]
+                                            Record verdicts (confirmed | rejected | insufficient, severity, one-line
+                                            reason) into ai-findings.json and verify.json; decoy pass-through
+                                            > 10% marks the run's verifications suspect. --vendor only when the
+                                            user opted into a different vendor's model (default: same-model check)
   nunchi login --url <base> [--path /login] [--out .nunchi/auth.json]
                                             open a browser window, sign in once with a test account,
                                             save the login for signed-in scenes
@@ -55,11 +70,12 @@ function parse(argv) {
     const a = argv[i];
     if (a === '--json') args.json = true;
     else if (a === '--plan') args.plan = true;
+    else if (a === '--score') args.score = true;
     else if (a === '--check') args.check = true;
     else if (a === '--no-browser') args.noBrowser = true;
     else if (a === '--root') args.root = argv[++i];
     else if (a === '--keep') args.keep = Number(argv[++i]);
-    else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
+    else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since', '--run', '--vendor', '--record', '--canaries'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a === '--version' || a === '-v') args.version = true;
     else args._.push(a);
@@ -105,6 +121,20 @@ async function engine(path) {
     process.exit(2);
   }
 }
+// The run a command reads: --run <id> (or a folder written with capture --out), else the latest run.
+function runDirOf(args, cmdName) {
+  const dir = resolve('.nunchi/runs');
+  const p = args.run ? (/^\d{4,}$/.test(args.run) ? join(dir, args.run) : resolve(args.run)) : (latestRun(dir) ? join(dir, latestRun(dir)) : null);
+  if (!p || !existsSync(join(p, 'manifest.json'))) { console.error(`nunchi ${cmdName}: ${args.run ? `no run at ${p}` : 'no runs yet: nunchi capture --url <your local server>'}`); process.exit(1); }
+  return p;
+}
+const readJson = p => JSON.parse(readFileSync(p, 'utf8'));
+const aiFindingsOf = (dir, cmdName) => {
+  const p = join(dir, 'ai-findings.json');
+  if (!existsSync(p)) { console.error(`nunchi ${cmdName}: ${p} does not exist yet: the AI hunt writes it`); process.exit(1); }
+  const doc = readJson(p);
+  return { path: p, doc, findings: Array.isArray(doc) ? doc : doc.findings || [] };
+};
 const inside = (dir, f) => { const r = relative(dir, f); return r && !r.startsWith('..') && !isAbsolute(r); };
 
 if (cmd === 'setup') {
@@ -167,6 +197,9 @@ if (cmd === 'setup') {
   const run = args.out ? null : startRun(runsDir);
   const out = run ? run.path : resolve(args.out);
   const viewports = (args.viewports || 'm,d').split(',');
+  const { DEFAULT_CANARIES } = await import('./canary.mjs');
+  const canaries = args.canaries === undefined ? DEFAULT_CANARIES : Number(args.canaries);
+  if (!Number.isInteger(canaries) || canaries < 0) { console.error('nunchi capture: --canaries takes a whole number (0 = none)'); process.exit(1); }
   const states = (args.states || 'normal,empty,error,slow,offline').split(',').map(x => x.trim());
   const runMeta = {
     schema: 1, id: run?.id ?? null, parent: run?.parent ?? null, ...workTree(root),
@@ -189,17 +222,18 @@ if (cmd === 'setup') {
     const r = await capture({
       baseUrl: args.url, scenes: all, out, viewports, browserPath: args.browserPath, storageState: auth,
       network: args.network || 'auto', recordingDir: resolve('.nunchi/har'), states, runMeta, flow,
-      allowHosts: (args.allowHost || '').split(',').map(x => x.trim()).filter(Boolean),
+      allowHosts: (args.allowHost || '').split(',').map(x => x.trim()).filter(Boolean), canaries,
     });
     const by = { blocker: 0, high: 0, medium: 0, low: 0 };
     for (const f of r.findings) by[f.severity]++;
     if (!args.routes) { const { writeStable } = await import('./stable.mjs'); writeStable(join(out, 'source-map.json'), buildSourceMap(root, discover(root).routes)); }
     const final = run ? finishRun(runsDir, run.id) : out;
     const misses = r.manifest.scenes.reduce((n, x) => n + (x.replayMisses || 0), 0);
-    const summary = { out: final, run: run?.id ?? null, health: r.manifest.health, scenes: r.manifest.scenes.length, network: r.run.network, replayMisses: misses, skipped, findings: by, seconds: Math.round(r.totalMs / 100) / 10 };
+    const canaryCount = r.canaries ? r.canaries.planted.length : 0;
+    const summary = { out: final, run: run?.id ?? null, health: r.manifest.health, scenes: r.manifest.scenes.length - canaryCount, canaries: canaryCount, network: r.run.network, replayMisses: misses, skipped, findings: by, seconds: Math.round(r.totalMs / 100) / 10 };
     if (args.json) console.log(JSON.stringify(summary, null, 2));
     else {
-      console.log(`captured ${summary.scenes} scenes in ${summary.seconds}s → ${final}${run ? ` (run ${run.id})` : ''}`);
+      console.log(`captured ${summary.scenes} scenes${canaryCount ? ` (+ ${canaryCount} canary copies)` : ''} in ${summary.seconds}s → ${final}${run ? ` (run ${run.id})` : ''}`);
       const why = { 'login-expired': 'the saved login no longer works: signed-in screens showed the sign-in page and were not judged. Run `nunchi login` again.', 'app-unreachable': 'most screens did not load at all. Is the app running at --url?', 'recording-stale': 'most screens asked for data the recording does not have. Re-record with --network record.' };
       for (const p of r.manifest.health.problems) console.log(`RUN PROBLEM ${p.status} (${p.scenes}/${p.of} screens): ${why[p.status]}`);
       console.log(`rule findings: blocker ${by.blocker} · high ${by.high} · medium ${by.medium} · low ${by.low}`);
@@ -235,6 +269,62 @@ if (cmd === 'setup') {
     for (const p of r.partial) console.log(`${p}  (incomplete: still running, or interrupted; removed by nunchi gc after an hour)`);
     if (!r.complete.length && !r.partial.length) console.log('no runs yet: nunchi capture --url <your local server>');
   }
+} else if (cmd === 'canaries') {
+  if (!args.score) { console.error('nunchi canaries: use --score [--run <id>] after the AI hunt has written ai-findings.json'); process.exit(1); }
+  const { scoreCanaries, voidCoverage } = await import('./canary.mjs');
+  const { writeStable } = await import('./stable.mjs');
+  const dir = runDirOf(args, 'canaries');
+  if (!existsSync(join(dir, 'canaries.json'))) { console.error(`nunchi canaries: ${dir} has no canaries.json (captured with --canaries 0, or before canaries existed)`); process.exit(1); }
+  const { findings } = aiFindingsOf(dir, 'canaries');
+  const r = scoreCanaries(readJson(join(dir, 'canaries.json')), findings.filter(f => f.source === 'ai'));
+  const coveragePath = join(dir, 'coverage.json');
+  let coverage = null;
+  if (existsSync(coveragePath)) { coverage = voidCoverage(readJson(coveragePath), r.missed); writeStable(coveragePath, coverage); }
+  writeStable(join(dir, 'canary-score.json'), r);
+  if (args.json) console.log(JSON.stringify({ ...r, coverage: coverage ? coverage.canaries : null }, null, 2));
+  else {
+    const pct = x => (x === null ? '–' : `${Math.round(x * 100)}%`);
+    console.log(`canaries hit ${r.hit}/${r.planted} → AI recall ≤ ${pct(r.rate)} (an upper bound: planted defects are easier than real ones)`);
+    console.log('  ' + Object.entries(r.byLens).sort((a, b) => Number(a[0].slice(1)) - Number(b[0].slice(1))).map(([l, v]) => `${l} ${v.hit}/${v.planted}`).join(' · '));
+    for (const m of r.missed) console.log(`  missed ${m.scene} (${m.lens} ${m.kind}): *seen* is void for the batch that hunted it; hunt that batch again`);
+    if (r.missed.length) console.log(coverage ? `coverage.json updated: ${coverage.canaries.voidedUnits.length} unit(s) no longer seen` : 'no coverage.json in this run: the batches above are not seen until hunted again');
+  }
+} else if (cmd === 'verify') {
+  const V = await import('./verify.mjs');
+  const { writeStable, stableJson } = await import('./stable.mjs');
+  const dir = runDirOf(args, 'verify');
+  const { path: aiPath, doc, findings } = aiFindingsOf(dir, 'verify');
+  const manifest = readJson(join(dir, 'manifest.json'));
+  // Scene ids in ai-findings come from the hunter: only scenes of this run's manifest are opened.
+  const known = new Set(manifest.scenes.map(s => s.id));
+  const canaryScenes = new Set(manifest.scenes.filter(s => s.canary !== undefined).map(s => s.id));
+  if (args.plan) {
+    const controlsOf = scene => (known.has(scene) && existsSync(join(dir, scene, 'controls.json')) ? readJson(join(dir, scene, 'controls.json')) : null);
+    const filesOf = scene => (known.has(scene) ? ['top.jpg', 'full.jpg', 'aria.yml', 'text.txt', 'controls.json', 'styles.json', 'links.json', 'measure.json'].filter(f => existsSync(join(dir, scene, f))).map(f => `${scene}/${f}`) : []);
+    const { packets, key } = V.planVerify({ findings, canaryScenes, controlsOf, filesOf });
+    if (!key.claims) { console.log('no claimed AI findings to verify (rule- and computed-lens findings skip the verifier)'); process.exit(0); }
+    writeStable(join(dir, 'verify-packets.json'), packets);
+    writeStable(join(dir, 'verify-key.json'), key);
+    if (args.json) process.stdout.write(stableJson(packets));
+    else {
+      console.log(`${packets.packets.length} packets → ${join(dir, 'verify-packets.json')}`);
+      console.log('Give the verifier only verify-packets.json and the files it names, in a fresh context. verify-key.json is the answer key: never show it to the verifier.');
+    }
+  } else if (args.record) {
+    const keyPath = join(dir, 'verify-key.json');
+    if (!existsSync(keyPath)) { console.error('nunchi verify: no verify-key.json in this run; run verify --plan first'); process.exit(1); }
+    const r = V.recordVerdicts({ findings, key: readJson(keyPath), verdicts: readJson(resolve(args.record)), vendor: args.vendor || null });
+    if (r.problems.length) { for (const p of r.problems) console.error('nunchi verify: ' + p); process.exit(1); }
+    writeStable(aiPath, Array.isArray(doc) ? r.findings : { ...doc, findings: r.findings });
+    writeStable(join(dir, 'verify.json'), r.verify);
+    if (args.json) console.log(JSON.stringify(r.verify, null, 2));
+    else {
+      const c = r.verify.claims, d = r.verify.decoys;
+      console.log(`verified by ${r.verify.verifier.label}${r.verify.verifier.vendor ? ` (${r.verify.verifier.vendor})` : ''}: confirmed ${c.confirmed} · rejected ${c.rejected} · insufficient ${c.insufficient}${c.unanswered ? ` · unanswered ${c.unanswered}` : ''}`);
+      console.log(`decoys passed through: ${d.passedThrough}/${d.answered}${d.answered < d.total ? ` (${d.total - d.answered} unanswered)` : ''}`);
+      if (r.verify.suspect) console.log(`SUSPECT: ${r.verify.suspectReason}. This run's verifications are marked suspect; verify again in a fresh context.`);
+    }
+  } else { console.error('nunchi verify: use --plan, or --record <verdicts.json>'); process.exit(1); }
 } else if (cmd === 'gc') {
   const r = gcRuns(resolve('.nunchi/runs'), { keep: Number.isInteger(args.keep) && args.keep > 0 ? args.keep : 5 });
   console.log(args.json ? JSON.stringify(r, null, 2) : `kept ${r.kept.join(', ') || 'nothing'} · removed ${r.removed.join(', ') || 'nothing'}`);
