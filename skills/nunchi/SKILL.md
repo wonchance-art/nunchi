@@ -37,6 +37,8 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    selector and evidence. Group the same rule + selector across scenes. Say which routes were
    skipped and why, and how many replay misses there were (a miss means the recording is stale:
    suggest `--network record`).
+6. After the user or you change code, re-capture only what the change can affect:
+   `capture --url <base> --changed-since HEAD` (add `--plan` first to show which screens that is).
 
 ## Rules
 
