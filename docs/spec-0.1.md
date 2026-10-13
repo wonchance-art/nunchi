@@ -161,8 +161,15 @@ would have to get TypeScript generics, JSX entities and template literals right 
 A small built-in import graph (static `import`/`export … from`/`import()`/`require`/CSS `@import`, resolved
 through relative paths, tsconfig/jsconfig `paths` and `baseUrl`, and the `@/` convention) plus the files that
 frame a route without importing it (Next.js layouts, templates, loading/error/not-found, middleware; pages-router
-`_app`/`_document`; TanStack root and parent routes). It over-approximates on purpose: a missed edge would hide a
-stale screen. A change to a dependency or build config (`package.json`, lockfiles, `next/vite/tailwind/postcss`
+`_app`/`_document`; TanStack root and parent routes). React Router routes start from what the route config says
+they render, not from the config file, which imports every page:
+- discover records each route's `components` (from `element`, `Component`, and wrappers such as
+  `<Guard><Page/></Guard>`, plus those of its enclosing layout routes) and its `lazy` modules;
+- the map follows those through the config file's imports;
+- the config file itself is part of every route it declares, but its imports are not followed.
+
+A component that can't be followed (defined in the config file itself, or with no import found) falls back to the
+config file and everything it imports. It over-approximates on purpose: a missed edge would hide a stale screen. A change to a dependency or build config (`package.json`, lockfiles, `next/vite/tailwind/postcss`
 config, `tsconfig*`) affects every route. `nunchi map` prints it; `capture --changed-since <ref>` captures only the
 routes it says changed (uncommitted and untracked files included); `capture` writes `source-map.json` with the
 evidence.
@@ -260,8 +267,10 @@ as such, only plain JSON values, length limits): `id`, `name`, `definition`, `ch
 question, scenes?}`), `examples` (`good`/`bad` text), `severityRubric` (blocker/high/medium/low → text), `method`
 (`ai`/`rule`/`computed`), `scenes` (`{states?, viewports?, persons?}`; `{}` = all), and `evidence` — the per-scene files
 the hunter reads (added to the list above because L1 needs images and L5 does not), plus an optional `source`
-(boolean: the unit also gets its route's source inventory slice, §4; added 2026-10-13 KST). Only `method: "ai"`
-lenses are hunted.
+(boolean: the unit also gets its route's source inventory slice, §4; added 2026-10-13 KST), and an optional
+`reference` (`"spread"`, the default: each unit's reference screen is picked by hash so references spread over the app;
+`"nearest"`: the route sharing the most leading path segments comes first, so `/bookings/:id` is compared with
+`/bookings`; built-in: L4, added 2026-10-14 KST after the held-out miss in §9.4). Only `method: "ai"` lenses are hunted.
 
 Built-in packs cover the AI parts: L1 (visual: overlap, unreadable text, collapsed layout, distorted media,
 unstyled), L2 (forced states only: what happened, next step, failure that looks normal, endless loading, no loading
@@ -377,7 +386,7 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   answered twice in one file is refused and left unanswered): every item
   must be answered `defect`/`none`/`cannot-judge`; a defect needs a scene under review, a claim, a severity and a
   ground — a selector found verbatim in that scene's controls/styles/links/measure JSON or an `aria=<node>` line of
-  aria.yml, and/or a `file:line` that exists under the app root (not `.nunchi/`, `node_modules/`, `.git/`; symlinks
+  aria.yml (a node with inline text also by its role and name alone), and/or a `file:line` that exists under the app root (not `.nunchi/`, `node_modules/`, `.git/`; symlinks
   must stay inside). Anything else is listed in `rejected` with a reason; an item whose only defects were rejected
   counts as unanswered, so the unit stays *not seen: incomplete*. Findings use the rule-finding shape plus
   `source: "ai"`, `status: "claimed"`; box comes from controls.json or measure.json when the selector has one.
@@ -682,21 +691,25 @@ took 253 s.
   - L5 'cancel' vs 'Release slot' on `/help`. This is a real cross-screen wording difference seen from Help; a
     human should label it.
 
-*Engine issues found, not fixed here.* Fixing them would turn this app into a tuning set; the numbers above stay
-as the held-out result, and a later re-measure on pegroom is reported as not blind.
-1. `signed-in-bounced` must strip `?` and `#` before matching the sign-in pattern.
-2. aria.yml nodes of the form `role "name": text` must be addressable as `aria=role "name"`.
-3. React Router source map: route each config entry to its `element` component, not to the config file.
-   Otherwise source slices and `dead-end` see the whole app on every route.
-4. L4 references: pick a scene that shares components with the one under review.
-5. Canary scoring: a `fixed-cover` hit should also count claims on elements under the bar at any scroll
-   position; `blank-state` should not be planted where a rule reports the same thing.
-6. When an app throws on `!res.ok` without reading the body, Chromium never marks the request finished, so the
-   `networkidle` waits run to their timeouts. This only slows the capture.
+*Engine issues found, not fixed in the measuring PR.* Fixing them there would have turned this app into a tuning
+set; the numbers above stay as the held-out result, and a later re-measure on pegroom is reported as not blind.
+Status after the fix PR (2026-10-14 KST), each with a synthetic fixture that triggers it and one that does not:
+1. *Fixed.* `signed-in-bounced` matches the sign-in pattern on the path only (`isSignInPath`):
+   `/sign-in?next=%2Fbilling` is a sign-in page, `/designs?from=login` is not.
+2. *Fixed.* aria.yml nodes of the form `role "name": text` are also addressable as `aria=role "name"` (the
+   whole line still works); the hunter brief and the skill say so.
+3. *Fixed.* React Router routes map to the components their config names, not to the config file (§2.5).
+   Source slices and `dead-end` now see each route's own files.
+4. *Fixed.* Lens packs may set `reference: "nearest"` (§3.3); L4 does, so a detail page is compared with its list
+   page. Other lenses keep the hash spread, so their measured plans are unchanged.
+5. *Fixed.* A `fixed-cover` canary is hit by a claim of its item anywhere on the copy; the ambiguity check against
+   the original still applies. `blank-state` is no longer planted where the message is the main area's only text.
+6. *Does not reproduce.* In the pegroom capture, error-state scenes took a median of 1.09 s, normal ones 1.08 s,
+   and no scene took more than 2.1 s. The networkidle waits did not run to their timeouts. No change.
 
 *Verdict:* the held-out app fails two gates: rule recall (37/38, one engine bug) and L4 recall (67%). Seven of
 eight AI lenses pass. Determinism, fingerprint stability and clean-screen false positives hold. Release still
-needs the fixes above and a fresh held-out app for a blind re-measure, besides the precision gate and the Codex
+needs a fresh held-out app for a blind re-measure with the fixes above, besides the precision gate and the Codex
 comparison.
 
 ## 10. Open items
