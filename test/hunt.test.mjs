@@ -278,6 +278,21 @@ test('record: answers are data — bad shapes, path escapes and stale plans are 
   assert.throws(() => recordHunt({ runDir, plan, root: cwd, answers: { plan: '000000000000', units: [] } }), e => e.code === 'STALE_ANSWERS');
 });
 
+test('record: a later answers file re-hunts a unit and replaces its answer; twice in one file is refused', () => {
+  const { cwd, runDir, lenses } = setup();
+  const plan = planHunt({ runDir, lenses, lensIds: ['L9'] });
+  const unit = plan.units.find(u => u.scenes[0].route === '/tasks');
+  const defect = answerAll(unit, 'none', { 'L9.destructive-without-confirm': { answer: 'defect', defects: [{ scene: 'tasks.guest.normal.m', selector: 'button#delete-all', claim: 'Deletes at once.', severity: 'high' }] } });
+  const later = recordHunt({ runDir, plan, root: cwd, answers: [{ units: [defect] }, { units: [answerAll(unit, 'none')] }] });
+  assert.equal(later.findings.length, 0, 'the re-hunt replaced the first answer');
+  assert.ok(later.coverage.cells.filter(c => c.unit === unit.id).every(c => c.status === 'seen'));
+  assert.deepEqual(later.rejected, []);
+  const twice = recordHunt({ runDir, plan, root: cwd, answers: [{ units: [defect] }, { units: [answerAll(unit, 'none'), defect] }] });
+  assert.deepEqual(twice.rejected.map(r => r.reason), ['duplicate-unit', 'duplicate-unit']);
+  assert.equal(twice.findings.length, 0, 'an ambiguous re-hunt leaves the unit unanswered, not the older answer');
+  assert.ok(twice.coverage.cells.filter(c => c.unit === unit.id).every(c => c.reason === 'not-answered'));
+});
+
 test('record: each built-in lens turns a grounded defect into a finding and "none" into nothing', () => {
   const { cwd, runDir, lenses } = setup();
   const plan = planHunt({ runDir, lenses });

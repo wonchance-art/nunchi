@@ -86,13 +86,18 @@ After step 5, when the user wants the deeper sweep. The engine cuts the work and
 ## Canaries and the verifier (AI findings only)
 
 When the AI lenses will run, capture with `--canaries 3`: it plants known defects in copies of a few scenes
-(manifest entries tagged `canary`, ids ending `.canary-<k>`; a plain capture plants none). They are part of the AI hunt like any other scene. Never open
-`canaries.json` or `verify-key.json` while hunting or verifying: they are answer keys. Never tell a hunter
-which scenes are canaries, and do not put a canary copy in the same work unit as the scene it copies.
+(a plain capture plants none). In such a run `hunt --plan` names every scene by an alias (`s` + 10 hex), points
+`files` at `hunt/<alias>/`, hunts each copy in a unit of its own and never uses one as a reference, so nothing in a
+unit tells a copy from a real screen. Give a hunter only its unit (lens, checklist, files). Never open
+`canaries.json`, `hunt-key.json` or `verify-key.json` while hunting or verifying, and never try to work out which
+aliases are copies: they are answer keys.
 
 6. After the hunt has written `ai-findings.json`, run `canaries --score`. Report the hit rate per lens as an
-   upper bound of recall ("≤ 67%"), never as recall. A missed canary means the batch that hunted it is not
-   *seen*: hunt that batch again before reporting its cells as covered.
+   upper bound of recall ("≤ 67%"), never as recall. A missed canary voids *seen* for its batch (that lens on
+   that route, the screens the copy came from included; `coverage.json` says `canary-missed`): hunt those units
+   again in fresh contexts, put the new answers in a later file of the answers folder (a later file replaces a
+   unit's earlier answer), run `hunt --record <folder>` and `canaries --score` again, and only then report those
+   cells as covered.
 7. `verify --plan` writes `verify-packets.json`: one packet per claimed AI finding (the claim and its evidence
    files, without the hunter's reasoning), with false claims mixed in. Rule-lens findings are not in it.
 8. Start a **fresh context** (a new subagent that has not seen the hunt) as the verifier. Give it only

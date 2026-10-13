@@ -294,18 +294,20 @@ export function recordHunt({ runDir, plan, answers, root, key = null }) {
   for (const [d, doc] of docs.entries()) {
     if (!isObj(doc) || !Array.isArray(doc.units)) { reject({ reason: 'bad-shape', detail: `answers file ${d + 1}: expected {"units": [...]}` }); continue; }
     if (doc.plan !== undefined && doc.plan !== plan.id) throw Object.assign(new Error(`these answers are for plan ${doc.plan}, but the run's hunt-plan.json is plan ${plan.id}. Run hunt --plan again and answer its units.`), { code: 'STALE_ANSWERS' });
-    for (const u of doc.units) given.push(u);
+    for (const u of doc.units) given.push({ u, d });
   }
   const unitsById = new Map(plan.units.map(u => [u.id, u]));
+  // A unit answered twice in one file is ambiguous; answered again in a later file (files are read in name
+  // order), the later answer is a re-hunt and replaces the earlier one.
   const counts = new Map();
-  for (const u of given) if (isObj(u) && typeof u.unit === 'string') counts.set(u.unit, (counts.get(u.unit) || 0) + 1);
+  for (const { u, d } of given) if (isObj(u) && typeof u.unit === 'string') counts.set(`${d}\0${u.unit}`, (counts.get(`${d}\0${u.unit}`) || 0) + 1);
   const answered = new Map();
-  for (const u of given) {
+  for (const { u, d } of given) {
     if (!isObj(u) || typeof u.unit !== 'string' || !isObj(u.items)) { reject({ reason: 'bad-shape', detail: 'a unit answer is {"unit": "<id>", "items": {...}}' }); continue; }
     const extra = Object.keys(u).filter(k => !UNIT_KEYS.includes(k));
     if (extra.length) { reject({ unit: u.unit, reason: 'bad-shape', detail: `unknown key(s) ${extra.sort().join(', ')}` }); continue; }
     if (!unitsById.has(u.unit)) { reject({ unit: u.unit, reason: 'unknown-unit' }); continue; }
-    if (counts.get(u.unit) > 1) { reject({ unit: u.unit, reason: 'duplicate-unit', detail: 'answered more than once; none of its answers were used' }); continue; }
+    if (counts.get(`${d}\0${u.unit}`) > 1) { reject({ unit: u.unit, reason: 'duplicate-unit', detail: `answered more than once in answers file ${d + 1}; none of those answers were used` }); answered.delete(u.unit); continue; }
     answered.set(u.unit, u);
   }
 
