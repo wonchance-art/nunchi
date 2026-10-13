@@ -6,6 +6,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { discover } from './discover.mjs';
 import { buildSourceMap, affectedRoutes } from './sourcemap.mjs';
 import { startRun, finishRun, gcRuns, latestRun, workTree, ensureGitignore } from './runs.mjs';
+import { codeNavigations } from './flow.mjs';
 import { execFileSync } from 'node:child_process';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -145,6 +146,12 @@ if (cmd === 'map') {
     schema: 1, id: run?.id ?? null, parent: run?.parent ?? null, ...workTree(root),
     scope: { routes: [...new Set(all.map(s => s.route))].sort(), persons, viewports, states, changedSince: args.changedSince || null },
   };
+  // L3 knows every route of the app when they come from the source, and the navigations the source names.
+  let flow = {};
+  if (!args.routes) {
+    const routes = discover(root).routes;
+    flow = { routes: routes.filter(r => !r.needsResolution).map(r => r.path).sort(), wholeApp: !args.changedSince, code: codeNavigations(root, buildSourceMap(root, routes)) };
+  }
   if (auth) {
     try {
       const cookies = JSON.parse(readFileSync(auth, 'utf8')).cookies || [];
@@ -155,7 +162,7 @@ if (cmd === 'map') {
   try {
     const r = await capture({
       baseUrl: args.url, scenes: all, out, viewports, browserPath: args.browserPath, storageState: auth,
-      network: args.network || 'auto', recordingDir: resolve('.nunchi/har'), states, runMeta,
+      network: args.network || 'auto', recordingDir: resolve('.nunchi/har'), states, runMeta, flow,
       allowHosts: (args.allowHost || '').split(',').map(x => x.trim()).filter(Boolean),
     });
     const by = { blocker: 0, high: 0, medium: 0, low: 0 };

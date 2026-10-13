@@ -21,6 +21,7 @@ before(async () => {
       return res.end(JSON.stringify({ items: [{ title: 'Water the fern' }, { title: 'Return the library book' }], total: 2, sync: counter, access_token: 'tok-must-not-be-recorded' }));
     }
     if (path.startsWith('/private/')) { res.writeHead(302, { location: '/login' }); return res.end(); }
+    if (path === '/loop') { res.writeHead(302, { location: '/loop' }); return res.end(); }
     if (path === '/login') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end('<main><h1>Sign in</h1></main>'); }
     const file = path === '/' ? join(SITE, 'index.html') : existsSync(join(SPA, path)) ? join(SPA, path) : join(SITE, path);
     if (!existsSync(file) || statSync(file).isDirectory()) { res.writeHead(404); return res.end(); }
@@ -138,4 +139,13 @@ test('a server that is not there is one run problem, and Chromium\'s error page 
   assert.equal(r.manifest.health.status, 'app-unreachable');
   assert.ok(r.manifest.scenes.every(e => e.status === 'capture-failed' && e.reason === 'browser-error-page'), JSON.stringify(r.manifest.scenes));
   assert.deepEqual(r.findings, []);
+});
+
+test('a redirect loop is a finding on its scene, not a missing screen', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const r = await capture({ baseUrl: base, scenes: [{ route: '/loop', path: '/loop' }, { route: '/', path: '/' }], viewports: ['m'], out: tmp('loop') });
+  assert.deepEqual(r.findings.filter(f => f.rule === 'redirect-loop').map(f => f.scene), ['loop.guest.normal.m']);
+  assert.equal(r.manifest.scenes.find(e => e.route === '/loop').reason, 'redirect-loop');
+  assert.ok(!r.findings.some(f => f.rule === 'redirect-loop' && f.route === '/'));
+  assert.equal(r.manifest.health.status, 'ok');
 });

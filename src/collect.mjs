@@ -154,7 +154,9 @@ export function collect() {
     let url;
     try { url = new URL(href, location.href); } catch { continue; }
     if (url.origin !== location.origin) continue;
-    links.push({ path: url.pathname, selector: sel(a), visible: vis(a) });
+    const lm = a.closest('nav,header,footer,[role="navigation"],[role="banner"],[role="contentinfo"]');
+    const landmark = !lm ? null : lm.getAttribute('role') === 'navigation' ? 'nav' : lm.getAttribute('role') === 'banner' ? 'header' : lm.getAttribute('role') === 'contentinfo' ? 'footer' : lm.localName;
+    links.push({ path: url.pathname, selector: sel(a), visible: vis(a), landmark });
   }
 
   const fonts = [...document.fonts].map(f => ({ family: f.family.replace(/["']/g, ''), weight: f.weight, style: f.style, status: f.status }));
