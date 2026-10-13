@@ -16,7 +16,7 @@ const HELP = `nunchi ${pkg.version} — notices what's off in every corner of yo
 
 Usage:
   nunchi setup [--check] [--no-browser] [--json]
-                                            Once per install: the two pinned engine packages from the lockfile
+                                            Once per install: the pinned engine packages from the lockfile
                                             (npm ci --ignore-scripts) and Chromium (~170 MB). --check only reports
   nunchi discover [--root <dir>] [--json]   List the app's page routes and what was skipped
   nunchi capture --url <base> [options]     Capture every route at phone and desktop width,
@@ -67,6 +67,8 @@ Usage:
                                             reason) into ai-findings.json and verify.json; decoy pass-through
                                             > 10% marks the run's verifications suspect. --vendor only when the
                                             user opted into a different vendor's model (default: same-model check)
+  nunchi inventory [--root <dir>] [--json]  Source strings, UI states (loading/empty/error) and destructive actions
+                                            with file:line, plus copy candidates for the AI lenses (not findings)
   nunchi login --url <base> [--path /login] [--out .nunchi/auth.json]
                                             open a browser window, sign in once with a test account,
                                             save the login for signed-in scenes
@@ -133,7 +135,7 @@ function changedFiles(root, ref) {
   return [...new Set([...diff.map(strip), ...untracked].filter(Boolean))].sort();
 }
 
-// The engine's two packages are installed by `nunchi setup`; say so instead of a stack trace.
+// The engine's pinned packages are installed by `nunchi setup`; say so instead of a stack trace.
 async function engine(path) {
   try { return await import(path); }
   catch (e) {
@@ -176,6 +178,31 @@ if (cmd === 'setup') {
     const entries = Object.entries(map.routes);
     console.log(`routes: ${entries.length} · source files reached: ${Object.keys(map.files).length}`);
     for (const [route, files] of entries) console.log(`  ${route.padEnd(32)} ${files.length} files`);
+  }
+} else if (cmd === 'inventory') {
+  const { buildInventory } = await engine('./inventory.mjs');
+  const { stableJson } = await import('./stable.mjs');
+  const root = resolve(args.root || process.cwd());
+  const inv = buildInventory(root, discover(root).routes);
+  if (args.json) process.stdout.write(stableJson(inv));
+  else {
+    const s = inv.summary;
+    console.log(`inventory (${inv.scope}): ${s.files} files · ${s.strings} strings · ${s.states} states · ${s.actions} destructive actions · ${s.dialogs} native dialogs`);
+    const at = (f, l) => `${f}:${l}`;
+    const states = inv.files.flatMap(f => f.states.map(x => `  ${x.state.padEnd(9)} ${at(f.file, x.line)}  ${x.strings.length ? x.strings.map(t => JSON.stringify(t)).join(' · ') : x.elements.length ? x.elements.map(e => `<${e}>`).join(' ') : x.renders === 'nothing' ? '(renders nothing)' : '(no text)'}`));
+    if (states.length) console.log(`states:\n${states.join('\n')}`);
+    const acts = inv.files.flatMap(f => f.actions.map(a => `  ${at(f.file, a.line)}  ${a.label ? JSON.stringify(a.label) : a.handler}  confirm: ${a.confirm ? a.confirm.kind : 'none'}${a.undo ? ' · undo' : ''}`));
+    if (acts.length) console.log(`destructive actions:\n${acts.join('\n')}`);
+    if (inv.candidates.length) {
+      console.log(`candidates for the AI lenses (not findings): ${inv.candidates.length}`);
+      for (const c of inv.candidates) {
+        const where = c.variants ? c.variants.map(v => `${v.forms.map(x => JSON.stringify(x)).join('/')} ×${v.count} (${at(v.occurrences[0].file, v.occurrences[0].line)})`).join(' · ')
+          : c.copies ? c.copies.map(x => `${at(x.file, x.line)} [${x.labels.join(', ')}]`).join(' vs ')
+          : `${at(c.file, c.line)}${c.text ? ` ${JSON.stringify(c.text)}` : c.label ? ` ${JSON.stringify(c.label)}` : c.expression ? ` {${c.expression}}` : ''}`;
+        console.log(`  ${c.lens} ${c.kind}${c.concept ? ` ${c.concept}` : ''}: ${where}`);
+      }
+    }
+    if (inv.skipped.length) { console.log(`skipped: ${inv.skipped.length}`); for (const x of inv.skipped) console.log(`  ${x.file}  (${x.reason}${x.message ? `: ${x.message}` : ''})`); }
   }
 } else if (cmd === 'discover') {
   const result = discover(resolve(args.root || process.cwd()));

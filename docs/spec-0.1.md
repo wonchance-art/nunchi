@@ -132,6 +132,26 @@ Run-level: `manifest.json` (scenes with status and reason, health), `findings.js
 `canaries.json` (planted defects, an answer key), and after the AI hunt `ai-findings.json`, `canary-score.json`,
 `verify-packets.json`, `verify-key.json` (an answer key), `verify.json` (§4).
 
+**Inventory (0.1-b).** `nunchi inventory` (and `buildInventory(root, routes)` for the run folder) lists, per file the
+source map reaches (or every code file when no routes are found), with file:line: user-facing strings (JSX text
+read as sentences, user-facing props, toast/dialog/error-setter calls, labelled object fields, Next.js metadata,
+`t('source text')`; thrown messages apart as `thrown`, since whether they reach the screen is not knowable
+statically), UI states (loading/empty/error/not-found from render conditions, Suspense/ErrorBoundary fallbacks,
+`notFound()`, and Next.js `loading`/`error`/`not-found` files; with the strings each branch renders), destructive
+actions with the confirm or undo in reach (native, custom, dialog, or *unknown* when the handler lives in another
+file), and native dialogs. A no-AI classification pass adds **candidates** (never findings, no severity) for the
+AI lenses: different verbs for one action, casing and spelling variants of one label, one concept under two names
+(L5); generic error copy, confirms that do not say what they affect, raw `*.message` values on screen (L6);
+drifted copies of a header/nav/footer (L7); destructive actions with no confirm or undo (L9); client data loading
+with no loading or error branch (L2). Source text is data and is never evaluated; secret-shaped strings appear by
+kind only; a file that does not parse is listed under `skipped` with the reason.
+*Decision (2026-10-13 KST):* the parser is `@babel/parser` 7.29.9, pinned exactly. It is pure JavaScript, has no
+install scripts, and parses .js/.jsx/.ts/.tsx with locations; its one declared dependency (`@babel/types`, plus two
+small helpers) is for type definitions and is never loaded at run time (the parser's `lib/index.js` requires
+nothing). Babel 8 needs Node ≥22.18 against our `>=20`; `@swc/core` runs a postinstall script and pulls a ~10 MB
+native binary per platform, and `@swc/wasm` is 18 MB unpacked against Babel's 2 MB; a hand-written tokenizer
+would have to get TypeScript generics, JSX entities and template literals right for no gain.
+
 ### 2.5 Source ↔ scene map (H5)
 
 A small built-in import graph (static `import`/`export … from`/`import()`/`require`/CSS `@import`, resolved
@@ -486,7 +506,7 @@ phone touch guidance — recorded in the answer key.
 ## 10. Open items
 
 - *Resolved 2026-10-13 KST:* a plugin installed from git has no `node_modules`, so capture could not start.
-  `nunchi setup` installs the two pinned packages from `package-lock.json` (`npm ci --ignore-scripts`: integrity
+  `nunchi setup` installs the pinned packages from `package-lock.json` (`npm ci --ignore-scripts`: integrity
   hashes checked, no install scripts) and Chromium through the pinned playwright-core; every command that needs
   them says so instead of failing with a stack trace. CI (`.github/workflows/ci.yml`) runs the tests on Linux, macOS
   and Windows × Node 20/22/24, a fresh install exactly as a plugin user gets it, and the benchmark gates.

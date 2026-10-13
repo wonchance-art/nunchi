@@ -19,12 +19,15 @@ test('fresh install without node_modules: setup --check says what is missing, ca
   assert.equal(check.status, 1);
   const r = JSON.parse(check.stdout);
   assert.equal(r.ready, false);
-  assert.deepEqual(r.dependencies.packages, { 'axe-core': { want: '4.13.0', have: null }, 'playwright-core': { want: '1.63.0', have: null } });
+  assert.deepEqual(r.dependencies.packages, { '@babel/parser': { want: '7.29.9', have: null }, 'axe-core': { want: '4.13.0', have: null }, 'playwright-core': { want: '1.63.0', have: null } });
   const cap = cli('capture', '--url', 'http://127.0.0.1:9', '--routes', '/');
   assert.equal(cap.status, 2);
   assert.match(cap.stderr, /Run `nunchi setup` once/);
   assert.doesNotMatch(cap.stderr, /at .*\.mjs/, 'no stack trace');
   assert.equal(cli('discover', '--root', copy).status, 0, 'discover needs no packages');
+  const inv = cli('inventory', '--root', copy);
+  assert.equal(inv.status, 2, 'inventory needs the pinned parser');
+  assert.match(inv.stderr, /Run `nunchi setup` once/);
 });
 
 test('the development checkout has the pinned versions', () => {

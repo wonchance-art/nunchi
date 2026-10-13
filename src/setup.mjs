@@ -1,5 +1,5 @@
 // One-time setup of the bundled engine (spec §10, H15): a plugin install from git has no node_modules.
-// The two pinned packages come from package-lock.json with `npm ci --ignore-scripts` (integrity-checked,
+// The pinned packages come from package-lock.json with `npm ci --ignore-scripts` (integrity-checked,
 // no install scripts), and Chromium from the pinned playwright-core's own installer. Nothing is fetched
 // from the npm registry by name at run time, and nothing runs at import.
 import { existsSync, readFileSync } from 'node:fs';
