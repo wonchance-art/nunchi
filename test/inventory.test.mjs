@@ -374,7 +374,7 @@ test('Pebble: seeded copy defects show up as inventory entries or candidates', (
   // P34 'Save' and 'Submit' on one page
   assert.ok(has('verb-variants', c => c.concept === 'save' && c.variants.every(v => v.occurrences[0].file === 'app/app/settings/page.jsx')));
   // P35 'Something went wrong.'
-  assert.ok(has('vague-error', c => c.file === 'app/app/page.jsx' && c.line === 14));
+  assert.ok(has('vague-error', c => c.file === 'app/app/page.jsx' && c.line === 15));
   // P36 'Are you sure?'
   assert.ok(has('vague-confirm', c => c.file === 'app/app/settings/page.jsx' && c.text === 'Are you sure?'));
   // P37 drifted header on /pricing
@@ -385,5 +385,5 @@ test('Pebble: seeded copy defects show up as inventory entries or candidates', (
   assert.ok(has('no-loading-state', c => c.file === 'app/app/notes/page.jsx'));
   // and P11/P26 from the source side
   assert.ok(has('raw-message', c => c.file === 'app/app/tasks/page.jsx'));
-  assert.deepEqual(fileOf(inv, 'app/app/tasks/[id]/page.jsx').dialogs, [{ call: 'alert', line: 10, text: 'debug: task loaded' }]);
+  assert.deepEqual(fileOf(inv, 'app/app/tasks/[id]/page.jsx').dialogs, [{ call: 'alert', line: 11, text: 'debug: task loaded' }]);
 });

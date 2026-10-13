@@ -10,6 +10,7 @@ export default function Notes() {
   return (
     <>
       <h1 style={{ color: '#5a5aff' }}>Notes</h1>
+      <p>Your memos, newest first.</p>
       {notes && notes.length === 0 && <p>No notes yet.</p>}
       {notes && notes.length > 0 && <ul className="list">{notes.map(n => <li key={n.id} className="card">{n.text}</li>)}</ul>}
     </>

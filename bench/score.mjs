@@ -47,7 +47,8 @@ export function score(answers, manifest, findings) {
 // AI-lens seeds (rule: null, with an `ai` hint): a seed is found when an AI claim (claimed or confirmed, not
 // rejected by the verifier) has its lens and route, a state in `ai.states` when given, and either a checklist id
 // in `ai.rules` or one of `ai.match` in its claim, selector or source (case-insensitive). Coarse on purpose:
-// the answer key names a defect, not an element, and every hit is listed for a human to check.
+// the answer key names a defect, not an element, and every hit is listed for a human to check. `ai.viewports`
+// limits a seed to the widths it exists on.
 export function scoreAi(answers, manifest, findings) {
   const scenes = new Map(manifest.scenes.map(s => [s.id, s]));
   const ai = findings.filter(f => f.source === 'ai' && f.status !== 'rejected');
@@ -59,6 +60,7 @@ export function scoreAi(answers, manifest, findings) {
       const s = scenes.get(f.scene);
       if (s && s.canary !== undefined) return false;                     // a copy's planted defect is not the seed
       if (d.ai.states && (!s || !d.ai.states.includes(s.state))) return false;
+      if (d.ai.viewports && !d.ai.viewports.includes(f.viewport)) return false;
       return (d.ai.rules || []).includes(f.rule) || (d.ai.match || []).some(m => text(f).includes(m.toLowerCase()));
     });
     return { id: d.id, lens: d.lens, route: d.route, what: d.what, found: hits.length > 0, hits: hits.map(f => `${f.scene} ${f.rule} ${f.selector ?? f.evidence?.file ?? ''}: ${f.evidence?.claim ?? ''}`) };

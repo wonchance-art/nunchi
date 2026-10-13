@@ -19,3 +19,17 @@ h2 { font-size: 20px; margin: 16px 0 8px; }
 label { display: block; font-weight: 600; margin: 12px 0 4px; }
 input { font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; width: 100%; max-width: 360px; }
 @media (max-width: 640px) { .desktop-only { display: none; } }
+textarea { font: inherit; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; width: 100%; max-width: 560px; }
+.meta { font-size: 13px; color: var(--muted); }
+.stamp { position: absolute; left: 10px; top: 8px; padding: 2px 10px; border-radius: 6px; background: rgba(243, 245, 244, 0.96); color: var(--muted); font-weight: 700; }
+.tipbar { display: none; }
+.login { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+.login .promo { order: 2; min-height: 320px; border-radius: 16px; background: linear-gradient(160deg, #2f5d50, #1f3f36); color: #fff; font-size: 40px; font-weight: 800; line-height: 1.1; display: flex; align-items: center; justify-content: center; text-align: center; }
+.cookies { position: fixed; left: 0; right: 0; bottom: 0; min-height: 140px; display: flex; gap: 16px; align-items: center; justify-content: center; flex-wrap: wrap; padding: 16px 24px; background: #fff; border-top: 1px solid var(--line); box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08); }
+.cookies p { margin: 0; max-width: 560px; }
+@media (max-width: 640px) {
+  .tipbar { display: flex; position: fixed; left: 0; right: 0; bottom: 0; height: 120px; align-items: center; justify-content: center; padding: 0 24px; background: var(--ink); color: #fff; font-weight: 600; text-align: center; }
+  .login { grid-template-columns: 1fr; }
+  .login .promo { order: 0; min-height: 640px; }
+  .cookies { min-height: 200px; }
+}
