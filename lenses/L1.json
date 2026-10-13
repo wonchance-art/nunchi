@@ -5,7 +5,7 @@
   "definition": "The screen looks broken in a way a measurement cannot see: elements drawn on top of each other, text that cannot be read, a layout that collapsed or spilled out of its container, an image or icon that is distorted, or a part of the page that rendered without its styles. Horizontal overflow, clipped text without ellipsis, broken images, missing fonts, layout shift, page errors and 4xx/5xx are already rule findings; do not repeat them.",
   "method": "ai",
   "scenes": { "states": ["normal"] },
-  "evidence": ["top.jpg", "full.jpg", "controls.json", "measure.json"],
+  "evidence": ["top.jpg", "full.jpg", "controls.json", "measure.json", "styles.json", "aria.yml"],
   "checklist": [
     { "id": "L1.overlap", "question": "In top.jpg or full.jpg, do two elements (text, buttons, images, cards) overlap so that one hides part of the other's text or controls?" },
     { "id": "L1.unreadable-text", "question": "Is any text drawn where it cannot be read: on top of an image or other text, or squeezed to one or two characters per line?" },
