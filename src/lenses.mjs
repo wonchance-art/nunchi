@@ -1,8 +1,8 @@
 // Lens packs (spec §3): a lens is plain data — a definition, a checklist, examples, a severity rubric —
 // never code. Packs load in a fixed order and later ones override earlier ones:
 //   1. built-in    lenses/*.json next to the engine
-//   2. project     .nunchi/lenses/*.json
-//   3. external    files listed in .nunchi/lenses.lock.json, each pinned by sha256 (refused on mismatch)
+//   2. external    files listed in .nunchi/lenses.lock.json, each pinned by sha256 (refused on mismatch)
+//   3. project     .nunchi/lenses/*.json — the project has the last word over packs it adopted
 // A pack with the same id replaces the earlier lens; a pack with `extends: <its own id>` merges into it.
 // Nothing here evaluates, imports or fetches anything: files are read and parsed as JSON only.
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync } from 'node:fs';
@@ -248,7 +248,6 @@ function lockedPacks(root) {
 export function loadLenses({ root = process.cwd(), builtinDir = BUILTIN_DIR } = {}) {
   const files = [];
   for (const f of jsonFiles(builtinDir)) files.push({ kind: 'built-in', abs: f, path: `lenses/${relative(builtinDir, f).split(sep).join('/')}` });
-  for (const f of jsonFiles(join(root, '.nunchi', 'lenses'))) files.push({ kind: 'project', abs: f, path: posix(relative(root, f)) });
   for (const p of lockedPacks(root)) {
     const abs = resolve(root, p.path);
     if (!existsSync(abs) || !statSync(abs).isFile()) throw lensError([`${p.path}: listed in .nunchi/lenses.lock.json but not found`], p.path);
@@ -256,6 +255,7 @@ export function loadLenses({ root = process.cwd(), builtinDir = BUILTIN_DIR } = 
     if (!insideDir(realpathSync(root), realpathSync(abs))) throw lensError([`${p.path}: resolves outside the project`], p.path);
     files.push({ kind: 'external', abs, path: p.path, want: p.sha256 });
   }
+  for (const f of jsonFiles(join(root, '.nunchi', 'lenses'))) files.push({ kind: 'project', abs: f, path: posix(relative(root, f)) });
   const byId = new Map();
   const sources = [];
   for (const f of files) {

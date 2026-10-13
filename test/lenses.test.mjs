@@ -121,3 +121,18 @@ test('a bundle cannot define one lens twice; broken JSON is reported with its fi
   write(join(root2, '.nunchi', 'lenses'), 'bad.json', '{ "id": "L6", ');
   assert.throws(() => loadLenses({ root: root2 }), e => e.code === 'BAD_LENS' && /bad\.json/.test(e.message));
 });
+
+test('the project has the last word over an external pack it adopted', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { createHash } = await import('node:crypto');
+  const root = mkdtempSync(join(tmpdir(), 'nunchi-order-'));
+  mkdirSync(join(root, '.nunchi', 'lenses'), { recursive: true }); mkdirSync(join(root, 'vendor'));
+  const ext = JSON.stringify({ id: 'L6', extends: 'L6', name: 'from the vendor' });
+  writeFileSync(join(root, 'vendor', 'v.json'), ext);
+  writeFileSync(join(root, '.nunchi', 'lenses.lock.json'), JSON.stringify({ schema: 1, packs: [{ path: 'vendor/v.json', sha256: createHash('sha256').update(ext).digest('hex') }] }));
+  writeFileSync(join(root, '.nunchi', 'lenses', 'mine.json'), JSON.stringify({ id: 'L6', extends: 'L6', name: 'ours' }));
+  const r = loadLenses({ root });
+  assert.equal(r.lenses.find(l => l.id === 'L6').name, 'ours');
+  assert.deepEqual(r.sources.map(s => s.kind).filter(k => k !== 'built-in'), ['external', 'project']);
+});

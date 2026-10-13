@@ -151,7 +151,7 @@ neighbour scenes for regression checks after a fix. The board header shows *evid
 ## 3. Lenses
 
 A lens is a data file (H8): id, definition of a defect, checklist items, good/bad examples, severity rubric,
-method. Packs: built-in, project (`.nunchi/lenses/`), external (pinned by sha256). Packs cannot execute code.
+method. Packs: built-in, external (pinned by sha256), project (`.nunchi/lenses/`, last word). Packs cannot execute code.
 Later packs override earlier ones (ESLint-style `extends`).
 
 | Lens | Defect | Method | Step |
@@ -221,13 +221,13 @@ content and the phone's first view are AI-lens checks (0.1-b).
 
 ### 3.3 Lens packs (built 2026-10-13 KST, 0.1-b)
 
-`src/lenses.mjs` loads `lenses/*.json` (built-in) → `.nunchi/lenses/*.json` (project) → the files listed in
-`.nunchi/lenses.lock.json` (`{"packs": [{"path", "sha256"}]}`, paths inside the project; a hash mismatch refuses the
-whole load; nothing is downloaded). Files are read in name order; a file holds one lens or `{"lenses": [...]}`. A
+`src/lenses.mjs` loads `lenses/*.json` (built-in) → the files listed in `.nunchi/lenses.lock.json`
+(`{"packs": [{"path", "sha256"}]}`, paths inside the project; a hash mismatch refuses the whole load; nothing is
+downloaded) → `.nunchi/lenses/*.json` (project). Files are read in name order; a file holds one lens or `{"lenses": [...]}`. A
 later lens with the same id replaces the earlier one; one with `extends` (its own id — ids are L1…L10) merges into
 it: scalars replaced, `scenes`/`severityRubric` merged by key, examples appended, checklist items replaced by id,
-appended, or removed with `{"id", "off": true}`. *Open:* external packs load after project packs, as planned, so an
-external pack has the last word over the project's own; the reverse may suit users better.
+appended, or removed with `{"id", "off": true}`. The project's own packs load last (decided 2026-10-13 KST): a pack the
+project adopted never overrides what the project itself wrote.
 
 Schema (strict: unknown keys are refused, keys that look executable — `on…`, `script`, `exec`, `run`, … — are named
 as such, only plain JSON values, length limits): `id`, `name`, `definition`, `checklist` (`{id: "L6.kebab-name",
