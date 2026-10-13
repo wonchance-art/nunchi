@@ -1,5 +1,6 @@
 // The AI-lens recall gate (spec §8: ≥75% per lens, mean of 3 runs) on a benchmark capture.
 //
+//   (both take --app <dir> for a benchmark app other than bench/pebble; its bench.json names the answer key)
 //   node bench/ai-gate.mjs --packets --run <run folder> --out <dir> [--lens L1,L6]
 //     plans the hunt (every AI lens, no budget), picks the units that cover the answer key's AI seeds, the clean
 //     screens and the canary copies, and writes one packet per hunter: the units and their lenses, nothing about
@@ -19,7 +20,9 @@ import { writeStable } from '../src/stable.mjs';
 import { scoreAi } from './score.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
-const ANSWERS = JSON.parse(readFileSync(join(HERE, 'answers', 'pebble.json'), 'utf8'));
+const appAt = process.argv.indexOf('--app');
+const APP_DIR = appAt > 0 ? resolve(process.argv[appAt + 1]) : join(HERE, 'pebble');
+const ANSWERS = JSON.parse(readFileSync(resolve(APP_DIR, JSON.parse(readFileSync(join(APP_DIR, 'bench.json'), 'utf8')).answers), 'utf8'));
 const GATE = 0.75;
 const PACKET_TOKENS = 70000;
 const readJson = p => JSON.parse(readFileSync(p, 'utf8'));
@@ -27,7 +30,7 @@ const readJson = p => JSON.parse(readFileSync(p, 'utf8'));
 const args = { _: [] };
 for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i];
-  if (a.startsWith('--') && ['--run', '--out', '--answers', '--root', '--lens'].includes(a)) args[a.slice(2)] = process.argv[++i];
+  if (a.startsWith('--') && ['--run', '--out', '--answers', '--root', '--lens', '--app'].includes(a)) args[a.slice(2)] = process.argv[++i];
   else if (a.startsWith('--')) args[a.slice(2)] = true;
 }
 if (!args.run || !(args.packets || args.score)) {

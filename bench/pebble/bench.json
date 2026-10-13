@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "name": "pebble",
+  "answers": "../answers/pebble.json",
+  "installed": "node_modules/next",
+  "install": ["npm", "ci", "--no-audit", "--no-fund", "--ignore-scripts"],
+  "build": ["npx", "--no-install", "next", "build"],
+  "start": ["npx", "--no-install", "next", "start", "-p", "{port}", "-H", "127.0.0.1"],
+  "port": 3417,
+  "ready": "/about",
+  "env": { "NEXT_TELEMETRY_DISABLED": "1" },
+  "samples": { "/app/tasks/[id]": "/app/tasks/2" },
+  "auth": { "cookies": [{ "name": "pebble_session", "value": "demo", "domain": "127.0.0.1", "path": "/", "expires": -1, "httpOnly": false, "secure": false, "sameSite": "Lax" }], "origins": [] }
+}
