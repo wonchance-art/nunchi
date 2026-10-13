@@ -38,6 +38,17 @@ test('built-in packs: valid, sorted L1 … L10, item ids carry their lens id, al
   assert.deepEqual(lenses.find(l => l.id === 'L2').scenes.states, ['empty', 'error', 'slow', 'offline']);
   assert.deepEqual(lenses.find(l => l.id === 'L10').checklist.find(i => i.id === 'L10.primary-not-in-first-view').scenes, { viewports: ['m'] });
   assert.equal(stableJson(loadLenses({ root })), stableJson({ lenses, sources }), 'same files → same result');
+  // the copy and safety lenses read the route's source inventory slice in the hunt (spec §4); the others do not
+  assert.deepEqual(lenses.filter(l => l.source === true).map(l => l.id), ['L2', 'L5', 'L6', 'L7', 'L9']);
+});
+
+test('schema: `source` is an optional boolean, replaced by an extends overlay', () => {
+  assert.deepEqual(lensProblems(lens({ source: true }), 'p'), []);
+  assert.deepEqual(lensProblems(lens({ source: false }), 'p'), []);
+  assert.ok(lensProblems(lens({ source: 'inventory.json' }), 'p').some(p => /source: true or false/.test(p)));
+  assert.ok(lensProblems(lens({ source: { file: 'x' } }), 'p').some(p => /source: true or false/.test(p)));
+  assert.equal(mergeLens(lens({ source: true }), { id: 'L6', extends: 'L6', source: false }).source, false);
+  assert.equal(mergeLens(lens({ source: true }), { id: 'L6', extends: 'L6', name: 'x' }).source, true);
 });
 
 test('schema: rejects code, executable-looking keys, unknown keys and bad values', () => {

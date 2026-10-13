@@ -2,7 +2,7 @@
 // nunchi engine CLI. The deterministic half of nunchi: everything here must give the
 // same output for the same input. Judgment (sample values, lenses, fixes) lives in the plugin skill.
 import { resolve, join, relative, isAbsolute } from 'node:path';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, rmSync } from 'node:fs';
 import { discover } from './discover.mjs';
 import { buildSourceMap, affectedRoutes } from './sourcemap.mjs';
 import { startRun, finishRun, gcRuns, latestRun, workTree, ensureGitignore } from './runs.mjs';
@@ -248,6 +248,13 @@ if (cmd === 'setup') {
   const { DEFAULT_CANARIES } = await import('./canary.mjs');
   const canaries = args.canaries === undefined ? 0 : Number(args.canaries);
   if (!Number.isInteger(canaries) || canaries < 0) { console.error('nunchi capture: --canaries takes a whole number (0 = none)'); process.exit(1); }
+  // Canaries go only where a lens of this project hunts (its own packs included); a broken pack falls back to
+  // the built-in ones here, and is reported by hunt --plan.
+  let lenses = null;
+  if (canaries > 0) {
+    try { lenses = (await import('./lenses.mjs')).loadLenses({ root: process.cwd() }).lenses; }
+    catch (e) { console.error(`nunchi capture: lens packs not loaded (${String(e.message).split('\n')[0]}); canaries follow the built-in packs`); }
+  }
   const states = (args.states || 'normal,empty,error,slow,offline').split(',').map(x => x.trim());
   const runMeta = {
     schema: 1, id: run?.id ?? null, parent: run?.parent ?? null, ...workTree(root),
@@ -270,11 +277,24 @@ if (cmd === 'setup') {
     const r = await capture({
       baseUrl: args.url, scenes: all, out, viewports, browserPath: args.browserPath, storageState: auth,
       network: args.network || 'auto', recordingDir: resolve('.nunchi/har'), states, runMeta, flow,
-      allowHosts: (args.allowHost || '').split(',').map(x => x.trim()).filter(Boolean), canaries,
+      allowHosts: (args.allowHost || '').split(',').map(x => x.trim()).filter(Boolean), canaries, lenses,
     });
     const by = { blocker: 0, high: 0, medium: 0, low: 0 };
     for (const f of r.findings) by[f.severity]++;
-    if (!args.routes) { const { writeStable } = await import('./stable.mjs'); writeStable(join(out, 'source-map.json'), buildSourceMap(root, discover(root).routes)); }
+    if (!args.routes) {
+      const { writeStable } = await import('./stable.mjs');
+      const routes = discover(root).routes;
+      writeStable(join(out, 'source-map.json'), buildSourceMap(root, routes));
+      // The source inventory (§2.4) feeds the AI hunt's source slices (§4). It is extra: it never fails a capture.
+      const invPath = join(out, 'inventory.json');
+      try {
+        const { buildInventory } = await import('./inventory.mjs');
+        writeStable(invPath, buildInventory(root, routes));
+      } catch (e) {
+        try { rmSync(invPath, { force: true }); } catch {}
+        console.error(`warning: no inventory.json in this run (${String(e?.message ?? e).split('\n')[0]}); the AI hunt gets no source slices`);
+      }
+    }
     const final = run ? finishRun(runsDir, run.id) : out;
     // fold the run into the local ledger state (what is open, fixed, back again)
     if (run) updateState(join(nunchiDir, 'state', 'ledger.json'), { id: run.id, scope: runMeta.scope, health: r.manifest.health, findings: r.findings });
@@ -391,7 +411,7 @@ if (cmd === 'setup') {
 } else if (cmd === 'hunt') {
   // AI lenses, engine side (spec §4): the plan and the record are deterministic; the judgement is the skill's.
   const { loadLenses } = await import('./lenses.mjs');
-  const { planHunt, recordHunt, writeRecord, readAnswers, formatPlan, formatRecord } = await import('./hunt.mjs');
+  const { planHuntWithKey, writeHuntMirror, recordHunt, writeRecord, readAnswers, formatPlan, formatRecord } = await import('./hunt.mjs');
   const { writeStable } = await import('./stable.mjs');
   const fail = (msg, code = 1) => { console.error(`nunchi hunt: ${msg}`); process.exit(code); };
   if (!!args.plan === !!args.record) fail('use either --plan or --record <answers.json>');
@@ -412,15 +432,21 @@ if (cmd === 'setup') {
       if (budget !== null && !(Number.isInteger(budget) && budget > 0)) fail('--budget takes a whole number of tokens');
       const { lenses } = loadLenses({ root: process.cwd() });
       const lensIds = args.lens ? args.lens.split(',').map(x => x.trim().toUpperCase()).filter(Boolean) : null;
-      const plan = planHunt({ runDir, lenses, lensIds, budget, runId });
+      const { plan, key } = planHuntWithKey({ runDir, lenses, lensIds, budget, runId });
       writeStable(planPath, plan);
+      // a run with canaries: scene aliases, their answer key and the evidence the aliases point to
+      const keyPath = join(runDir, 'hunt-key.json');
+      if (key) writeStable(keyPath, key); else rmSync(keyPath, { force: true });
+      writeHuntMirror(runDir, key);
       console.log(args.json ? JSON.stringify(plan, null, 2) : formatPlan(plan, planPath));
     } else {
       if (!existsSync(planPath)) fail(`no hunt-plan.json in ${runDir}: run hunt --plan first`);
       const plan = JSON.parse(readFileSync(planPath, 'utf8'));
       const answersPath = resolve(args.record);
       if (!existsSync(answersPath)) fail(`${args.record} not found`);
-      const result = recordHunt({ runDir, plan, answers: readAnswers(answersPath), root: resolve(args.root || process.cwd()) });
+      const keyPath = join(runDir, 'hunt-key.json');
+      const key = existsSync(keyPath) ? JSON.parse(readFileSync(keyPath, 'utf8')) : null;
+      const result = recordHunt({ runDir, plan, key, answers: readAnswers(answersPath), root: resolve(args.root || process.cwd()) });
       writeRecord(runDir, result);
       console.log(args.json ? JSON.stringify({ plan: plan.id, run: runId, summary: result.coverage.summary, findings: result.findings.length, rejected: result.rejected }, null, 2) : formatRecord(result, runDir));
     }

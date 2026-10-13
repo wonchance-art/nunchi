@@ -6,6 +6,7 @@
   "method": "ai",
   "scenes": { "states": ["normal"] },
   "evidence": ["top.jpg", "text.txt", "controls.json", "links.json"],
+  "source": true,
   "checklist": [
     { "id": "L7.template-copy", "question": "Is template or scaffold copy left on screen ('Your tagline here', 'Feature 1', 'Card title', 'Welcome to your new app', 'Edit this page to get started')?" },
     { "id": "L7.fake-data", "question": "Are hard-coded numbers or records shown that look like demo data rather than the user's data (round marketing numbers like '10,000+ users' on a private dashboard, the same sample record repeated, 'Acme'-style placeholder companies)?" },

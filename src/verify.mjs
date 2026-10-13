@@ -10,8 +10,9 @@ export const VERDICTS = ['confirmed', 'rejected', 'insufficient'];
 export const SEVERITIES = ['blocker', 'high', 'medium', 'low'];
 export const SAME_MODEL = 'same-model check';
 
-// What a claim may carry into a packet. The hunter's reasoning is left out, wherever it was put.
-const REASONING = new Set(['reason', 'reasoning', 'rationale', 'explanation', 'why', 'thinking', 'thoughts', 'analysis', 'confidence', 'hunter', 'prompt', 'notes', 'answer', 'checklistAnswers']);
+// What a claim may carry into a packet. The hunter's reasoning is left out, wherever it was put, and so is
+// how the hunt was organised (`unit`): decoys have no unit, so it would tell them apart.
+const REASONING = new Set(['reason', 'reasoning', 'rationale', 'explanation', 'why', 'thinking', 'thoughts', 'analysis', 'confidence', 'hunter', 'prompt', 'notes', 'answer', 'checklistAnswers', 'unit']);
 export function claimOf(f) {
   const evidence = {};
   for (const k of Object.keys(f.evidence || {}).sort()) if (!REASONING.has(k)) evidence[k] = f.evidence[k];
@@ -37,20 +38,24 @@ const plain = c => c && !c.inside && typeof c.name === 'string' && c.name.length
 const nameKey = c => c.name.toLowerCase().replace(/\s+/g, ' ').trim();
 
 // Each decoy template makes a claim that the scene's own evidence contradicts: an element that is fine,
-// claimed as a defect. `fits` picks such elements from controls.json.
+// claimed as a defect. `fits` picks such elements from controls.json. Rule ids are checklist ids of the
+// built-in lens packs, and the evidence has the shape `hunt --record` gives a real claim (a one-sentence
+// claim, grounded in controls.json), so a decoy cannot be told apart by its form.
+const quote = c => `“${(c.text || c.name).replace(/\s+/g, ' ').trim().slice(0, 60)}”`;
+const grounded = claim => ({ claim, groundedIn: ['controls.json'] });
 export const DECOY_TEMPLATES = [
-  { id: 'unlabelled', lens: 'L6', rule: 'L6.control-without-label', severity: 'medium',
+  { id: 'unclear-label', lens: 'L6', rule: 'L6.unclear-label', severity: 'medium',
     fits: c => plain(c) && c.hasText && (c.tag === 'button' || c.role === 'button' || c.tag === 'a') && !PLACEHOLDER.test(c.name),
-    evidence: c => ({ text: c.text || c.name, note: 'control has no visible label or accessible name' }) },
-  { id: 'leftover', lens: 'L7', rule: 'L7.leftover-text', severity: 'medium',
+    evidence: c => grounded(`The label ${quote(c)} does not say what this control does.`) },
+  { id: 'template-copy', lens: 'L7', rule: 'L7.template-copy', severity: 'medium',
     fits: c => plain(c) && c.hasText && (c.text || '').length >= 3 && !PLACEHOLDER.test(`${c.text} ${c.name}`),
-    evidence: c => ({ text: c.text || c.name, note: 'placeholder or developer text left on screen' }) },
+    evidence: c => grounded(`${quote(c)} is scaffold copy left from a template.`) },
   { id: 'destructive', lens: 'L9', rule: 'L9.destructive-without-confirm', severity: 'high',
     fits: c => plain(c) && c.hasText && (c.tag === 'button' || c.tag === 'a' || c.role === 'button') && !DESTRUCTIVE.test(c.name),
-    evidence: c => ({ text: c.text || c.name, note: 'destructive action runs without a confirm or undo' }) },
-  { id: 'verb-mismatch', lens: 'L5', rule: 'L5.different-verbs-same-action', severity: 'medium', pair: true,
+    evidence: c => grounded(`${quote(c)} deletes data at once, with no confirmation or undo.`) },
+  { id: 'verb-mismatch', lens: 'L5', rule: 'L5.same-action-different-verb', severity: 'medium', pair: true,
     fits: (c, d) => plain(c) && plain(d) && c.selector !== d.selector && c.hasText && d.hasText && nameKey(c) === nameKey(d),
-    evidence: (c, d) => ({ text: c.text || c.name, comparedWith: { selector: d.selector, text: d.text || d.name }, note: 'the same action is named with different words' }) },
+    evidence: (c, d) => grounded(`${quote(c)} and ${quote(d)} name the same action with different verbs.`) },
 ];
 
 const byHash = (seed, salt) => (a, b) => { const ha = sha(`${seed}:${salt}:${a}`), hb = sha(`${seed}:${salt}:${b}`); return ha < hb ? -1 : ha > hb ? 1 : a < b ? -1 : a > b ? 1 : 0; };

@@ -129,8 +129,9 @@ Per scene:
 
 Run-level: `manifest.json` (scenes with status and reason, health), `findings.json`, `timing.json`, `run.json`, `source-map.json`
 (§2.5), `inventory.json` (source strings and UI states, extracted with Babel/SWC; classified in 0.1-b),
-`canaries.json` (planted defects, an answer key), and after the AI hunt `ai-findings.json`, `canary-score.json`,
-`verify-packets.json`, `verify-key.json` (an answer key), `verify.json` (§4).
+`canaries.json` (planted defects, an answer key), and after the AI hunt `hunt-plan.json`, `hunt-key.json` and
+`hunt/<alias>/` (runs with canaries: scene aliases, an answer key, and the evidence they point to), `ai-findings.json`,
+`coverage.json`, `canary-score.json`, `verify-packets.json`, `verify-key.json` (an answer key), `verify.json` (§4).
 
 **Inventory (0.1-b).** `nunchi inventory` (and `buildInventory(root, routes)` for the run folder) lists, per file the
 source map reaches (or every code file when no routes are found), with file:line: user-facing strings (JSX text
@@ -145,6 +146,9 @@ AI lenses: different verbs for one action, casing and spelling variants of one l
 drifted copies of a header/nav/footer (L7); destructive actions with no confirm or undo (L9); client data loading
 with no loading or error branch (L2). Source text is data and is never evaluated; secret-shaped strings appear by
 kind only; a file that does not parse is listed under `skipped` with the reason.
+*Built (2026-10-13 KST):* `capture` writes it into the run as `inventory.json` (`buildInventory(root, discovered
+routes)`, next to `source-map.json`; not with `--routes`, which has no source). It is extra evidence: any error
+leaves it out with one warning line and never fails the capture. The hunt hands it to the AI lenses in slices (§4).
 *Decision (2026-10-13 KST):* the parser is `@babel/parser` 7.29.9, pinned exactly. It is pure JavaScript, has no
 install scripts, and parses .js/.jsx/.ts/.tsx with locations; its one declared dependency (`@babel/types`, plus two
 small helpers) is for type definitions and is never loaded at run time (the parser's `lib/index.js` requires
@@ -255,8 +259,9 @@ Schema (strict: unknown keys are refused, keys that look executable — `on…`,
 as such, only plain JSON values, length limits): `id`, `name`, `definition`, `checklist` (`{id: "L6.kebab-name",
 question, scenes?}`), `examples` (`good`/`bad` text), `severityRubric` (blocker/high/medium/low → text), `method`
 (`ai`/`rule`/`computed`), `scenes` (`{states?, viewports?, persons?}`; `{}` = all), and `evidence` — the per-scene files
-the hunter reads (added to the list above because L1 needs images and L5 does not). Only `method: "ai"` lenses are
-hunted.
+the hunter reads (added to the list above because L1 needs images and L5 does not), plus an optional `source`
+(boolean: the unit also gets its route's source inventory slice, §4; added 2026-10-13 KST). Only `method: "ai"`
+lenses are hunted.
 
 Built-in packs cover the AI parts: L1 (visual: overlap, unreadable text, collapsed layout, distorted media,
 unstyled), L2 (forced states only: what happened, next step, failure that looks normal, endless loading, no loading
@@ -286,26 +291,36 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
 *Built (engine side, 0.1-b, 2026-10-13 KST):*
 - `src/canary.mjs`: eight mutation kinds, each an in-page function applied after load and before anything is
   measured (a delimited hook in `captureOne`): `verb-swap` and `term-swap` (L5), `vague-error` and
-  `vague-confirm` (L6), `stray-todo` (L7), `blank-state` (L2), `remove-confirm` (L9: a destructive control loses
-  its `aria-haspopup`/`aria-controls`/ellipsis cue), `fixed-cover` (L10). Each returns selector (built like
+  `vague-confirm` (L6), `template-copy` (L7: a paragraph replaced by scaffold copy), `blank-state` (L2),
+  `remove-confirm` (L9: a destructive control loses its `aria-haspopup`/`aria-controls`/ellipsis cue), `fixed-cover`
+  (L10). Each names the checklist item of the built-in packs it should be found under (a contract test keeps the
+  ids in step), and none is something a rule lens reports: the lenses tell the hunter not to repeat rule findings,
+  so such a canary could only be missed (the first `stray-todo`, a visible TODO, was replaced for that reason on
+  2026-10-13 KST). Each returns selector (built like
   `collect()`'s), box and before/after text, or nothing when the page has no suitable element. Which scenes and
   kinds: seeded from the run scope (routes, persons, viewports, states), one scene per route first, kinds not
-  yet planted first; the first kind that fits the page is planted; a copy where none fits is dropped (at most
+  yet planted first, and only kinds whose lens and checklist item look at that scene in the loaded packs (L2 on
+  forced states, L7/L9/L10 on normal screens; a project pack that turns an item off turns its canary off); the
+  first kind that fits the page is planted; a copy where none fits is dropped (at most
   3 × n tries). `capture --canaries <n>` (CLI default 3, API default 0). Copies are captured after every
   rule and computed finding, appear in `manifest.json` as `canary: k, of: <scene>` with id `<scene>.canary-<k>`,
   and in `canaries.json` (kind, lens, expected checklist id, selector, box); their rule findings are dropped,
   and flow, design system, parity and run health never see them.
 - `nunchi canaries --score`: a canary is hit when `ai-findings.json` has a claim of its lens on the copy at
   the same element, an ancestor/descendant or a box overlapping ≥ half of the smaller one. Writes
-  `canary-score.json` (per lens, labelled an upper bound of recall). Missed canaries are written into
-  `coverage.json` when it exists (`units` of the missed unit's `batch` → `seen: false, notSeen:
-  'canary-missed'`, plus a `canaries` block), else printed. Re-running the batch is the skill's job.
+  `canary-score.json` (per lens, labelled an upper bound of recall). A missed canary voids *seen* for its batch in
+  `coverage.json` (every cell of that lens on that route, the screens the copy came from included → `not-seen`,
+  reason `canary-missed`, summary counted again, plus a `canaries` block); without coverage.json it is printed.
+  Re-hunting is the skill's job: a later answers file replaces a unit's earlier answer.
 - `src/verify.mjs`, `nunchi verify --plan`: one packet per AI claim (`source: 'ai'`, `status: 'claimed'`, not on a
   canary copy): lens, rule, severity, scene, route, viewport, selector, box, evidence minus reasoning-like
   keys, and the scene's evidence files. Decoys = ⌈n/4⌉ (20% of packets): false claims on visible, unclaimed
-  controls of the claimed scenes, from `controls.json` (a labelled button claimed unlabelled, ordinary copy
-  claimed as a leftover, a non-destructive control claimed destructive without confirm, two identically named
-  controls claimed as different verbs), the claim's own lens first. Order is a seeded shuffle; the key
+  controls of the claimed scenes, from `controls.json` (a clear label claimed unclear `L6.unclear-label`,
+  ordinary copy claimed as scaffold `L7.template-copy`, a non-destructive control claimed destructive without
+  confirm `L9.destructive-without-confirm`, two identically named controls claimed as different verbs
+  `L5.same-action-different-verb`), the claim's own lens first. A decoy has the evidence shape `hunt --record`
+  gives a real claim (`claim`, `groundedIn: ["controls.json"]`), and the hunt unit id is left out of every
+  packet, so a decoy cannot be told apart by its form. Order is a seeded shuffle; the key
   (`verify-key.json`: decoy or finding index + claim hash) is a separate file.
 - `nunchi verify --record <verdicts.json> [--vendor <name>]`: verdict, corrected severity, one-line reason per
   packet → `status` and `verification` on each finding in `ai-findings.json` (confirmed takes the corrected
@@ -313,8 +328,7 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   when it is above 10% or no decoy was answered (then every verification of the run carries `suspect: true`).
   The verifier is recorded as *same-model check* unless `--vendor` names another vendor; nothing is sent
   anywhere. A plan refuses verdicts once the claims it was built from changed.
-- Not done yet: lens checklist ids are not defined, so canary checklist ids and decoy rule ids are nunchi's own
-  names; decoys come only from controls (no L2/L10 decoys); "stricter threshold for pages with a history of
+- Not done yet: decoys come only from controls (no L2/L10 decoys); "stricter threshold for pages with a history of
   false positives" is not built; the verifier's re-capture is the skill's job.
 
 - **Trust:** per-lens precision = fix ÷ (fix + false positive) over the last 20 human decisions; below 70%
@@ -322,21 +336,36 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
 - **Budget (H14):** per-run token cap; estimate shown before a deep sweep; hitting the cap leaves cells
   *not seen: budget*, never silently skipped.
 
-**Built (2026-10-13 KST): `nunchi hunt --plan` and `--record`** (`src/hunt.mjs`). Canaries, decoys, the verifier and
-trust are not built.
+**Built (2026-10-13 KST): `nunchi hunt --plan` and `--record`** (`src/hunt.mjs`).
 - *Plan* (`hunt --plan [--run] [--lens] [--budget] [--json]`, writes `hunt-plan.json` into the run): per AI lens,
   scenes matching its `scenes` filter are grouped by route + person + state across viewports (≤3 per unit). Each unit
   gets one reference scene: another route, same person and viewport, same state if one exists else normal, picked
   by a hash of the group (deterministic, spread over the app). Files are listed reference first, the scenes under
   review last (only the lens's `evidence` files; the reference gets `top.jpg` instead of `full.jpg`). Checklist items
   with their own `scenes` filter list the scenes they apply to. Scenes not captured, not seen or redirected are
-  listed as not seen with that reason. Unit id = hash of lens content, scenes, reference and items.
+  listed as not seen with that reason. Unit id = hash of lens content, scenes, reference and items. Each unit has a
+  `batch`: its lens on its route (hash), the scope a missed canary voids.
+- *Canaries in the plan:* a canary copy is grouped on its own (never in a unit with the scene it copies) and is
+  never a reference. In a run with canaries, every scene of the plan goes by an alias (`s` + 10 hex, salted with
+  the canary seed) and `files` point at `hunt/<alias>/…`, the scene's evidence files hard-linked (copied where links
+  fail) there; the alias → scene map is `hunt-key.json`, an answer key the hunter never reads. `--record` maps the
+  answers back, so `ai-findings.json` and `coverage.json` name scenes. Runs without canaries keep scene ids and get
+  no key or mirror.
+- *Source slices (2026-10-13 KST):* a lens pack with `"source": true` (built-in: L2, L5, L6, L7, L9) gets, when the
+  run has `inventory.json`, the slice of its route: `hunt/source/<first 12 hex of sha256(route)>.json` =
+  `{schema, route, note, files: [{file, strings, states, actions, dialogs}] (the inventory files whose routes include
+  it), candidates (every candidate touching those files)}`, written on first use. It is listed after the reference
+  scene's files and before the scenes under review, and counted in the estimate. A route no inventory file renders,
+  or a run without `inventory.json`, gets no slice. Candidates are hints; a defect the code causes is grounded with
+  `source: file:line`.
 - *Estimate:* text files bytes/4; JPEGs width × height / 750 after scaling to ≤1568 px long edge and ≤1.15 MP (max
   1,600; read from the JPEG header); per unit, the lens text (bytes/4) + 80 tokens per checklist item per scene for
   the answer. An estimate, not a measurement. Units are spent in a fixed order — normal screens first, then error,
   empty, slow, offline; by route; guest first; by lens — and from the first unit that does not fit, every later unit
   is *not seen: budget*. No default budget yet.
-- *Record* (`hunt --record <answers.json|dir> [--root]`, writes `ai-findings.json` and `coverage.json`): every item
+- *Record* (`hunt --record <answers.json|dir> [--root]`, writes `ai-findings.json` and `coverage.json`; a folder is
+  read in name order, and a unit answered again in a later file takes the later answer — a re-hunt — while a unit
+  answered twice in one file is refused and left unanswered): every item
   must be answered `defect`/`none`/`cannot-judge`; a defect needs a scene under review, a claim, a severity and a
   ground — a selector found verbatim in that scene's controls/styles/links/measure JSON or an `aria=<node>` line of
   aria.yml, and/or a `file:line` that exists under the app root (not `.nunchi/`, `node_modules/`, `.git/`; symlinks
