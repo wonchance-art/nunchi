@@ -38,12 +38,14 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    responses; later runs replay them so screens are comparable. Screens that load data are also
    captured in forced empty, error, slow and offline states. If it says the engine is not set up
    or Chromium is missing, go back to step 0.
-5. Read `findings.json` in the run folder the capture printed (`.nunchi/runs/<id>/`; `nunchi runs` lists them,
-   `.nunchi/runs/latest` names the newest). If the capture printed `RUN PROBLEM`, say so first and fix that
-   (log in again, start the app) before reading any finding. Report blocker and high first, each with scene,
-   selector and evidence. Group the same rule + selector across scenes. Say which routes were
-   skipped and why, and how many replay misses there were (a miss means the recording is stale:
-   suggest `--network record`).
+5. If the capture printed `RUN PROBLEM`, say so first and fix that (log in again, start the app) before
+   reading any finding. Then run `findings`: one line per kind of defect, most serious first, with how many
+   screens and places it covers. Report those kinds, not individual occurrences; `findings --rule <rule>` lists
+   the groups of one kind (a group is one defect however many screens show it). Say which routes were skipped and
+   why, and how many replay misses there were (a miss means the recording is stale: suggest `--network record`).
+   When the user decides on a group, record it with `decide <group id> fix|keep|false-positive|hold`
+   (`keep` needs `--reason intended|out-of-scope`, `false-positive` needs `--reason not-a-problem|wrong-place`).
+   Never decide for the user, and never act on a decision `findings` marks as needing approval.
 6. After the user or you change code, re-capture only what the change can affect:
    `capture --url <base> --changed-since HEAD` (add `--plan` first to show which screens that is).
 

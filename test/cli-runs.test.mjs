@@ -50,3 +50,18 @@ test('capture: numbered run folders, latest pointer, run.json with scope and sou
   assert.ok(readFileSync(join(cwd, '.nunchi', '.gitignore'), 'utf8').includes('runs/'));
   assert.deepEqual(await cli(cwd, 'runs'), { complete: ['0001', '0002'], partial: [], latest: '0002' });
 });
+
+test('ledger CLI: findings by kind, decide on a group, the decision is a committed file and changes the status', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-led-')));
+  await cli(cwd, 'capture', '--url', base, '--routes', '/broken.html', '--viewports', 'm', '--states', 'normal', '--network', 'live');
+  const first = await cli(cwd, 'findings');
+  assert.ok(first.kinds.length >= 5, JSON.stringify(first.kinds.map(k => k.rule)));
+  const g = first.groups.find(x => x.rule === 'dead-href');
+  const made = await cli(cwd, 'decide', g.group.slice(0, 8), 'fix');
+  assert.equal(made[0].decision, 'fix');
+  assert.deepEqual(readdirSync(join(cwd, '.nunchi', 'decisions')), [`group-${g.group}`]);
+  const after = await cli(cwd, 'findings', '--status', 'to-fix');
+  assert.deepEqual(after.groups.map(x => x.group), [g.group]);
+  assert.ok(!readFileSync(join(cwd, '.nunchi', '.gitignore'), 'utf8').includes('decisions'), 'decisions are committed');
+});
