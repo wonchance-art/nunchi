@@ -6,8 +6,13 @@ the app they were developed on (`bench/pebble/`).
 - They are not in CI and not part of `npm test`.
 - Do not open them, read their source or their answer keys (`bench/answers/<name>.json`), tune lenses or rules
   against them, or change them after measuring. A held-out app that has been looked at is no longer held out.
-- Results are recorded only as gate results in `docs/spec-0.1.md` §9 (recall, false positives on clean screens,
-  determinism, fingerprint stability), never as per-seed notes that would guide a fix.
+- Results are recorded as gate results in `docs/spec-0.1.md` §9 (recall, false positives on clean screens,
+  determinism, fingerprint stability). Each miss is explained once, after its measurement, so the engine bug behind
+  it can be fixed; from then on the app counts as seen, and a re-measure on it is reported as not blind.
+
+| App | Measured | Status |
+|---|---|---|
+| `pegroom` | 2026-10-13 KST (spec §9.4) | seen: misses explained; the next blind measurement needs a new app |
 
 Run one (installs its pinned dependencies on first use, builds it, captures it twice and scores it):
 
