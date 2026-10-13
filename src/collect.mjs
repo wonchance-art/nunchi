@@ -86,6 +86,21 @@ export function collect() {
     scrollers.push({ selector: sel(el), box: box(el), scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
   }
 
+  // Navigation regions and the buttons that open them: on phones a sidebar is often not in the page
+  // at all until its toggle is pressed (shadcn's Sidebar renders a sheet on open).
+  const NAV = 'nav,aside,header,[role="navigation"],[role="banner"],[data-sidebar],[data-slot="sidebar"]';
+  const isToggle = el => el.matches('button,[role="button"]') && (el.hasAttribute('aria-expanded') || el.hasAttribute('aria-haspopup') || el.getAttribute('data-sidebar') === 'trigger' || /\b(menu|sidebar|navigation|nav)\b/i.test(name(el)));
+  // A sidebar built from plain divs: a fixed or sticky column at least 60% of the screen tall and at
+  // most 40% of it wide.
+  const inRail = el => {
+    for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) {
+      const pos = getComputedStyle(a).position;
+      if (pos !== 'fixed' && pos !== 'sticky') continue;
+      const r = a.getBoundingClientRect();
+      return r.height >= 0.6 * innerHeight && r.width <= 0.4 * innerWidth;
+    }
+    return false;
+  };
   const controls = [];
   for (const el of document.querySelectorAll('a[href],button,[role="button"],[role="link"],input,select,textarea,summary')) {
     if (controls.length >= MAX || !vis(el)) continue;
@@ -95,6 +110,8 @@ export function collect() {
       name: name(el), hasText: text.length > 0, text: text.slice(0, 40), box: box(el),
       href: el.localName === 'a' ? el.getAttribute('href') : null,
       inline: el.localName === 'a' && getComputedStyle(el).display === 'inline',
+      ...(el.closest(NAV) || inRail(el) ? { inNav: true } : {}),
+      ...(isToggle(el) ? { menuToggle: true } : {}),
       ...where(el),
     });
   }
@@ -148,6 +165,8 @@ export function collect() {
     if (!ownText) continue;
     const cs = getComputedStyle(el);
     if (!/hidden|clip/.test(cs.overflowX) || cs.textOverflow === 'ellipsis') continue;
+    // visually hidden text for screen readers (sr-only: 1px box, clipped) is meant to be invisible
+    if (el.clientWidth <= 1 || el.clientHeight <= 1 || /rect\(0/.test(cs.clip) || /inset\(50%/.test(cs.clipPath)) continue;
     if (el.scrollWidth > el.clientWidth + 1) clipped.push({ selector: sel(el), box: box(el), text: el.innerText.trim().slice(0, 80), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, ...where(el) });
   }
 
@@ -189,6 +208,8 @@ export function collect() {
     scrollHeight: doc.scrollHeight,
     text: (document.body.innerText || '').replace(/ /g, ' '),
     mainText: (main.innerText || '').replace(/ /g, ' '),
+    // code samples and keyboard text: documentation quoting an error is not the app showing one
+    codeLines: [...new Set([...document.querySelectorAll('pre,code,kbd,samp')].flatMap(e => (e.innerText || '').split('\n').map(l => l.trim()).filter(Boolean)))].slice(0, 2000),
     controls, hiddenControls, styles, clipped, images, links, fonts, fields, scrollers,
   };
 }

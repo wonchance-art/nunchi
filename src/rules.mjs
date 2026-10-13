@@ -2,7 +2,8 @@
 // A rule finding is backed by a measurement, so it skips the verifier (spec §4).
 // Every finding names a selector or a URL; nothing here reads the network or the clock.
 
-const RAW_ERROR = /\b(TypeError|ReferenceError|SyntaxError|RangeError|Unhandled Runtime Error|Application error: a client-side exception|An error occurred in the Server Components render|Cannot read propert(?:y|ies) of (?:undefined|null)|is not a function|is not defined|Internal Server Error|ECONNREFUSED|ERR_[A-Z_]{4,}|at [\w.$<>]+ \([^)]*:\d+:\d+\))/;
+// Error class names count only as `TypeError: …` (a guide that mentions "a TypeError when …" is prose).
+const RAW_ERROR = /\b((?:TypeError|ReferenceError|SyntaxError|RangeError):|Unhandled Runtime Error|Application error: a client-side exception|An error occurred in the Server Components render|Cannot read propert(?:y|ies) of (?:undefined|null)|is not a function|is not defined|Internal Server Error|ECONNREFUSED|ERR_[A-Z_]{4,}|at [\w.$<>]+ \([^)]*:\d+:\d+\))/;
 const MISSING_VALUE = [
   { re: /\bundefined\b/, kind: 'undefined' },
   { re: /\bNaN\b/, kind: 'NaN' },
@@ -12,7 +13,8 @@ const MISSING_VALUE = [
   { re: /(^|\s)%[sd](\s|$)/, kind: 'unreplaced %s' },
 ];
 const PLACEHOLDER = [
-  { re: /\blorem ipsum\b/i, kind: 'Lorem ipsum' },
+  // placeholder prose, not the words themselves ("Lorem Ipsum Generator" is a real tool's name)
+  { re: /\blorem ipsum\s+(dolor|sit|amet)\b/i, kind: 'Lorem ipsum' },
   { re: /\b(John|Jane) Doe\b/, kind: 'John/Jane Doe' },
   { re: /\b[\w.+-]+@example\.(com|org)\b|\bexample\.com\b/i, kind: 'example.com' },
   { re: /\b(TODO|FIXME|TBD)\b/, kind: 'TODO/FIXME' },
@@ -44,7 +46,9 @@ export function ruleFindings(ev) {
   if (m.scrollWidth > m.viewport.width + 1) add({ lens: 'L1', id: 'horizontal-overflow', severity: 'high', selector: 'html', evidence: { scrollWidth: m.scrollWidth, viewportWidth: m.viewport.width } });
   for (const c of m.clipped) add({ lens: 'L1', id: 'clipped-text', severity: 'medium', selector: c.selector, box: c.box, evidence: { text: c.text, scrollWidth: c.scrollWidth, clientWidth: c.clientWidth } });
   for (const i of m.images) add({ lens: 'L1', id: 'broken-image', severity: 'medium', selector: i.selector, box: i.box, evidence: { src: i.src } });
-  const failedFonts = m.fonts.filter(f => f.status === 'error');
+  // next/font's metric-matched fallback faces point at local() system fonts (Arial) and fail on machines
+  // without them; they are not the app's font.
+  const failedFonts = m.fonts.filter(f => f.status === 'error' && !/_Fallback(_[0-9a-f]+)?$/.test(f.family));
   if (failedFonts.length) add({ lens: 'L1', id: 'font-not-loaded', severity: 'medium', evidence: { fonts: failedFonts.map(f => `${f.family} ${f.weight} ${f.style}`).sort() } });
   if (m.clsBand && m.clsBand !== 'good') add({ lens: 'L1', id: 'layout-shift', severity: m.clsBand === 'poor' ? 'high' : 'medium', evidence: { band: m.clsBand, threshold: 0.1 } });
   for (const e of ev.pageErrors) add({ lens: 'L1', id: 'page-error', severity: 'high', evidence: { message: e } });
@@ -60,10 +64,16 @@ export function ruleFindings(ev) {
   if (ev.state && ev.state !== 'normal' && !(m.mainText || '').trim()) add({ lens: 'L2', id: 'blank-state', severity: 'high', selector: 'main', evidence: { state: ev.state } });
 
   // L6 copy quality (measurable part)
-  const raw = snippet(m.text, RAW_ERROR);
+  // Quoted spans and code samples are text about errors, not errors on screen.
+  const code = new Set(m.codeLines || []);
+  const prose = m.text.split('\n').filter(l => !code.has(l.trim())).join('\n')
+    // a quote in prose opens after a space and closes before a space or punctuation; JSON keys and
+    // values ({"message":"…"}) do not, and raw JSON on screen is itself a finding
+    .replace(/(^|[\s(\[])(["'`“‘])[^"'`”’\n]{1,160}?["'`”’](?=[\s.,;!?)\]]|$)/gm, '$1 ');
+  const raw = snippet(prose, RAW_ERROR);
   if (raw) add({ lens: 'L6', id: 'raw-error-text', severity: 'high', selector: 'body', evidence: { text: raw } });
   // Lines already reported as raw errors are not reported again as missing values.
-  const valueText = m.text.split('\n').filter(l => !RAW_ERROR.test(l)).join('\n');
+  const valueText = prose.split('\n').filter(l => !RAW_ERROR.test(l)).join('\n');
   for (const v of MISSING_VALUE) {
     const t = snippet(valueText, v.re);
     if (t) add({ lens: 'L6', id: 'missing-value', severity: 'high', selector: 'body', evidence: { kind: v.kind, text: t } });
@@ -85,13 +95,26 @@ export function ruleFindings(ev) {
     add({ lens: 'L8', id: `axe-${v.id}`, severity: v.id === 'color-contrast' ? 'medium' : 'high', selector: n.selector, evidence: { impact: v.impact, summary: n.summary } });
   }
   // WCAG 2.5.8: every target counts except links inline in a sentence. Form fields are left to axe.
-  for (const c of m.controls.filter(c => !c.inline && !['input', 'select', 'textarea'].includes(c.tag))) {
+  // An undersized target still passes when a 24px circle centred on it touches no other target and no
+  // other undersized target's circle (the spacing exception); on the phone it is then touch guidance.
+  const targets = m.controls.filter(c => !c.inline);
+  const small = c => c.box[2] < 24 || c.box[3] < 24;
+  const centre = ([x, y, w, h]) => [x + w / 2, y + h / 2];
+  const toRect = ([px, py], [x, y, w, h]) => Math.hypot(Math.max(x - px, 0, px - (x + w)), Math.max(y - py, 0, py - (y + h)));
+  const spaced = c => {
+    const p = centre(c.box);
+    return targets.every(o => o === c || (toRect(p, o.box) >= 12 && (!small(o) || Math.hypot(p[0] - centre(o.box)[0], p[1] - centre(o.box)[1]) >= 24)));
+  };
+  const phone = ev.viewport === 'm';
+  for (const c of targets.filter(c => !['input', 'select', 'textarea'].includes(c.tag))) {
     const [, , w, h] = c.box;
-    // 44px is the touch guidance for icon controls (no text, or a glyph like ×); text links and
-    // buttons are held to the WCAG minimum only, or every ordinary nav link would be flagged.
+    // 44px is touch guidance for icon controls (no text, or a glyph like ×), so it is judged on the
+    // phone only; text links and buttons are held to the WCAG minimum, or every nav link would be flagged.
     const iconLike = !c.hasText || (c.text ?? c.name).trim().length <= 2;
-    if (w < 24 || h < 24) add({ lens: 'L8', id: 'target-size-min', severity: 'medium', selector: c.selector, box: c.box, evidence: { width: w, height: h, minimum: 24, name: c.name } });
-    else if (iconLike && (w < 44 || h < 44)) add({ lens: 'L8', id: 'target-size-recommended', severity: 'low', selector: c.selector, box: c.box, evidence: { width: w, height: h, recommended: 44, name: c.name } });
+    if (small(c)) {
+      if (!spaced(c)) add({ lens: 'L8', id: 'target-size-min', severity: 'medium', selector: c.selector, box: c.box, evidence: { width: w, height: h, minimum: 24, name: c.name } });
+      else if (phone && iconLike) add({ lens: 'L8', id: 'target-size-recommended', severity: 'low', selector: c.selector, box: c.box, evidence: { width: w, height: h, recommended: 44, name: c.name, note: 'passes WCAG 2.5.8 by spacing; small for a finger' } });
+    } else if (phone && iconLike && (w < 44 || h < 44)) add({ lens: 'L8', id: 'target-size-recommended', severity: 'low', selector: c.selector, box: c.box, evidence: { width: w, height: h, recommended: 44, name: c.name } });
   }
 
   for (const f of (m.fields || []).filter(f => !f.labelled && f.placeholder)) {

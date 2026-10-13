@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // nunchi engine CLI. The deterministic half of nunchi: everything here must give the
 // same output for the same input. Judgment (sample values, lenses, fixes) lives in the plugin skill.
-import { resolve, join } from 'node:path';
+import { resolve, join, relative, isAbsolute } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
 import { discover } from './discover.mjs';
 import { buildSourceMap, affectedRoutes } from './sourcemap.mjs';
@@ -14,6 +14,9 @@ const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url),
 const HELP = `nunchi ${pkg.version} — notices what's off in every corner of your web app
 
 Usage:
+  nunchi setup [--check] [--no-browser] [--json]
+                                            Once per install: the two pinned engine packages from the lockfile
+                                            (npm ci --ignore-scripts) and Chromium (~170 MB). --check only reports
   nunchi discover [--root <dir>] [--json]   List the app's page routes and what was skipped
   nunchi capture --url <base> [options]     Capture every route at phone and desktop width,
                                             write the evidence pack and rule findings
@@ -52,6 +55,8 @@ function parse(argv) {
     const a = argv[i];
     if (a === '--json') args.json = true;
     else if (a === '--plan') args.plan = true;
+    else if (a === '--check') args.check = true;
+    else if (a === '--no-browser') args.noBrowser = true;
     else if (a === '--root') args.root = argv[++i];
     else if (a === '--keep') args.keep = Number(argv[++i]);
     else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
@@ -91,7 +96,28 @@ function changedFiles(root, ref) {
   return [...new Set([...diff.map(strip), ...untracked].filter(Boolean))].sort();
 }
 
-if (cmd === 'map') {
+// The engine's two packages are installed by `nunchi setup`; say so instead of a stack trace.
+async function engine(path) {
+  try { return await import(path); }
+  catch (e) {
+    if (e.code !== 'ERR_MODULE_NOT_FOUND') throw e;
+    console.error('nunchi: the engine is not set up yet (its pinned packages are missing). Run `nunchi setup` once.');
+    process.exit(2);
+  }
+}
+const inside = (dir, f) => { const r = relative(dir, f); return r && !r.startsWith('..') && !isAbsolute(r); };
+
+if (cmd === 'setup') {
+  const { setup } = await import('./setup.mjs');
+  const r = await setup({ check: !!args.check, browser: !args.noBrowser });
+  if (args.json) console.log(JSON.stringify(r, null, 2));
+  else {
+    for (const [name, d] of Object.entries(r.dependencies.packages)) console.log(`${d.have === d.want ? 'ok     ' : 'missing'} ${name}@${d.want}${d.have && d.have !== d.want ? ` (found ${d.have})` : ''}`);
+    console.log(`${r.browser.ok ? 'ok     ' : 'missing'} Chromium${r.browser.path ? ` ${r.browser.path}` : ''}`);
+    console.log(r.ready ? 'ready' : args.check ? 'not ready: run `nunchi setup`' : 'not ready (see the messages above)');
+  }
+  process.exit(r.ready ? 0 : 1);
+} else if (cmd === 'map') {
   const root = resolve(args.root || process.cwd());
   const map = buildSourceMap(root, discover(root).routes);
   if (args.json) console.log(JSON.stringify(map, null, 2));
@@ -104,7 +130,7 @@ if (cmd === 'map') {
   const result = discover(resolve(args.root || process.cwd()));
   console.log(args.json ? JSON.stringify(result, null, 2) : printDiscover(result));
 } else if (cmd === 'capture') {
-  const { capture } = await import('./capture.mjs');
+  const { capture } = await engine('./capture.mjs');
   if (!args.url && !args.plan) { console.error('nunchi capture: --url is required (your local or preview server, never production)'); process.exit(1); }
   const root = resolve(args.root || process.cwd());
   const samples = args.samples ? JSON.parse(readFileSync(resolve(args.samples), 'utf8')) : {};
@@ -187,12 +213,12 @@ if (cmd === 'map') {
     process.exit(2);
   }
 } else if (cmd === 'login') {
-  const { login, loginWarnings } = await import('./login.mjs');
+  const { login, loginWarnings } = await engine('./login.mjs');
   if (!args.url) { console.error('nunchi login: --url is required'); process.exit(1); }
   const target = args.url.replace(/\/$/, '') + (args.path || '');
   for (const w of loginWarnings(target)) console.error('warning: ' + w);
   const out = resolve(args.out || '.nunchi/auth.json');
-  if (out.startsWith(resolve('.nunchi') + '/')) ensureGitignore(resolve('.nunchi'));
+  if (inside(resolve('.nunchi'), out)) ensureGitignore(resolve('.nunchi'));
   try { console.log(`saved login → ${await login({ url: target, out, browserPath: args.browserPath })} (owner-only, git-ignored)`); }
   catch (e) { console.error(e.code === 'NO_BROWSER' ? 'nunchi: ' + e.message : e.stack); process.exit(2); }
 } else if (cmd === 'runs') {

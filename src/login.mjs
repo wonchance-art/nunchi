@@ -25,7 +25,7 @@ export async function login({ url, out, browserPath, waitForEnter = true }) {
     browser = await chromium.launch({ headless: false, executablePath: browserPath || process.env.NUNCHI_BROWSER || undefined, ...(proxyServer ? { proxy: { server: proxyServer, bypass: 'localhost,127.0.0.1,::1' } } : {}) });
   } catch (e) {
     throw Object.assign(new Error(`could not open a browser window (${String(e.message).split('\n')[0]}). ` +
-      'Run `nunchi login` on a machine with a display, or install Chromium with `npx playwright@1.63.0 install chromium`.'), { code: 'NO_BROWSER' });
+      'Run `nunchi login` on a machine with a display, or install Chromium with `nunchi setup`.'), { code: 'NO_BROWSER' });
   }
   const ctx = await browser.newContext();
   const page = await ctx.newPage();

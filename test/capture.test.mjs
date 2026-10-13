@@ -1,6 +1,7 @@
 // End-to-end capture against a tiny synthetic site with seeded defects.
 // Needs a Chromium: set NUNCHI_BROWSER to its executable, or install one with
-// `npx playwright@1.63.0 install chromium`. Skipped (not failed) when none is found.
+// `node src/cli.mjs setup`. Skipped (not failed) when none is found.
+import { fileURLToPath } from 'node:url';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -14,7 +15,7 @@ let server, base, site, browserOk = true;
 
 before(async () => {
   site = mkdtempSync(join(tmpdir(), 'nunchi-site-'));
-  cpSync(new URL('./fixtures/site', import.meta.url).pathname, site, { recursive: true });
+  cpSync(fileURLToPath(new URL('./fixtures/site', import.meta.url)), site, { recursive: true });
   // Built at test time so no secret-shaped string is ever committed.
   const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
   const serviceRole = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ role: 'service_role', iss: 'supabase' })}.${'x'.repeat(24)}`;
@@ -28,7 +29,8 @@ before(async () => {
   });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
-  try { const b = await launch(); await b.close(); } catch { browserOk = false; }
+  // CI sets NUNCHI_REQUIRE_BROWSER so a missing browser fails the run instead of skipping the capture tests
+  try { const b = await launch(); await b.close(); } catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
 after(() => server && server.close());
 
@@ -49,6 +51,7 @@ test('captures seeded defects, keeps the clean page clean, writes the evidence p
     assert.ok(at(m, rule).length >= 1, `expected ${rule} on ${m}`);
   }
   assert.deepEqual(at(m, 'missing-value').map(f => f.evidence.kind), ['NaN']);
+  assert.ok(!at(m, 'clipped-text').some(f => f.evidence.text === 'Toggle Sidebar'), 'screen-reader-only text is not clipped text');
   assert.deepEqual(at(m, 'placeholder-text').map(f => f.evidence.kind), ['Lorem ipsum']);
   const secrets = r.findings.filter(f => f.rule === 'secret-in-client-bundle').map(f => f.evidence.kind);
   assert.deepEqual(secrets, ['stripe-live-secret-key', 'supabase-service-role-jwt']);

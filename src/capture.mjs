@@ -72,7 +72,9 @@ export async function launch({ browserPath, baseUrl, allowHosts = [] } = {}) {
       '--font-render-hinting=none', '--disable-gpu', '--hide-scrollbars',
       // deterministic raster: same page, same pixels (tiling order and partial raster otherwise
       // leave 1–3 level differences on anti-aliased edges between runs)
-      '--deterministic-mode', '--run-all-compositor-stages-before-draw', '--disable-partial-raster',
+      // (not --deterministic-mode: in chrome-headless-shell, Playwright's default, it turns on begin-frame
+      // control, nothing is ever drawn and the first screenshot waits forever)
+      '--run-all-compositor-stages-before-draw', '--disable-partial-raster',
       '--disable-skia-runtime-opts', '--disable-threaded-animation', '--disable-threaded-scrolling',
       '--disable-checker-imaging', '--disable-lcd-text', '--force-color-profile=srgb',
       '--disable-background-networking', '--disable-component-update', '--disable-domain-reliability',
@@ -81,7 +83,7 @@ export async function launch({ browserPath, baseUrl, allowHosts = [] } = {}) {
     ] });
   } catch (e) {
     const err = new Error(`nunchi could not start Chromium (${String(e.message).split('\n')[0]}). ` +
-      'Install it once with `npx playwright@1.63.0 install chromium`, or pass --browser-path <chrome executable>.');
+      'Install it once with `nunchi setup`, or pass --browser-path <chrome executable> (or set NUNCHI_BROWSER).');
     err.code = 'NO_BROWSER';
     throw err;
   }

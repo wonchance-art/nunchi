@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -100,7 +101,7 @@ test('cli capture --changed-since --plan: only routes whose files changed, uncom
   const git = (...a) => execFileSync('git', ['-C', root, ...a], { encoding: 'utf8' });
   git('init', '-q'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'add', '-A'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'base');
   writeFileSync(join(root, 'src/lib/notify.ts'), 'export const notify = () => {};');
-  const cli = new URL('../src/cli.mjs', import.meta.url).pathname;
+  const cli = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
   const plan = JSON.parse(execFileSync('node', [cli, 'capture', '--root', root, '--changed-since', 'HEAD', '--plan'], { cwd: root, encoding: 'utf8' }).split('\n').slice(1).join('\n'));
   assert.deepEqual(plan.scenes.map(s => s.route), ['/tasks']);
   assert.deepEqual(plan.skipped.map(s => [s.route, s.reason]), [['/', 'unchanged'], ['/settings', 'unchanged']]);
