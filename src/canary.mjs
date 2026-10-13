@@ -334,15 +334,22 @@ export function scoreCanaries(canaryFile, aiFindings, coverage = null) {
     const cell = cells.find(x => x.scene === c.scene && x.lens === c.lens);
     return { scene: c.scene, of: c.of, kind: c.kind, lens: c.lens, reason: cell?.reason || 'not-planned' };
   });
-  const results = all.filter(hunted).map(c => {
-    // A claim grounded in an aria node or only in source has no box to compare: it counts when it names the
-    // expected checklist item and the scene the copy came from has no claim of that item (else the hunter
-    // flagged something both share, not the planted defect).
-    const unlocated = f => !f.box && (!f.selector || f.selector.startsWith('aria='));
-    const sharedWithOriginal = aiFindings.some(g => g.scene === c.of && g.lens === c.lens && g.rule === c.checklist);
-    const hits = aiFindings.filter(f => f.scene === c.scene && f.lens === c.lens && (sameLocation(f, c) || (unlocated(f) && f.rule === c.checklist && !sharedWithOriginal)));
-    return { scene: c.scene, of: c.of, kind: c.kind, lens: c.lens, checklist: c.checklist, hit: hits.length > 0, exact: hits.some(f => f.rule === c.checklist || f.checklist === c.checklist) };
-  });
+  // A claim grounded in an aria node or only in source has no box to compare: it counts when it names the
+  // expected checklist item. If the scene the copy came from has a claim of that item too, the hunter flagged
+  // something both share, and the copy cannot tell a planted defect from one the screen already had: such a
+  // canary is *ambiguous*, listed apart and left out of the rate, like a canary nobody hunted.
+  const unlocated = f => !f.box && (!f.selector || f.selector.startsWith('aria='));
+  const ambiguous = [];
+  const results = [];
+  for (const c of all.filter(hunted)) {
+    const mine = aiFindings.filter(f => f.scene === c.scene && f.lens === c.lens);
+    const placed = mine.filter(f => sameLocation(f, c));
+    const byItem = mine.filter(f => unlocated(f) && f.rule === c.checklist);
+    const shared = aiFindings.some(g => g.scene === c.of && g.lens === c.lens && g.rule === c.checklist);
+    if (!placed.length && byItem.length && shared) { ambiguous.push({ scene: c.scene, of: c.of, kind: c.kind, lens: c.lens, reason: 'the original has the same claim' }); continue; }
+    const hits = [...placed, ...byItem];
+    results.push({ scene: c.scene, of: c.of, kind: c.kind, lens: c.lens, checklist: c.checklist, hit: hits.length > 0, exact: hits.some(f => f.rule === c.checklist || f.checklist === c.checklist) });
+  }
   const byLens = {};
   for (const r of results) {
     const l = (byLens[r.lens] ||= { planted: 0, hit: 0, rate: 0 });
@@ -355,6 +362,7 @@ export function scoreCanaries(canaryFile, aiFindings, coverage = null) {
     planted: results.length, hit, rate: results.length ? hit / results.length : null, byLens, results,
     missed: results.filter(r => !r.hit).map(({ scene, of, kind, lens }) => ({ scene, of, kind, lens })),
     ...(notHunted.length ? { notHunted } : {}),
+    ...(ambiguous.length ? { ambiguous } : {}),
   };
 }
 

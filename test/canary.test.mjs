@@ -253,7 +253,9 @@ test('canary score: a claim without a box (aria node, source only) counts by its
   const aria = (scene, rule) => ({ source: 'ai', status: 'claimed', lens: 'L6', rule, severity: 'medium', scene, route: '/b', viewport: 'd', selector: 'aria=paragraph', box: null, evidence: {} });
   assert.equal(scoreCanaries(CANARIES, [aria('b.guest.error.d.canary-2', 'L6.vague-error')]).results[1].hit, true);
   assert.equal(scoreCanaries(CANARIES, [aria('b.guest.error.d.canary-2', 'L6.unclear-label')]).results[1].hit, false, 'another item: not the planted defect');
-  assert.equal(scoreCanaries(CANARIES, [aria('b.guest.error.d.canary-2', 'L6.vague-error'), aria('b.guest.error.d', 'L6.vague-error')]).results[1].hit, false, 'the original has it too: the hunter saw something both share');
+  const both = scoreCanaries(CANARIES, [aria('b.guest.error.d.canary-2', 'L6.vague-error'), aria('b.guest.error.d', 'L6.vague-error')]);
+  assert.deepEqual(both.ambiguous, [{ scene: 'b.guest.error.d.canary-2', of: 'b.guest.error.d', kind: 'vague-error', lens: 'L6', reason: 'the original has the same claim' }], 'the original has it too: neither hit nor miss');
+  assert.equal(both.planted, 2); assert.ok(!both.missed.some(m => m.kind === 'vague-error'), 'and it voids nothing');
   const located = { ...aria('b.guest.error.d.canary-2', 'L6.vague-error'), selector: 'main > h1', box: [0, 0, 10, 10] };
   assert.equal(scoreCanaries(CANARIES, [located]).results[1].hit, false, 'a claim with a place is judged by its place');
 });

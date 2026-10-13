@@ -477,6 +477,7 @@ if (cmd === 'setup') {
     console.log('  ' + Object.entries(r.byLens).sort((a, b) => Number(a[0].slice(1)) - Number(b[0].slice(1))).map(([l, v]) => `${l} ${v.hit}/${v.planted}`).join(' · '));
     for (const m of r.missed) console.log(`  missed ${m.scene} (${m.lens} ${m.kind}): *seen* is void for the batch that hunted it; hunt that batch again`);
     for (const n of r.notHunted || []) console.log(`  not hunted ${n.scene} (${n.lens}, ${n.reason}): not counted; raise --budget or answer that unit to measure it`);
+    for (const a of r.ambiguous || []) console.log(`  ambiguous ${a.scene} (${a.lens} ${a.kind}): ${a.reason}, so the copy cannot tell the planted defect apart; not counted`);
     if (r.missed.length) console.log(coverage ? `coverage.json updated: ${coverage.canaries.voidedUnits.length} unit(s) no longer seen` : 'no coverage.json in this run: the batches above are not seen until hunted again');
   }
 } else if (cmd === 'verify') {

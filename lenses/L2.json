@@ -8,7 +8,7 @@
   "evidence": ["top.jpg", "text.txt", "aria.yml", "controls.json"],
   "source": true,
   "checklist": [
-    { "id": "L2.what-happened", "question": "Does the screen say in words what happened (nothing here yet / loading failed / still loading / you are offline)? Answer defect when it does not." },
+    { "id": "L2.what-happened", "question": "Does the screen say in words what happened (nothing here yet / loading failed / still loading / you are offline)? Answer defect when it does not. An offline screen that shows no notice at all is the rule finding no-offline-notice: answer none for that alone." },
     { "id": "L2.next-step", "question": "Does the screen offer a next step that fits the state: create the first item (empty), retry (error), reconnect or keep working offline (offline)? Answer defect when there is none.", "scenes": { "states": ["empty", "error", "offline"] } },
     { "id": "L2.looks-normal", "question": "Does a failure look like success: an error or offline screen that shows a normal empty list, zero counts or stale data with no notice?", "scenes": { "states": ["error", "offline"] } },
     { "id": "L2.endless-loading", "question": "Does a skeleton, spinner or 'Loading…' stay on screen although the request already failed?", "scenes": { "states": ["error", "offline"] } },

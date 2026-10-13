@@ -123,8 +123,14 @@ if (args.score) {
   const L = [`# AI-lens gate — ${ANSWERS.app}`, '', `${per.length} hunt runs on the same capture · gate: recall ≥ ${pct(GATE)} per lens, mean of the runs`, '',
     '| Lens | Seeds | Found per run | Mean | Gate |', '|---|---|---|---|---|'];
   for (const [l, v] of Object.entries(report.recall)) L.push(`| ${l} | ${v.seeded} | ${v.perRun.join(' / ')} | ${pct(v.mean)} | ${v.pass ? 'pass' : 'FAIL'} |`);
-  L.push('', '| Run | Seeds found | Canaries hit (upper bound of recall) | Not hunted | Claims | Rejected | Cells seen | Claims on clean screens |', '|---|---|---|---|---|---|---|---|');
-  for (const r of per) L.push(`| ${r.name} | ${r.ai.found}/${r.ai.seeded} | ${r.canary ? `${r.canary.hit}/${r.canary.planted}` : '–'} | ${r.canary?.notHunted?.length ?? 0} | ${r.claims} | ${r.rejected} | ${r.cells.seen}/${r.cells.answered} | ${r.ai.cleanClaims.length} |`);
+  L.push('', '| Run | Seeds found | Canaries hit (upper bound of recall) | Not hunted | Ambiguous | Claims | Rejected | Cells seen | Claims on clean screens |', '|---|---|---|---|---|---|---|---|---|');
+  for (const r of per) L.push(`| ${r.name} | ${r.ai.found}/${r.ai.seeded} | ${r.canary ? `${r.canary.hit}/${r.canary.planted}` : '–'} | ${r.canary?.notHunted?.length ?? 0} | ${r.canary?.ambiguous?.length ?? 0} | ${r.claims} | ${r.rejected} | ${r.cells.seen}/${r.cells.answered} | ${r.ai.cleanClaims.length} |`);
+  L.push('', '## Canaries', '');
+  for (const r of per) if (r.canary) {
+    for (const c of r.canary.results) L.push(`- ${r.name} ${c.kind} (${c.lens}) ${c.scene}: ${c.hit ? 'hit' : 'missed'}`);
+    for (const c of r.canary.ambiguous || []) L.push(`- ${r.name} ${c.kind} (${c.lens}) ${c.scene}: ambiguous — ${c.reason}`);
+    for (const c of r.canary.notHunted || []) L.push(`- ${r.name} ${c.kind} (${c.lens}) ${c.scene}: not hunted — ${c.reason}`);
+  }
   L.push('', '## Seeds', '');
   for (const r of per) for (const s of r.ai.results) L.push(`- ${r.name} ${s.id} ${s.lens} ${s.route} — ${s.found ? 'found' : 'missed'}: ${s.what}${s.hits.length ? `\n  - ${s.hits.join('\n  - ')}` : ''}`);
   L.push('', '## Claims on clean screens (for a human to label)', '');
