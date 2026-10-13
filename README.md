@@ -22,7 +22,7 @@ and don't write tests.
 ```
 
 Then, in your app's folder, ask Claude to check your app with nunchi (or run the `nunchi` skill). The first time,
-it runs `nunchi setup`: two pinned packages from the lockfile (`npm ci --ignore-scripts`, so no install scripts
+it runs `nunchi setup`: the pinned packages from the lockfile (`npm ci --ignore-scripts`, so no install scripts
 run) and Chromium (~170 MB), once.
 
 Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, then
