@@ -146,3 +146,44 @@ test('L8: a field described only by its placeholder', () => {
   ];
   assert.deepEqual(ruleFindings(ev).map(f => `${f.rule} ${f.selector}`), ['placeholder-as-label input.email']);
 });
+
+test('target size: the WCAG spacing exception passes a small target with room around it; crowded ones fail', () => {
+  const ctl = (selector, box, extra = {}) => ({ selector, tag: 'button', name: 'x', hasText: false, text: '', box, inline: false, ...extra });
+  const scene = (viewport, controls) => ({ scene: 's', route: '/r', viewport, status: 200, errors: [], pageErrors: [], nativeDialogs: [], requests: [], blocked: [], axe: [],
+    measure: { text: '', mainText: '', controls, clipped: [], images: [], links: [], fields: [], styles: [], scrollWidth: 390, scrollHeight: 800, viewport: { width: 390, height: 800 }, fonts: [] } });
+  const rules = ev => ruleFindings(ev).map(f => `${f.rule} ${f.selector}`).sort();
+  const crowded = [ctl('a', [0, 0, 20, 20]), ctl('b', [20, 0, 20, 20])];
+  assert.deepEqual(rules(scene('d', crowded)), ['target-size-min a', 'target-size-min b']);
+  const spaced = [ctl('a', [0, 0, 20, 20]), ctl('b', [100, 0, 20, 20])];
+  assert.deepEqual(rules(scene('d', spaced)), [], 'passes 2.5.8 by spacing; desktop has no touch guidance');
+  assert.deepEqual(rules(scene('m', spaced)), ['target-size-recommended a', 'target-size-recommended b'], 'on the phone it is still small for a finger');
+  const textLink = [ctl('open', [0, 0, 42, 20], { hasText: true, text: 'Open', name: 'Open' }), ctl('next', [0, 60, 42, 20], { hasText: true, text: 'Open', name: 'Open' })];
+  assert.deepEqual(rules(scene('m', textLink)), [], 'a spaced text link is fine');
+});
+
+test('placeholder prose is found, the words used as a name are not', () => {
+  const ev = text => ({ scene: 's', route: '/r', viewport: 'd', status: 200, errors: [], pageErrors: [], nativeDialogs: [], requests: [], blocked: [], axe: [],
+    measure: { text, mainText: text, controls: [], clipped: [], images: [], links: [], fields: [], styles: [], scrollWidth: 1280, scrollHeight: 800, viewport: { width: 1280, height: 800 }, fonts: [] } });
+  assert.deepEqual(ruleFindings(ev('Lorem ipsum dolor sit amet, consectetur.')).filter(f => f.rule === 'placeholder-text').map(f => f.evidence.kind), ['Lorem ipsum']);
+  assert.deepEqual(ruleFindings(ev('Generators: UUID Generator, Lorem Ipsum Generator, Password Generator')).filter(f => f.rule === 'placeholder-text'), []);
+});
+
+test('raw error text needs the error itself, not prose about it; next/font fallback faces are not the app\'s font', () => {
+  const ev = (text, fonts = []) => ({ scene: 's', route: '/r', viewport: 'd', status: 200, errors: [], pageErrors: [], nativeDialogs: [], requests: [], blocked: [], axe: [],
+    measure: { text, mainText: text, controls: [], clipped: [], images: [], links: [], fields: [], styles: [], scrollWidth: 1280, scrollHeight: 800, viewport: { width: 1280, height: 800 }, fonts } });
+  const has = (e, rule) => ruleFindings(e).some(f => f.rule === rule);
+  assert.ok(has(ev('Failed: TypeError: x is undefined'), 'raw-error-text'));
+  assert.ok(!has(ev('Prompt: "I am getting a TypeError when calling processData"'), 'raw-error-text'));
+  assert.ok(has(ev('', [{ family: 'Inter', weight: '400', style: 'normal', status: 'error' }]), 'font-not-loaded'));
+  assert.ok(!has(ev('', [{ family: '__Inter_Fallback_d8ebd1', weight: 'normal', style: 'normal', status: 'error' }]), 'font-not-loaded'));
+});
+
+test('quoted error messages and code samples are prose, a bare one on screen is a finding', () => {
+  const ev = (text, codeLines = []) => ({ scene: 's', route: '/r', viewport: 'd', status: 200, errors: [], pageErrors: [], nativeDialogs: [], requests: [], blocked: [], axe: [],
+    measure: { text, mainText: text, codeLines, controls: [], clipped: [], images: [], links: [], fields: [], styles: [], scrollWidth: 1280, scrollHeight: 800, viewport: { width: 1280, height: 800 }, fonts: [] } });
+  const rules = e => ruleFindings(e).map(f => f.rule).filter(r => r === 'raw-error-text' || r === 'missing-value').sort();
+  assert.deepEqual(rules(ev("Paste the error 'Cannot read property map of undefined' into the chat.")), []);
+  assert.deepEqual(rules(ev('Example:\nconsole.log(undefined)\nTypeError: x is not a function', ['console.log(undefined)', 'TypeError: x is not a function'])), []);
+  assert.deepEqual(rules(ev('Hello, undefined! You have NaN tasks.')), ['missing-value', 'missing-value']);
+  assert.deepEqual(rules(ev('Error: {"message":"Internal Server Error"}')), ['raw-error-text'], 'raw JSON is not a quotation');
+});

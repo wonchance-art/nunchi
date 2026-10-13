@@ -226,11 +226,12 @@
     {
       "id": "P25",
       "lens": "L8",
-      "rule": "target-size-min",
+      "rule": "target-size-recommended",
       "route": "/app/tasks",
       "person": "signed-in",
       "state": "normal",
-      "what": "done toggle is 18×18 px"
+      "what": "done toggle is 18×18 px. It passes WCAG 2.5.8 by the spacing exception (12px clear around it), so it is touch guidance on the phone, not a 2.5.8 failure (re-judged 2026-10-13 KST after the field test showed the exception was missing)",
+      "viewport": "m"
     },
     {
       "id": "P26",

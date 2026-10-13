@@ -14,7 +14,8 @@ const HEADINGS = ['h1', 'h2', 'h3'];
 const TRANSPARENT = /^(transparent|rgba\(0, 0, 0, 0\))$/;
 // Filled or outlined buttons, and links styled as them. Icon-only plain buttons (no fill, square corners)
 // are a different component; controls under 24px are L8's target-size finding, not a shape.
-const buttonLike = r => r.height >= 24 && (r.role === 'button' || r.role === 'link') && (!TRANSPARENT.test(r.background) || r.radius !== '0px');
+// Taller than 56px is a clickable card or list row, not a button.
+const buttonLike = r => r.height >= 24 && r.height <= 56 && (r.role === 'button' || r.role === 'link') && (!TRANSPARENT.test(r.background) || r.radius !== '0px');
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 // rowsByScene: Map(scene id → styles.json rows). Scenes: captured, normal state, not redirected.
@@ -74,7 +75,15 @@ export function buildSystem({ entries, rowsByScene }) {
           const ex = v.examples[0];
           // the same route also uses the usual heading value? then this is a variant (a second h2), not a one-off
           if (prop !== 'buttonShape' && usual.screens.includes(ex.route)) continue;
-          findings.push({ lens: 'L4', rule, severity: 'medium', scene: ex.scene, route: ex.route, viewport: vp, selector: ex.selector, box: null,
+          // a button that differs only in height is a size variant (sm / lg): a one-off needs a corner
+          // radius or a weight that no other route's buttons use
+          if (prop === 'buttonShape') {
+            const parts = x => /radius (\S+) · weight (\S+)/.exec(x.value).slice(1);
+            const [radius, weight] = parts(v);
+            const others = list.filter(x => x !== v && x.screens.some(r => r !== ex.route)).map(parts);
+            if (others.some(o => o[0] === radius) && others.some(o => o[1] === weight)) continue;
+          }
+          findings.push({ lens: 'L4', rule, severity: 'low', scene: ex.scene, route: ex.route, viewport: vp, selector: ex.selector, box: null,
             evidence: { what: label, value: v.value, usual: usual.value, usualScreens: usual.screens.length, note: `only this screen uses this ${label}; ${usual.screens.length} screens use ${usual.value}` } });
         }
       };
@@ -99,16 +108,22 @@ export function parityFindings({ entries, controlsByScene }) {
     if (!m || !d) continue;
     const dc = controlsByScene.get(d.id), mc = controlsByScene.get(m.id);
     if (!dc || !mc) continue;
+    // Hidden elements report their text without the spaces layout puts between children, so names are
+    // compared with whitespace removed.
+    const key = n => n.toLowerCase().replace(/\s+/g, '');
     const onPhone = new Map();
-    for (const c of mc.visible) if (c.name) onPhone.set(c.name.toLowerCase(), 'visible');
-    for (const c of mc.hidden) if (!onPhone.has(c.name.toLowerCase())) onPhone.set(c.name.toLowerCase(), c.menu ? 'menu' : 'hidden');
+    const phoneHasMenu = mc.visible.some(c => c.menuToggle);
+    for (const c of mc.visible) if (c.name) onPhone.set(key(c.name), 'visible');
+    for (const c of mc.hidden) if (!onPhone.has(key(c.name))) onPhone.set(key(c.name), c.menu ? 'menu' : 'hidden');
     const done = new Set();
     for (const c of dc.visible) {
-      const n = (c.name || '').toLowerCase();
+      const n = key(c.name || '');
       if (!n || done.has(n)) continue;
       done.add(n);
       const state = onPhone.get(n);
       if (state === 'visible' || state === 'menu') continue;
+      // desktop navigation the phone keeps behind a menu button that renders it only when opened
+      if (c.inNav && phoneHasMenu) continue;
       findings.push({ lens: 'L10', rule: 'missing-on-phone', severity: 'medium', scene: m.id, route: m.route, viewport: 'm', selector: c.selector, box: null,
         evidence: { name: c.name, desktopScene: d.id, onPhone: state || 'absent', note: state === 'hidden' ? 'on the phone this control is in the page but hidden, and not in a menu' : 'the phone version of this screen has no control with this name' } });
     }

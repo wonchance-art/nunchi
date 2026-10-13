@@ -12,13 +12,14 @@ test('L4: a one-off button shape, heading size and heading colour are found; sha
   const entries = routes.map(r => scene(r));
   const rows = new Map(entries.map(e => [e.id, [btn(), h1()]]));
   rows.set('/e.guest.normal.d', [btn({ height: 52, radius: '24px', fontWeight: '800' }), h1({ fontSize: '40px', color: 'rgb(90, 90, 255)' })]);
+  rows.set('/c.guest.normal.d', [btn(), btn({ height: 36 }), h1()]);   // a size variant: same radius and weight
   rows.set('/d.guest.normal.d', [btn(), btn({ background: 'rgb(255, 255, 255)', color: 'rgb(47, 93, 80)' }), h1(), { ...h1(), role: 'h2', fontSize: '20px' }, { ...h1(), role: 'h1', fontSize: '22px', selector: 'aside > h1' }]);
   const r = buildSystem({ entries, rowsByScene: rows });
   assert.deepEqual(rules(r), ['one-off-button-shape /e', 'one-off-heading-color /e', 'one-off-heading-size /e'],
     'a secondary colour is not a new shape; a second h1 size on a page that also uses the usual one is a variant');
   const f = r.findings.find(x => x.rule === 'one-off-heading-size');
   assert.deepEqual([f.evidence.value, f.evidence.usual, f.evidence.usualScreens], ['40px', '28px', 4]);
-  assert.equal(r.system.viewports.d.size.buttonShapes, 2);
+  assert.equal(r.system.viewports.d.size.buttonShapes, 3, 'the inventory still lists the size variant');
   assert.deepEqual(r.system.viewports.d['h1.fontSize'].map(x => x.value), ['28px', '22px', '40px']);
 });
 
@@ -41,9 +42,19 @@ test('L10: a desktop control the phone hides outside a menu, or lacks, is missin
   const c = (name, selector = 'main > button') => ({ name, selector });
   const controlsByScene = new Map([
     [d.id, { visible: [c('Export', 'main > div > button'), c('Add task'), c('Settings', 'nav > a'), c('Archive', 'main > a'), c(''), c('Help', 'footer > a')], hidden: [] }],
-    [m.id, { visible: [c('Add task'), c('Open menu')], hidden: [{ name: 'Export', menu: false, selector: 'main > div > button' }, { name: 'Settings', menu: true, selector: 'nav > a' }, { name: 'help', menu: true, selector: 'footer > a' }] }],
+    [m.id, { visible: [c('Add task'), c('Open menu')], hidden: [{ name: 'Ex port', menu: false, selector: 'main > div > button' }, { name: 'Settings', menu: true, selector: 'nav > a' }, { name: 'help', menu: true, selector: 'footer > a' }] }],
   ]);
   const f = parityFindings({ entries: [d, m], controlsByScene });
   assert.deepEqual(f.map(x => [x.evidence.name, x.evidence.onPhone, x.scene, x.selector]), [['Export', 'hidden', m.id, 'main > div > button'], ['Archive', 'absent', m.id, 'main > a']]);
   assert.deepEqual(parityFindings({ entries: [d], controlsByScene }), [], 'no phone scene, nothing to compare');
+});
+
+test('L10: desktop navigation behind a phone menu button that renders it only when opened is not missing', () => {
+  const d = scene('/app', 'guest', 'd'), m = scene('/app', 'guest', 'm');
+  const nav = name => ({ name, selector: `aside a.${name}`, inNav: true });
+  const withToggle = new Map([[d.id, { visible: [nav('Tasks'), nav('Notes'), { name: 'Export', selector: 'main > button' }], hidden: [] }],
+    [m.id, { visible: [{ name: 'Toggle Sidebar', selector: 'header > button', menuToggle: true }], hidden: [] }]]);
+  assert.deepEqual(parityFindings({ entries: [d, m], controlsByScene: withToggle }).map(f => f.evidence.name), ['Export'], 'content controls still count');
+  const noToggle = new Map([[d.id, withToggle.get(d.id)], [m.id, { visible: [], hidden: [] }]]);
+  assert.deepEqual(parityFindings({ entries: [d, m], controlsByScene: noToggle }).map(f => f.evidence.name), ['Tasks', 'Notes', 'Export'], 'no menu button: the navigation is gone');
 });

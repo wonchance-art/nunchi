@@ -51,6 +51,7 @@ test('captures seeded defects, keeps the clean page clean, writes the evidence p
     assert.ok(at(m, rule).length >= 1, `expected ${rule} on ${m}`);
   }
   assert.deepEqual(at(m, 'missing-value').map(f => f.evidence.kind), ['NaN']);
+  assert.ok(!at(m, 'clipped-text').some(f => f.evidence.text === 'Toggle Sidebar'), 'screen-reader-only text is not clipped text');
   assert.deepEqual(at(m, 'placeholder-text').map(f => f.evidence.kind), ['Lorem ipsum']);
   const secrets = r.findings.filter(f => f.rule === 'secret-in-client-bundle').map(f => f.evidence.kind);
   assert.deepEqual(secrets, ['stripe-live-secret-key', 'supabase-service-role-jwt']);

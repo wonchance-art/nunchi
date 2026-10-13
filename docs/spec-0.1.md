@@ -207,8 +207,8 @@ One-offs are judged per person and viewport over routes (a public page seen by b
 
 | Rule | Severity | When |
 |---|---|---|
-| `one-off-button-shape` | medium | a button shape only one route uses, while ≥3 routes share the most common one (≥4 routes have buttons) |
-| `one-off-heading-size` / `one-off-heading-color` | medium | an h1/h2/h3 size or colour only one route uses, under the same rule, and that route does not also use the usual value (a second heading style on one page is a variant) |
+| `one-off-button-shape` | low | a button shape only one route uses, while ≥3 routes share the most common one (≥4 routes have buttons) |
+| `one-off-heading-size` / `one-off-heading-color` | low | an h1/h2/h3 size or colour only one route uses, under the same rule, and that route does not also use the usual value (a second heading style on one page is a variant) |
 
 AI grouping (0.1-b) adds what values cannot: two shapes that are the same component, near-duplicate colours.
 
@@ -342,6 +342,41 @@ Caveats, kept honest:
 - "Findings not in the answer key" are mostly the same defect seen from another person, viewport or state (the
   ledger in 0.1-b collapses them) plus real extra defects the app happens to have (tasks overflow on phone,
   client-rendered lists shifting layout, a TypeError in the task page's error state).
+
+### 9.2 Field test 1 (2026-10-13 KST, preview, rule and computed lenses only)
+
+Three public, MIT-licensed apps made with AI builders, built and served locally, captured with the CLI as a user
+would (samples for dynamic routes taken from each app's own data). Nothing from them is committed here.
+
+| App | Made with | Routes / scenes | Findings before → after the fixes below | Unique after (route + rule + element) |
+|---|---|---|---|---|
+| [d33pm3/Multi-agent-Full-Stack-App](https://github.com/d33pm3/Multi-agent-Full-Stack-App) | Lovable (Vite + React Router) | 17 / 34 | 2,379 → 1,082 | 961, of which 281 phone touch guidance (low) |
+| [rangeva/online-dev-tools](https://github.com/rangeva/online-dev-tools) | Lovable (Vite + React Router) | 3 / 6 | 56 → 12 | 12 |
+| [jalcantarab/v0-vibecodex](https://github.com/jalcantarab/v0-vibecodex) | v0 (Next.js 14) | 26 / 52 | 233 → 133 | 83 |
+
+**False positives the field test exposed, all fixed with a test each:** a phone sidebar that is only rendered
+when its menu button is pressed read as `missing-on-phone` (262 + 36 + 51); screen-reader-only text read as
+`clipped-text` (34); no WCAG 2.5.8 spacing exception, so every small but well-spaced link was `target-size-min`
+(861 → 56); 44px touch guidance applied on desktop; a tool *named* "Lorem Ipsum Generator" read as placeholder
+text; next/font's local Arial fallback face read as `font-not-loaded` on machines without Arial (52); a guide that
+mentions "a TypeError when …" or quotes an error read as `raw-error-text` / `missing-value`; clickable cards and
+size variants (sm/lg) read as one-off button shapes; hidden elements' names compared with different spacing.
+Benchmark P25 (an 18px toggle with 12px clear around it) was re-judged: it passes 2.5.8 by spacing and is now
+phone touch guidance — recorded in the answer key.
+
+**After the fixes**, judged by Claude per unique finding (the gate needs a human; the owner's judgement is pending):
+- Wrong: the L4 one-offs (4 of 4 on these apps were intended variants: a landing-page heading, filter chips, card
+  buttons), now severity *low*; one quoted error in a guide (`missing-value`).
+- To check: two React hydration errors (#422/#425) on one page — nunchi freezes the clock, which can itself cause a
+  server/client date mismatch.
+- The rest hold by the rule's definition. Candidates for "didn't know, worth fixing": a link to `/document-vault`
+  where the route is `/doc-vault`; chat history and quick actions unreachable on the phone (`hidden lg:flex`, no
+  alternative); 92 icon buttons without a name; 2.98:1 sidebar text; images missing from `public/`; a link to a
+  guide that does not exist; the app's own link to a docs page that answers 404; "Coming soon" links to `#`; links
+  nested inside buttons (the visible button is 40px, the part that navigates is 20px); phone pages wider than the
+  screen. The small app (3 routes) has 3 kinds of real finding, short of the ≥5 the gate asks for.
+- Volume is the real problem for a user: 1,082 findings on 34 screens is unreadable without the ledger's grouping
+  by root cause (0.1-b) — accessibility (contrast, names) dominates and repeats per screen.
 
 ## 10. Open items
 
