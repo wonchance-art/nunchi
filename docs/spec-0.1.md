@@ -158,7 +158,7 @@ Later packs override earlier ones (ESLint-style `extends`).
 |---|---|---|---|
 | L1 broken | horizontal overflow, clipped text without ellipsis, overlap, broken image, font not loaded, layout shift (CLS), page error, 4xx/5xx | rule + AI (image) | a / b |
 | L2 states | in a forced state the user cannot tell what happened or what to do | rule + AI | a / b |
-| L3 flow | links to missing routes, orphan routes, dead-end screens, redirect loops, signed-in user bounced to login | computed (link graph; linkinator-style) | a |
+| L3 flow | links to missing routes, orphan routes, dead-end screens, redirect loops, signed-in user bounced to login | computed (link graph; linkinator-style) — §3.1 | a |
 | L4 visual consistency | values outside the app's measured design system (colors, type sizes, radii, shadows, button shapes, heading scale) | computed + AI grouping | a / b |
 | L5 copy consistency | same situation different words, same concept different names, mixed tone, different verbs for the same action | AI | b |
 | L6 copy quality | errors that don't say what happened and what to do, confirms that don't say what is deleted, `undefined`/`NaN`/`[object Object]`, raw errors | rule + AI | a / b |
@@ -171,6 +171,29 @@ Severity: **blocker** (core task impossible, data loss, secret exposed) · **hig
 where many users pass) · **medium** (inconsistency, missing state guidance, AA violation) · **low** (polish;
 collapsed by default). Reach raises one level: same cause in ≥10 places, or on a core path (first view,
 sign-up, checkout).
+
+
+### 3.1 L3 flow (computed)
+
+Built from the evidence and the source, no AI; written to `flow.json` in the run:
+- **Nodes** = route templates (from discover, so every route of the app; from `--routes`, only those), each with
+  how it is reached: `entry`, `link`, `code`, `redirect` or nothing.
+- **Edges** = internal `<a href>` links seen on captured normal screens (persons, viewports, up to three
+  scene + selector examples) and literal navigations in the files a route renders (`router.push/replace`,
+  `redirect`, `navigate`, `location.assign`, `href=`, `to=`, `href:`; template literals keep their static
+  part; file:line). An edge is **shared navigation** (`global`) when its link sits in nav/header/footer and
+  reaches the same target from ≥80% of a person's screens in that section — the board hides those by default.
+- **Order and groups** (the wall's order, R7): breadth-first from `/` over link edges in the order a visitor meets
+  them (guest before signed-in, desktop before phone), unreached routes after, by path. One order per run,
+  whatever the viewport. Groups = first path segment shared by ≥2 routes (`/app/*`); single pages go to `/`.
+
+| Rule | Severity | When |
+|---|---|---|
+| `link-to-missing-route` | high | an internal link matches no route of the app (assets and `/api/` links are not judged; only when routes come from discover) |
+| `redirect-loop` | high | the browser gave up after too many redirects |
+| `signed-in-bounced` | high | a signed-in person was sent to a sign-in page (an expired login is a run problem instead, §2.4) |
+| `unreachable-route` | low | no captured link, no navigation in the source and no redirect leads here (only when the whole app was captured, not `--changed-since`). Low because a button that navigates in code nunchi cannot read would make it wrong |
+| `dead-end` | low | no visible link to another screen on any viewport and no navigation in its source; error pages excluded |
 
 ## 4. Hunting and verification (0.1-b)
 
@@ -263,7 +286,7 @@ hunting model cannot read them.
 
 | Step | Contents | Done when |
 |---|---|---|
-| 0.1-a | **remaining: computed lenses L3 (flow), L4 (measured design system), L10 (parity)** · runs + run health + scene ids + URL redaction + scroll-area boxes ✔ · plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login ✔ · record/replay ✔ · forced states ✔ · evidence pack ✔ · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map ✔ · benchmark app ✔ · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
+| 0.1-a | **remaining: computed lenses L4 (measured design system), L10 (parity)** · L3 flow ✔ · runs + run health + scene ids + URL redaction + scroll-area boxes ✔ · plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login ✔ · record/replay ✔ · forced states ✔ · evidence pack ✔ · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map ✔ · benchmark app ✔ · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
 | 0.1-b | inventory extractor · AI lenses · verifier · canaries · decoys · ledger · fingerprints · trust metrics · lens packs · budget | AI-lens recall, precision, fingerprint stability gates |
 | 0.1-c | fix loop · guards · board (mock-ups agreed) · exports · `check` · fast first run · batch decisions | fix-loop gate, field test, all gates |
 

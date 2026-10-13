@@ -1,6 +1,6 @@
 {
   "app": "pebble",
-  "note": "Answer key for bench/pebble. Kept outside the app folder so a hunter pointed at the app never reads it. 'rule' names the rule lens expected to catch the defect in 0.1-a; defects with rule null are for AI or computed lenses (0.1-b) and are not scored yet.",
+  "note": "Answer key for bench/pebble. Kept outside the app folder so a hunter pointed at the app never reads it. 'rule' names the rule or computed lens expected to catch the defect in 0.1-a; defects with rule null are for lenses not built yet and are not scored.",
   "clean": [
     "/about",
     "/help"
@@ -268,7 +268,7 @@
     {
       "id": "P29",
       "lens": "L3",
-      "rule": null,
+      "rule": "unreachable-route",
       "route": "/orphan-page",
       "what": "page is not linked from anywhere"
     },
@@ -348,6 +348,13 @@
       "rule": null,
       "route": "/app/notes",
       "what": "while notes load, nothing tells the user something is coming"
+    },
+    {
+      "id": "P41",
+      "lens": "L3",
+      "rule": "unreachable-route",
+      "route": "/reports",
+      "what": "no link or navigation leads to the reports page (not seeded on purpose: found by L3 on 2026-10-13 KST and confirmed in the source)"
     }
   ]
 }

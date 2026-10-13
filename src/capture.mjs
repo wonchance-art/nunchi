@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
 import { initScript, collect, FREEZE_CSS } from './collect.mjs';
 import { ruleFindings, secretFindings } from './rules.mjs';
+import { buildFlow } from './flow.mjs';
 import { writeStable, sha } from './stable.mjs';
 import { FONT_HOSTS, BACKEND_SUFFIXES, isBackendHost, isDataRequest, requestKey, forceResponse, Recording, redactUrl, redactText } from './network.mjs';
 
@@ -242,6 +243,9 @@ async function captureOne(browser, base, scene, opts) {
   const insideOf = new Map();
   if (measure) for (const x of [...measure.controls, ...measure.images, ...measure.clipped, ...measure.fields]) if (x.inside) insideOf.set(x.selector, x.inside);
   const findings = raw.map(f => (insideOf.has(f.selector) ? { ...f, inside: insideOf.get(f.selector) } : f));
+  // A redirect loop never shows a page, so it is judged from the navigation error itself.
+  const loop = errors.some(e => /ERR_TOO_MANY_REDIRECTS/.test(e));
+  if (loop) findings.push({ lens: 'L3', rule: 'redirect-loop', severity: 'high', scene: scene.id, route: scene.route, viewport: scene.vp, selector: null, box: null, evidence: { path: redactUrl(scene.path), note: 'the browser gave up after too many redirects' } });
   writeStable(join(dir, 'measure.json'), {
     status, finalPath, redirected: ev.redirected, axe: ev.axe,
     ...(measure ? { scrollWidth: measure.scrollWidth, scrollHeight: measure.scrollHeight, viewport: measure.viewport, clsBand: measure.clsBand, fonts: measure.fonts, clipped: measure.clipped, images: measure.images, h1: measure.h1, title: measure.title, scrollers: measure.scrollers } : {}),
@@ -251,13 +255,13 @@ async function captureOne(browser, base, scene, opts) {
     entry: {
       id: scene.id, route: scene.route, path: redactUrl(scene.path), person: scene.person, state: scene.state, viewport: scene.vp,
       status: measure ? (ev.redirected && opts.strictPath ? 'capture-failed' : 'captured') : 'capture-failed',
-      reason: !measure ? (browserErrorPage ? 'browser-error-page' : 'no-dom') : ev.redirected ? `redirected to ${finalPath}` : null,
+      reason: !measure ? (loop ? 'redirect-loop' : browserErrorPage ? 'browser-error-page' : 'no-dom') : ev.redirected ? `redirected to ${finalPath}` : null,
       finalPath, httpStatus: status,
       top: top ? sha(top) : null, full: full ? sha(full) : null,
       findings: findings.length, dataRequests: dataKeys.length, replayMisses: new Set(drift).size,
       textHash: measure ? sha(measure.mainText) : null,
     },
-    findings, scripts,
+    findings, scripts, links: measure ? measure.links : [],
   };
 }
 
@@ -305,7 +309,7 @@ export function runHealth(entries, findings) {
 
 // scenes: [{ route, path, person }] → expanded per viewport and per forced state here.
 // network: 'auto' (replay if a recording exists, else record) | 'record' | 'replay' | 'live'.
-export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {} }) {
+export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {}, flow: flowOpts = {} }) {
   if (scenes.some(s => s.person === 'signed-in') && !(storageState && existsSync(storageState))) {
     throw Object.assign(new Error(`signed-in scenes need a saved login state, but ${storageState || '(none)'} does not exist`), { code: 'NO_AUTH' });
   }
@@ -329,7 +333,7 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   }
   const browser = await launch({ browserPath, baseUrl, allowHosts });
   const t0 = Date.now();
-  const entries = []; const findings = []; const scriptMap = new Map(); const timing = [];
+  const entries = []; const findings = []; const scriptMap = new Map(); const timing = []; const sceneLinks = new Map();
   const run = async (s, vp, state) => {
     const person = s.person || 'guest';
     const scene = { ...s, vp, person, state, id: sceneId(s.route || s.path, person, state, vp) };
@@ -338,7 +342,7 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
     const t = Date.now();
     const r = await captureOne(browser, baseUrl, scene, { out, clock, locale, timezone, timeout, storageState: person === 'signed-in' ? storageState : undefined, strictPath, allowHosts, mode, loader: recordings[person].loader() });
     timing.push({ scene: scene.id, ms: Date.now() - t });
-    entries.push(r.entry); findings.push(...r.findings);
+    entries.push(r.entry); findings.push(...r.findings); sceneLinks.set(r.entry.id, r.links);
     for (const sc of r.scripts) if (!scriptMap.has(sc.path)) scriptMap.set(sc.path, sc.body);
     return r.entry;
   };
@@ -358,6 +362,11 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
     for (const e of entries) if (lost.has(e.id)) { e.status = 'not-seen'; e.reason = 'login-expired'; e.findings = 0; }
     for (let i = findings.length - 1; i >= 0; i--) if (lost.has(findings[i].scene)) findings.splice(i, 1);
   }
+  // L3: the link graph. Routes come from discover when the CLI has them (complete); otherwise only the
+  // captured routes are known and links elsewhere are not judged.
+  const flowRoutes = flowOpts.routes || [...new Set(scenes.map(s => s.route || s.path))].sort();
+  const { flow, findings: flowFindings } = buildFlow({ entries, sceneLinks, routes: flowRoutes, complete: !!flowOpts.routes, wholeApp: flowOpts.wholeApp ?? !!flowOpts.routes, code: flowOpts.code || [] });
+  findings.push(...flowFindings);
   const scripts = [...scriptMap].sort().map(([path, body]) => ({ path, body }));
   findings.push(...secretFindings(scripts));
   const order = { blocker: 0, high: 1, medium: 2, low: 3 };
@@ -367,7 +376,8 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   const runInfo = { ...runMeta, network: modes, health };
   writeStable(join(out, 'manifest.json'), manifest);
   writeStable(join(out, 'findings.json'), { schema: 1, findings });
+  writeStable(join(out, 'flow.json'), flow);
   writeStable(join(out, 'timing.json'), { totalMs: Date.now() - t0, scenes: timing });
   writeStable(join(out, 'run.json'), runInfo);
-  return { manifest, findings, run: runInfo, totalMs: Date.now() - t0 };
+  return { manifest, findings, flow, run: runInfo, totalMs: Date.now() - t0 };
 }
