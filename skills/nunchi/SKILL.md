@@ -54,9 +54,11 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
 
 After step 5, when the user wants the deeper sweep. The engine cuts the work and checks the answers; you judge.
 
-1. `hunt --plan` (`--budget <tokens>` when the user set a cap, `--lens L5,L6` to narrow; `--run <id>` for an
-   older run). Tell the user the estimate it prints, and how many units the budget leaves *not seen: budget*,
-   before you start. Then read `hunt-plan.json` in the run folder.
+1. `hunt --plan` (`--lens L5,L6` to narrow; `--run <id>` for an older run). Without `--budget` it plans within the
+   default 400,000 tokens, spent lens by lens, worst defects first (L1 broken, L9 data loss, L6 copy, then L2,
+   L10, L7, L5, L4). Before you start, tell the user the estimate, which lenses the budget covers on every screen
+   and which it leaves *not seen: budget*. Raise it (`--budget <tokens>`) or lift it (`--budget all`) only when
+   the user says so. Then read `hunt-plan.json` in the run folder.
 2. For each unit with `status: "planned"` — in a fresh context per unit when you can (a subagent) — read its lens
    from the plan's `lenses` (definition, examples, severityRubric) and the unit's `files` in the order given, paths
    relative to the run folder: the reference scene (another screen of the same app, for comparison) comes first,
@@ -97,7 +99,8 @@ unit tells a copy from a real screen. Give a hunter only its unit (lens, checkli
 aliases are copies: they are answer keys.
 
 6. After the hunt has written `ai-findings.json`, run `canaries --score`. Report the hit rate per lens as an
-   upper bound of recall ("≤ 67%"), never as recall. A missed canary voids *seen* for its batch (that lens on
+   upper bound of recall ("≤ 67%"), never as recall; canaries it lists as *not hunted* (their unit was cut by the
+   budget or not answered) measure nothing, so say so instead of giving a rate for them. A missed canary voids *seen* for its batch (that lens on
    that route, the screens the copy came from included; `coverage.json` says `canary-missed`): hunt those units
    again in fresh contexts, put the new answers in a later file of the answers folder (a later file replaces a
    unit's earlier answer), run `hunt --record <folder>` and `canaries --score` again, and only then report those

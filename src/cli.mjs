@@ -72,10 +72,11 @@ Usage:
   nunchi login --url <base> [--path /login] [--out .nunchi/auth.json]
                                             open a browser window, sign in once with a test account,
                                             save the login for signed-in scenes
-  nunchi hunt --plan [--run <id>] [--lens L1,L6] [--budget <tokens>] [--json]
+  nunchi hunt --plan [--run <id>] [--lens L1,L6] [--budget <tokens>|all] [--json]
                                             Cut a run into AI-lens work units (1–3 scenes × 1 lens + a reference
                                             scene), estimate tokens, write hunt-plan.json into the run.
-                                            Units over --budget are listed as not seen: budget
+                                            Units over the budget (default 400000 tokens, normal screens
+                                            first; all = no cap) are listed as not seen: budget
   nunchi hunt --record <answers.json|dir> [--run <id>] [--root <dir>] [--json]
                                             Check the hunter's answers (every item answered, every defect
                                             grounded in a selector of the scene or a file:line under --root)
@@ -428,11 +429,13 @@ if (cmd === 'setup') {
   const planPath = join(runDir, 'hunt-plan.json');
   try {
     if (args.plan) {
-      const budget = args.budget === undefined ? null : Number(args.budget);
-      if (budget !== null && !(Number.isInteger(budget) && budget > 0)) fail('--budget takes a whole number of tokens');
+      const { DEFAULT_BUDGET } = await import('./hunt.mjs');
+      const budgetDefault = args.budget === undefined;
+      const budget = budgetDefault ? DEFAULT_BUDGET : args.budget === 'all' ? null : Number(args.budget);
+      if (budget !== null && !(Number.isInteger(budget) && budget > 0)) fail('--budget takes a whole number of tokens, or all for no cap');
       const { lenses } = loadLenses({ root: process.cwd() });
       const lensIds = args.lens ? args.lens.split(',').map(x => x.trim().toUpperCase()).filter(Boolean) : null;
-      const { plan, key } = planHuntWithKey({ runDir, lenses, lensIds, budget, runId });
+      const { plan, key } = planHuntWithKey({ runDir, lenses, lensIds, budget, budgetDefault, runId });
       writeStable(planPath, plan);
       // a run with canaries: scene aliases, their answer key and the evidence the aliases point to
       const keyPath = join(runDir, 'hunt-key.json');
@@ -461,10 +464,11 @@ if (cmd === 'setup') {
   const dir = runDirOf(args, 'canaries');
   if (!existsSync(join(dir, 'canaries.json'))) { console.error(`nunchi canaries: ${dir} has no canaries.json (captured with --canaries 0, or before canaries existed)`); process.exit(1); }
   const { findings } = aiFindingsOf(dir, 'canaries');
-  const r = scoreCanaries(readJson(join(dir, 'canaries.json')), findings.filter(f => f.source === 'ai'));
   const coveragePath = join(dir, 'coverage.json');
+  const recorded = existsSync(coveragePath) ? readJson(coveragePath) : null;
+  const r = scoreCanaries(readJson(join(dir, 'canaries.json')), findings.filter(f => f.source === 'ai'), recorded);
   let coverage = null;
-  if (existsSync(coveragePath)) { coverage = voidCoverage(readJson(coveragePath), r.missed); writeStable(coveragePath, coverage); }
+  if (recorded) { coverage = voidCoverage(recorded, r.missed); writeStable(coveragePath, coverage); }
   writeStable(join(dir, 'canary-score.json'), r);
   if (args.json) console.log(JSON.stringify({ ...r, coverage: coverage ? coverage.canaries : null }, null, 2));
   else {
@@ -472,6 +476,7 @@ if (cmd === 'setup') {
     console.log(`canaries hit ${r.hit}/${r.planted} → AI recall ≤ ${pct(r.rate)} (an upper bound: planted defects are easier than real ones)`);
     console.log('  ' + Object.entries(r.byLens).sort((a, b) => Number(a[0].slice(1)) - Number(b[0].slice(1))).map(([l, v]) => `${l} ${v.hit}/${v.planted}`).join(' · '));
     for (const m of r.missed) console.log(`  missed ${m.scene} (${m.lens} ${m.kind}): *seen* is void for the batch that hunted it; hunt that batch again`);
+    for (const n of r.notHunted || []) console.log(`  not hunted ${n.scene} (${n.lens}, ${n.reason}): not counted; raise --budget or answer that unit to measure it`);
     if (r.missed.length) console.log(coverage ? `coverage.json updated: ${coverage.canaries.voidedUnits.length} unit(s) no longer seen` : 'no coverage.json in this run: the batches above are not seen until hunted again');
   }
 } else if (cmd === 'verify') {

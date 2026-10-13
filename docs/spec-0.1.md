@@ -311,7 +311,9 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   `canary-score.json` (per lens, labelled an upper bound of recall). A missed canary voids *seen* for its batch in
   `coverage.json` (every cell of that lens on that route, the screens the copy came from included → `not-seen`,
   reason `canary-missed`, summary counted again, plus a `canaries` block); without coverage.json it is printed.
-  Re-hunting is the skill's job: a later answers file replaces a unit's earlier answer.
+  Re-hunting is the skill's job: a later answers file replaces a unit's earlier answer. A canary whose cell the
+  hunt never saw (cut by the budget, not answered) is *not hunted*: listed apart, neither planted nor missed, and
+  voids nothing — nobody looked, so it measures nothing.
 - `src/verify.mjs`, `nunchi verify --plan`: one packet per AI claim (`source: 'ai'`, `status: 'claimed'`, not on a
   canary copy): lens, rule, severity, scene, route, viewport, selector, box, evidence minus reasoning-like
   keys, and the scene's evidence files. Decoys = ⌈n/4⌉ (20% of packets): false claims on visible, unclaimed
@@ -333,8 +335,8 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
 
 - **Trust:** per-lens precision = fix ÷ (fix + false positive) over the last 20 human decisions; below 70%
   the lens's new findings go to *suspect*. Resolution rate (confirmed findings that reached *fixed*) beside it.
-- **Budget (H14):** per-run token cap; estimate shown before a deep sweep; hitting the cap leaves cells
-  *not seen: budget*, never silently skipped.
+- **Budget (H14):** per-run token cap (default 400,000, §4 *Default budget*); estimate shown before a deep sweep;
+  hitting the cap leaves cells *not seen: budget*, never silently skipped.
 
 **Built (2026-10-13 KST): `nunchi hunt --plan` and `--record`** (`src/hunt.mjs`).
 - *Plan* (`hunt --plan [--run] [--lens] [--budget] [--json]`, writes `hunt-plan.json` into the run): per AI lens,
@@ -360,9 +362,16 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   `source: file:line`.
 - *Estimate:* text files bytes/4; JPEGs width × height / 750 after scaling to ≤1568 px long edge and ≤1.15 MP (max
   1,600; read from the JPEG header); per unit, the lens text (bytes/4) + 80 tokens per checklist item per scene for
-  the answer. An estimate, not a measurement. Units are spent in a fixed order — normal screens first, then error,
-  empty, slow, offline; by route; guest first; by lens — and from the first unit that does not fit, every later unit
-  is *not seen: budget*. No default budget yet.
+  the answer. An estimate, not a measurement. Units are spent in a fixed order — lens by lens, worst defects first
+  (L1 broken, L9 data loss, L6 copy that fails the user, L2 states, L10 phone, L7 leftovers, L5 and L4 consistency),
+  and within a lens normal screens first, then error, empty, slow, offline; by route; guest first — and from the
+  first unit that does not fit, every later unit is *not seen: budget*.
+- *Default budget (decided 2026-10-13 KST):* 400,000 tokens when `--budget` is not given; `--budget all` lifts it.
+  Measured on the benchmark app (100 scenes + 3 canaries, 217 units, 1.25M tokens for everything): spent screen by
+  screen, as first built, the default saw every lens on 7 of 13 routes and nothing of the other 6; spent lens by
+  lens it sees L1, L9 and L6 on all 13 routes. A Claude subscription's weekly use is not published in tokens, and
+  a sweep is fresh input (screenshots, no cache), so the default leaves room for re-hunts and the verifier in the
+  same week. The plan says when the default applied (`budgetDefault: true`).
 - *Record* (`hunt --record <answers.json|dir> [--root]`, writes `ai-findings.json` and `coverage.json`; a folder is
   read in name order, and a unit answered again in a later file takes the later answer — a re-hunt — while a unit
   answered twice in one file is refused and left unanswered): every item

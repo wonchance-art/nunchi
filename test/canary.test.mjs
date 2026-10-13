@@ -249,6 +249,24 @@ test('a missed canary voids seen for its batch in coverage.json', () => {
   assert.deepEqual(voidCoverage({}, []).canaries, { missed: [], voidedUnits: [], voidedBatches: [] });
 });
 
+test('a canary the hunt never saw (budget, not answered) is not hunted: neither planted nor missed', () => {
+  const cov = { schema: 1, cells: [
+    cell('L5', 'a.guest.normal.m.canary-1', 'u1', 'b1'),
+    { ...cell('L6', 'b.guest.error.d.canary-2', 'u2', 'b2', 'not-seen'), reason: 'budget' },
+  ] };
+  const r = scoreCanaries(CANARIES, [ai('a.guest.normal.m.canary-1', 'L5', 'main > form > button', null)], cov);
+  assert.equal(r.planted, 1); assert.equal(r.hit, 1); assert.equal(r.rate, 1);
+  assert.deepEqual(r.missed, []);
+  assert.deepEqual(r.notHunted.map(n => [n.scene, n.reason]), [['b.guest.error.d.canary-2', 'budget'], ['c.guest.normal.m.canary-3', 'not-planned']]);
+  assert.deepEqual(voidCoverage(cov, r.missed).cells.map(c => c.status), ['seen', 'not-seen'], 'nothing voided for a canary nobody hunted');
+  // scoring again after a miss voided a batch gives the same result
+  const miss = scoreCanaries(CANARIES, [], { cells: [cell('L5', 'a.guest.normal.m.canary-1', 'u1', 'b1')] });
+  const voided = voidCoverage({ cells: [cell('L5', 'a.guest.normal.m.canary-1', 'u1', 'b1')] }, miss.missed);
+  assert.deepEqual(scoreCanaries(CANARIES, [], voided).missed, miss.missed);
+  // without coverage.json every canary counts, as before
+  assert.equal(scoreCanaries(CANARIES, []).planted, 3);
+});
+
 test('CLI canaries --score: per-lens hit rate, canary-score.json, coverage.json updated', () => {
   const work = mkdtempSync(join(tmpdir(), 'nunchi-cscore-'));
   const run = join(work, '.nunchi', 'runs', '0001');
@@ -259,13 +277,15 @@ test('CLI canaries --score: per-lens hit rate, canary-score.json, coverage.json 
   const cli = args => execFileSync(process.execPath, [CLI, ...args], { cwd: work, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   assert.throws(() => cli(['canaries', '--score']), /ai-findings\.json does not exist/);
   writeFileSync(join(run, 'ai-findings.json'), JSON.stringify({ schema: 1, findings: [ai('a.guest.normal.m.canary-1', 'L5', 'main > form > button', null), { ...ai('c.guest.normal.m.canary-3', 'L7', 'main', null), source: 'rule' }] }));
-  writeFileSync(join(run, 'coverage.json'), JSON.stringify(COVERAGE));
+  // every canary was hunted: its lens saw its copy
+  const hunted = { ...COVERAGE, cells: [...COVERAGE.cells, cell('L5', 'a.guest.normal.m.canary-1', 'u5', 'b4'), cell('L7', 'c.guest.normal.m.canary-3', 'u6', 'b5')] };
+  writeFileSync(join(run, 'coverage.json'), JSON.stringify(hunted));
   const text = cli(['canaries', '--score']);
   assert.match(text, /canaries hit 1\/3 → AI recall ≤ 33%/);
   assert.match(text, /L5 1\/1 · L6 0\/1 · L7 0\/1/, 'rule findings do not count as AI hits');
   const json = JSON.parse(cli(['canaries', '--score', '--run', '0001', '--json']));
   assert.equal(json.hit, 1);
-  assert.deepEqual(json.coverage.voidedUnits, ['u1', 'u2']);
+  assert.deepEqual(json.coverage.voidedUnits, ['u1', 'u2', 'u6'], 'the L6 and L7 canaries were missed');
   assert.equal(JSON.parse(readFileSync(join(run, 'coverage.json'), 'utf8')).cells[0].status, 'not-seen');
   assert.equal(JSON.parse(readFileSync(join(run, 'canary-score.json'), 'utf8')).planted, 3);
 });

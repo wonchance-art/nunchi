@@ -196,6 +196,13 @@ test('plan: budget cuts units into not-seen: budget, never drops them; --lens fi
   assert.equal(cut.estimate.planned, first);
   assert.equal(cut.estimate.units.cut, full.units.length - 1);
   assert.equal(full.units[0].scenes[0].state, 'normal', 'normal screens are spent on first');
+  // lens by lens, worst defects first: every L1 unit before any L9 unit, every L9 unit before L6, …
+  const order = [...new Set(full.units.map(u => u.lens))];
+  assert.deepEqual(order, ['L1', 'L9', 'L6', 'L2', 'L10', 'L7', 'L5', 'L4']);
+  const l1 = full.units.filter(u => u.lens === 'L1').reduce((n, u) => n + u.tokens, 0);
+  const firstLens = planHunt({ runDir, lenses, budget: l1 });
+  assert.ok(firstLens.units.filter(u => u.lens === 'L1').every(u => u.status === 'planned'), 'a budget the size of L1 sees L1 on every screen');
+  assert.ok(firstLens.units.filter(u => u.lens !== 'L1').every(u => u.status === 'not-seen'));
   const only = planHunt({ runDir, lenses, lensIds: ['L6'] });
   assert.ok(only.units.length && only.units.every(u => u.lens === 'L6'));
   assert.throws(() => planHunt({ runDir, lenses, lensIds: ['L3'] }), e => e.code === 'BAD_ARGS');
@@ -442,4 +449,23 @@ test('plan with canaries and an inventory: the copy gets its route\'s slice too,
   for (const u of units) for (const f of u.files) assert.ok(existsSync(join(runDir, f)), f);
   writeHuntMirror(runDir, key);
   assert.ok(existsSync(join(runDir, SLICE('/tasks'))), 'a new mirror keeps the slices');
+});
+
+test('cli: hunt --plan applies the default budget, --budget all lifts it, nonsense is refused', () => {
+  const { cwd, runDir } = setup();
+  const run = (...a) => spawnSync('node', [CLI, 'hunt', ...a], { cwd, encoding: 'utf8' });
+  const text = run('--plan');
+  assert.equal(text.status, 0, text.stderr);
+  assert.match(text.stdout, /budget 400000 tokens \(the default; --budget <tokens> to change it, --budget all for none\)/);
+  const plan = JSON.parse(readFileSync(join(runDir, 'hunt-plan.json'), 'utf8'));
+  assert.equal(plan.budget, 400000); assert.equal(plan.budgetDefault, true);
+  const all = JSON.parse(run('--plan', '--budget', 'all', '--json').stdout);
+  assert.equal(all.budget, null); assert.equal(all.budgetDefault, undefined);
+  assert.ok(all.units.every(u => u.status === 'planned'));
+  const mine = JSON.parse(run('--plan', '--budget', '5000', '--json').stdout);
+  assert.equal(mine.budget, 5000); assert.equal(mine.budgetDefault, undefined, 'a budget the user gave is not the default');
+  for (const bad of ['0', '-1', '1.5', 'lots']) {
+    const r = run('--plan', '--budget', bad);
+    assert.equal(r.status, 1, bad); assert.match(r.stderr, /--budget takes a whole number of tokens, or all/);
+  }
 });

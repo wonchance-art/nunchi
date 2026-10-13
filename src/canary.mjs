@@ -320,10 +320,19 @@ export function sameLocation(f, c) {
 }
 
 // A canary is hit when the hunter claimed a defect of the canary's lens on the canary scene at the planted
-// element. `exact` says the claim also named the expected checklist item.
-export function scoreCanaries(canaryFile, aiFindings) {
-  const planted = canaryFile?.planted || [];
-  const results = planted.map(c => {
+// element. `exact` says the claim also named the expected checklist item. With coverage.json, a canary whose
+// cell the hunt never saw (cut by the budget, not answered, incomplete) is *not hunted*: it is listed apart and
+// counts neither as planted nor as missed, since nobody looked. A cell voided by an earlier miss still counts
+// as hunted, so scoring again gives the same result.
+export function scoreCanaries(canaryFile, aiFindings, coverage = null) {
+  const cells = Array.isArray(coverage?.cells) ? coverage.cells : null;
+  const hunted = c => !cells || cells.some(x => x.scene === c.scene && x.lens === c.lens && (x.status === 'seen' || x.reason === 'canary-missed'));
+  const all = canaryFile?.planted || [];
+  const notHunted = all.filter(c => !hunted(c)).map(c => {
+    const cell = cells.find(x => x.scene === c.scene && x.lens === c.lens);
+    return { scene: c.scene, of: c.of, kind: c.kind, lens: c.lens, reason: cell?.reason || 'not-planned' };
+  });
+  const results = all.filter(hunted).map(c => {
     const hits = aiFindings.filter(f => f.scene === c.scene && f.lens === c.lens && sameLocation(f, c));
     return { scene: c.scene, of: c.of, kind: c.kind, lens: c.lens, checklist: c.checklist, hit: hits.length > 0, exact: hits.some(f => f.rule === c.checklist || f.checklist === c.checklist) };
   });
@@ -338,6 +347,7 @@ export function scoreCanaries(canaryFile, aiFindings) {
     schema: 1, note: 'canary hit rate is an upper bound of recall: planted defects are easier than real ones',
     planted: results.length, hit, rate: results.length ? hit / results.length : null, byLens, results,
     missed: results.filter(r => !r.hit).map(({ scene, of, kind, lens }) => ({ scene, of, kind, lens })),
+    ...(notHunted.length ? { notHunted } : {}),
   };
 }
 
