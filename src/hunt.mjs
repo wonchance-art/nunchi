@@ -16,8 +16,19 @@ import { lensHash, lensNumber, SEVERITIES, EVIDENCE_FILES } from './lenses.mjs';
 //   per unit     the lens text sent with it (definition, checklist, examples, rubric: bytes / 4)
 //                + ANSWER_TOKENS per checklist item for the answer
 export const ANSWER_TOKENS = 80;
+// The budget `hunt --plan` applies when none is given (spec §4, H14; decided 2026-10-13 KST). A full sweep of a
+// 100-scene app is about 1.25M tokens of fresh input, screenshots included; 400,000 checks every screen of it for
+// the worst defects (L1, L9; see SPEND_ORDER) and leaves room in a week's use for the re-hunts and the verifier.
+// `--budget all` lifts it.
+export const DEFAULT_BUDGET = 400000;
 export const IMAGE_TOKENS_MAX = 1600;
 const STATE_ORDER = ['normal', 'error', 'empty', 'slow', 'offline'];
+// Lenses by the harm of what they find (decided 2026-10-13 KST): a broken screen (L1) and lost data (L9) first,
+// then copy that fails the user (L6), unexplained states (L2), the phone (L10), leftovers (L7), and consistency
+// (L5, L4). Measured on the benchmark app (100 scenes): spent screen by screen, the default budget saw every lens on
+// 7 of 13 routes and nothing of the other 6; spent lens by lens, it sees L1 and L9 on every screen. Lenses not
+// listed come after, by number.
+const SPEND_ORDER = ['L1', 'L9', 'L6', 'L2', 'L10', 'L7', 'L5', 'L4'];
 const PERSON_ORDER = ['guest', 'signed-in'];
 const MAX_SCENES = 3;
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -140,7 +151,7 @@ const batchOf = (lens, route) => sha(stableJson({ lens, route }), 12);
 
 export function planHunt(opts) { return planHuntWithKey(opts).plan; }
 
-export function planHuntWithKey({ runDir, lenses, lensIds = null, budget = null, runId = null }) {
+export function planHuntWithKey({ runDir, lenses, lensIds = null, budget = null, budgetDefault = false, runId = null }) {
   const manifest = readManifest(runDir);
   let canarySeed = null;
   try { canarySeed = JSON.parse(readFileSync(join(runDir, 'canaries.json'), 'utf8')).seed ?? null; } catch {}
@@ -203,9 +214,10 @@ export function planHuntWithKey({ runDir, lenses, lensIds = null, budget = null,
       }
     }
   }
-  // Order the budget is spent in: normal screens first, then error, empty, slow, offline; by route, guest
-  // before signed-in, then lens. A small budget covers every lens on the main screens before going deeper.
-  const key = u => [rank(STATE_ORDER, u.scenes[0].state), u.scenes[0].route, rank(PERSON_ORDER, u.scenes[0].person), lensNumber(u.lens), u.scenes[0].scene];
+  // Order the budget is spent in: lens by lens in SPEND_ORDER, and within a lens normal screens first, then
+  // error, empty, slow, offline; by route, guest before signed-in. A small budget checks every screen for the
+  // worst defects before it looks for the milder ones (spec §4, H14).
+  const key = u => [rank(SPEND_ORDER, u.lens), lensNumber(u.lens), rank(STATE_ORDER, u.scenes[0].state), u.scenes[0].route, rank(PERSON_ORDER, u.scenes[0].person), u.scenes[0].scene];
   units.sort((a, b) => { const x = key(a), y = key(b); for (let i = 0; i < x.length; i++) { const c = typeof x[i] === 'number' ? x[i] - y[i] : cmp(x[i], y[i]); if (c) return c; } return 0; });
   let spent = 0; let cut = false;
   for (const u of units) {
@@ -219,6 +231,7 @@ export function planHuntWithKey({ runDir, lenses, lensIds = null, budget = null,
     run: runId,
     health: manifest.health?.status ?? null,
     budget: budget ?? null,
+    ...(budgetDefault && budget != null ? { budgetDefault: true } : {}),
     estimate: {
       method: `text: bytes/4; JPEG: width*height/750 after scaling to <=1568px long edge and <=1.15MP (max ${IMAGE_TOKENS_MAX}); per unit: lens text bytes/4 + ${ANSWER_TOKENS} per checklist item per scene`,
       total, planned: spent, cut: total - spent,
@@ -467,7 +480,7 @@ export function formatPlan(plan, planPath) {
   const e = plan.estimate;
   L.push(`hunt plan ${plan.id}${plan.run ? ` for run ${plan.run}` : ''}: ${e.units.total} work units over ${plan.lenses.length} lens(es), estimated ${e.total} tokens`);
   if (plan.health && plan.health !== 'ok') L.push(`RUN PROBLEM ${plan.health}: affected scenes are listed as not seen`);
-  if (plan.budget != null) L.push(`budget ${plan.budget} tokens: ${e.units.planned} unit(s) planned (${e.planned} tokens), ${e.units.cut} not seen: budget (${e.cut} tokens)`);
+  if (plan.budget != null) L.push(`budget ${plan.budget} tokens${plan.budgetDefault ? ' (the default; --budget <tokens> to change it, --budget all for none)' : ''}: ${e.units.planned} unit(s) planned (${e.planned} tokens), ${e.units.cut} not seen: budget (${e.cut} tokens)`);
   for (const lens of plan.lenses) {
     const us = plan.units.filter(u => u.lens === lens.id);
     const cut = us.filter(u => u.status !== 'planned').length;
