@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "id": "L2",
+  "name": "States",
+  "definition": "In a forced state (empty data, a failed request, a slow response, no connection) the user cannot tell what happened or what to do next. nunchi forced these states itself: the failure is expected, the question is only how the screen handles it. A blank main area (blank-state), an error state identical to the empty state (error-looks-empty) and an unchanged offline screen (no-offline-notice) are already rule findings; do not repeat them.",
+  "method": "ai",
+  "scenes": { "states": ["empty", "error", "slow", "offline"] },
+  "evidence": ["top.jpg", "text.txt", "aria.yml", "controls.json"],
+  "checklist": [
+    { "id": "L2.what-happened", "question": "Does the screen say in words what happened (nothing here yet / loading failed / still loading / you are offline)? Answer defect when it does not." },
+    { "id": "L2.next-step", "question": "Does the screen offer a next step that fits the state: create the first item (empty), retry (error), reconnect or keep working offline (offline)? Answer defect when there is none.", "scenes": { "states": ["empty", "error", "offline"] } },
+    { "id": "L2.looks-normal", "question": "Does a failure look like success: an error or offline screen that shows a normal empty list, zero counts or stale data with no notice?", "scenes": { "states": ["error", "offline"] } },
+    { "id": "L2.endless-loading", "question": "Does a skeleton, spinner or 'Loading…' stay on screen although the request already failed?", "scenes": { "states": ["error", "offline"] } },
+    { "id": "L2.no-loading-indicator", "question": "While data is held back, does anything show that content is on its way (spinner, skeleton, 'Loading…')? Answer defect when the area is just empty or shows a final-looking 'nothing here' message.", "scenes": { "states": ["slow"] } }
+  ],
+  "examples": {
+    "bad": [
+      "Error state of /notes: the list area shows 'No notes yet. Write your first note!' — the user believes their notes are gone.",
+      "Error state of /garden: three grey skeleton rows and nothing else; there is no retry.",
+      "Slow state of /tasks: 'You have no tasks' while the request is still pending."
+    ],
+    "good": [
+      "Error state of /notes: 'We couldn't load your notes. Check your connection and try again.' with a 'Try again' button.",
+      "Empty state of /garden: 'No plants yet' with an 'Add a plant' button."
+    ]
+  },
+  "severityRubric": {
+    "high": "a failure looks like data loss or success (error shown as empty), or the user is stuck with no way forward on a core screen",
+    "medium": "the state is shown but gives no next step, or loading never ends",
+    "low": "wording or placement of an otherwise clear state message"
+  }
+}

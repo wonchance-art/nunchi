@@ -15,6 +15,7 @@
   },
   "files": [
     "src",
+    "lenses",
     "LICENSE",
     "README.md"
   ],

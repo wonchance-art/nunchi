@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "id": "L7",
+  "name": "Vibe-coding leftovers",
+  "definition": "Things left from building the app that a user should never see: template copy, demo data, debug UI, and copies of navigation or footer that drifted apart. Lorem ipsum, John/Jane Doe, example.com, TODO/FIXME on screen, 'Coming soon' sprawl and href=\"#\" are already rule findings; do not repeat them.",
+  "method": "ai",
+  "scenes": { "states": ["normal"] },
+  "evidence": ["top.jpg", "text.txt", "controls.json", "links.json"],
+  "checklist": [
+    { "id": "L7.template-copy", "question": "Is template or scaffold copy left on screen ('Your tagline here', 'Feature 1', 'Card title', 'Welcome to your new app', 'Edit this page to get started')?" },
+    { "id": "L7.fake-data", "question": "Are hard-coded numbers or records shown that look like demo data rather than the user's data (round marketing numbers like '10,000+ users' on a private dashboard, the same sample record repeated, 'Acme'-style placeholder companies)?" },
+    { "id": "L7.debug-ui", "question": "Is debug UI visible: JSON dumps, 'Debug' or 'Test' buttons, raw ids or state printed for the developer, a developer toolbar left on?" },
+    { "id": "L7.drifted-nav", "question": "Do the header, navigation or footer differ from the reference screen's copy of them in a way that looks unintended (a link missing, a different label or order, an older logo text)? Answer none when this screen intentionally uses another layout (sign-in, landing page)." }
+  ],
+  "examples": {
+    "bad": [
+      "The dashboard hero says 'Your tagline here'.",
+      "'Trusted by 50,000+ gardeners' on a signed-in page that lists the user's own three plants.",
+      "A 'Test toast' button next to 'Add plant'.",
+      "The footer on /notes links 'Help, Privacy'; on the reference /garden it links 'Help, Privacy, Terms' — copied before Terms was added."
+    ],
+    "good": [
+      "An onboarding sample note 'Try editing me' that the app explains and lets the user delete.",
+      "The sign-in page has no main navigation: a deliberate layout."
+    ]
+  },
+  "severityRubric": {
+    "high": "debug UI or demo data that could mislead the user about their own data",
+    "medium": "template copy or a drifted navigation on a core screen",
+    "low": "a leftover on a rarely visited screen"
+  }
+}
