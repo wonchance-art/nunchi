@@ -20,6 +20,8 @@ before(async () => {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ items: [{ title: 'Water the fern' }, { title: 'Return the library book' }], total: 2, sync: counter, access_token: 'tok-must-not-be-recorded' }));
     }
+    if (path.startsWith('/private/')) { res.writeHead(302, { location: '/login' }); return res.end(); }
+    if (path === '/login') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end('<main><h1>Sign in</h1></main>'); }
     const file = path === '/' ? join(SITE, 'index.html') : existsSync(join(SPA, path)) ? join(SPA, path) : join(SITE, path);
     if (!existsSync(file) || statSync(file).isDirectory()) { res.writeHead(404); return res.end(); }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
@@ -68,7 +70,7 @@ test('forced states: empty, error, slow, offline are captured and judged', async
   const scenes = [{ route: '/tasks.html', path: '/tasks.html' }, { route: '/quiet.html', path: '/quiet.html' }, { route: '/', path: '/' }];
   const r = await capture({ baseUrl: base, scenes, viewports: ['m'], out, network: 'auto', recordingDir: har, states: ['normal', 'empty', 'error', 'slow', 'offline'] });
   const ids = r.manifest.scenes.map(s => s.id);
-  assert.ok(!ids.some(id => id.startsWith('root.') && !id.includes('.normal.')), 'a page without data requests gets no forced states');
+  assert.ok(!ids.some(id => id.startsWith('~.') && !id.includes('.normal.')), 'a page without data requests gets no forced states');
 
   assert.match(text(out, 'tasks.html.guest.empty.m'), /No tasks yet/);
   assert.match(text(out, 'tasks.html.guest.error.m'), /Internal Server Error/);
@@ -114,4 +116,26 @@ test('a recording survives a new port: same-origin requests are keyed as app:', 
   const other = base.replace('127.0.0.1', 'localhost');
   const r = await capture({ baseUrl: other, scenes: [{ route: '/tasks.html', path: '/tasks.html' }], viewports: ['m'], out: tmp('m4'), network: 'replay', recordingDir: har });
   assert.equal(r.manifest.scenes[0].replayMisses, 0);
+});
+
+test('an expired login is one run problem, not a finding per screen', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const dir = tmp('exp'), auth = join(dir, 'auth.json');
+  writeFileSync(auth, JSON.stringify({ cookies: [], origins: [] }));
+  const scenes = ['/private/a', '/private/b', '/private/c'].map(p => ({ route: p, path: p, person: 'signed-in' })).concat([{ route: '/', path: '/', person: 'guest' }]);
+  const r = await capture({ baseUrl: base, scenes, viewports: ['m'], out: tmp('exp-out'), storageState: auth });
+  assert.equal(r.manifest.health.status, 'login-expired', JSON.stringify(r.manifest.scenes.map(e => [e.id, e.status, e.reason, e.finalPath])) + JSON.stringify(r.findings.map(f => f.rule)));
+  assert.deepEqual(r.manifest.health.problems, [{ status: 'login-expired', scenes: 3, of: 3 }]);
+  const signed = r.manifest.scenes.filter(e => e.person === 'signed-in');
+  assert.ok(signed.every(e => e.status === 'not-seen' && e.reason === 'login-expired'));
+  assert.deepEqual(r.findings.filter(f => signed.some(e => e.id === f.scene)), []);
+  assert.equal(r.run.health.status, 'login-expired');
+});
+
+test('a server that is not there is one run problem, and Chromium\'s error page is never a screen', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const r = await capture({ baseUrl: 'http://127.0.0.1:9', scenes: [{ route: '/', path: '/' }, { route: '/a', path: '/a' }], viewports: ['m'], out: tmp('down'), timeout: 5000 });
+  assert.equal(r.manifest.health.status, 'app-unreachable');
+  assert.ok(r.manifest.scenes.every(e => e.status === 'capture-failed' && e.reason === 'browser-error-page'), JSON.stringify(r.manifest.scenes));
+  assert.deepEqual(r.findings, []);
 });

@@ -32,6 +32,8 @@
 </main>
 <script>
   fetch('/api/tasks-missing').catch(() => {});
+  fetch('/api/session?token=tok-SEKRIT-1&page=2').catch(() => {});
+  history.replaceState(null, '', location.pathname + '?invite=1&code=tok-SEKRIT-2');
   window.confirm('Delete everything?');
   setTimeout(() => { null.boom(); }, 0);
 </script>

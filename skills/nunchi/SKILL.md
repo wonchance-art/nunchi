@@ -33,7 +33,9 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    responses; later runs replay them so screens are comparable. Screens that load data are also
    captured in forced empty, error, slow and offline states. If Chromium is missing, relay the one
    install command it prints.
-5. Read `.nunchi/evidence/latest/findings.json`. Report blocker and high first, each with scene,
+5. Read `findings.json` in the run folder the capture printed (`.nunchi/runs/<id>/`; `nunchi runs` lists them,
+   `.nunchi/runs/latest` names the newest). If the capture printed `RUN PROBLEM`, say so first and fix that
+   (log in again, start the app) before reading any finding. Report blocker and high first, each with scene,
    selector and evidence. Group the same rule + selector across scenes. Say which routes were
    skipped and why, and how many replay misses there were (a miss means the recording is stale:
    suggest `--network record`).

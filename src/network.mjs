@@ -28,9 +28,40 @@ export function isDataRequest({ resourceType, headers }) {
 }
 
 const VOLATILE_PARAMS = new Set(['_', '_t', 't', 'ts', 'timestamp', 'cb', 'cachebust', 'cache_bust', 'nonce', '_rsc', 'rand', 'random']);
-// Same request across runs → same key: params sorted, cache-busters dropped, epoch-like numbers masked.
+// Query and fragment parameters that carry credentials (magic links, signed URLs, OAuth codes,
+// Supabase's #access_token, `?apikey=`). Their values never reach evidence, recordings or keys.
+export const SECRET_PARAM = /^(access_token|refresh_token|id_token|provider_token|token|auth|authorization|apikey|api_key|key|secret|client_secret|password|pass|pwd|session|session_id|sessionid|sid|jwt|code|otp|signature|sig|x-amz-signature|x-amz-security-token|x-amz-credential|x-goog-signature|x-goog-credential)$/i;
+const redactParams = (params, keep) => { for (const [k, v] of [...params]) if (SECRET_PARAM.test(k)) params.set(k, keep ? `REDACTED-${sha(v, 8)}` : 'REDACTED'); };
+const redactPart = (part, keep) => {
+  if (!part.includes('=')) return part;
+  const p = new URLSearchParams(part);
+  if (![...p.keys()].some(k => SECRET_PARAM.test(k))) return part;
+  redactParams(p, keep);
+  return p.toString();
+};
+
+// A URL or path as it may be written into evidence: credential values replaced, in the query and in
+// a `#a=1&b=2` fragment. Only the query and fragment are touched; everything before them is kept as is.
+export function redactUrl(url) {
+  if (typeof url !== 'string') return url;
+  const m = /^([^?#]*)(\?[^#]*)?(#.*)?$/s.exec(url);
+  const [, head, query = '', hash = ''] = m;
+  const q = query ? '?' + redactPart(query.slice(1), false) : '';
+  const h = hash ? '#' + redactPart(hash.slice(1), false) : '';
+  return head + q + h;
+}
+
+// Free text (console messages, navigation errors) can quote URLs: credential values in it go too.
+export function redactText(text) {
+  if (typeof text !== 'string') return text;
+  return text.replace(/([?&#])([\w.-]+)=([^&#\s"'<>]+)/g, (all, sep, k) => (SECRET_PARAM.test(k) ? `${sep}${k}=REDACTED` : all));
+}
+
+// Same request across runs → same key: params sorted, cache-busters dropped, epoch-like numbers masked,
+// credentials replaced by a short hash (requests that differ only by token stay distinct).
 export function normalizeUrl(url) {
   const u = new URL(url);
+  redactParams(u.searchParams, true);
   const params = [...u.searchParams].filter(([k]) => !VOLATILE_PARAMS.has(k.toLowerCase()))
     .map(([k, v]) => [k, /^\d{10}(\d{3})?$/.test(v) ? '<epoch>' : v])
     .sort((a, b) => (a[0] + '=' + a[1] < b[0] + '=' + b[1] ? -1 : 1));
