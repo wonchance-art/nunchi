@@ -8,6 +8,7 @@ import { chromium } from 'playwright-core';
 import { initScript, collect, FREEZE_CSS } from './collect.mjs';
 import { ruleFindings, secretFindings } from './rules.mjs';
 import { buildFlow } from './flow.mjs';
+import { buildSystem, parityFindings } from './system.mjs';
 import { writeStable, sha } from './stable.mjs';
 import { FONT_HOSTS, BACKEND_SUFFIXES, isBackendHost, isDataRequest, requestKey, forceResponse, Recording, redactUrl, redactText } from './network.mjs';
 
@@ -248,7 +249,7 @@ async function captureOne(browser, base, scene, opts) {
   if (loop) findings.push({ lens: 'L3', rule: 'redirect-loop', severity: 'high', scene: scene.id, route: scene.route, viewport: scene.vp, selector: null, box: null, evidence: { path: redactUrl(scene.path), note: 'the browser gave up after too many redirects' } });
   writeStable(join(dir, 'measure.json'), {
     status, finalPath, redirected: ev.redirected, axe: ev.axe,
-    ...(measure ? { scrollWidth: measure.scrollWidth, scrollHeight: measure.scrollHeight, viewport: measure.viewport, clsBand: measure.clsBand, fonts: measure.fonts, clipped: measure.clipped, images: measure.images, h1: measure.h1, title: measure.title, scrollers: measure.scrollers } : {}),
+    ...(measure ? { scrollWidth: measure.scrollWidth, scrollHeight: measure.scrollHeight, viewport: measure.viewport, clsBand: measure.clsBand, fonts: measure.fonts, clipped: measure.clipped, images: measure.images, h1: measure.h1, title: measure.title, scrollers: measure.scrollers, hiddenControls: measure.hiddenControls } : {}),
   });
   writeStable(join(dir, 'volatile.json'), { cls });
   return {
@@ -262,6 +263,7 @@ async function captureOne(browser, base, scene, opts) {
       textHash: measure ? sha(measure.mainText) : null,
     },
     findings, scripts, links: measure ? measure.links : [],
+    styles: measure ? measure.styles : [], controls: measure ? { visible: measure.controls, hidden: measure.hiddenControls } : null,
   };
 }
 
@@ -333,7 +335,7 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   }
   const browser = await launch({ browserPath, baseUrl, allowHosts });
   const t0 = Date.now();
-  const entries = []; const findings = []; const scriptMap = new Map(); const timing = []; const sceneLinks = new Map();
+  const entries = []; const findings = []; const scriptMap = new Map(); const timing = []; const sceneLinks = new Map(); const rowsByScene = new Map(); const controlsByScene = new Map();
   const run = async (s, vp, state) => {
     const person = s.person || 'guest';
     const scene = { ...s, vp, person, state, id: sceneId(s.route || s.path, person, state, vp) };
@@ -342,7 +344,7 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
     const t = Date.now();
     const r = await captureOne(browser, baseUrl, scene, { out, clock, locale, timezone, timeout, storageState: person === 'signed-in' ? storageState : undefined, strictPath, allowHosts, mode, loader: recordings[person].loader() });
     timing.push({ scene: scene.id, ms: Date.now() - t });
-    entries.push(r.entry); findings.push(...r.findings); sceneLinks.set(r.entry.id, r.links);
+    entries.push(r.entry); findings.push(...r.findings); sceneLinks.set(r.entry.id, r.links); rowsByScene.set(r.entry.id, r.styles); if (r.controls) controlsByScene.set(r.entry.id, r.controls);
     for (const sc of r.scripts) if (!scriptMap.has(sc.path)) scriptMap.set(sc.path, sc.body);
     return r.entry;
   };
@@ -367,6 +369,9 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   const flowRoutes = flowOpts.routes || [...new Set(scenes.map(s => s.route || s.path))].sort();
   const { flow, findings: flowFindings } = buildFlow({ entries, sceneLinks, routes: flowRoutes, complete: !!flowOpts.routes, wholeApp: flowOpts.wholeApp ?? !!flowOpts.routes, code: flowOpts.code || [] });
   findings.push(...flowFindings);
+  // L4 and L10: the app's measured design system and phone/desktop parity.
+  const { system, findings: systemFindings } = buildSystem({ entries, rowsByScene });
+  findings.push(...systemFindings, ...parityFindings({ entries, controlsByScene }));
   const scripts = [...scriptMap].sort().map(([path, body]) => ({ path, body }));
   findings.push(...secretFindings(scripts));
   const order = { blocker: 0, high: 1, medium: 2, low: 3 };
@@ -377,7 +382,8 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   writeStable(join(out, 'manifest.json'), manifest);
   writeStable(join(out, 'findings.json'), { schema: 1, findings });
   writeStable(join(out, 'flow.json'), flow);
+  writeStable(join(out, 'design-system.json'), system);
   writeStable(join(out, 'timing.json'), { totalMs: Date.now() - t0, scenes: timing });
   writeStable(join(out, 'run.json'), runInfo);
-  return { manifest, findings, flow, run: runInfo, totalMs: Date.now() - t0 };
+  return { manifest, findings, flow, system, run: runInfo, totalMs: Date.now() - t0 };
 }

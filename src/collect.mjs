@@ -99,6 +99,24 @@ export function collect() {
     });
   }
 
+  // Controls present in the DOM but not visible (L10 parity): inside a menu, a dialog or a region a visible
+  // toggle controls, or simply hidden. A desktop control that is hidden on the phone and not in a menu
+  // is one the phone user cannot reach.
+  const toggled = new Set();
+  for (const t of document.querySelectorAll('[aria-controls]')) if (vis(t)) for (const id of (t.getAttribute('aria-controls') || '').split(/\s+/)) if (id) toggled.add(id);
+  const inMenu = el => {
+    if (el.closest('nav,dialog,details,[role="menu"],[role="dialog"],[role="navigation"],[popover]')) return true;
+    for (let a = el; a; a = a.parentElement) if (a.id && toggled.has(a.id)) return true;
+    return false;
+  };
+  const hiddenControls = [];
+  for (const el of document.querySelectorAll('a[href],button,[role="button"],[role="link"]')) {
+    if (hiddenControls.length >= MAX || vis(el)) continue;
+    const n = name(el);
+    if (!n) continue;
+    hiddenControls.push({ selector: sel(el), tag: el.localName, name: n, menu: inMenu(el) });
+  }
+
   const styles = [];
   const seen = new Set();
   for (const el of document.querySelectorAll('body *')) {
@@ -171,6 +189,6 @@ export function collect() {
     scrollHeight: doc.scrollHeight,
     text: (document.body.innerText || '').replace(/ /g, ' '),
     mainText: (main.innerText || '').replace(/ /g, ' '),
-    controls, styles, clipped, images, links, fonts, fields, scrollers,
+    controls, hiddenControls, styles, clipped, images, links, fonts, fields, scrollers,
   };
 }

@@ -275,21 +275,21 @@
     {
       "id": "P30",
       "lens": "L4",
-      "rule": null,
+      "rule": "one-off-button-shape",
       "route": "/pricing",
       "what": "'Choose Garden' button has its own shape (52px, radius 24, weight 800)"
     },
     {
       "id": "P31",
       "lens": "L4",
-      "rule": null,
+      "rule": "one-off-heading-color",
       "route": "/app/notes",
       "what": "heading colour #5a5aff exists nowhere else"
     },
     {
       "id": "P32",
       "lens": "L4",
-      "rule": null,
+      "rule": "one-off-heading-size",
       "route": "/app/archive",
       "what": "h1 is 40px where every other h1 is 28px"
     },
@@ -338,7 +338,7 @@
     {
       "id": "P39",
       "lens": "L10",
-      "rule": null,
+      "rule": "missing-on-phone",
       "route": "/app/tasks",
       "what": "Export is available on desktop and missing on phone"
     },
