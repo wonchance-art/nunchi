@@ -104,7 +104,19 @@ Run-level: `manifest.json` (scenes, timings, determinism check, font status, dri
 
 ### 2.5 Source ↔ scene map (H5)
 
-dependency-cruiser import graph + Next.js `.nft.json` traces where present. Used to (a) mark coverage
+A small built-in import graph (static `import`/`export … from`/`import()`/`require`/CSS `@import`, resolved
+through relative paths, tsconfig/jsconfig `paths` and `baseUrl`, and the `@/` convention) plus the files that
+frame a route without importing it (Next.js layouts, templates, loading/error/not-found, middleware; pages-router
+`_app`/`_document`; TanStack root and parent routes). It over-approximates on purpose: a missed edge would hide a
+stale screen. A change to a dependency or build config (`package.json`, lockfiles, `next/vite/tailwind/postcss`
+config, `tsconfig*`) affects every route. `nunchi map` prints it; `capture --changed-since <ref>` captures only the
+routes it says changed (uncommitted and untracked files included); `capture` writes `source-map.json` with the
+evidence.
+
+*Decision (2026-10-13 KST):* dependency-cruiser was adopted in the precedent survey but is **not** used. It brings
+18 direct dependencies (including an interactive prompt library and a webpack plugin) for one feature, against the
+"pinned, minimal dependencies" rule (H15); the needed graph is ~200 lines. Next.js `.nft.json` traces need a
+production build and are left for a later version. Used to (a) mark coverage
 cells *stale* when files they depend on change, (b) pick scenes to re-capture incrementally, (c) pick
 neighbour scenes for regression checks after a fix. The board header shows *evidence commit ≠ HEAD*.
 
@@ -223,7 +235,7 @@ hunting model cannot read them.
 
 | Step | Contents | Done when |
 |---|---|---|
-| 0.1-a | **remaining: computed lenses L3 (flow), L4 (measured design system), L10 (parity)** · plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login ✔ · record/replay ✔ · forced states ✔ · evidence pack ✔ · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map ✔ (PR #4) · benchmark app ✔ · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
+| 0.1-a | **remaining: computed lenses L3 (flow), L4 (measured design system), L10 (parity)** · plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login ✔ · record/replay ✔ · forced states ✔ · evidence pack ✔ · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map ✔ · benchmark app ✔ · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
 | 0.1-b | inventory extractor · AI lenses · verifier · canaries · decoys · ledger · fingerprints · trust metrics · lens packs · budget | AI-lens recall, precision, fingerprint stability gates |
 | 0.1-c | fix loop · guards · board (mock-ups agreed) · exports · `check` · fast first run · batch decisions | fix-loop gate, field test, all gates |
 
