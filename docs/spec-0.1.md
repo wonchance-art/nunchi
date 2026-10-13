@@ -159,13 +159,13 @@ Later packs override earlier ones (ESLint-style `extends`).
 | L1 broken | horizontal overflow, clipped text without ellipsis, overlap, broken image, font not loaded, layout shift (CLS), page error, 4xx/5xx | rule + AI (image) | a / b |
 | L2 states | in a forced state the user cannot tell what happened or what to do | rule + AI | a / b |
 | L3 flow | links to missing routes, orphan routes, dead-end screens, redirect loops, signed-in user bounced to login | computed (link graph; linkinator-style) — §3.1 | a |
-| L4 visual consistency | values outside the app's measured design system (colors, type sizes, radii, shadows, button shapes, heading scale) | computed + AI grouping | a / b |
+| L4 visual consistency | values outside the app's measured design system (colors, type sizes, radii, shadows, button shapes, heading scale) | computed (§3.2) + AI grouping | a / b |
 | L5 copy consistency | same situation different words, same concept different names, mixed tone, different verbs for the same action | AI | b |
 | L6 copy quality | errors that don't say what happened and what to do, confirms that don't say what is deleted, `undefined`/`NaN`/`[object Object]`, raw errors | rule + AI | a / b |
 | L7 vibe-coding leftovers | Lorem ipsum, John Doe, example.com, TODO on screen, "Coming soon" sprawl, `href="#"`, empty `onClick`, hard-coded fake numbers, debug UI, drifted copies of nav/footer | rule + AI | a / b |
 | L8 accessibility | axe (contrast, names, alt, labels, duplicate ids), target size (WCAG 2.5.8: < 24px medium, < 44px low; links inline in text exempt), no focus style | rule | a |
 | L9 safety | destructive action without confirm/undo, `window.confirm`, input lost on leave, secret-shaped strings in client JS (location and kind only, value masked) | rule + AI | a / b |
-| L10 parity | control on desktop missing on phone, fixed element covering content, primary action missing from phone first view | computed + AI | a / b |
+| L10 parity | control on desktop missing on phone, fixed element covering content, primary action missing from phone first view | computed (§3.2) + AI | a / b |
 
 Severity: **blocker** (core task impossible, data loss, secret exposed) · **high** (broken, wrong or raw error
 where many users pass) · **medium** (inconsistency, missing state guidance, AA violation) · **low** (polish;
@@ -194,6 +194,29 @@ Built from the evidence and the source, no AI; written to `flow.json` in the run
 | `signed-in-bounced` | high | a signed-in person was sent to a sign-in page (an expired login is a run problem instead, §2.4) |
 | `unreachable-route` | low | no captured link, no navigation in the source and no redirect leads here (only when the whole app was captured, not `--changed-since`). Low because a button that navigates in code nunchi cannot read would make it wrong |
 | `dead-end` | low | no visible link to another screen on any viewport and no navigation in its source; error pages excluded |
+
+
+### 3.2 L4 measured design system and L10 parity (computed)
+
+**L4.** The app's design system is what its screens actually use. `design-system.json` (per run, per viewport)
+lists colours, backgrounds, type sizes, weights, families, radii, shadows, button shapes (height · radius · weight
+of filled or outlined buttons and button-styled links; icon-only plain buttons and controls under 24px are left
+to L8) and the h1–h3 scale, each with the screens that use it and up to three examples, plus a `size` summary
+(how many distinct values: the progress board's "is it converging" number). Framework error pages are left out.
+One-offs are judged per person and viewport over routes (a public page seen by both persons is one route):
+
+| Rule | Severity | When |
+|---|---|---|
+| `one-off-button-shape` | medium | a button shape only one route uses, while ≥3 routes share the most common one (≥4 routes have buttons) |
+| `one-off-heading-size` / `one-off-heading-color` | medium | an h1/h2/h3 size or colour only one route uses, under the same rule, and that route does not also use the usual value (a second heading style on one page is a variant) |
+
+AI grouping (0.1-b) adds what values cannot: two shapes that are the same component, near-duplicate colours.
+
+**L10.** For each route and person captured at both widths: a named control visible on desktop that the phone
+neither shows nor keeps in a menu (nav, dialog, details, `role=menu|dialog|navigation`, popover, or a region a
+visible `aria-controls` toggle opens) is `missing-on-phone` (medium; evidence says `hidden` or `absent`).
+`measure.json` keeps the page's hidden named controls (`hiddenControls`) for this. Fixed elements covering
+content and the phone's first view are AI-lens checks (0.1-b).
 
 ## 4. Hunting and verification (0.1-b)
 
@@ -286,7 +309,7 @@ hunting model cannot read them.
 
 | Step | Contents | Done when |
 |---|---|---|
-| 0.1-a | **remaining: computed lenses L4 (measured design system), L10 (parity)** · L3 flow ✔ · runs + run health + scene ids + URL redaction + scroll-area boxes ✔ · plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login ✔ · record/replay ✔ · forced states ✔ · evidence pack ✔ · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map ✔ · benchmark app ✔ · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
+| 0.1-a | computed lenses L3 flow ✔ L4 measured design system ✔ L10 parity ✔ · runs + run health + scene ids + URL redaction + scroll-area boxes ✔ · plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login ✔ · record/replay ✔ · forced states ✔ · evidence pack ✔ · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map ✔ · benchmark app ✔ · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
 | 0.1-b | inventory extractor · AI lenses · verifier · canaries · decoys · ledger · fingerprints · trust metrics · lens packs · budget | AI-lens recall, precision, fingerprint stability gates |
 | 0.1-c | fix loop · guards · board (mock-ups agreed) · exports · `check` · fast first run · batch decisions | fix-loop gate, field test, all gates |
 
@@ -297,20 +320,25 @@ planned screens), scheduled runs, artifact sharing, optional CI workflow example
 
 ### 9.1 Benchmark results (0.1-a gates)
 
-`npm run bench` on 2026-10-13 KST, two full runs, each capturing twice (100 scenes, ~150 s per capture):
+`npm run bench` on 2026-10-13 KST (last: 12:59 KST, rule and computed lenses), capturing twice (100 scenes, ~136 s per capture):
 
 | Gate | Target | Result |
 |---|---|---|
-| Rule-lens recall | 100% of seeded rule-lens defects | 28/28 (L1 7/7, L2 3/3, L6 3/3, L7 6/6, L8 6/6, L9 3/3) |
+| Rule- and computed-lens recall | 100% of seeded defects those lenses own | 34/34 (L1 7/7, L2 3/3, L3 2/2, L4 3/3, L6 3/3, L7 6/6, L8 6/6, L9 3/3, L10 1/1) |
 | False positives on clean scenes | ≤ 0.1 per scene | 0 on 8 scenes |
-| Determinism | 2 captures byte-identical | identical (1,002 files) |
+| Determinism | 2 captures byte-identical | identical (1,005 files, `flow.json` and `design-system.json` included) |
 
 Caveats, kept honest:
 - One rule (`placeholder-as-label`) and three noise fixes (prefetch 404s, 44px guidance for text links, redirected
   scenes) were made after the first benchmark run showed them. The fixes are general, but this is exactly how a
   benchmark gets overfitted: the held-out second benchmark (§8) is what keeps the gate honest.
-- 12 seeded defects are not scored yet: L3 orphan route, L4 ×3, L10 parity (computed lenses, still 0.1-a) and
-  L5 ×2, L6 ×2, L7, L9, L2 slow (AI lenses, 0.1-b).
+- The computed lenses were tuned once against the benchmark (2026-10-13 KST): L4 first counted a guest's
+  sign-in prompt as the same screen as the signed-in page, which hid two seeded one-offs, and counted Next.js's
+  own 500 page as the app's style. Both fixes are general rules (§3.2), but they were found here — the held-out
+  benchmark has to confirm them.
+- P41 (`/reports` unreachable) was not seeded: L3 found it and the source confirms it; it is in the answer key
+  with that note.
+- 7 seeded defects are not scored yet: L5 ×2, L6 ×2, L7, L9, L2 slow (AI lenses, 0.1-b).
 - "Findings not in the answer key" are mostly the same defect seen from another person, viewport or state (the
   ledger in 0.1-b collapses them) plus real extra defects the app happens to have (tasks overflow on phone,
   client-rendered lists shifting layout, a TypeError in the task page's error state).
