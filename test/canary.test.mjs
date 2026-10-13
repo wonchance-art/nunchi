@@ -249,6 +249,15 @@ test('a missed canary voids seen for its batch in coverage.json', () => {
   assert.deepEqual(voidCoverage({}, []).canaries, { missed: [], voidedUnits: [], voidedBatches: [] });
 });
 
+test('canary score: a claim without a box (aria node, source only) counts by its checklist item, unless the original has the same claim', () => {
+  const aria = (scene, rule) => ({ source: 'ai', status: 'claimed', lens: 'L6', rule, severity: 'medium', scene, route: '/b', viewport: 'd', selector: 'aria=paragraph', box: null, evidence: {} });
+  assert.equal(scoreCanaries(CANARIES, [aria('b.guest.error.d.canary-2', 'L6.vague-error')]).results[1].hit, true);
+  assert.equal(scoreCanaries(CANARIES, [aria('b.guest.error.d.canary-2', 'L6.unclear-label')]).results[1].hit, false, 'another item: not the planted defect');
+  assert.equal(scoreCanaries(CANARIES, [aria('b.guest.error.d.canary-2', 'L6.vague-error'), aria('b.guest.error.d', 'L6.vague-error')]).results[1].hit, false, 'the original has it too: the hunter saw something both share');
+  const located = { ...aria('b.guest.error.d.canary-2', 'L6.vague-error'), selector: 'main > h1', box: [0, 0, 10, 10] };
+  assert.equal(scoreCanaries(CANARIES, [located]).results[1].hit, false, 'a claim with a place is judged by its place');
+});
+
 test('a canary the hunt never saw (budget, not answered) is not hunted: neither planted nor missed', () => {
   const cov = { schema: 1, cells: [
     cell('L5', 'a.guest.normal.m.canary-1', 'u1', 'b1'),

@@ -44,6 +44,35 @@ export function score(answers, manifest, findings) {
   };
 }
 
+// AI-lens seeds (rule: null, with an `ai` hint): a seed is found when an AI claim (claimed or confirmed, not
+// rejected by the verifier) has its lens and route, a state in `ai.states` when given, and either a checklist id
+// in `ai.rules` or one of `ai.match` in its claim, selector or source (case-insensitive). Coarse on purpose:
+// the answer key names a defect, not an element, and every hit is listed for a human to check.
+export function scoreAi(answers, manifest, findings) {
+  const scenes = new Map(manifest.scenes.map(s => [s.id, s]));
+  const ai = findings.filter(f => f.source === 'ai' && f.status !== 'rejected');
+  const text = f => [f.evidence?.claim, f.selector, f.evidence?.file ? `${f.evidence.file}:${f.evidence.line}` : null].filter(Boolean).join(' ').toLowerCase();
+  const seeds = answers.defects.filter(d => !d.rule && d.ai);
+  const results = seeds.map(d => {
+    const hits = ai.filter(f => {
+      if (f.lens !== d.lens || f.route !== d.route) return false;
+      const s = scenes.get(f.scene);
+      if (s && s.canary !== undefined) return false;                     // a copy's planted defect is not the seed
+      if (d.ai.states && (!s || !d.ai.states.includes(s.state))) return false;
+      return (d.ai.rules || []).includes(f.rule) || (d.ai.match || []).some(m => text(f).includes(m.toLowerCase()));
+    });
+    return { id: d.id, lens: d.lens, route: d.route, what: d.what, found: hits.length > 0, hits: hits.map(f => `${f.scene} ${f.rule} ${f.selector ?? f.evidence?.file ?? ''}: ${f.evidence?.claim ?? ''}`) };
+  });
+  const byLens = {};
+  for (const r of results) {
+    const l = (byLens[r.lens] ||= { seeded: 0, found: 0 });
+    l.seeded++; if (r.found) l.found++;
+  }
+  const clean = new Set(answers.clean || []);
+  const cleanClaims = ai.filter(f => clean.has(f.route) && scenes.get(f.scene)?.canary === undefined);
+  return { results, byLens, found: results.filter(r => r.found).length, seeded: results.length, cleanClaims: cleanClaims.map(f => `${f.scene} ${f.rule} ${f.selector ?? ''}: ${f.evidence?.claim ?? ''}`) };
+}
+
 export function reportMarkdown(r, meta) {
   const pct = x => `${Math.round(x * 1000) / 10}%`;
   const lines = [
