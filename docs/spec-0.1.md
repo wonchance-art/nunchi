@@ -128,7 +128,9 @@ Per scene:
 | `measure.json` | rule-lens measurements (§3) |
 
 Run-level: `manifest.json` (scenes with status and reason, health), `findings.json`, `timing.json`, `run.json`, `source-map.json`
-(§2.5), `inventory.json` (source strings and UI states, extracted with Babel/SWC; classified in 0.1-b).
+(§2.5), `inventory.json` (source strings and UI states, extracted with Babel/SWC; classified in 0.1-b),
+`canaries.json` (planted defects, an answer key), and after the AI hunt `ai-findings.json`, `canary-score.json`,
+`verify-packets.json`, `verify-key.json` (an answer key), `verify.json` (§4).
 
 ### 2.5 Source ↔ scene map (H5)
 
@@ -235,6 +237,41 @@ content and the phone's first view are AI-lens checks (0.1-b).
   verifications are marked *suspect*.
 - **Who verifies (H7):** a different vendor's model only after the user opts in once; otherwise the same
   model in a fresh context, labelled *same-model check*. 0.1 never auto-approves.
+
+*Built (engine side, 0.1-b, 2026-10-13 KST):*
+- `src/canary.mjs`: eight mutation kinds, each an in-page function applied after load and before anything is
+  measured (a delimited hook in `captureOne`): `verb-swap` and `term-swap` (L5), `vague-error` and
+  `vague-confirm` (L6), `stray-todo` (L7), `blank-state` (L2), `remove-confirm` (L9: a destructive control loses
+  its `aria-haspopup`/`aria-controls`/ellipsis cue), `fixed-cover` (L10). Each returns selector (built like
+  `collect()`'s), box and before/after text, or nothing when the page has no suitable element. Which scenes and
+  kinds: seeded from the run scope (routes, persons, viewports, states), one scene per route first, kinds not
+  yet planted first; the first kind that fits the page is planted; a copy where none fits is dropped (at most
+  3 × n tries). `capture --canaries <n>` (CLI default 3, API default 0). Copies are captured after every
+  rule and computed finding, appear in `manifest.json` as `canary: k, of: <scene>` with id `<scene>.canary-<k>`,
+  and in `canaries.json` (kind, lens, expected checklist id, selector, box); their rule findings are dropped,
+  and flow, design system, parity and run health never see them.
+- `nunchi canaries --score`: a canary is hit when `ai-findings.json` has a claim of its lens on the copy at
+  the same element, an ancestor/descendant or a box overlapping ≥ half of the smaller one. Writes
+  `canary-score.json` (per lens, labelled an upper bound of recall). Missed canaries are written into
+  `coverage.json` when it exists (`units` of the missed unit's `batch` → `seen: false, notSeen:
+  'canary-missed'`, plus a `canaries` block), else printed. Re-running the batch is the skill's job.
+- `src/verify.mjs`, `nunchi verify --plan`: one packet per AI claim (`source: 'ai'`, `status: 'claimed'`, not on a
+  canary copy): lens, rule, severity, scene, route, viewport, selector, box, evidence minus reasoning-like
+  keys, and the scene's evidence files. Decoys = ⌈n/4⌉ (20% of packets): false claims on visible, unclaimed
+  controls of the claimed scenes, from `controls.json` (a labelled button claimed unlabelled, ordinary copy
+  claimed as a leftover, a non-destructive control claimed destructive without confirm, two identically named
+  controls claimed as different verbs), the claim's own lens first. Order is a seeded shuffle; the key
+  (`verify-key.json`: decoy or finding index + claim hash) is a separate file.
+- `nunchi verify --record <verdicts.json> [--vendor <name>]`: verdict, corrected severity, one-line reason per
+  packet → `status` and `verification` on each finding in `ai-findings.json` (confirmed takes the corrected
+  severity); `verify.json` has counts, decoy pass-through (confirmed decoys ÷ answered decoys) and `suspect`
+  when it is above 10% or no decoy was answered (then every verification of the run carries `suspect: true`).
+  The verifier is recorded as *same-model check* unless `--vendor` names another vendor; nothing is sent
+  anywhere. A plan refuses verdicts once the claims it was built from changed.
+- Not done yet: lens checklist ids are not defined, so canary checklist ids and decoy rule ids are nunchi's own
+  names; decoys come only from controls (no L2/L10 decoys); "stricter threshold for pages with a history of
+  false positives" is not built; the verifier's re-capture is the skill's job.
+
 - **Trust:** per-lens precision = fix ÷ (fix + false positive) over the last 20 human decisions; below 70%
   the lens's new findings go to *suspect*. Resolution rate (confirmed findings that reached *fixed*) beside it.
 - **Budget (H14):** per-run token cap; estimate shown before a deep sweep; hitting the cap leaves cells
