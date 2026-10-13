@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "id": "L5",
+  "name": "Copy consistency",
+  "definition": "The app says the same thing in different words: one action with different verbs, one concept with different names, one situation with different messages, or a mix of tones and capitalisation. Compare the screen under review with the reference screen.",
+  "method": "ai",
+  "scenes": { "states": ["normal", "empty", "error"] },
+  "evidence": ["text.txt", "aria.yml", "controls.json"],
+  "checklist": [
+    { "id": "L5.same-action-different-verb", "question": "Is the same action named with different verbs on this screen or against the reference screen (Delete / Remove / Trash, Save / Apply / Done)?" },
+    { "id": "L5.same-concept-different-name", "question": "Is one concept called by two names (Project and Workspace, Note and Entry, Team and Group) for the same thing?" },
+    { "id": "L5.same-situation-different-message", "question": "Is the same situation (nothing found, saved, failed to load) worded differently than on the reference screen in a way the user would notice?" },
+    { "id": "L5.mixed-tone", "question": "Does the copy switch tone (formal and casual; 'you', 'we' and 'the user'; playful and dry) within the screen or against the reference?" },
+    { "id": "L5.mixed-capitalisation", "question": "Do buttons, headings or menu items mix Title Case and Sentence case for the same kind of element?" }
+  ],
+  "examples": {
+    "bad": [
+      "The list says 'Remove plant' and the detail page says 'Delete plant' for the same action.",
+      "The sidebar says 'Gardens'; the page header says 'Plots' for the same thing.",
+      "Buttons 'Add Task' and 'Add note' side by side."
+    ],
+    "good": [
+      "'Archive' and 'Delete' both appear: they are different actions.",
+      "Every button uses Sentence case: 'Add task', 'Add note', 'Export list'."
+    ]
+  },
+  "severityRubric": {
+    "medium": "the inconsistency is on a core path or about an action with consequences (delete, pay, share)",
+    "low": "wording or capitalisation drift that does not change what the user understands"
+  }
+}

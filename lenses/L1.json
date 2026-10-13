@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "id": "L1",
+  "name": "Broken (visual)",
+  "definition": "The screen looks broken in a way a measurement cannot see: elements drawn on top of each other, text that cannot be read, a layout that collapsed or spilled out of its container, an image or icon that is distorted, or a part of the page that rendered without its styles. Horizontal overflow, clipped text without ellipsis, broken images, missing fonts, layout shift, page errors and 4xx/5xx are already rule findings; do not repeat them.",
+  "method": "ai",
+  "scenes": { "states": ["normal"] },
+  "evidence": ["top.jpg", "full.jpg", "controls.json", "measure.json"],
+  "checklist": [
+    { "id": "L1.overlap", "question": "In top.jpg or full.jpg, do two elements (text, buttons, images, cards) overlap so that one hides part of the other's text or controls?" },
+    { "id": "L1.unreadable-text", "question": "Is any text drawn where it cannot be read: on top of an image or other text, or squeezed to one or two characters per line?" },
+    { "id": "L1.collapsed-layout", "question": "Did a layout collapse or spill: a column squeezed to a sliver, a card or panel sticking out of its container, items stacked that are clearly meant to sit side by side (compare with the reference screen)?" },
+    { "id": "L1.distorted-media", "question": "Is an image, avatar or icon stretched, squashed, cropped to an unrecognisable part, or drawn at a clearly wrong size compared with its neighbours?" },
+    { "id": "L1.unstyled", "question": "Does any part of the screen look unstyled (default browser buttons, bullet lists or blue underlined links where the rest of the app is styled, as if its stylesheet did not load)?" }
+  ],
+  "examples": {
+    "bad": [
+      "The label 'Total: 12 pebbles' is drawn over the 'Pay' button, so the button reads 'Pa'.",
+      "On the phone, the three plan cards keep their desktop width and the third card sticks out of the screen.",
+      "The avatar of 'Mira Tanaka-Holm' is stretched to twice its width."
+    ],
+    "good": [
+      "A long task title wraps onto a second line inside its card.",
+      "An open dropdown menu is drawn above the list: menus are meant to cover content."
+    ]
+  },
+  "severityRubric": {
+    "high": "the main content or the primary action of the screen cannot be read or reached",
+    "medium": "a visible part of the screen is broken but the task can still be done",
+    "low": "a small cosmetic glitch (a misaligned icon, a slightly cropped avatar)"
+  }
+}

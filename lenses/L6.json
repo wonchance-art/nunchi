@@ -1,0 +1,33 @@
+{
+  "schema": 1,
+  "id": "L6",
+  "name": "Copy quality",
+  "definition": "Text that leaves the user unsure: errors that do not say what happened and what to do, confirmations that do not say what will be deleted, raw technical text, or missing values printed as text. 'undefined', 'NaN', '[object Object]', unreplaced templates and known raw error strings are already rule findings; do not repeat them.",
+  "method": "ai",
+  "scenes": {},
+  "evidence": ["text.txt", "aria.yml", "controls.json"],
+  "checklist": [
+    { "id": "L6.vague-error", "question": "Is there an error message that does not say what went wrong or what to do ('Something went wrong', 'Error', 'Oops!', 'Request failed')?" },
+    { "id": "L6.raw-technical-text", "question": "Is technical text shown to the user that the rules did not catch: status codes ('Error 500'), error codes, JSON, SQL, stack fragments, internal ids?" },
+    { "id": "L6.unclear-confirm", "question": "Is there a visible confirmation (dialog text, an inline 'Are you sure?') that does not say what will be deleted or changed? Answer cannot-judge when no confirmation is visible." },
+    { "id": "L6.unclear-label", "question": "Is there a button or link whose label does not say what it does where it matters ('Click here', 'Submit', 'OK', 'Go' on an action with consequences)?" },
+    { "id": "L6.missing-value-text", "question": "Is a missing value printed as text in a way the rules did not catch ('null', 'Invalid Date', '$-', empty parentheses '()', '0 of 0' where a count is clearly missing)?" }
+  ],
+  "examples": {
+    "bad": [
+      "'Oops! Something went wrong.' with no retry and no hint what failed.",
+      "'Error 502: upstream gardenapi timeout' under the plant list.",
+      "A dialog 'Are you sure?' with 'Cancel' and 'OK' that does not say the note 'Seed order' will be deleted.",
+      "'Last watered: Invalid Date'."
+    ],
+    "good": [
+      "'We couldn't save your note because you're offline. It will be saved when you reconnect.'",
+      "A dialog 'Delete the note \"Seed order\"? This can't be undone.' with 'Keep note' and 'Delete note'."
+    ]
+  },
+  "severityRubric": {
+    "high": "raw technical text or a missing value on a core screen, or a destructive confirmation that does not say what it deletes",
+    "medium": "an error that does not say what happened or what to do",
+    "low": "an unclear label on a minor action"
+  }
+}

@@ -151,7 +151,7 @@ neighbour scenes for regression checks after a fix. The board header shows *evid
 ## 3. Lenses
 
 A lens is a data file (H8): id, definition of a defect, checklist items, good/bad examples, severity rubric,
-method. Packs: built-in, project (`.nunchi/lenses/`), external (pinned by sha256). Packs cannot execute code.
+method. Packs: built-in, external (pinned by sha256), project (`.nunchi/lenses/`, last word). Packs cannot execute code.
 Later packs override earlier ones (ESLint-style `extends`).
 
 | Lens | Defect | Method | Step |
@@ -218,6 +218,31 @@ visible `aria-controls` toggle opens) is `missing-on-phone` (medium; evidence sa
 `measure.json` keeps the page's hidden named controls (`hiddenControls`) for this. Fixed elements covering
 content and the phone's first view are AI-lens checks (0.1-b).
 
+
+### 3.3 Lens packs (built 2026-10-13 KST, 0.1-b)
+
+`src/lenses.mjs` loads `lenses/*.json` (built-in) → the files listed in `.nunchi/lenses.lock.json`
+(`{"packs": [{"path", "sha256"}]}`, paths inside the project; a hash mismatch refuses the whole load; nothing is
+downloaded) → `.nunchi/lenses/*.json` (project). Files are read in name order; a file holds one lens or `{"lenses": [...]}`. A
+later lens with the same id replaces the earlier one; one with `extends` (its own id — ids are L1…L10) merges into
+it: scalars replaced, `scenes`/`severityRubric` merged by key, examples appended, checklist items replaced by id,
+appended, or removed with `{"id", "off": true}`. The project's own packs load last (decided 2026-10-13 KST): a pack the
+project adopted never overrides what the project itself wrote.
+
+Schema (strict: unknown keys are refused, keys that look executable — `on…`, `script`, `exec`, `run`, … — are named
+as such, only plain JSON values, length limits): `id`, `name`, `definition`, `checklist` (`{id: "L6.kebab-name",
+question, scenes?}`), `examples` (`good`/`bad` text), `severityRubric` (blocker/high/medium/low → text), `method`
+(`ai`/`rule`/`computed`), `scenes` (`{states?, viewports?, persons?}`; `{}` = all), and `evidence` — the per-scene files
+the hunter reads (added to the list above because L1 needs images and L5 does not). Only `method: "ai"` lenses are
+hunted.
+
+Built-in packs cover the AI parts: L1 (visual: overlap, unreadable text, collapsed layout, distorted media,
+unstyled), L2 (forced states only: what happened, next step, failure that looks normal, endless loading, no loading
+indicator when slow), L4 (same component with two looks, near-duplicate colours and sizes), L5, L6, L7 (template
+copy, demo data, debug UI, nav/footer drifted from the reference screen's), L9 (destructive action without
+confirm/undo, input lost on leave) and L10 (fixed element covering content, primary action not in the phone's first
+view). Each names the rule findings it must not repeat. Their recall is unmeasured until the AI-lens gate runs (§8).
+
 ## 4. Hunting and verification (0.1-b)
 
 - **Work unit (H4):** 1–3 scenes × 1 lens. Input = lens definition + checklist + the scenes' evidence +
@@ -239,6 +264,29 @@ content and the phone's first view are AI-lens checks (0.1-b).
   the lens's new findings go to *suspect*. Resolution rate (confirmed findings that reached *fixed*) beside it.
 - **Budget (H14):** per-run token cap; estimate shown before a deep sweep; hitting the cap leaves cells
   *not seen: budget*, never silently skipped.
+
+**Built (2026-10-13 KST): `nunchi hunt --plan` and `--record`** (`src/hunt.mjs`). Canaries, decoys, the verifier and
+trust are not built.
+- *Plan* (`hunt --plan [--run] [--lens] [--budget] [--json]`, writes `hunt-plan.json` into the run): per AI lens,
+  scenes matching its `scenes` filter are grouped by route + person + state across viewports (≤3 per unit). Each unit
+  gets one reference scene: another route, same person and viewport, same state if one exists else normal, picked
+  by a hash of the group (deterministic, spread over the app). Files are listed reference first, the scenes under
+  review last (only the lens's `evidence` files; the reference gets `top.jpg` instead of `full.jpg`). Checklist items
+  with their own `scenes` filter list the scenes they apply to. Scenes not captured, not seen or redirected are
+  listed as not seen with that reason. Unit id = hash of lens content, scenes, reference and items.
+- *Estimate:* text files bytes/4; JPEGs width × height / 750 after scaling to ≤1568 px long edge and ≤1.15 MP (max
+  1,600; read from the JPEG header); per unit, the lens text (bytes/4) + 80 tokens per checklist item per scene for
+  the answer. An estimate, not a measurement. Units are spent in a fixed order — normal screens first, then error,
+  empty, slow, offline; by route; guest first; by lens — and from the first unit that does not fit, every later unit
+  is *not seen: budget*. No default budget yet.
+- *Record* (`hunt --record <answers.json|dir> [--root]`, writes `ai-findings.json` and `coverage.json`): every item
+  must be answered `defect`/`none`/`cannot-judge`; a defect needs a scene under review, a claim, a severity and a
+  ground — a selector found verbatim in that scene's controls/styles/links/measure JSON or an `aria=<node>` line of
+  aria.yml, and/or a `file:line` that exists under the app root (not `.nunchi/`, `node_modules/`, `.git/`; symlinks
+  must stay inside). Anything else is listed in `rejected` with a reason; an item whose only defects were rejected
+  counts as unanswered, so the unit stays *not seen: incomplete*. Findings use the rule-finding shape plus
+  `source: "ai"`, `status: "claimed"`; box comes from controls.json or measure.json when the selector has one.
+  Answers naming another plan id are refused. Answers are parsed and compared as strings only.
 
 ## 5. Ledger (0.1-b)
 

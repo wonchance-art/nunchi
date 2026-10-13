@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "id": "L4",
+  "name": "Visual consistency (grouping)",
+  "definition": "Values that are measured as different but are meant to be the same thing: two looks for one component, or colours, sizes and radii so close that one was meant. The measured design system (design-system.json) and the one-off rules already list exact values; this lens groups what values alone cannot.",
+  "method": "ai",
+  "scenes": { "states": ["normal"] },
+  "evidence": ["top.jpg", "styles.json", "controls.json"],
+  "checklist": [
+    { "id": "L4.same-component-different-look", "question": "Do two controls or blocks that do the same job (two primary buttons, two cards of one list, two text inputs) look different on this screen or against the reference screen (height, radius, colour, weight, padding in styles.json)?" },
+    { "id": "L4.near-duplicate-color", "question": "Does styles.json use two colours or backgrounds for the same role that differ only slightly (two near-identical blues on links or primary buttons), where one was clearly meant?" },
+    { "id": "L4.near-duplicate-size", "question": "Does styles.json use type sizes, radii or paddings for the same role that differ by a pixel or two (15px and 16px body text, 6px and 8px button radius) where one was clearly meant?" }
+  ],
+  "examples": {
+    "bad": [
+      "'Save plant' is a 40px button with 8px radius; 'Save note' on the reference screen is a 36px button with 6px radius, same blue.",
+      "Links use rgb(37, 99, 235) in the list and rgb(38, 99, 230) in the footer."
+    ],
+    "good": [
+      "A destructive 'Delete' button is red while 'Save' is blue: a deliberate variant.",
+      "Small and large button sizes used for different emphasis, each used consistently."
+    ]
+  },
+  "severityRubric": {
+    "medium": "the same component has two looks on core screens, so the app reads as inconsistent",
+    "low": "near-duplicate values that only a side-by-side comparison shows"
+  }
+}
