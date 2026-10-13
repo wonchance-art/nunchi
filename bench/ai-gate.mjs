@@ -1,6 +1,6 @@
 // The AI-lens recall gate (spec §8: ≥75% per lens, mean of 3 runs) on a benchmark capture.
 //
-//   node bench/ai-gate.mjs --packets --run <run folder> --out <dir>
+//   node bench/ai-gate.mjs --packets --run <run folder> --out <dir> [--lens L1,L6]
 //     plans the hunt (every AI lens, no budget), picks the units that cover the answer key's AI seeds, the clean
 //     screens and the canary copies, and writes one packet per hunter: the units and their lenses, nothing about
 //     why they were picked. Canary copies go to a packet of their own, never beside the screen they copy.
@@ -27,7 +27,7 @@ const readJson = p => JSON.parse(readFileSync(p, 'utf8'));
 const args = { _: [] };
 for (let i = 2; i < process.argv.length; i++) {
   const a = process.argv[i];
-  if (a.startsWith('--') && ['--run', '--out', '--answers', '--root'].includes(a)) args[a.slice(2)] = process.argv[++i];
+  if (a.startsWith('--') && ['--run', '--out', '--answers', '--root', '--lens'].includes(a)) args[a.slice(2)] = process.argv[++i];
   else if (a.startsWith('--')) args[a.slice(2)] = true;
 }
 if (!args.run || !(args.packets || args.score)) {
@@ -60,7 +60,8 @@ export const HUNTER_BRIEF = [
 if (args.packets) {
   const out = resolve(args.out || 'bench/out/ai-gate');
   const { lenses } = loadLenses({ root: BUILTIN_DIR });
-  const { plan, key } = planHuntWithKey({ runDir, lenses, budget: null, runId: null });
+  const lensIds = args.lens ? String(args.lens).split(',').map(x => x.trim().toUpperCase()).filter(Boolean) : null;
+  const { plan, key } = planHuntWithKey({ runDir, lenses, lensIds, budget: null, runId: null });
   writeStable(join(runDir, 'hunt-plan.json'), plan);
   if (key) writeStable(join(runDir, 'hunt-key.json'), key);
   writeHuntMirror(runDir, key);
