@@ -10,7 +10,7 @@
   "checklist": [
     { "id": "L6.vague-error", "question": "Is there an error message that does not say what went wrong or what to do ('Something went wrong', 'Error', 'Oops!', 'Request failed')?" },
     { "id": "L6.raw-technical-text", "question": "Is technical text shown to the user that the rules did not catch: status codes ('Error 500'), error codes, JSON, SQL, stack fragments, internal ids?" },
-    { "id": "L6.unclear-confirm", "question": "Is there a visible confirmation (dialog text, an inline 'Are you sure?') that does not say what will be deleted or changed? Answer cannot-judge when no confirmation is visible." },
+    { "id": "L6.unclear-confirm", "question": "Is there a confirmation that does not say what will be deleted or changed: visible (dialog text, an inline 'Are you sure?') or in the source slice (a confirm() call or a dialog's text, grounded with its file:line)? Answer cannot-judge when neither shows one." },
     { "id": "L6.unclear-label", "question": "Is there a button or link whose label does not say what it does where it matters ('Click here', 'Submit', 'OK', 'Go' on an action with consequences)?" },
     { "id": "L6.missing-value-text", "question": "Is a missing value printed as text in a way the rules did not catch ('null', 'Invalid Date', '$-', empty parentheses '()', '0 of 0' where a count is clearly missing)?" }
   ],

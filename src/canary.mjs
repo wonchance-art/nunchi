@@ -284,7 +284,9 @@ export function canaryMutate({ kinds }) {
     // L10: a fixed bar over the bottom of the first view, where the page has content.
     'fixed-cover': () => {
       const band = Math.max(96, Math.round(innerHeight * 0.2));
-      const under = all('p,li,a[href],button,input,select,textarea,h1,h2,h3,h4,img,td,label').some(el => { const r = el.getBoundingClientRect(); return r.bottom > innerHeight - band && r.top < innerHeight - 8; });
+      // content the bar would hide: an element whose middle lies inside the band (an element that only grazes
+      // the band's top edge stays readable, and a bar over empty space covers nothing)
+      const under = all('p,li,a[href],button,input,select,textarea,h1,h2,h3,h4,img,td,label').some(el => { const r = el.getBoundingClientRect(); const mid = r.top + r.height / 2; return mid > innerHeight - band && mid < innerHeight; });
       if (!under) return null;
       const bar = document.createElement('div');
       bar.setAttribute('style', `position:fixed;left:0;right:0;bottom:0;height:${band}px;z-index:2147483000;box-sizing:border-box;padding:0 16px;background:#ffffff;color:#1d1f23;border-top:1px solid #d0d4da;display:flex;align-items:center;justify-content:center;text-align:center;font:600 16px/1.4 system-ui,sans-serif`);
@@ -332,10 +334,22 @@ export function scoreCanaries(canaryFile, aiFindings, coverage = null) {
     const cell = cells.find(x => x.scene === c.scene && x.lens === c.lens);
     return { scene: c.scene, of: c.of, kind: c.kind, lens: c.lens, reason: cell?.reason || 'not-planned' };
   });
-  const results = all.filter(hunted).map(c => {
-    const hits = aiFindings.filter(f => f.scene === c.scene && f.lens === c.lens && sameLocation(f, c));
-    return { scene: c.scene, of: c.of, kind: c.kind, lens: c.lens, checklist: c.checklist, hit: hits.length > 0, exact: hits.some(f => f.rule === c.checklist || f.checklist === c.checklist) };
-  });
+  // A claim grounded in an aria node or only in source has no box to compare: it counts when it names the
+  // expected checklist item. If the scene the copy came from has a claim of that item too, the hunter flagged
+  // something both share, and the copy cannot tell a planted defect from one the screen already had: such a
+  // canary is *ambiguous*, listed apart and left out of the rate, like a canary nobody hunted.
+  const unlocated = f => !f.box && (!f.selector || f.selector.startsWith('aria='));
+  const ambiguous = [];
+  const results = [];
+  for (const c of all.filter(hunted)) {
+    const mine = aiFindings.filter(f => f.scene === c.scene && f.lens === c.lens);
+    const placed = mine.filter(f => sameLocation(f, c));
+    const byItem = mine.filter(f => unlocated(f) && f.rule === c.checklist);
+    const shared = aiFindings.some(g => g.scene === c.of && g.lens === c.lens && g.rule === c.checklist);
+    if (!placed.length && byItem.length && shared) { ambiguous.push({ scene: c.scene, of: c.of, kind: c.kind, lens: c.lens, reason: 'the original has the same claim' }); continue; }
+    const hits = [...placed, ...byItem];
+    results.push({ scene: c.scene, of: c.of, kind: c.kind, lens: c.lens, checklist: c.checklist, hit: hits.length > 0, exact: hits.some(f => f.rule === c.checklist || f.checklist === c.checklist) });
+  }
   const byLens = {};
   for (const r of results) {
     const l = (byLens[r.lens] ||= { planted: 0, hit: 0, rate: 0 });
@@ -348,6 +362,7 @@ export function scoreCanaries(canaryFile, aiFindings, coverage = null) {
     planted: results.length, hit, rate: results.length ? hit / results.length : null, byLens, results,
     missed: results.filter(r => !r.hit).map(({ scene, of, kind, lens }) => ({ scene, of, kind, lens })),
     ...(notHunted.length ? { notHunted } : {}),
+    ...(ambiguous.length ? { ambiguous } : {}),
   };
 }
 

@@ -541,6 +541,45 @@ phone touch guidance — recorded in the answer key.
 - Volume is the real problem for a user: 1,082 findings on 34 screens is unreadable without the ledger's grouping
   by root cause (0.1-b) — accessibility (contrast, names) dominates and repeats per screen.
 
+### 9.3 AI-lens gate, first measurement (2026-10-13 KST)
+
+`bench/ai-gate.mjs` on the benchmark capture (100 scenes + 3 canary copies, `inventory.json` included). Each run hunts
+the same 67 of 217 units: the 23 that cover the answer key's AI seeds, the units on the clean screens (`/about`,
+`/help`) and the 17 on canary copies. Six hunters per run, each a fresh subagent with one packet (units and lens
+text only, nothing about why a unit was picked; canary copies in a packet of their own). Fresh context per packet,
+not per unit. About 0.7M subagent tokens per run.
+
+| Lens | AI seeds | Found (run 1 / 2 / 3) | Mean recall | Gate ≥75% |
+|---|---|---|---|---|
+| L2 | 1 (no loading indicator, slow) | 1 / 1 / 1 | 100% | pass on this seed |
+| L5 | 2 (Sign in/Log in/Login; Save/Submit) | 2 / 2 / 2 | 100% | pass on these seeds |
+| L6 | 2 (vague error; native "Are you sure?") | 2 / 2 / 2 | 100% | pass on these seeds |
+| L7 | 1 (drifted header copy) | 1 / 1 / 1 | 100% | pass on this seed |
+| L9 | 1 (Clear all, no confirm or undo) | 1 / 1 / 1 | 100% | pass on this seed |
+| L1, L4, L10 | 0 | — | unmeasured | — |
+
+Every hit was read: each is the seeded defect, grounded in a selector or file:line (the native confirm only through
+the source slice). 117/117 cells seen per run, 0 answers rejected.
+
+*Canaries.* `template-copy` (L7) hit 3/3. `fixed-cover` (L10) was an invalid canary: the bar sat under the last
+footer link and covered nothing, and two of three hunters rightly answered none (the mutator now requires an
+element's middle inside the band). `blank-state` (L2) was *ambiguous*: the original screen already failed the same
+item (on error it says only "No notes yet."), and every hunter flagged both; the scorer now lists such canaries
+apart instead of as misses, and a claim grounded only in an aria node or source now counts by its checklist item.
+
+*Clean screens* (7 claims over 3 runs, for a human to label): `L4` on `/help` ×3 compares the heading with the
+Notes screen's off-palette heading, so the claim lands on the screen that matches (wrong place; L4 now asks for the
+odd one out); `L5` on `/about` ×4, "Log in" in the header vs "Login" on the sign-in button, is the seeded
+inconsistency (P33) seen from another page and likely true.
+
+*Lens fixes from the hunters' notes:* L2 no longer asks a hunter to restate `no-offline-notice`; L6.unclear-confirm
+accepts a confirmation found in the source slice (a native `confirm()` never shows on screen); L4 claims only the
+odd one out. These changes are not re-measured yet.
+
+*Verdict:* recall is 100% on every AI seed in three runs, but the seed set is too thin to call the gate met: 1–2
+seeds per lens, none for L1, L4 and L10, all on the app the lenses were written against. Still needed: ≥3 AI seeds
+per lens, the held-out benchmark (§8), and the precision gate (a human-labelled sample of 50 verified findings).
+
 ## 10. Open items
 
 - *Resolved 2026-10-13 KST:* a plugin installed from git has no `node_modules`, so capture could not start.

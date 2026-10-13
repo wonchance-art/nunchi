@@ -7,7 +7,7 @@
   "scenes": { "states": ["normal"] },
   "evidence": ["top.jpg", "styles.json", "controls.json"],
   "checklist": [
-    { "id": "L4.same-component-different-look", "question": "Do two controls or blocks that do the same job (two primary buttons, two cards of one list, two text inputs) look different on this screen or against the reference screen (height, radius, colour, weight, padding in styles.json)?" },
+    { "id": "L4.same-component-different-look", "question": "Do two controls or blocks that do the same job (two primary buttons, two cards of one list, two text inputs) look different on this screen or against the reference screen (height, radius, colour, weight, padding in styles.json)? Claim it only where the look is the odd one out: if this screen matches the app and only the reference differs, answer none." },
     { "id": "L4.near-duplicate-color", "question": "Does styles.json use two colours or backgrounds for the same role that differ only slightly (two near-identical blues on links or primary buttons), where one was clearly meant?" },
     { "id": "L4.near-duplicate-size", "question": "Does styles.json use type sizes, radii or paddings for the same role that differ by a pixel or two (15px and 16px body text, 6px and 8px button radius) where one was clearly meant?" }
   ],

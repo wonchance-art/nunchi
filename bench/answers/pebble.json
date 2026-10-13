@@ -1,6 +1,6 @@
 {
   "app": "pebble",
-  "note": "Answer key for bench/pebble. Kept outside the app folder so a hunter pointed at the app never reads it. 'rule' names the rule or computed lens expected to catch the defect in 0.1-a; defects with rule null are for lenses not built yet and are not scored.",
+  "note": "Answer key for bench/pebble. Kept outside the app folder so a hunter pointed at the app never reads it. 'rule' names the rule or computed lens expected to catch the defect in 0.1-a; defects with rule null are for lenses not built yet and are not scored. 'ai' (defects for AI lenses): how bench/ai-gate.mjs matches a claim to the seed — same lens and route, a state in 'states' when given, and either a checklist id in 'rules' or one of 'match' in the claim, selector or source (case-insensitive).",
   "clean": [
     "/about",
     "/help"
@@ -299,42 +299,84 @@
       "lens": "L5",
       "rule": null,
       "route": "/pricing",
-      "what": "'Log in' / 'Login' / 'Sign in' for the same action across pages"
+      "what": "'Log in' / 'Login' / 'Sign in' for the same action across pages",
+      "ai": {
+        "rules": [
+          "L5.same-action-different-verb"
+        ],
+        "match": [
+          "sign in",
+          "login",
+          "log in"
+        ]
+      }
     },
     {
       "id": "P34",
       "lens": "L5",
       "rule": null,
       "route": "/app/settings",
-      "what": "'Save' and 'Submit' for the same kind of action on one page"
+      "what": "'Save' and 'Submit' for the same kind of action on one page",
+      "ai": {
+        "rules": [
+          "L5.same-action-different-verb"
+        ],
+        "match": [
+          "submit"
+        ]
+      }
     },
     {
       "id": "P35",
       "lens": "L6",
       "rule": null,
       "route": "/app",
-      "what": "'Something went wrong.' with no cause and no next step"
+      "what": "'Something went wrong.' with no cause and no next step",
+      "ai": {
+        "match": [
+          "something went wrong"
+        ]
+      }
     },
     {
       "id": "P36",
       "lens": "L6",
       "rule": null,
       "route": "/app/settings",
-      "what": "delete confirmation 'Are you sure?' does not say what is deleted (native confirm on click)"
+      "what": "delete confirmation 'Are you sure?' does not say what is deleted (native confirm on click)",
+      "ai": {
+        "match": [
+          "are you sure"
+        ]
+      }
     },
     {
       "id": "P37",
       "lens": "L7",
       "rule": null,
       "route": "/pricing",
-      "what": "a drifted copy of the site header: Pricing and Help links missing"
+      "what": "a drifted copy of the site header: Pricing and Help links missing",
+      "ai": {
+        "rules": [
+          "L7.drifted-nav"
+        ],
+        "match": [
+          "header",
+          "navigation"
+        ]
+      }
     },
     {
       "id": "P38",
       "lens": "L9",
       "rule": null,
       "route": "/app/tasks",
-      "what": "'Clear all tasks' deletes everything with no confirm and no undo"
+      "what": "'Clear all tasks' deletes everything with no confirm and no undo",
+      "ai": {
+        "match": [
+          "clear all"
+        ]
+      }
     },
     {
       "id": "P39",
@@ -348,7 +390,19 @@
       "lens": "L2",
       "rule": null,
       "route": "/app/notes",
-      "what": "while notes load, nothing tells the user something is coming"
+      "what": "while notes load, nothing tells the user something is coming",
+      "ai": {
+        "states": [
+          "slow"
+        ],
+        "rules": [
+          "L2.no-loading-indicator"
+        ],
+        "match": [
+          "loading",
+          "load"
+        ]
+      }
     },
     {
       "id": "P41",
