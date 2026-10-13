@@ -1,5 +1,6 @@
 // Record/replay and forced states against a tiny data-driven page. The API answers with a
 // counter that changes on every request, so only replay can make two runs identical.
+import { fileURLToPath } from 'node:url';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -8,8 +9,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { capture, launch } from '../src/capture.mjs';
 
-const SPA = new URL('./fixtures/spa', import.meta.url).pathname;
-const SITE = new URL('./fixtures/site', import.meta.url).pathname;
+const SPA = fileURLToPath(new URL('./fixtures/spa', import.meta.url));
+const SITE = fileURLToPath(new URL('./fixtures/site', import.meta.url));
 let server, base, browserOk = true, counter = 0;
 
 before(async () => {
@@ -30,7 +31,8 @@ before(async () => {
   });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
-  try { const b = await launch(); await b.close(); } catch { browserOk = false; }
+  // CI sets NUNCHI_REQUIRE_BROWSER so a missing browser fails the run instead of skipping the capture tests
+  try { const b = await launch(); await b.close(); } catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
 after(() => server && server.close());
 

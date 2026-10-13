@@ -345,6 +345,12 @@ Caveats, kept honest:
 
 ## 10. Open items
 
+- *Resolved 2026-10-13 KST:* a plugin installed from git has no `node_modules`, so capture could not start.
+  `nunchi setup` installs the two pinned packages from `package-lock.json` (`npm ci --ignore-scripts`: integrity
+  hashes checked, no install scripts) and Chromium through the pinned playwright-core; every command that needs
+  them says so instead of failing with a stack trace. CI (`.github/workflows/ci.yml`) runs the tests on Linux, macOS
+  and Windows × Node 20/22/24, a fresh install exactly as a plugin user gets it, and the benchmark gates.
+
 - Whether the skill can be invoked as `/nunchi` or only as `/nunchi:nunchi` once installed from the
   marketplace (plugin skills are namespaced). Verify on a clean install.
 - Reserve the npm name with a 0.0.x publish through trusted publishing (needs the owner's npm account).

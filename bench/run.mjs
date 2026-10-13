@@ -2,8 +2,9 @@
 // Builds the benchmark app, captures it with the nunchi CLI exactly as a user would, and scores
 // the result against the answer key. Usage: node bench/run.mjs [--twice] [--keep]
 //   --twice  capture twice and check the evidence is byte-identical (determinism gate)
-// Needs Chromium (NUNCHI_BROWSER or `npx playwright@1.63.0 install chromium`) and network
+// Needs Chromium (NUNCHI_BROWSER or `node src/cli.mjs setup`) and network
 // access to the npm registry for the first install.
+import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, statSync, mkdirSync, rmSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,7 +12,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { score, reportMarkdown } from './score.mjs';
 
-const HERE = new URL('.', import.meta.url).pathname;
+const HERE = fileURLToPath(new URL('.', import.meta.url));
 const APP = join(HERE, 'pebble');
 const ANSWERS = JSON.parse(readFileSync(join(HERE, 'answers', 'pebble.json'), 'utf8'));
 const CLI = join(HERE, '..', 'src', 'cli.mjs');

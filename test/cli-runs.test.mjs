@@ -1,17 +1,18 @@
 // The CLI writes each capture into its own run folder: complete or absent, numbered, with the source
 // state it was taken from. Needs Chromium (skipped otherwise).
+import { fileURLToPath } from 'node:url';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, mkdtempSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, readdirSync, statSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, extname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { launch } from '../src/capture.mjs';
 
-const SITE = new URL('./fixtures/site', import.meta.url).pathname;
-const CLI = new URL('../src/cli.mjs', import.meta.url).pathname;
+const SITE = fileURLToPath(new URL('./fixtures/site', import.meta.url));
+const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 let server, base, browserOk = true;
 before(async () => {
   server = createServer((req, res) => {
@@ -23,7 +24,8 @@ before(async () => {
   });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   base = `http://127.0.0.1:${server.address().port}`;
-  try { const b = await launch(); await b.close(); } catch { browserOk = false; }
+  // CI sets NUNCHI_REQUIRE_BROWSER so a missing browser fails the run instead of skipping the capture tests
+  try { const b = await launch(); await b.close(); } catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
 after(() => server && server.close());
 
@@ -32,7 +34,7 @@ const cli = async (cwd, ...a) => JSON.parse((await promisify(execFile)('node', [
 
 test('capture: numbered run folders, latest pointer, run.json with scope and source state', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
-  const cwd = mkdtempSync(join(tmpdir(), 'nunchi-cli-'));
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-cli-')));          // macOS: /var is a symlink to /private/var
   const args = ['capture', '--url', base, '--routes', '/', '--viewports', 'm', '--states', 'normal', '--network', 'live'];
   const one = await cli(cwd, ...args);
   const two = await cli(cwd, ...args);

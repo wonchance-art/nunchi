@@ -81,7 +81,7 @@ export async function launch({ browserPath, baseUrl, allowHosts = [] } = {}) {
     ] });
   } catch (e) {
     const err = new Error(`nunchi could not start Chromium (${String(e.message).split('\n')[0]}). ` +
-      'Install it once with `npx playwright@1.63.0 install chromium`, or pass --browser-path <chrome executable>.');
+      'Install it once with `nunchi setup`, or pass --browser-path <chrome executable> (or set NUNCHI_BROWSER).');
     err.code = 'NO_BROWSER';
     throw err;
   }
