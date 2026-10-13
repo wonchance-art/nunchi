@@ -40,7 +40,7 @@ test('captures seeded defects, keeps the clean page clean, writes the evidence p
   const r = await capture({ baseUrl: base, scenes: [{ route: '/', path: '/' }, { route: '/broken.html', path: '/broken.html' }], out });
   const at = (scene, rule) => r.findings.filter(f => f.scene === scene && f.rule === rule);
 
-  assert.equal(r.findings.filter(f => f.scene?.startsWith('root.')).length, 0, JSON.stringify(r.findings.filter(f => f.scene?.startsWith('root.')), null, 1));
+  assert.equal(r.findings.filter(f => f.scene?.startsWith('~.')).length, 0, JSON.stringify(r.findings.filter(f => f.scene?.startsWith('~.')), null, 1));
 
   const m = 'broken.html.guest.normal.m', d = 'broken.html.guest.normal.d';
   assert.equal(at(m, 'horizontal-overflow').length, 1, 'overflow on phone');
@@ -62,7 +62,9 @@ test('captures seeded defects, keeps the clean page clean, writes the evidence p
     assert.deepEqual([...bytes.subarray(0, 3)], [0xff, 0xd8, 0xff], `${img} must be a JPEG`);
     assert.ok(bytes.length > 2000, `${img} too small to be a real capture`);
   }
-  assert.deepEqual(at(m, 'failed-request').map(f => f.evidence.url).sort(), ['/api/tasks-missing'], 'a broken image is reported once, as broken-image');
+  assert.deepEqual(at(m, 'failed-request').map(f => f.evidence.url).sort(), ['/api/session?token=REDACTED&page=2', '/api/tasks-missing'], 'a broken image is reported once, as broken-image');
+  const leaked = files(out).filter(f => !f.endsWith('.jpg') && readFileSync(join(out, f), 'utf8').includes('tok-SEKRIT'));
+  assert.deepEqual(leaked, [], 'credential values in query strings never reach the evidence');
 });
 
 test('deterministic: two runs of the same site give byte-identical evidence', async t => {

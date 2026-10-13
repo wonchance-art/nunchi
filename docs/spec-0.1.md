@@ -69,7 +69,10 @@ scene = route × person × state × viewport.
 - Timing-dependent measurements are kept out of the deterministic evidence: layout shift is stored as the
   web.dev band (good ≤ 0.1, needs-improvement ≤ 0.25, poor) and the raw value goes to `volatile.json`.
   Layout shift is read before nunchi scrolls or injects styles.
-- Cookies, auth headers and tokens are stripped from HAR and evidence before they are written.
+- Cookies, auth headers and tokens are stripped from HAR and evidence before they are written. Credential
+  query and fragment parameters (`token`, `access_token`, `apikey`, `code`, `X-Amz-Signature`, …) are replaced
+  by `REDACTED` in every URL the evidence keeps (requests, links, image sources, final path, aria snapshot,
+  console text); recording keys keep a short hash instead, so requests that differ only by token stay distinct.
 - Gate: same build, two runs → byte-identical screenshots.
 
 ### 2.3 Forced states
@@ -83,9 +86,31 @@ Derived from the recording, so they work with any auth:
 | slow | hold responses, capture at 1.5 s | no loading indicator, layout shift, double-submit risk |
 | offline | `context.setOffline(true)` after load | no offline message (`no-offline-notice`) |
 
-### 2.4 Evidence pack (per scene × viewport)
+### 2.4 Runs and the evidence pack
 
-`.nunchi/evidence/<run>/<scene>.<vp>/` (git-ignored):
+Every capture is a **run**: `.nunchi/runs/<id>/` (git-ignored), ids sequential (`0001`, `0002`, …). It is written
+as `<id>.partial` and renamed when complete, so a reader never sees half a run and an interrupted capture leaves
+the previous run intact; `.nunchi/runs/latest` names the newest complete run. `nunchi runs` lists them,
+`nunchi gc --keep N` removes older ones (runs referenced by open reviews will be kept, 0.1-c). `--out <dir>` writes
+in place without a run (tests, scripts).
+
+`run.json` (metadata, not compared between runs): id, parent run, git commit, `dirty` and a `tree` hash of the
+working tree (uncommitted and untracked edits included, `.nunchi/` excluded) — so *evidence is from the code you
+have now* holds without the user committing — scope (routes, persons, viewports, states, `--changed-since`),
+network mode per person, run health.
+
+**Run health** — whole-run failures are reported once instead of as one finding per screen, judged from the
+evidence only: *login-expired* (≥2 and ≥half of signed-in screens bounced to a sign-in page: every signed-in scene
+becomes *not seen: login expired*, no findings), *app-unreachable* (≥half of scenes have no DOM, including
+Chromium's own error page, which is never treated as a screen), *recording-stale* (≥half of replayed data screens
+missed the recording). The CLI prints `RUN PROBLEM …` and exits 3 for the first two.
+
+**Scene id** = route template (not the sample path) + person + state + viewport, e.g.
+`app~tasks~[id].signed-in.error.m`. The route encoding is one-to-one and safe on every file system (`/` → `~`,
+capitals → `^` + lower case, other unsafe characters → `%XX`, Windows device names escaped); `manifest.json` also
+keeps the structured key (route, path, person, state, viewport), and readers use that, never the folder name.
+
+Per scene:
 
 | File | Content |
 |---|---|
@@ -99,7 +124,7 @@ Derived from the recording, so they work with any auth:
 | `links.json` | internal links → target route, status |
 | `measure.json` | rule-lens measurements (§3) |
 
-Run-level: `manifest.json` (scenes, timings, determinism check, font status, drift list), `source-map.json`
+Run-level: `manifest.json` (scenes with status and reason, health), `findings.json`, `timing.json`, `run.json`, `source-map.json`
 (§2.5), `inventory.json` (source strings and UI states, extracted with Babel/SWC; classified in 0.1-b).
 
 ### 2.5 Source ↔ scene map (H5)
@@ -118,7 +143,7 @@ evidence.
 "pinned, minimal dependencies" rule (H15); the needed graph is ~200 lines. Next.js `.nft.json` traces need a
 production build and are left for a later version. Used to (a) mark coverage
 cells *stale* when files they depend on change, (b) pick scenes to re-capture incrementally, (c) pick
-neighbour scenes for regression checks after a fix. The board header shows *evidence commit ≠ HEAD*.
+neighbour scenes for regression checks after a fix. The board header shows *evidence tree ≠ working tree* (§2.4 `run.json`).
 
 ## 3. Lenses
 
@@ -235,7 +260,7 @@ hunting model cannot read them.
 
 | Step | Contents | Done when |
 |---|---|---|
-| 0.1-a | **remaining: computed lenses L3 (flow), L4 (measured design system), L10 (parity)** · plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login ✔ · record/replay ✔ · forced states ✔ · evidence pack ✔ · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map ✔ · benchmark app ✔ · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
+| 0.1-a | **remaining: computed lenses L3 (flow), L4 (measured design system), L10 (parity), scroll-container boxes** · runs + run health + scene ids + URL redaction ✔ · plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login ✔ · record/replay ✔ · forced states ✔ · evidence pack ✔ · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map ✔ · benchmark app ✔ · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
 | 0.1-b | inventory extractor · AI lenses · verifier · canaries · decoys · ledger · fingerprints · trust metrics · lens packs · budget | AI-lens recall, precision, fingerprint stability gates |
 | 0.1-c | fix loop · guards · board (mock-ups agreed) · exports · `check` · fast first run · batch decisions | fix-loop gate, field test, all gates |
 

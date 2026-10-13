@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeUrl, isDataRequest, isBackendHost, emptyJson, redactJson, forceResponse, requestKey, Recording } from '../src/network.mjs';
+import { normalizeUrl, isDataRequest, isBackendHost, emptyJson, redactJson, forceResponse, requestKey, Recording, redactUrl, redactText } from '../src/network.mjs';
 import { pacScript } from '../src/capture.mjs';
 
 test('normalizeUrl: sorted params, cache-busters dropped, epoch values masked', () => {
@@ -79,4 +79,25 @@ test('login warns on production-looking hosts, not on local or preview ones', as
   const { loginWarnings } = await import('../src/login.mjs');
   assert.equal(loginWarnings('https://pebbletasks.com/login').length, 1);
   for (const u of ['http://localhost:3000/login', 'http://127.0.0.1:5173', 'https://pebble-git-main.vercel.app', 'https://staging.pebbletasks.com']) assert.deepEqual(loginWarnings(u), [], u);
+});
+
+test('redactUrl: credential values in query and fragment are replaced, the rest is untouched', () => {
+  assert.equal(redactUrl('/auth/confirm?token=abc&next=/app'), '/auth/confirm?token=REDACTED&next=%2Fapp');
+  assert.equal(redactUrl('/cb#access_token=eyJ&token_type=bearer'), '/cb#access_token=REDACTED&token_type=bearer');
+  assert.equal(redactUrl('https://cdn.x/a.png?X-Amz-Signature=s1&w=200'), 'https://cdn.x/a.png?X-Amz-Signature=REDACTED&w=200');
+  assert.equal(redactUrl('../rel?code=9'), '../rel?code=REDACTED');
+  for (const keep of ['/plain', '/a?q=1&z=a%20b', '#top', '/p?page=2#section']) assert.equal(redactUrl(keep), keep);
+  assert.equal(redactUrl(null), null);
+});
+
+test('redactText: URLs quoted in messages lose their credentials', () => {
+  assert.equal(redactText('GET /api/x?apikey=K1&q=2 failed'), 'GET /api/x?apikey=REDACTED&q=2 failed');
+  assert.equal(redactText('no urls here: a=b'), 'no urls here: a=b');
+});
+
+test('request keys: credentials hashed, so distinct tokens stay distinct requests without being stored', () => {
+  const a = requestKey('GET', 'http://a/x?token=one'), b = requestKey('GET', 'http://a/x?token=two');
+  assert.notEqual(a, b);
+  assert.ok(!a.includes('one') && !b.includes('two'), a + ' ' + b);
+  assert.equal(a, requestKey('GET', 'http://a/x?token=one'));
 });

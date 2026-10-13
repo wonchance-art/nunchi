@@ -2,9 +2,10 @@
 // nunchi engine CLI. The deterministic half of nunchi: everything here must give the
 // same output for the same input. Judgment (sample values, lenses, fixes) lives in the plugin skill.
 import { resolve, join } from 'node:path';
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { discover } from './discover.mjs';
 import { buildSourceMap, affectedRoutes } from './sourcemap.mjs';
+import { startRun, finishRun, gcRuns, latestRun, workTree, ensureGitignore } from './runs.mjs';
 import { execFileSync } from 'node:child_process';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -18,7 +19,8 @@ Usage:
     --root <dir>          app source (routes come from discover)     default: .
     --routes </a,/b>      capture these paths instead of discovered routes
     --samples <file.json> sample paths for dynamic routes, e.g. {"/posts/[id]": "/posts/1"}
-    --out <dir>           evidence folder                            default: .nunchi/evidence/latest
+    --out <dir>           write the evidence here, in place (no run history)
+                          default: a new run folder .nunchi/runs/<id>, complete or absent
     --viewports <m,d>     m = 390x844, d = 1280x800                  default: m,d
     --browser-path <exe>  Chromium/Chrome executable (or NUNCHI_BROWSER)
     --auth <state.json>   saved login (from nunchi login) for signed-in scenes     default: .nunchi/auth.json if present
@@ -31,6 +33,9 @@ Usage:
     --json                print the summary as JSON
     --changed-since <ref> only screens whose source changed since a git ref (plus uncommitted changes)
     --plan                print the screens that would be captured and exit (no browser)
+    exit code 3 when the run is not usable (login expired, app unreachable); the run is kept
+  nunchi runs [--json]                      List captured runs (newest last) and which is latest
+  nunchi gc [--keep 5]                      Delete old runs, keep the newest N and the latest
   nunchi map [--root <dir>] [--json]        Which source files each route renders (source ↔ scene map)
   nunchi login --url <base> [--path /login] [--out .nunchi/auth.json]
                                             open a browser window, sign in once with a test account,
@@ -47,6 +52,7 @@ function parse(argv) {
     if (a === '--json') args.json = true;
     else if (a === '--plan') args.plan = true;
     else if (a === '--root') args.root = argv[++i];
+    else if (a === '--keep') args.keep = Number(argv[++i]);
     else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a === '--version' || a === '-v') args.version = true;
@@ -127,33 +133,48 @@ if (cmd === 'map') {
   const persons = auth ? ['guest', 'signed-in'] : ['guest'];
   const all = scenes.flatMap(s => persons.map(person => ({ ...s, person })));
   if (args.plan) { console.log(JSON.stringify({ scenes: all, skipped }, null, 2)); process.exit(0); }
-  const out = resolve(args.out || '.nunchi/evidence/latest');
-  // Evidence holds screenshots of the user's app and login state holds tokens: never committed.
   const nunchiDir = resolve('.nunchi');
-  if (out.startsWith(nunchiDir + '/') && !existsSync(join(nunchiDir, '.gitignore'))) {
-    mkdirSync(nunchiDir, { recursive: true });
-    writeFileSync(join(nunchiDir, '.gitignore'), 'evidence/\nauth.json\nhar/\n');
+  const runsDir = join(nunchiDir, 'runs');
+  // Evidence holds screenshots of the user's app and login state holds tokens: never committed.
+  ensureGitignore(nunchiDir);
+  const run = args.out ? null : startRun(runsDir);
+  const out = run ? run.path : resolve(args.out);
+  const viewports = (args.viewports || 'm,d').split(',');
+  const states = (args.states || 'normal,empty,error,slow,offline').split(',').map(x => x.trim());
+  const runMeta = {
+    schema: 1, id: run?.id ?? null, parent: run?.parent ?? null, ...workTree(root),
+    scope: { routes: [...new Set(all.map(s => s.route))].sort(), persons, viewports, states, changedSince: args.changedSince || null },
+  };
+  if (auth) {
+    try {
+      const cookies = JSON.parse(readFileSync(auth, 'utf8')).cookies || [];
+      const dated = cookies.filter(c => c.expires > 0);
+      if (dated.length && dated.every(c => c.expires * 1000 < Date.now())) console.error('warning: every cookie in the saved login has expired; run `nunchi login` again or signed-in screens will show the sign-in page');
+    } catch {}
   }
   try {
     const r = await capture({
-      baseUrl: args.url, scenes: all, out, viewports: (args.viewports || 'm,d').split(','), browserPath: args.browserPath, storageState: auth,
-      network: args.network || 'auto', recordingDir: resolve('.nunchi/har'),
-      states: (args.states || 'normal,empty,error,slow,offline').split(',').map(x => x.trim()),
+      baseUrl: args.url, scenes: all, out, viewports, browserPath: args.browserPath, storageState: auth,
+      network: args.network || 'auto', recordingDir: resolve('.nunchi/har'), states, runMeta,
       allowHosts: (args.allowHost || '').split(',').map(x => x.trim()).filter(Boolean),
     });
     const by = { blocker: 0, high: 0, medium: 0, low: 0 };
     for (const f of r.findings) by[f.severity]++;
     if (!args.routes) { const { writeStable } = await import('./stable.mjs'); writeStable(join(out, 'source-map.json'), buildSourceMap(root, discover(root).routes)); }
+    const final = run ? finishRun(runsDir, run.id) : out;
     const misses = r.manifest.scenes.reduce((n, x) => n + (x.replayMisses || 0), 0);
-    const summary = { out, scenes: r.manifest.scenes.length, network: r.run.network, replayMisses: misses, skipped, findings: by, seconds: Math.round(r.totalMs / 100) / 10 };
+    const summary = { out: final, run: run?.id ?? null, health: r.manifest.health, scenes: r.manifest.scenes.length, network: r.run.network, replayMisses: misses, skipped, findings: by, seconds: Math.round(r.totalMs / 100) / 10 };
     if (args.json) console.log(JSON.stringify(summary, null, 2));
     else {
-      console.log(`captured ${summary.scenes} scenes in ${summary.seconds}s → ${out}`);
+      console.log(`captured ${summary.scenes} scenes in ${summary.seconds}s → ${final}${run ? ` (run ${run.id})` : ''}`);
+      const why = { 'login-expired': 'the saved login no longer works: signed-in screens showed the sign-in page and were not judged. Run `nunchi login` again.', 'app-unreachable': 'most screens did not load at all. Is the app running at --url?', 'recording-stale': 'most screens asked for data the recording does not have. Re-record with --network record.' };
+      for (const p of r.manifest.health.problems) console.log(`RUN PROBLEM ${p.status} (${p.scenes}/${p.of} screens): ${why[p.status]}`);
       console.log(`rule findings: blocker ${by.blocker} · high ${by.high} · medium ${by.medium} · low ${by.low}`);
       console.log(`network: ${Object.entries(r.run.network).map(([p, m]) => `${p} ${m}`).join(' · ')}`);
       if (misses) console.log(`replay misses: ${misses} request(s) were not in the recording and went live; re-record with --network record`);
       for (const s of skipped) console.log(`  skipped ${s.route} (${s.reason})`);
     }
+    if (r.manifest.health.problems.some(p => p.status === 'login-expired' || p.status === 'app-unreachable')) process.exitCode = 3;
   } catch (e) {
     console.error(['NO_BROWSER', 'NO_AUTH', 'NO_RECORDING', 'BAD_ARGS'].includes(e.code) ? 'nunchi: ' + e.message : e.stack);
     process.exit(2);
@@ -164,13 +185,26 @@ if (cmd === 'map') {
   const target = args.url.replace(/\/$/, '') + (args.path || '');
   for (const w of loginWarnings(target)) console.error('warning: ' + w);
   const out = resolve(args.out || '.nunchi/auth.json');
-  const nunchiDir = resolve('.nunchi');
-  if (out.startsWith(nunchiDir + '/') && !existsSync(join(nunchiDir, '.gitignore'))) {
-    mkdirSync(nunchiDir, { recursive: true });
-    writeFileSync(join(nunchiDir, '.gitignore'), 'evidence/\nauth.json\nhar/\n');
-  }
+  if (out.startsWith(resolve('.nunchi') + '/')) ensureGitignore(resolve('.nunchi'));
   try { console.log(`saved login → ${await login({ url: target, out, browserPath: args.browserPath })} (owner-only, git-ignored)`); }
   catch (e) { console.error(e.code === 'NO_BROWSER' ? 'nunchi: ' + e.message : e.stack); process.exit(2); }
+} else if (cmd === 'runs') {
+  const { listRuns } = await import('./runs.mjs');
+  const dir = resolve('.nunchi/runs');
+  const r = { ...listRuns(dir), latest: latestRun(dir) };
+  if (args.json) console.log(JSON.stringify(r, null, 2));
+  else {
+    for (const id of r.complete) {
+      let m = {};
+      try { m = JSON.parse(readFileSync(join(dir, id, 'run.json'), 'utf8')); } catch {}
+      console.log(`${id}${id === r.latest ? ' (latest)' : ''}  ${m.commit ? m.commit.slice(0, 7) : 'no git'}${m.dirty ? ' + edits' : ''}  health ${m.health?.status ?? '?'}  ${m.scope?.routes?.length ?? '?'} routes`);
+    }
+    for (const p of r.partial) console.log(`${p}  (incomplete: still running, or interrupted; removed by nunchi gc after an hour)`);
+    if (!r.complete.length && !r.partial.length) console.log('no runs yet: nunchi capture --url <your local server>');
+  }
+} else if (cmd === 'gc') {
+  const r = gcRuns(resolve('.nunchi/runs'), { keep: Number.isInteger(args.keep) && args.keep > 0 ? args.keep : 5 });
+  console.log(args.json ? JSON.stringify(r, null, 2) : `kept ${r.kept.join(', ') || 'nothing'} · removed ${r.removed.join(', ') || 'nothing'}`);
 } else {
   console.error(`nunchi: unknown command "${cmd}"\n\n${HELP}`);
   process.exit(1);

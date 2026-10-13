@@ -135,6 +135,7 @@ export function collect() {
   const main = document.querySelector('main') || document.body;
   return {
     url: location.pathname + location.search,
+    browserErrorPage: location.protocol === 'chrome-error:',
     title: document.title,
     h1: (document.querySelector('h1')?.innerText || '').trim().slice(0, 120),
     viewport: { width: innerWidth, height: innerHeight },

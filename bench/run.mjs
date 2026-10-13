@@ -53,7 +53,7 @@ const capture = (label, harFrom) => {
   writeFileSync(join(work, '.nunchi', 'auth.json'), JSON.stringify({ cookies: [{ name: 'pebble_session', value: 'demo', domain: '127.0.0.1', path: '/', expires: -1, httpOnly: false, secure: false, sameSite: 'Lax' }], origins: [] }));
   const t = Date.now();
   const summary = JSON.parse(run('node', [CLI, 'capture', '--url', base, '--root', APP, '--samples', '.nunchi/samples.json', '--json'], { cwd: work }));
-  return { work, out: join(work, '.nunchi', 'evidence', 'latest'), summary, seconds: Math.round((Date.now() - t) / 100) / 10 };
+  return { work, out: summary.out, summary, seconds: Math.round((Date.now() - t) / 100) / 10 };
 };
 
 log('capturing (run 1)…');

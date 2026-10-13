@@ -8,7 +8,7 @@ import { chromium } from 'playwright-core';
 import { initScript, collect, FREEZE_CSS } from './collect.mjs';
 import { ruleFindings, secretFindings } from './rules.mjs';
 import { writeStable, sha } from './stable.mjs';
-import { FONT_HOSTS, BACKEND_SUFFIXES, isBackendHost, isDataRequest, requestKey, forceResponse, Recording } from './network.mjs';
+import { FONT_HOSTS, BACKEND_SUFFIXES, isBackendHost, isDataRequest, requestKey, forceResponse, Recording, redactUrl, redactText } from './network.mjs';
 
 const require = createRequire(import.meta.url);
 const AXE_SOURCE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
@@ -19,9 +19,26 @@ const DEFAULT_CLOCK = Date.UTC(2026, 0, 15, 9, 0, 0);
 export const STATES = ['normal', 'empty', 'error', 'slow', 'offline'];
 const TEXTUAL = /json|text|javascript|xml|x-www-form-urlencoded|graphql/i;
 
+// Scene folder name. Built from the route template (not the sample path), so a new sample value keeps
+// the same scene. The encoding is one-to-one and safe on every file system: '/' → '~', capitals → '^'
+// + lower case (case-insensitive disks), '~ ^ %' and anything outside a small safe set → %XX, Windows
+// device names escaped. person, state and viewport never contain '.', so the name splits from the right.
+const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i;
+export function sceneSlug(route) {
+  let s = '';
+  for (const ch of route) {
+    if (ch === '/') s += '~';
+    else if (/[a-z0-9_\-.[\]$()@+]/.test(ch)) s += ch;
+    else if (/[A-Z]/.test(ch)) s += '^' + ch.toLowerCase();
+    else s += [...new TextEncoder().encode(ch)].map(b => '%' + b.toString(16).toUpperCase().padStart(2, '0')).join('');
+  }
+  if (s.startsWith('~') && s.length > 1) s = s.slice(1);
+  if (RESERVED.test(s)) s = '%' + s.charCodeAt(0).toString(16).toUpperCase() + s.slice(1);
+  if (s.endsWith('.')) s = s.slice(0, -1) + '%2E';
+  return s;
+}
 export function sceneId(route, person, state, vp) {
-  const slug = route === '/' ? 'root' : route.replace(/^\//, '').replace(/[^\w\-[\]$.]+/g, '_');
-  return `${slug}.${person}.${state}.${vp}`;
+  return `${sceneSlug(route)}.${person}.${state}.${vp}`;
 }
 
 // Network policy for the whole browser, not just the page: the app under test and local hosts go
@@ -118,8 +135,8 @@ async function captureOne(browser, base, scene, opts) {
   const page = await ctx.newPage();
   const pageErrors = [];
   const nativeDialogs = [];
-  page.on('pageerror', e => pageErrors.push(String(e.message || e).split('\n')[0].slice(0, 200)));
-  page.on('dialog', d => { nativeDialogs.push({ type: d.type(), message: d.message().slice(0, 200) }); d.dismiss().catch(() => {}); });
+  page.on('pageerror', e => pageErrors.push(redactText(String(e.message || e).split('\n')[0].slice(0, 200))));
+  page.on('dialog', d => { nativeDialogs.push({ type: d.type(), message: redactText(d.message().slice(0, 200)) }); d.dismiss().catch(() => {}); });
   page.on('response', async res => {
     const u = new URL(res.url());
     if (u.origin !== origin) return;
@@ -128,7 +145,7 @@ async function captureOne(browser, base, scene, opts) {
     // not on the screen: kept out of the evidence so it stays comparable.
     const h = req.headers();
     if (u.searchParams.has('_rsc') || h.rsc === '1' || h['next-router-prefetch'] || /prefetch/i.test(h['sec-purpose'] || h.purpose || '')) return;
-    requests.push({ path: u.pathname + u.search, method: req.method(), status: res.status(), sameOrigin: true, type: req.resourceType(), document: req.resourceType() === 'document', write: !['GET', 'HEAD', 'OPTIONS'].includes(req.method()) });
+    requests.push({ path: redactUrl(u.pathname + u.search), method: req.method(), status: res.status(), sameOrigin: true, type: req.resourceType(), document: req.resourceType() === 'document', write: !['GET', 'HEAD', 'OPTIONS'].includes(req.method()) });
     if (req.resourceType() === 'script') { try { scripts.push({ path: u.pathname, body: await res.text() }); } catch {} }
   });
 
@@ -137,7 +154,7 @@ async function captureOne(browser, base, scene, opts) {
   try {
     const res = await page.goto(base.replace(/\/$/, '') + scene.path, { waitUntil: slow ? 'domcontentloaded' : 'load', timeout: opts.timeout });
     status = res ? res.status() : null;
-  } catch (e) { errors.push('navigation: ' + String(e.message).split('\n')[0]); }
+  } catch (e) { errors.push('navigation: ' + redactText(String(e.message).split('\n')[0])); }
   if (slow) await page.waitForTimeout(1500);                    // data held: what does the user see?
   else await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
   // Layout shift is read before nunchi scrolls or injects styles, so only the app's own shifts count.
@@ -155,7 +172,17 @@ async function captureOne(browser, base, scene, opts) {
     if (scene.state !== 'offline') await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
   }
 
-  const measure = await page.evaluate(collect).catch(e => { errors.push('collect: ' + e.message); return null; });
+  let measure = await page.evaluate(collect).catch(e => { errors.push('collect: ' + e.message); return null; });
+  // Chromium's own error page (connection refused, empty error response) is not the app's screen.
+  const browserErrorPage = !!measure?.browserErrorPage;
+  if (browserErrorPage) measure = null;
+  if (measure) delete measure.browserErrorPage;
+  // URLs read from the page can carry credentials (magic links, signed image URLs): redacted before use.
+  if (measure) {
+    measure.url = redactUrl(measure.url);
+    for (const c of measure.controls) c.href = redactUrl(c.href);
+    for (const i of measure.images) i.src = redactUrl(i.src);
+  }
   // CLS depends on timing; the evidence keeps the web.dev band, the raw value goes to volatile.json.
   if (measure) { measure.cls = cls; measure.clsBand = cls <= 0.1 ? 'good' : cls <= 0.25 ? 'needs-improvement' : 'poor'; }
   await page.addScriptTag({ content: AXE_SOURCE }).catch(() => {});
@@ -179,8 +206,8 @@ async function captureOne(browser, base, scene, opts) {
 
   const finalPath = measure ? measure.url : null;
   const ev = {
-    scene: scene.id, route: scene.route, path: scene.path, viewport: scene.vp, person: scene.person, state: scene.state,
-    status, finalPath, redirected: finalPath !== null && finalPath.split('?')[0] !== scene.path.split('?')[0],
+    scene: scene.id, route: scene.route, path: redactUrl(scene.path), viewport: scene.vp, person: scene.person, state: scene.state,
+    status, finalPath, redirected: finalPath !== null && finalPath.split(/[?#]/)[0] !== scene.path.split(/[?#]/)[0],
     errors, pageErrors: seenErrors, nativeDialogs: seenDialogs,
     requests: seen.sort((a, b) => (a.path + a.method < b.path + b.method ? -1 : 1)),
     blocked: [...blocked].sort(), axe: axe.sort((a, b) => (a.id < b.id ? -1 : 1)),
@@ -188,9 +215,9 @@ async function captureOne(browser, base, scene, opts) {
   };
   if (top) writeStable(join(dir, 'top.jpg'), top);
   if (full) writeStable(join(dir, 'full.jpg'), full);
-  writeStable(join(dir, 'aria.yml'), aria + '\n');
+  writeStable(join(dir, 'aria.yml'), redactText(aria) + '\n');
   if (measure) {
-    writeStable(join(dir, 'text.txt'), measure.text + '\n');
+    writeStable(join(dir, 'text.txt'), redactText(measure.text) + '\n');
     writeStable(join(dir, 'styles.json'), measure.styles);
     writeStable(join(dir, 'controls.json'), measure.controls);
     writeStable(join(dir, 'links.json'), measure.links);
@@ -211,9 +238,9 @@ async function captureOne(browser, base, scene, opts) {
   writeStable(join(dir, 'volatile.json'), { cls });
   return {
     entry: {
-      id: scene.id, route: scene.route, path: scene.path, person: scene.person, state: scene.state, viewport: scene.vp,
+      id: scene.id, route: scene.route, path: redactUrl(scene.path), person: scene.person, state: scene.state, viewport: scene.vp,
       status: measure ? (ev.redirected && opts.strictPath ? 'capture-failed' : 'captured') : 'capture-failed',
-      reason: !measure ? 'no-dom' : ev.redirected ? `redirected to ${finalPath}` : null,
+      reason: !measure ? (browserErrorPage ? 'browser-error-page' : 'no-dom') : ev.redirected ? `redirected to ${finalPath}` : null,
       finalPath, httpStatus: status,
       top: top ? sha(top) : null, full: full ? sha(full) : null,
       findings: findings.length, dataRequests: dataKeys.length, replayMisses: new Set(drift).size,
@@ -245,9 +272,29 @@ export function stateFindings(entries) {
   return out;
 }
 
+// Whole-run failures look like many identical findings; they are reported once instead (spec §2.4).
+// - login-expired: most signed-in screens bounced to a sign-in page. Those scenes become not-seen and
+//   their bounce findings are dropped; one bounced screen among working ones is still a finding.
+// - app-unreachable: most scenes have no DOM (server down, wrong URL).
+// - recording-stale: most replayed screens asked for requests the recording does not have.
+// Judged from the evidence only (no clock), so two runs of the same app agree.
+export function runHealth(entries, findings) {
+  const problems = [];
+  const signedIn = entries.filter(e => e.person === 'signed-in' && e.state === 'normal');
+  const bouncedIds = new Set(findings.filter(f => f.rule === 'signed-in-bounced').map(f => f.scene));
+  const bounced = signedIn.filter(e => bouncedIds.has(e.id));
+  if (bounced.length >= 2 && bounced.length * 2 >= signedIn.length) problems.push({ status: 'login-expired', scenes: bounced.length, of: signedIn.length });
+  const noDom = entries.filter(e => e.reason === 'no-dom' || e.reason === 'browser-error-page');
+  if (noDom.length >= 2 && noDom.length * 2 >= entries.length) problems.push({ status: 'app-unreachable', scenes: noDom.length, of: entries.length });
+  const data = entries.filter(e => e.dataRequests > 0);
+  const missed = data.filter(e => e.replayMisses > 0);
+  if (missed.length >= 2 && missed.length * 2 >= data.length) problems.push({ status: 'recording-stale', scenes: missed.length, of: data.length });
+  return { status: problems.length ? problems[0].status : 'ok', problems };
+}
+
 // scenes: [{ route, path, person }] → expanded per viewport and per forced state here.
 // network: 'auto' (replay if a recording exists, else record) | 'record' | 'replay' | 'live'.
-export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false }) {
+export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {} }) {
   if (scenes.some(s => s.person === 'signed-in') && !(storageState && existsSync(storageState))) {
     throw Object.assign(new Error(`signed-in scenes need a saved login state, but ${storageState || '(none)'} does not exist`), { code: 'NO_AUTH' });
   }
@@ -263,12 +310,18 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
     if (modes[person] !== 'live' && !path) throw Object.assign(new Error('record/replay needs a recording folder'), { code: 'BAD_ARGS' });
     recordings[person] = existing || new Recording();
   }
+  const ids = new Map();
+  for (const s of scenes) {
+    const id = sceneId(s.route || s.path, s.person || 'guest', 'normal', 'm');
+    if (ids.has(id)) throw Object.assign(new Error(`two scenes map to the same name: ${ids.get(id)} and ${s.path} (one sample per route and person)`), { code: 'BAD_ARGS' });
+    ids.set(id, s.path);
+  }
   const browser = await launch({ browserPath, baseUrl, allowHosts });
   const t0 = Date.now();
   const entries = []; const findings = []; const scriptMap = new Map(); const timing = [];
   const run = async (s, vp, state) => {
     const person = s.person || 'guest';
-    const scene = { ...s, vp, person, state, id: sceneId(s.path, person, state, vp) };
+    const scene = { ...s, vp, person, state, id: sceneId(s.route || s.path, person, state, vp) };
     // forced states read the recording when there is one, so they rewrite the same data
     const mode = state === 'normal' ? modes[person] : (Object.keys(recordings[person].entries).length ? 'replay' : 'live');
     const t = Date.now();
@@ -287,13 +340,20 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   } finally { await browser.close(); }
   for (const person of persons) if (modes[person] === 'record') recordings[person].save(join(recordingDir, `${person}.json`));
   findings.push(...stateFindings(entries));
+  const health = runHealth(entries, findings);
+  if (health.status === 'login-expired' || health.problems.some(p => p.status === 'login-expired')) {
+    // Every signed-in scene of an expired login is unseen, bounced or not: what it showed is a sign-in page.
+    const lost = new Set(entries.filter(e => e.person === 'signed-in').map(e => e.id));
+    for (const e of entries) if (lost.has(e.id)) { e.status = 'not-seen'; e.reason = 'login-expired'; e.findings = 0; }
+    for (let i = findings.length - 1; i >= 0; i--) if (lost.has(findings[i].scene)) findings.splice(i, 1);
+  }
   const scripts = [...scriptMap].sort().map(([path, body]) => ({ path, body }));
   findings.push(...secretFindings(scripts));
   const order = { blocker: 0, high: 1, medium: 2, low: 3 };
   findings.sort((a, b) => order[a.severity] - order[b.severity] || String(a.scene).localeCompare(String(b.scene)) || a.rule.localeCompare(b.rule) || String(a.selector).localeCompare(String(b.selector)));
-  const manifest = { schema: 1, baseUrl, viewports: viewports.map(v => ({ id: v, ...VIEWPORTS[v] })), clock: new Date(clock).toISOString(), states, scenes: entries };
+  const manifest = { schema: 1, health, baseUrl, viewports: viewports.map(v => ({ id: v, ...VIEWPORTS[v] })), clock: new Date(clock).toISOString(), states, scenes: entries };
   // How this run got its data (record vs replay) is run metadata, not evidence: kept beside timing.
-  const runInfo = { network: modes };
+  const runInfo = { ...runMeta, network: modes, health };
   writeStable(join(out, 'manifest.json'), manifest);
   writeStable(join(out, 'findings.json'), { schema: 1, findings });
   writeStable(join(out, 'timing.json'), { totalMs: Date.now() - t0, scenes: timing });
