@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "id": "L9",
+  "name": "Safety",
+  "definition": "The user can lose something without warning: a destructive action that runs without a confirmation or undo, or typed input that is lost when they leave. window.confirm dialogs and secret-shaped strings in client JS are already rule findings; do not repeat them. A static screen cannot show what a click does: ground a claim on the control (selector) and, when you read the handler in source, on file:line; answer cannot-judge when neither the evidence nor the source settles it.",
+  "method": "ai",
+  "scenes": { "states": ["normal"] },
+  "evidence": ["top.jpg", "aria.yml", "controls.json", "text.txt"],
+  "checklist": [
+    { "id": "L9.destructive-without-confirm", "question": "Is there a destructive control (Delete, Remove, Reset, Discard, Cancel subscription, Clear all) with no sign of a confirmation step or undo: its accessible name and aria.yml show no dialog/menu popup, nothing on screen mentions undo or a trash, and (if you read it) its handler deletes immediately?" },
+    { "id": "L9.input-lost-on-leave", "question": "Is there a form or editor with several fields or free text where leaving controls (navigation links, Cancel, Close, Back) sit beside it with no sign of a draft, autosave or leave warning (no 'Saved', 'Draft', 'Unsaved changes' text)?" }
+  ],
+  "examples": {
+    "bad": [
+      "A trash icon button named 'Delete garden' on each row; aria.yml shows a plain button, no popup, and the screen offers no undo.",
+      "A long 'New journal entry' editor with a 'Back' link and no 'Draft saved' indicator or leave warning."
+    ],
+    "good": [
+      "'Delete garden…' opens a dialog (aria-haspopup=dialog) that names the garden.",
+      "'Archive' moves a note to an Archive list the sidebar links to: it can be undone.",
+      "The editor shows 'Draft saved 2 min ago'."
+    ]
+  },
+  "severityRubric": {
+    "blocker": "a single click permanently deletes user data with no confirmation and no undo",
+    "high": "a destructive action without confirmation on a core screen, or long input lost on leave",
+    "medium": "a destructive action with no confirmation where the data can be recovered another way",
+    "low": "short input (one field) lost on leave"
+  }
+}

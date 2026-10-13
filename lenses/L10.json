@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "id": "L10",
+  "name": "Parity (phone first view and fixed elements)",
+  "definition": "The phone user gets less than the desktop user: a fixed or sticky element covers content or controls, or the screen's primary action is not in the phone's first view although it is on desktop. Controls missing on the phone altogether are already computed (missing-on-phone); do not repeat them.",
+  "method": "ai",
+  "scenes": { "states": ["normal"] },
+  "evidence": ["top.jpg", "full.jpg", "controls.json", "measure.json"],
+  "checklist": [
+    { "id": "L10.fixed-covers-content", "question": "Does a fixed or sticky element (header, bottom bar, cookie or install banner, chat bubble, floating button) cover text or controls in top.jpg or full.jpg so they cannot be read or pressed?" },
+    { "id": "L10.primary-not-in-first-view", "question": "Is the screen's primary action (the one the desktop first view shows prominently: Add, Save, Sign up, Checkout) missing from the phone's first view (top.jpg of the phone scene, controls.json boxes below the viewport height)?", "scenes": { "viewports": ["m"] } }
+  ],
+  "examples": {
+    "bad": [
+      "On the phone, a fixed 'Rate us' banner covers the last task row and its checkbox.",
+      "Desktop shows 'Add plant' in the header; on the phone it is at the bottom of a long list, 2,400px down."
+    ],
+    "good": [
+      "A sticky header that leaves room for the content below it (the page is padded by its height).",
+      "On the phone, 'Add plant' moved into a floating button in the first view."
+    ]
+  },
+  "severityRubric": {
+    "high": "a fixed element covers the primary action or a required field",
+    "medium": "a fixed element covers content, or the primary action is far below the phone's first view on a core screen",
+    "low": "the primary action is just below the first view"
+  }
+}

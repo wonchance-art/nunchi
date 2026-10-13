@@ -70,6 +70,14 @@ Usage:
   nunchi login --url <base> [--path /login] [--out .nunchi/auth.json]
                                             open a browser window, sign in once with a test account,
                                             save the login for signed-in scenes
+  nunchi hunt --plan [--run <id>] [--lens L1,L6] [--budget <tokens>] [--json]
+                                            Cut a run into AI-lens work units (1–3 scenes × 1 lens + a reference
+                                            scene), estimate tokens, write hunt-plan.json into the run.
+                                            Units over --budget are listed as not seen: budget
+  nunchi hunt --record <answers.json|dir> [--run <id>] [--root <dir>] [--json]
+                                            Check the hunter's answers (every item answered, every defect
+                                            grounded in a selector of the scene or a file:line under --root)
+                                            and write ai-findings.json and coverage.json into the run
   nunchi --version
   nunchi --help
 
@@ -88,7 +96,7 @@ function parse(argv) {
     else if (a === '--keep') args.keep = Number(argv[++i]);
     else if (a === '--all') args.all = true;
     else if (['--reason', '--note', '--run', '--status', '--rule'].includes(a)) args[a.slice(2)] = argv[++i];
-    else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since', '--vendor', '--record', '--canaries'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
+    else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since', '--lens', '--budget', '--record', '--vendor', '--canaries'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a === '--version' || a === '-v') args.version = true;
     else args._.push(a);
@@ -352,6 +360,46 @@ if (cmd === 'setup') {
     }
     for (const p of r.partial) console.log(`${p}  (incomplete: still running, or interrupted; removed by nunchi gc after an hour)`);
     if (!r.complete.length && !r.partial.length) console.log('no runs yet: nunchi capture --url <your local server>');
+  }
+} else if (cmd === 'hunt') {
+  // AI lenses, engine side (spec §4): the plan and the record are deterministic; the judgement is the skill's.
+  const { loadLenses } = await import('./lenses.mjs');
+  const { planHunt, recordHunt, writeRecord, readAnswers, formatPlan, formatRecord } = await import('./hunt.mjs');
+  const { writeStable } = await import('./stable.mjs');
+  const fail = (msg, code = 1) => { console.error(`nunchi hunt: ${msg}`); process.exit(code); };
+  if (!!args.plan === !!args.record) fail('use either --plan or --record <answers.json>');
+  const runsDir = resolve('.nunchi/runs');
+  let runDir, runId = null;
+  if (args.run && !/^\d{4,}$/.test(args.run)) runDir = resolve(args.run);          // a run folder or an --out folder
+  else {
+    runId = args.run || latestRun(runsDir);
+    if (!runId) fail('no runs yet: nunchi capture --url <your local server>');
+    runDir = join(runsDir, runId);
+  }
+  if (!existsSync(join(runDir, 'manifest.json'))) fail(`${runDir} is not a complete capture run (no manifest.json)`);
+  if (!runId) { try { runId = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8')).id ?? null; } catch {} }
+  const planPath = join(runDir, 'hunt-plan.json');
+  try {
+    if (args.plan) {
+      const budget = args.budget === undefined ? null : Number(args.budget);
+      if (budget !== null && !(Number.isInteger(budget) && budget > 0)) fail('--budget takes a whole number of tokens');
+      const { lenses } = loadLenses({ root: process.cwd() });
+      const lensIds = args.lens ? args.lens.split(',').map(x => x.trim().toUpperCase()).filter(Boolean) : null;
+      const plan = planHunt({ runDir, lenses, lensIds, budget, runId });
+      writeStable(planPath, plan);
+      console.log(args.json ? JSON.stringify(plan, null, 2) : formatPlan(plan, planPath));
+    } else {
+      if (!existsSync(planPath)) fail(`no hunt-plan.json in ${runDir}: run hunt --plan first`);
+      const plan = JSON.parse(readFileSync(planPath, 'utf8'));
+      const answersPath = resolve(args.record);
+      if (!existsSync(answersPath)) fail(`${args.record} not found`);
+      const result = recordHunt({ runDir, plan, answers: readAnswers(answersPath), root: resolve(args.root || process.cwd()) });
+      writeRecord(runDir, result);
+      console.log(args.json ? JSON.stringify({ plan: plan.id, run: runId, summary: result.coverage.summary, findings: result.findings.length, rejected: result.rejected }, null, 2) : formatRecord(result, runDir));
+    }
+  } catch (e) {
+    if (['BAD_LENS', 'LENS_HASH_MISMATCH', 'BAD_ARGS', 'BAD_RUN', 'BAD_ANSWERS', 'STALE_ANSWERS'].includes(e.code)) fail(e.message, 2);
+    throw e;
   }
 } else if (cmd === 'canaries') {
   if (!args.score) { console.error('nunchi canaries: use --score [--run <id>] after the AI hunt has written ai-findings.json'); process.exit(1); }
