@@ -589,7 +589,33 @@ step off the brand green, an input with its own height and border, one dashboard
 dashboard, an open debug JSON panel; L9: "Empty archive" without confirm or undo, a details field with no draft
 beside "Back to tasks"; L10 (phone): a fixed tip bar over Save, a promo block that pushes Login below the first
 view, a cookie banner over the footer links. Each has an `ai` match hint (lens, route, state or viewport, checklist
-id or words). Not re-measured yet; the inventory does not yet treat "empty" as a destructive verb (P54).
+id or words). The inventory does not yet treat "empty" as a destructive verb (P54).
+
+*Re-measure on the 24 seeds (2026-10-13 KST):* the same method on a new capture (100 scenes + 3 canary copies):
+89 of 212 units per run, nine hunter packets, three runs (about 3.6M subagent tokens in all).
+
+| Lens | Seeds | Found (run 1 / 2 / 3) | Mean recall |
+|---|---|---|---|
+| L1 | 3 | 1 / 1 / 1, then 3 / 3 / 3 with the fix below | 33% → 100% |
+| L2, L4, L5, L6, L7, L9, L10 | 3 each | 3 / 3 / 3 each | 100% |
+
+- *L1 fix:* the hunters saw the "Archived" stamp over item titles and the squashed photo in every run but answered
+  cannot-judge: neither is a control, and L1 read only the screenshots, controls.json and measure.json. L1 now also
+  reads styles.json (the stamp has a row) and aria.yml (the photo is an `img` node). An L1-only re-run of the same
+  units with the fixed lens, three runs, found all three L1 seeds every time, grounded in those files, with no
+  claim on the clean screens.
+- *Canaries:* 2 of 2 hit in every run (`fixed-cover` on the phone home screen, `blank-state` on a slow task
+  screen); the third, `blank-state` on the notes error screen, was ambiguous again (the original already fails the
+  same item). Canary placement should avoid screens that already fail the planted item; not built.
+- *Clean screens:* the L4 wrong-place claims of the first measurement are gone (L4 now claims only the odd one
+  out); the one remaining claim, L5 "Log in" (header) vs "Login" (sign-in button) on `/about`, in every run, is
+  the seeded P33 inconsistency seen from another page.
+- 166/166 cells seen per run, no answer rejected.
+
+*Verdict:* every AI lens reaches the recall gate on the benchmark's seeds (≥75%, mean of three runs; L1 after the
+evidence fix). Still open before the gate counts for release: the held-out benchmark (a second app never opened
+during development), the precision gate (a human-labelled sample of 50 verified findings), and the Codex CLI
+comparison (§8).
 
 ## 10. Open items
 
