@@ -3,3 +3,7 @@ node_modules/
 .nunchi/evidence/
 .nunchi/har/
 *.log
+bench/pebble/node_modules/
+bench/pebble/.next/
+bench/pebble/next-env.d.ts
+bench/out/

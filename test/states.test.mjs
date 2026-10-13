@@ -47,10 +47,10 @@ test('record once, replay twice: identical evidence even though the server chang
   const a = tmp('a'), b = tmp('b');
   const ra = await capture({ baseUrl: base, scenes, viewports: ['m'], out: a, network: 'auto', recordingDir: har });
   await capture({ baseUrl: base, scenes, viewports: ['m'], out: b, network: 'replay', recordingDir: har });
-  assert.equal(ra.manifest.network.guest, 'replay', 'auto replays when a recording exists');
+  assert.equal(ra.run.network.guest, 'replay', 'auto replays when a recording exists');
   const id = 'tasks.html.guest.normal.m';
   assert.match(text(a, id), new RegExp(`Synced #${recorded}\\b`));
-  const stable = f => f !== 'timing.json' && !f.endsWith('volatile.json');
+  const stable = f => f !== 'timing.json' && f !== 'run.json' && !f.endsWith('volatile.json');
   const diff = files(a).filter(stable).filter(f => !readFileSync(join(a, f)).equals(readFileSync(join(b, f))));
   assert.deepEqual(diff, []);
   assert.equal(counter, recorded, 'two replays never asked the live server');

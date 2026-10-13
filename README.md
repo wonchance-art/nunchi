@@ -34,6 +34,14 @@ Then run `/nunchi` in your app's folder. (Pre-release: discovery, login, capture
 - Track each finding: found → confirmed → fixing → fixed (re-captured) → guarded (lint/contract rule)
 - Show a local progress board: open defects, trend, coverage map, design-system drift, AI trust
 
+## Benchmark
+
+`bench/pebble` is a small synthetic to-do app with 40 seeded UI defects; `bench/answers/pebble.json` is its
+answer key, kept outside the app so a hunter pointed at the app never sees it. `npm run bench` builds the app,
+captures it with the nunchi CLI exactly as a user would (twice, to check determinism) and writes
+`bench/out/report.md`. The 0.1 release gates (rule-lens recall, false positives on clean screens,
+byte-identical evidence) are measured here.
+
 ## Principles
 
 - No finding without evidence (a DOM element, selector, measurement or file:line)

@@ -145,12 +145,12 @@ if (cmd === 'map') {
     for (const f of r.findings) by[f.severity]++;
     if (!args.routes) { const { writeStable } = await import('./stable.mjs'); writeStable(join(out, 'source-map.json'), buildSourceMap(root, discover(root).routes)); }
     const misses = r.manifest.scenes.reduce((n, x) => n + (x.replayMisses || 0), 0);
-    const summary = { out, scenes: r.manifest.scenes.length, network: r.manifest.network, replayMisses: misses, skipped, findings: by, seconds: Math.round(r.totalMs / 100) / 10 };
+    const summary = { out, scenes: r.manifest.scenes.length, network: r.run.network, replayMisses: misses, skipped, findings: by, seconds: Math.round(r.totalMs / 100) / 10 };
     if (args.json) console.log(JSON.stringify(summary, null, 2));
     else {
       console.log(`captured ${summary.scenes} scenes in ${summary.seconds}s → ${out}`);
       console.log(`rule findings: blocker ${by.blocker} · high ${by.high} · medium ${by.medium} · low ${by.low}`);
-      console.log(`network: ${Object.entries(r.manifest.network).map(([p, m]) => `${p} ${m}`).join(' · ')}`);
+      console.log(`network: ${Object.entries(r.run.network).map(([p, m]) => `${p} ${m}`).join(' · ')}`);
       if (misses) console.log(`replay misses: ${misses} request(s) were not in the recording and went live; re-record with --network record`);
       for (const s of skipped) console.log(`  skipped ${s.route} (${s.reason})`);
     }

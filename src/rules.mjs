@@ -51,7 +51,10 @@ export function ruleFindings(ev) {
   const brokenSrcs = new Set(m.images.map(i => { try { return new URL(i.src, 'http://x').pathname; } catch { return i.src; } }));
   // In the forced error and offline states the failures are nunchi's own doing, not findings.
   const forcedFailures = ev.state === 'error' || ev.state === 'offline';
-  for (const r of ev.requests.filter(r => !forcedFailures && r.sameOrigin && r.status >= 400 && !r.document && !brokenSrcs.has(r.path.split('?')[0]))) add({ lens: 'L1', id: 'failed-request', severity: 'medium', evidence: { url: r.path, status: r.status, method: r.method } });
+  // Only requests this screen depends on: data, scripts and styles. Images are judged when visible
+  // (broken-image); an image 404 from a prefetch of another route is that route's problem.
+  const CRITICAL = new Set(['fetch', 'xhr', 'script', 'stylesheet']);
+  for (const r of ev.requests.filter(r => !forcedFailures && r.sameOrigin && r.status >= 400 && !r.document && (!r.type || CRITICAL.has(r.type)) && !brokenSrcs.has(r.path.split('?')[0]))) add({ lens: 'L1', id: 'failed-request', severity: 'medium', evidence: { url: r.path, status: r.status, method: r.method } });
 
   // L2 states (measurable part): a forced state that leaves the main area blank
   if (ev.state && ev.state !== 'normal' && !(m.mainText || '').trim()) add({ lens: 'L2', id: 'blank-state', severity: 'high', selector: 'main', evidence: { state: ev.state } });
@@ -84,8 +87,15 @@ export function ruleFindings(ev) {
   // WCAG 2.5.8: every target counts except links inline in a sentence. Form fields are left to axe.
   for (const c of m.controls.filter(c => !c.inline && !['input', 'select', 'textarea'].includes(c.tag))) {
     const [, , w, h] = c.box;
+    // 44px is the touch guidance for icon controls (no text, or a glyph like ×); text links and
+    // buttons are held to the WCAG minimum only, or every ordinary nav link would be flagged.
+    const iconLike = !c.hasText || (c.text ?? c.name).trim().length <= 2;
     if (w < 24 || h < 24) add({ lens: 'L8', id: 'target-size-min', severity: 'medium', selector: c.selector, box: c.box, evidence: { width: w, height: h, minimum: 24, name: c.name } });
-    else if (w < 44 || h < 44) add({ lens: 'L8', id: 'target-size-recommended', severity: 'low', selector: c.selector, box: c.box, evidence: { width: w, height: h, recommended: 44, name: c.name } });
+    else if (iconLike && (w < 44 || h < 44)) add({ lens: 'L8', id: 'target-size-recommended', severity: 'low', selector: c.selector, box: c.box, evidence: { width: w, height: h, recommended: 44, name: c.name } });
+  }
+
+  for (const f of (m.fields || []).filter(f => !f.labelled && f.placeholder)) {
+    add({ lens: 'L8', id: 'placeholder-as-label', severity: 'medium', selector: f.selector, box: f.box, evidence: { placeholder: f.placeholder } });
   }
 
   // L9 safety (measurable part)

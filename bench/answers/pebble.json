@@ -1,0 +1,353 @@
+{
+  "app": "pebble",
+  "note": "Answer key for bench/pebble. Kept outside the app folder so a hunter pointed at the app never reads it. 'rule' names the rule lens expected to catch the defect in 0.1-a; defects with rule null are for AI or computed lenses (0.1-b) and are not scored yet.",
+  "clean": [
+    "/about",
+    "/help"
+  ],
+  "defects": [
+    {
+      "id": "P01",
+      "lens": "L1",
+      "rule": "horizontal-overflow",
+      "route": "/pricing",
+      "person": "guest",
+      "state": "normal",
+      "viewport": "m",
+      "what": "comparison table has a 720px minimum width"
+    },
+    {
+      "id": "P02",
+      "lens": "L1",
+      "rule": "clipped-text",
+      "route": "/app/tasks",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "list badge clips 'Errands and small trips' without an ellipsis"
+    },
+    {
+      "id": "P03",
+      "lens": "L1",
+      "rule": "broken-image",
+      "route": "/",
+      "person": "guest",
+      "state": "normal",
+      "what": "hero illustration points at a missing file"
+    },
+    {
+      "id": "P04",
+      "lens": "L1",
+      "rule": "page-error",
+      "route": "/app/notes",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "metrics flush on an undefined global throws TypeError"
+    },
+    {
+      "id": "P05",
+      "lens": "L1",
+      "rule": "failed-request",
+      "route": "/app/archive",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "archive stats endpoint does not exist (404)"
+    },
+    {
+      "id": "P06",
+      "lens": "L1",
+      "rule": "layout-shift",
+      "route": "/",
+      "person": "guest",
+      "state": "normal",
+      "what": "news banner appears 400 ms after load and pushes the page down"
+    },
+    {
+      "id": "P07",
+      "lens": "L1",
+      "rule": "http-status",
+      "route": "/reports",
+      "person": "guest",
+      "state": "normal",
+      "what": "server component reads a property of null and the page answers 500"
+    },
+    {
+      "id": "P08",
+      "lens": "L2",
+      "rule": "blank-state",
+      "route": "/app/archive",
+      "person": "signed-in",
+      "state": "error",
+      "what": "on error the archive renders nothing at all"
+    },
+    {
+      "id": "P09",
+      "lens": "L2",
+      "rule": "error-looks-empty",
+      "route": "/app/notes",
+      "person": "signed-in",
+      "state": "error",
+      "what": "a failed load shows 'No notes yet.'"
+    },
+    {
+      "id": "P10",
+      "lens": "L2",
+      "rule": "no-offline-notice",
+      "route": "/app/tasks",
+      "person": "signed-in",
+      "state": "offline",
+      "what": "the app never tells the user they are offline"
+    },
+    {
+      "id": "P11",
+      "lens": "L6",
+      "rule": "raw-error-text",
+      "route": "/app/tasks",
+      "person": "signed-in",
+      "state": "error",
+      "what": "server message 'Internal Server Error' shown as the error text"
+    },
+    {
+      "id": "P12",
+      "lens": "L6",
+      "rule": "missing-value",
+      "route": "/app",
+      "person": "signed-in",
+      "state": "empty",
+      "what": "completion is 0/0 and shows 'NaN%'"
+    },
+    {
+      "id": "P13",
+      "lens": "L6",
+      "rule": "missing-value",
+      "route": "/app/settings",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "'Plan: undefined' because the profile has no plan field"
+    },
+    {
+      "id": "P14",
+      "lens": "L7",
+      "rule": "placeholder-text",
+      "route": "/pricing",
+      "person": "guest",
+      "state": "normal",
+      "what": "Lorem ipsum footnote"
+    },
+    {
+      "id": "P15",
+      "lens": "L7",
+      "rule": "placeholder-text",
+      "route": "/",
+      "person": "guest",
+      "state": "normal",
+      "what": "testimonial signed 'John Doe, CEO'"
+    },
+    {
+      "id": "P16",
+      "lens": "L7",
+      "rule": "placeholder-text",
+      "route": "/pricing",
+      "person": "guest",
+      "state": "normal",
+      "what": "support address at example.com"
+    },
+    {
+      "id": "P17",
+      "lens": "L7",
+      "rule": "coming-soon-sprawl",
+      "route": "/app",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "three 'Coming soon' cards on the dashboard"
+    },
+    {
+      "id": "P18",
+      "lens": "L7",
+      "rule": "dead-href",
+      "route": "/",
+      "person": "guest",
+      "state": "normal",
+      "what": "Privacy and Terms links go to '#'"
+    },
+    {
+      "id": "P19",
+      "lens": "L7",
+      "rule": "placeholder-text",
+      "route": "/app/settings",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "'TODO: wire up billing' visible"
+    },
+    {
+      "id": "P20",
+      "lens": "L8",
+      "rule": "axe-color-contrast",
+      "route": "/",
+      "person": "guest",
+      "state": "normal",
+      "what": "subtitle in #b9bcc2 on white"
+    },
+    {
+      "id": "P21",
+      "lens": "L8",
+      "rule": "axe-button-name",
+      "route": "/app/tasks",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "delete buttons are an unlabeled icon"
+    },
+    {
+      "id": "P22",
+      "lens": "L8",
+      "rule": "axe-link-name",
+      "route": "/app",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "archive link in the sidebar has only an icon and no name"
+    },
+    {
+      "id": "P23",
+      "lens": "L8",
+      "rule": "axe-image-alt",
+      "route": "/",
+      "person": "guest",
+      "state": "normal",
+      "what": "logo image has no alt"
+    },
+    {
+      "id": "P24",
+      "lens": "L8",
+      "rule": "placeholder-as-label",
+      "route": "/login",
+      "person": "guest",
+      "state": "normal",
+      "what": "email field has a placeholder but no label (axe accepts a placeholder as the accessible name, so this is nunchi's own rule)"
+    },
+    {
+      "id": "P25",
+      "lens": "L8",
+      "rule": "target-size-min",
+      "route": "/app/tasks",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "done toggle is 18×18 px"
+    },
+    {
+      "id": "P26",
+      "lens": "L9",
+      "rule": "native-dialog",
+      "route": "/app/tasks/[id]",
+      "person": "signed-in",
+      "state": "normal",
+      "what": "debug alert left on task load"
+    },
+    {
+      "id": "P27",
+      "lens": "L9",
+      "rule": "secret-in-client-bundle",
+      "route": null,
+      "person": null,
+      "state": null,
+      "what": "payment secret key inlined into the client bundle",
+      "evidence": {
+        "kind": "stripe-live-secret-key"
+      }
+    },
+    {
+      "id": "P28",
+      "lens": "L9",
+      "rule": "secret-in-client-bundle",
+      "route": null,
+      "person": null,
+      "state": null,
+      "what": "database service_role key inlined into the client bundle",
+      "evidence": {
+        "kind": "supabase-service-role-jwt"
+      }
+    },
+    {
+      "id": "P29",
+      "lens": "L3",
+      "rule": null,
+      "route": "/orphan-page",
+      "what": "page is not linked from anywhere"
+    },
+    {
+      "id": "P30",
+      "lens": "L4",
+      "rule": null,
+      "route": "/pricing",
+      "what": "'Choose Garden' button has its own shape (52px, radius 24, weight 800)"
+    },
+    {
+      "id": "P31",
+      "lens": "L4",
+      "rule": null,
+      "route": "/app/notes",
+      "what": "heading colour #5a5aff exists nowhere else"
+    },
+    {
+      "id": "P32",
+      "lens": "L4",
+      "rule": null,
+      "route": "/app/archive",
+      "what": "h1 is 40px where every other h1 is 28px"
+    },
+    {
+      "id": "P33",
+      "lens": "L5",
+      "rule": null,
+      "route": "/pricing",
+      "what": "'Log in' / 'Login' / 'Sign in' for the same action across pages"
+    },
+    {
+      "id": "P34",
+      "lens": "L5",
+      "rule": null,
+      "route": "/app/settings",
+      "what": "'Save' and 'Submit' for the same kind of action on one page"
+    },
+    {
+      "id": "P35",
+      "lens": "L6",
+      "rule": null,
+      "route": "/app",
+      "what": "'Something went wrong.' with no cause and no next step"
+    },
+    {
+      "id": "P36",
+      "lens": "L6",
+      "rule": null,
+      "route": "/app/settings",
+      "what": "delete confirmation 'Are you sure?' does not say what is deleted (native confirm on click)"
+    },
+    {
+      "id": "P37",
+      "lens": "L7",
+      "rule": null,
+      "route": "/pricing",
+      "what": "a drifted copy of the site header: Pricing and Help links missing"
+    },
+    {
+      "id": "P38",
+      "lens": "L9",
+      "rule": null,
+      "route": "/app/tasks",
+      "what": "'Clear all tasks' deletes everything with no confirm and no undo"
+    },
+    {
+      "id": "P39",
+      "lens": "L10",
+      "rule": null,
+      "route": "/app/tasks",
+      "what": "Export is available on desktop and missing on phone"
+    },
+    {
+      "id": "P40",
+      "lens": "L2",
+      "rule": null,
+      "route": "/app/notes",
+      "what": "while notes load, nothing tells the user something is coming"
+    }
+  ]
+}

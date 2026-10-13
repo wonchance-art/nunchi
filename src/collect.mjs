@@ -67,7 +67,7 @@ export function collect() {
     const text = (el.innerText || '').trim();
     controls.push({
       selector: sel(el), tag: el.localName, role: el.getAttribute('role') || null,
-      name: name(el), hasText: text.length > 0, box: box(el),
+      name: name(el), hasText: text.length > 0, text: text.slice(0, 40), box: box(el),
       href: el.localName === 'a' ? el.getAttribute('href') : null,
       inline: el.localName === 'a' && getComputedStyle(el).display === 'inline',
     });
@@ -107,6 +107,15 @@ export function collect() {
     if (el.scrollWidth > el.clientWidth + 1) clipped.push({ selector: sel(el), box: box(el), text: el.innerText.trim().slice(0, 80), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
   }
 
+  // Form fields whose only description is a placeholder: it disappears as soon as the user types.
+  const fields = [];
+  for (const el of document.querySelectorAll('input,textarea,select')) {
+    if (fields.length >= 100 || !vis(el)) continue;
+    if (/^(hidden|submit|button|reset|checkbox|radio|image|range|color|file)$/i.test(el.type || '')) continue;
+    const labelled = (el.labels && el.labels.length > 0) || el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title');
+    fields.push({ selector: sel(el), box: box(el), labelled: !!labelled, placeholder: (el.getAttribute('placeholder') || '').slice(0, 80) });
+  }
+
   const images = [];
   for (const img of document.images) {
     if (!vis(img)) continue;
@@ -133,6 +142,6 @@ export function collect() {
     scrollHeight: doc.scrollHeight,
     text: (document.body.innerText || '').replace(/ /g, ' '),
     mainText: (main.innerText || '').replace(/ /g, ' '),
-    controls, styles, clipped, images, links, fonts,
+    controls, styles, clipped, images, links, fonts, fields,
   };
 }

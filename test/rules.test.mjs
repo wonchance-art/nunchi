@@ -116,3 +116,33 @@ test('L2: a forced state that leaves the main area blank', () => {
   ev.state = 'normal';
   assert.deepEqual(ruleFindings(ev), []);
 });
+
+test('L1: failed images are not failed requests (prefetch noise); data, script and style failures are', () => {
+  const ev = clean();
+  ev.requests = [
+    { path: '/hero.png', method: 'GET', status: 404, sameOrigin: true, document: false, type: 'image' },
+    { path: '/api/x', method: 'GET', status: 500, sameOrigin: true, document: false, type: 'fetch' },
+    { path: '/app.css', method: 'GET', status: 404, sameOrigin: true, document: false, type: 'stylesheet' },
+  ];
+  assert.deepEqual(ruleFindings(ev).map(f => f.evidence.url).sort(), ['/api/x', '/app.css']);
+});
+
+test('L8: 44px guidance only for icon controls; text links and buttons need 24px', () => {
+  const ev = clean();
+  ev.measure.controls = [
+    { selector: 'a.nav', tag: 'a', name: 'Pricing', hasText: true, text: 'Pricing', box: [0, 0, 53, 24], href: '/pricing' },
+    { selector: 'button.x', tag: 'button', name: 'Close', hasText: true, text: '×', box: [0, 0, 32, 32], href: null },
+    { selector: 'button.svg', tag: 'button', name: '', hasText: false, text: '', box: [0, 0, 40, 40], href: null },
+  ];
+  assert.deepEqual(ruleFindings(ev).map(f => `${f.rule} ${f.selector}`).sort(), ['target-size-recommended button.svg', 'target-size-recommended button.x']);
+});
+
+test('L8: a field described only by its placeholder', () => {
+  const ev = clean();
+  ev.measure.fields = [
+    { selector: 'input.email', box: [0, 0, 300, 40], labelled: false, placeholder: 'Email address' },
+    { selector: 'input.name', box: [0, 0, 300, 40], labelled: true, placeholder: 'Your name' },
+    { selector: 'input.bare', box: [0, 0, 300, 40], labelled: false, placeholder: '' },
+  ];
+  assert.deepEqual(ruleFindings(ev).map(f => `${f.rule} ${f.selector}`), ['placeholder-as-label input.email']);
+});

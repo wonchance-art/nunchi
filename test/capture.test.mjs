@@ -71,7 +71,7 @@ test('deterministic: two runs of the same site give byte-identical evidence', as
   const a = mkdtempSync(join(tmpdir(), 'nunchi-a-')), b = mkdtempSync(join(tmpdir(), 'nunchi-b-'));
   await capture({ baseUrl: base, scenes, out: a });
   await capture({ baseUrl: base, scenes, out: b });
-  const stable = f => f !== 'timing.json' && !f.endsWith('volatile.json');
+  const stable = f => f !== 'timing.json' && f !== 'run.json' && !f.endsWith('volatile.json');
   const fa = files(a).filter(stable);
   assert.deepEqual(fa, files(b).filter(stable));
   const diff = fa.filter(f => !readFileSync(join(a, f)).equals(readFileSync(join(b, f))));
