@@ -12,6 +12,7 @@ import { buildSystem, parityFindings } from './system.mjs';
 import { annotate } from './ledger.mjs';
 import { writeStable, sha } from './stable.mjs';
 import { canaryMutate, canarySeed, plantCanaries } from './canary.mjs';
+import { loadLenses, BUILTIN_DIR } from './lenses.mjs';
 import { FONT_HOSTS, BACKEND_SUFFIXES, isBackendHost, isDataRequest, requestKey, forceResponse, Recording, redactUrl, redactText } from './network.mjs';
 
 const require = createRequire(import.meta.url);
@@ -321,7 +322,8 @@ export function runHealth(entries, findings) {
 // scenes: [{ route, path, person }] → expanded per viewport and per forced state here.
 // network: 'auto' (replay if a recording exists, else record) | 'record' | 'replay' | 'live'.
 // canaries: how many canary scenes to plant (spec §4 H2); 0 = none (the default for the API; the CLI plants 3).
-export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {}, flow: flowOpts = {}, canaries = 0 }) {
+// lenses: the loaded lens packs, so a canary is planted only where its lens hunts (default: the built-in packs).
+export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {}, flow: flowOpts = {}, canaries = 0, lenses = null }) {
   if (scenes.some(s => s.person === 'signed-in') && !(storageState && existsSync(storageState))) {
     throw Object.assign(new Error(`signed-in scenes need a saved login state, but ${storageState || '(none)'} does not exist`), { code: 'NO_AUTH' });
   }
@@ -395,7 +397,7 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
     const seed = canarySeed({ routes: [...new Set(scenes.map(s => s.route || s.path))], persons, viewports, states });
     const cb = await launch({ browserPath, baseUrl, allowHosts });
     try {
-      const r = await plantCanaries({ entries, count: canaries, seed, tryScene: async (base, kinds, id) => {
+      const r = await plantCanaries({ entries, count: canaries, seed, lenses: lenses || loadLenses({ root: BUILTIN_DIR }).lenses, tryScene: async (base, kinds, id) => {
         const s = scenes.find(x => (x.route || x.path) === base.route && (x.person || 'guest') === base.person);
         const scene = { ...s, vp: base.viewport, person: base.person, state: base.state, id };
         const mode = Object.keys(recordings[base.person].entries).length ? 'replay' : 'live';

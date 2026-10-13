@@ -21,10 +21,11 @@ const CONTROLS = {
   'pricing.guest.normal.d': [ctl('header > a', 'Log in', { tag: 'a', href: '/login' }), ctl('main > a', 'Start free', { tag: 'a', href: '/login' }), ctl('main > button', 'Compare plans')],
 };
 const claim = (i, extra = {}) => ({
-  source: 'ai', status: 'claimed', lens: ['L5', 'L6', 'L9'][i % 3], rule: ['L5.same-action-same-verb', 'L6.error-says-what-and-next', 'L9.destructive-has-confirm'][i % 3],
+  source: 'ai', status: 'claimed', lens: ['L5', 'L6', 'L9'][i % 3], rule: ['L5.same-action-different-verb', 'L6.vague-error', 'L9.destructive-without-confirm'][i % 3],
   severity: 'medium', scene: i % 2 ? 'pricing.guest.normal.d' : 'app~tasks.signed-in.normal.m', route: i % 2 ? '/pricing' : '/app/tasks', viewport: i % 2 ? 'd' : 'm',
   selector: `main > p:nth-of-type(${i + 1})`, box: [16, 40 * i, 300, 24],
-  evidence: { text: `claimed text ${i}`, reasoning: `the hunter thought hard about ${i}` },
+  // the shape hunt --record writes, plus reasoning a hunter might have slipped in
+  evidence: { claim: `claimed text ${i}`, unit: `unit${i % 4}`, groundedIn: ['controls.json'], reasoning: `the hunter thought hard about ${i}` },
   rationale: 'hunter-only notes', ...extra,
 });
 const FINDINGS = [
@@ -48,7 +49,7 @@ test('packets: claimed AI findings only, the claim and its evidence without the 
     assert.deepEqual(p.files, [`${p.claim.scene}/top.jpg`, `${p.claim.scene}/controls.json`]);
     assert.ok(p.claim.selector && p.claim.box, 'every claim names an element');
   }
-  assert.deepEqual(claimOf(FINDINGS[0]).evidence, { text: 'claimed text 0' });
+  assert.deepEqual(claimOf(FINDINGS[0]).evidence, { claim: 'claimed text 0', groundedIn: ['controls.json'] }, 'no reasoning, no hunt unit');
   // the key maps each packet back to the finding it came from
   for (const [id, k] of Object.entries(key.packets)) if (!k.decoy) assert.equal(packets.packets.find(p => p.packet === id).claim.selector, FINDINGS[k.finding].selector);
 });
@@ -67,8 +68,11 @@ test('decoys: false claims about fine elements of the same scenes, never on a cl
     const t = DECOY_TEMPLATES.find(x => x.rule === c.rule);
     assert.ok(t, c.rule);
     if (t.id === 'destructive') assert.doesNotMatch(row.name, /clear|delete|close/i, 'a destructive-action decoy is never on a destructive control');
-    if (t.id === 'unlabelled') assert.ok(row.name.length > 0, 'an unlabelled decoy names a labelled control');
-    if (t.id === 'verb-mismatch') assert.equal(c.evidence.text, c.evidence.comparedWith.text, 'the two "different" words are the same word');
+    if (t.id === 'unclear-label') assert.ok(row.name.length > 0, 'an unclear-label decoy names a labelled control');
+    if (t.id === 'verb-mismatch') { const q = c.evidence.claim.match(/“[^”]*”/g); assert.equal(q[0], q[1], 'the two "different" words are the same word'); }
+    // a decoy looks like a real claim: same keys, same grounding, a checklist id of its lens
+    assert.deepEqual(Object.keys(c.evidence).sort(), Object.keys(claimOf(FINDINGS[0]).evidence).sort());
+    assert.ok(c.rule.startsWith(c.lens + '.'));
   }
   // shuffled: decoys are not all at the end
   const order = Object.values(a.key.packets).map(k => k.decoy);

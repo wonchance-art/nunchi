@@ -8,7 +8,8 @@ import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadLenses } from '../src/lenses.mjs';
-import { planHunt, recordHunt, jpegSize, imageTokens, IMAGE_TOKENS_MAX } from '../src/hunt.mjs';
+import { planHunt, planHuntWithKey, writeHuntMirror, recordHunt, jpegSize, imageTokens, IMAGE_TOKENS_MAX } from '../src/hunt.mjs';
+import { voidCoverage } from '../src/canary.mjs';
 import { stableJson } from '../src/stable.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -99,6 +100,79 @@ test('plan: units group viewports, carry a reference scene, list the reviewed sc
   assert.ok(plan.notSeen.some(n => n.scene === 'old.guest.normal.m' && n.reason === 'redirected'));
   assert.ok(plan.units.every(u => u.status === 'planned'));
   assert.equal(plan.estimate.total, plan.units.reduce((n, u) => n + u.tokens, 0));
+});
+
+// A run with a canary copy of /tasks on the phone (as capture writes it: tagged in the manifest, its own
+// folder, the answer key in canaries.json).
+function addCanary(runDir) {
+  const m = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+  const of = m.scenes.find(s => s.id === 'tasks.guest.normal.m');
+  const id = `${of.id}.canary-1`;
+  m.scenes.push({ ...of, id, canary: 1, of: of.id, findings: 0 });
+  writeFileSync(join(runDir, 'manifest.json'), JSON.stringify(m, null, 2));
+  mkdirSync(join(runDir, id));
+  for (const f of ['top.jpg', 'full.jpg', 'text.txt', 'aria.yml', 'controls.json', 'styles.json', 'links.json', 'measure.json']) writeFileSync(join(runDir, id, f), readFileSync(join(runDir, of.id, f)));
+  writeFileSync(join(runDir, id, 'volatile.json'), '{}');
+  writeFileSync(join(runDir, 'canaries.json'), JSON.stringify({ schema: 1, seed: 'f00d', planted: [{ scene: id, of: of.id, kind: 'remove-confirm', lens: 'L9', checklist: 'L9.destructive-without-confirm', selector: 'button#delete-all', box: [150, 120, 100, 40] }] }));
+  return id;
+}
+
+test('plan with canaries: scenes go by alias, the copy is hunted alone and never a reference, the key maps back', () => {
+  const { cwd, runDir, lenses } = setup();
+  const copy = addCanary(runDir);
+  const { plan, key } = planHuntWithKey({ runDir, lenses, runId: '0001' });
+  const text = stableJson(plan);
+  assert.doesNotMatch(text, /canary|\.guest\./, 'the plan names no scene id, so no copy can be spotted');
+  assert.equal(key.plan, plan.id);
+  const real = a => key.scenes[a];
+  assert.ok(Object.keys(key.scenes).every(a => /^s[0-9a-f]{10}$/.test(a)));
+  const alias = Object.keys(key.scenes).find(a => real(a) === copy);
+  for (const u of plan.units) {
+    const ids = u.scenes.map(s => real(s.scene));
+    if (ids.includes(copy)) assert.deepEqual(ids, [copy], `${u.lens}: the copy is in a unit of its own`);
+    assert.notEqual(u.reference && real(u.reference.scene), copy, 'a copy is never the reference');
+    assert.ok(u.files.every(f => /^hunt\/s[0-9a-f]{10}\//.test(f)), 'files point at the mirror');
+    assert.match(u.batch, /^[0-9a-f]{12}$/);
+  }
+  const l9 = plan.units.filter(u => u.lens === 'L9' && u.scenes[0].route === '/tasks');
+  assert.equal(l9.length, 2, 'the copy and the screens it copies');
+  assert.equal(l9[0].batch, l9[1].batch, 'one batch: same lens, same route');
+  // same evidence, same aliases; the canary seed salts them
+  assert.deepEqual(planHuntWithKey({ runDir, lenses, runId: '0001' }).key, key);
+  // the mirror: evidence files only, linked under hunt/<alias>/
+  mkdirSync(join(runDir, 'hunt', 'source'), { recursive: true });
+  writeFileSync(join(runDir, 'hunt', 'source', 'keep.json'), '{}');
+  writeHuntMirror(runDir, key);
+  for (const u of plan.units) for (const f of u.files) assert.ok(existsSync(join(runDir, f)), f);
+  assert.equal(existsSync(join(runDir, 'hunt', alias, 'volatile.json')), false);
+  assert.ok(readFileSync(join(runDir, 'hunt', alias, 'controls.json')).equals(readFileSync(join(runDir, copy, 'controls.json'))));
+  writeHuntMirror(runDir, null);
+  assert.equal(existsSync(join(runDir, 'hunt', alias)), false, 'a plan without canaries removes the mirror');
+  assert.ok(existsSync(join(runDir, 'hunt', 'source', 'keep.json')), 'nothing else under hunt/ is touched');
+
+  // recording: answers name aliases; findings and coverage name scenes; a missed canary voids its batch
+  const [u1, u2] = l9;
+  const onCopy = u1.scenes[0].scene === alias ? u1 : u2;
+  const onOriginal = onCopy === u1 ? u2 : u1;
+  const phone = onOriginal.scenes.find(s => s.viewport === 'm').scene;
+  const answers = { plan: plan.id, units: [
+    answerAll(onOriginal, 'none', { 'L9.destructive-without-confirm': { answer: 'defect', defects: [{ scene: phone, selector: 'button#delete-all', claim: 'Deletes at once.', severity: 'high' }] } }),
+    answerAll(onCopy, 'none'),
+  ] };
+  const r = recordHunt({ runDir, plan, key, answers, root: cwd });
+  assert.deepEqual(r.findings.map(f => f.scene), ['tasks.guest.normal.m']);
+  assert.ok(r.coverage.cells.some(c => c.scene === copy && c.status === 'seen' && c.batch === onCopy.batch));
+  const voided = voidCoverage(r.coverage, [{ scene: copy, lens: 'L9', kind: 'remove-confirm' }]);
+  assert.deepEqual(voided.cells.filter(c => c.batch === onCopy.batch).map(c => c.status), ['not-seen', 'not-seen', 'not-seen'], 'the copy and both widths of /tasks under L9');
+  assert.ok(voided.cells.filter(c => c.lens === 'L9' && c.batch !== onCopy.batch).every(c => c.status === r.coverage.cells.find(x => x.lens === c.lens && x.scene === c.scene).status), 'other batches untouched');
+  assert.throws(() => recordHunt({ runDir, plan, key: { ...key, plan: 'ffffffffffff' }, answers, root: cwd }), e => e.code === 'STALE_ANSWERS');
+});
+
+test('plan without canaries keeps scene ids and writes no key', () => {
+  const { runDir, lenses } = setup();
+  const { plan, key } = planHuntWithKey({ runDir, lenses });
+  assert.equal(key, null);
+  assert.ok(plan.units.some(u => u.scenes.some(s => s.scene === 'tasks.guest.normal.m')));
 });
 
 test('plan: deterministic — two plans are byte-identical, unit ids stable', () => {
@@ -220,6 +294,24 @@ test('record: each built-in lens turns a grounded defect into a finding and "non
     assert.equal(quiet.findings.length, 0, lens.id);
     assert.ok(quiet.coverage.cells.filter(c => c.unit === unit.id).every(c => c.status === 'seen'));
   }
+});
+
+test('cli: a run with canaries gets hunt-key.json and the mirror; --record reads the key', () => {
+  const { cwd, runDir } = setup();
+  const copy = addCanary(runDir);
+  const run = (...a) => execFileSync('node', [CLI, 'hunt', ...a], { cwd, encoding: 'utf8' });
+  const plan = JSON.parse(run('--plan', '--lens', 'L9', '--json'));
+  const key = JSON.parse(readFileSync(join(runDir, 'hunt-key.json'), 'utf8'));
+  assert.equal(key.plan, plan.id);
+  const unit = plan.units.find(u => key.scenes[u.scenes[0].scene] === copy);
+  assert.ok(unit.files.every(f => existsSync(join(runDir, f))));
+  writeFileSync(join(cwd, 'answers.json'), JSON.stringify({ plan: plan.id, units: [answerAll(unit, 'none', { 'L9.destructive-without-confirm': { answer: 'defect', defects: [{ scene: unit.scenes[0].scene, selector: 'button#delete-all', claim: 'No confirm step.', severity: 'high' }] } })] }));
+  run('--record', 'answers.json');
+  const ai = JSON.parse(readFileSync(join(runDir, 'ai-findings.json'), 'utf8'));
+  assert.deepEqual(ai.findings.map(f => f.scene), [copy], 'findings name the scene, not the alias');
+  // the canary is then scored as hit
+  const score = JSON.parse(execFileSync('node', [CLI, 'canaries', '--score', '--json'], { cwd, encoding: 'utf8' }));
+  assert.equal(score.hit, 1);
 });
 
 test('cli: hunt --plan writes the same plan twice, --record writes ai-findings.json and coverage.json', () => {

@@ -4,10 +4,10 @@
 //   - validates the hunter's answers: every checklist item answered, every defect grounded in the
 //     scene's evidence (a selector it contains) or in the app's source (a file:line that exists).
 // Answers and evidence are data: they are parsed and compared as strings, never evaluated.
-import { readFileSync, existsSync, statSync, realpathSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, realpathSync, readdirSync, mkdirSync, rmSync, linkSync, copyFileSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { stableJson, sha, writeStable } from './stable.mjs';
-import { lensHash, lensNumber, SEVERITIES } from './lenses.mjs';
+import { lensHash, lensNumber, SEVERITIES, EVIDENCE_FILES } from './lenses.mjs';
 
 // Token estimate (documented in spec §4):
 //   text files   ceil(bytes / 4)  — chars/4 for ASCII; UTF-8 text with other scripts is over-estimated, never under
@@ -74,11 +74,11 @@ function huntable(entry) {
 }
 
 // The reference scene: another route of the same app, same person and viewport, preferably in the same
-// state (how the app handles the same situation elsewhere), else normal. Chosen by a hash of the group,
+// state (how the app handles the same situation elsewhere), else normal; never a canary copy. Chosen by a hash of the group,
 // so references spread over the app and the same group always gets the same one.
 function pickReference(group, scenes) {
   const first = group[0];
-  const pool = scenes.filter(s => s.route !== first.route && s.person === first.person && s.viewport === first.viewport);
+  const pool = scenes.filter(s => s.canary === undefined && s.route !== first.route && s.person === first.person && s.viewport === first.viewport);
   const key = group.map(s => s.id).join('|');
   for (const state of [first.state, 'normal']) {
     const c = pool.filter(s => s.state === state);
@@ -87,8 +87,37 @@ function pickReference(group, scenes) {
   return null;
 }
 
-export function planHunt({ runDir, lenses, lensIds = null, budget = null, runId = null }) {
+// Canaries stay hidden from the hunter (spec §4, H2). A copy's id ends in `.canary-<k>`, so in a run with
+// canaries every scene of the plan goes by an alias (`s` + 10 hex, salted with the canary seed, which only
+// the answer key holds) and its evidence files are linked under hunt/<alias>/. The alias → scene map is
+// hunt-key.json, which hunters never read; recording maps answers back through it. A copy is grouped on its
+// own (never in a unit with the scene it copies) and is never a reference. Runs without canaries keep the
+// scene ids.
+const ALIAS = /^s[0-9a-f]{10}$/;
+function aliasesFor(ids, salt) {
+  const out = new Map(); const taken = new Set();
+  for (const id of [...new Set(ids)].sort(cmp)) {
+    let a; for (let n = 0; !a || taken.has(a); n++) a = 's' + sha(`${salt}:${n}:${id}`, 10);
+    taken.add(a); out.set(id, a);
+  }
+  return out;
+}
+
+// A batch: one lens on one route (all its persons, states, viewports and canary copies). A missed canary
+// voids *seen* for its batch (`canaries --score`), so the screens it was copied from are hunted again.
+const batchOf = (lens, route) => sha(stableJson({ lens, route }), 12);
+
+export function planHunt(opts) { return planHuntWithKey(opts).plan; }
+
+export function planHuntWithKey({ runDir, lenses, lensIds = null, budget = null, runId = null }) {
   const manifest = readManifest(runDir);
+  let canarySeed = null;
+  try { canarySeed = JSON.parse(readFileSync(join(runDir, 'canaries.json'), 'utf8')).seed ?? null; } catch {}
+  const hide = manifest.scenes.some(e => e.canary !== undefined);
+  const alias = hide ? aliasesFor(manifest.scenes.map(e => e.id), sha(stableJson({ seed: canarySeed, scenes: manifest.scenes.map(e => e.id).sort(cmp) }))) : null;
+  const name = id => (alias ? alias.get(id) : id);
+  const dirOf = id => (alias ? `hunt/${alias.get(id)}` : id);
+  const ref = s => ({ ...sceneRef(s), scene: name(s.id) });
   const wanted = lensIds ? lenses.filter(l => lensIds.includes(l.id)) : lenses;
   if (lensIds) {
     const unknown = lensIds.filter(id => !lenses.some(l => l.id === id));
@@ -103,11 +132,11 @@ export function planHunt({ runDir, lenses, lensIds = null, budget = null, runId 
     const promptTokens = Math.ceil(Buffer.byteLength(lensText(lens)) / 4);
     for (const e of entries) {
       const h = huntable(e);
-      if (!h.ok && matches(lens.scenes, e)) notSeen.push({ lens: lens.id, scene: e.id, reason: h.reason });
+      if (!h.ok && matches(lens.scenes, e)) notSeen.push({ lens: lens.id, scene: name(e.id), reason: h.reason });
     }
     const groups = new Map();
     for (const s of scenes.filter(s => matches(lens.scenes, s))) {
-      const k = `${s.route}\0${s.person}\0${s.state}`;
+      const k = `${s.route}\0${s.person}\0${s.state}\0${s.canary ?? ''}`;
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k).push(s);
     }
@@ -116,20 +145,25 @@ export function planHunt({ runDir, lenses, lensIds = null, budget = null, runId 
       for (let i = 0; i < all.length; i += MAX_SCENES) {
         const group = all.slice(i, i + MAX_SCENES);
         const checklist = lens.checklist.filter(item => group.some(s => matches(item.scenes, s))).map(item => {
-          const applies = group.filter(s => matches(item.scenes, s)).map(s => s.id);
+          const applies = group.filter(s => matches(item.scenes, s)).map(s => name(s.id));
           return { id: item.id, question: item.question, ...(applies.length < group.length ? { scenes: applies } : {}) };
         });
         if (!checklist.length) continue;
         const reference = pickReference(group, scenes);
         // The scene under review goes last (spec §4): reference files first, then the reviewed scenes.
-        const files = []; const missing = [];
-        const add = (s, names) => { for (const n of names) { const p = `${s.id}/${n}`; (existsSync(join(runDir, s.id, n)) ? files : missing).push(p); } };
+        const files = []; const missing = []; let tokens = 0;
+        const add = (s, names) => {
+          for (const n of names) {
+            const at = join(runDir, s.id, n);
+            if (existsSync(at)) { files.push(`${dirOf(s.id)}/${n}`); tokens += fileTokens(at); } else missing.push(`${dirOf(s.id)}/${n}`);
+          }
+        };
         if (reference) add(reference, [...new Set(lens.evidence.map(n => (n === 'full.jpg' ? 'top.jpg' : n)))]);
         for (const s of group) add(s, lens.evidence);
-        const tokens = files.reduce((n, p) => n + fileTokens(join(runDir, p)), 0) + promptTokens + ANSWER_TOKENS * checklist.length * group.length;
+        tokens += promptTokens + ANSWER_TOKENS * checklist.length * group.length;
         const id = sha(stableJson({ lens: lens.id, hash, scenes: group.map(s => s.id), reference: reference?.id ?? null, items: checklist.map(c => c.id) }), 12);
         units.push({
-          id, lens: lens.id, scenes: group.map(sceneRef), reference: reference ? sceneRef(reference) : null,
+          id, lens: lens.id, batch: batchOf(lens.id, group[0].route), scenes: group.map(ref), reference: reference ? ref(reference) : null,
           checklist, files, ...(missing.length ? { missing } : {}), tokens,
         });
       }
@@ -162,7 +196,27 @@ export function planHunt({ runDir, lenses, lensIds = null, budget = null, runId 
     notSeen,
   };
   plan.id = sha(stableJson(plan), 12);
-  return plan;
+  const answerKey = alias ? {
+    schema: 1, note: 'answer key: maps the plan\'s scene aliases to scene ids; never give this file to a hunter', plan: plan.id,
+    scenes: Object.fromEntries([...alias].map(([id, a]) => [a, id]).sort((x, y) => cmp(x[0], y[0]))),
+  } : null;
+  return { plan, key: answerKey };
+}
+
+// Links (or copies, where links are not possible) each aliased scene's evidence files under hunt/<alias>/.
+// Earlier mirrors are replaced; nothing else under hunt/ is touched.
+export function writeHuntMirror(runDir, key) {
+  const dir = join(runDir, 'hunt');
+  if (existsSync(dir)) for (const n of readdirSync(dir)) if (ALIAS.test(n)) rmSync(join(dir, n), { recursive: true, force: true });
+  if (!key) return;
+  for (const [a, id] of Object.entries(key.scenes)) {
+    const from = join(runDir, id);
+    if (!existsSync(from)) continue;
+    mkdirSync(join(dir, a), { recursive: true });
+    for (const n of readdirSync(from).filter(n => EVIDENCE_FILES.includes(n)).sort(cmp)) {
+      try { linkSync(join(from, n), join(dir, a, n)); } catch { copyFileSync(join(from, n), join(dir, a, n)); }
+    }
+  }
 }
 
 // ---------- recording answers ----------
@@ -230,8 +284,10 @@ function checkSource(root, source, cache) {
 
 // answers: one object {schema?, plan?, units: [{unit, items: {<item id>: {answer, reason?, defects?}}}]} or a
 // list of them (several answer files). Returns {findings, rejected, coverage}.
-export function recordHunt({ runDir, plan, answers, root }) {
+export function recordHunt({ runDir, plan, answers, root, key = null }) {
   const docs = Array.isArray(answers) ? answers : [answers];
+  if (key && key.plan !== plan.id) throw Object.assign(new Error(`hunt-key.json is for plan ${key.plan}, but hunt-plan.json is plan ${plan.id}. Run hunt --plan again.`), { code: 'STALE_ANSWERS' });
+  const real = a => (key ? key.scenes[a] ?? a : a);
   const rejected = [];
   const reject = (r) => rejected.push(Object.fromEntries(Object.entries(r).filter(([, v]) => v !== undefined)));
   const given = [];
@@ -296,7 +352,7 @@ export function recordHunt({ runDir, plan, answers, root }) {
           let where = null; let box = null; let inside = null; let selector = null;
           if (hasSel) {
             if (typeof d.selector !== 'string' || !d.selector.trim()) { reject({ ...r, reason: 'selector-not-in-evidence', detail: 'selector must be text' }); continue; }
-            if (!indexes.has(scene.scene)) indexes.set(scene.scene, sceneIndex(runDir, scene.scene));
+            if (!indexes.has(scene.scene)) indexes.set(scene.scene, sceneIndex(runDir, real(scene.scene)));
             const { idx, ariaNodes } = indexes.get(scene.scene);
             selector = d.selector.trim();
             if (selector.startsWith('aria=')) {
@@ -314,7 +370,7 @@ export function recordHunt({ runDir, plan, answers, root }) {
             if (src.error) { reject({ ...r, reason: 'source-not-found', detail: src.error }); continue; }
           }
           const f = {
-            lens: unit.lens, rule: item.id, severity: d.severity, scene: scene.scene, route: scene.route, viewport: scene.viewport,
+            lens: unit.lens, rule: item.id, severity: d.severity, scene: real(scene.scene), route: scene.route, viewport: scene.viewport,
             selector, box, ...(inside ? { inside } : {}),
             evidence: { claim: d.claim.trim(), unit: unit.id, groundedIn: [where, src ? 'source' : null].filter(Boolean), ...(src ? { file: src.file, line: src.line } : {}) },
             source: 'ai', status: 'claimed',
@@ -337,13 +393,13 @@ export function recordHunt({ runDir, plan, answers, root }) {
     const reason = seen ? null : !a ? (unit.status === 'not-seen' ? unit.reason : 'not-answered') : 'incomplete';
     for (const s of unit.scenes) {
       cells.push({
-        lens: unit.lens, scene: s.scene, route: s.route, person: s.person, state: s.state, viewport: s.viewport, unit: unit.id,
+        lens: unit.lens, scene: real(s.scene), route: s.route, person: s.person, state: s.state, viewport: s.viewport, unit: unit.id, batch: unit.batch,
         status: seen ? 'seen' : 'not-seen', ...(reason ? { reason } : {}), ...(missing.length ? { missing: missing.slice().sort(cmp) } : {}),
         ...(a ? { answers: tally } : {}),
       });
     }
   }
-  for (const n of plan.notSeen) cells.push({ lens: n.lens, scene: n.scene, status: 'not-seen', reason: n.reason });
+  for (const n of plan.notSeen) cells.push({ lens: n.lens, scene: real(n.scene), status: 'not-seen', reason: n.reason });
   cells.sort((a, b) => lensNumber(a.lens) - lensNumber(b.lens) || cmp(a.scene, b.scene));
   const order = { blocker: 0, high: 1, medium: 2, low: 3 };
   findings.sort((a, b) => order[a.severity] - order[b.severity] || cmp(a.scene, b.scene) || cmp(a.rule, b.rule) || cmp(String(a.selector), String(b.selector)) || cmp(stableJson(a), stableJson(b)));

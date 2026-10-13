@@ -11,7 +11,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { capture, launch } from '../src/capture.mjs';
-import { CANARY_KINDS, canaryMutate, canarySeed, canaryCandidates, kindOrder, plantCanaries, scoreCanaries, voidCoverage, sameLocation } from '../src/canary.mjs';
+import { CANARY_KINDS, canaryMutate, canarySeed, canaryCandidates, kindOrder, kindApplies, plantCanaries, scoreCanaries, voidCoverage, sameLocation } from '../src/canary.mjs';
+import { loadLenses, BUILTIN_DIR } from '../src/lenses.mjs';
+import { DECOY_TEMPLATES } from '../src/verify.mjs';
 
 const CANARY = fileURLToPath(new URL('./fixtures/canary', import.meta.url));
 const SITE = fileURLToPath(new URL('./fixtures/site', import.meta.url));
@@ -50,11 +52,13 @@ const EXPECT = {
   'term-swap': { selector: 'main > h1', after: 'To-dos' },
   'vague-error': { selector: 'main > p:nth-of-type(2)', after: 'Something went wrong.' },
   'vague-confirm': { selector: 'main > p:nth-of-type(4)', after: 'Are you sure?' },
-  'stray-todo': { selector: 'main > p:nth-of-type(1)', after: 'Plan the week ahead and keep every errand in one calm list. TODO: replace with final copy' },
+  'template-copy': { selector: 'main > p:nth-of-type(1)', after: 'Add a short description of this section here.' },
   'blank-state': { selector: 'main > p:nth-of-type(3)', after: '' },
   'remove-confirm': { selector: 'main > button', after: 'Delete list' },
   'fixed-cover': { selector: 'body > div', after: 'Get the app for the full experience' },
 };
+
+const BUILTIN = loadLenses({ root: BUILTIN_DIR }).lenses;
 
 test('every catalogued kind has a lens, a checklist item and a fixture expectation', () => {
   assert.deepEqual(CANARY_KINDS.map(k => k.kind).sort(), Object.keys(EXPECT).sort());
@@ -62,6 +66,26 @@ test('every catalogued kind has a lens, a checklist item and a fixture expectati
     assert.match(k.lens, /^L(2|5|6|7|9|10)$/, `${k.kind} belongs to an AI lens`);
     assert.ok(k.checklist.startsWith(k.lens + '.'), k.kind);
   }
+});
+
+test('canary checklist ids and decoy rule ids are checklist items of the built-in AI lenses', () => {
+  const items = new Set(BUILTIN.filter(l => l.method === 'ai').flatMap(l => l.checklist.map(c => c.id)));
+  for (const k of CANARY_KINDS) assert.ok(items.has(k.checklist), `canary ${k.kind}: ${k.checklist}`);
+  for (const t of DECOY_TEMPLATES) assert.ok(items.has(t.rule), `decoy ${t.id}: ${t.rule}`);
+});
+
+test('a canary kind is planted only where its lens and checklist item look', () => {
+  const at = (state, viewport = 'm') => ({ id: `x.guest.${state}.${viewport}`, route: '/x', person: 'guest', state, viewport });
+  assert.equal(kindApplies('blank-state', at('normal'), BUILTIN), false, 'L2 hunts forced states only');
+  assert.equal(kindApplies('blank-state', at('error'), BUILTIN), true);
+  assert.equal(kindApplies('template-copy', at('error'), BUILTIN), false, 'L7 hunts normal screens only');
+  assert.equal(kindApplies('vague-error', at('error'), BUILTIN), true, 'L6 hunts every state');
+  assert.equal(kindApplies('verb-swap', at('slow'), BUILTIN), false);
+  assert.equal(kindApplies('verb-swap', at('slow'), null), true, 'without lenses every kind applies');
+  // a project pack that turns the item off: no canary for it
+  const off = BUILTIN.map(l => (l.id === 'L10' ? { ...l, checklist: l.checklist.filter(c => c.id !== 'L10.fixed-covers-content') } : l));
+  assert.equal(kindApplies('fixed-cover', at('normal'), off), false);
+  assert.equal(kindApplies('fixed-cover', at('normal'), BUILTIN), true);
 });
 
 for (const { kind } of CANARY_KINDS) {
@@ -87,7 +111,7 @@ test('canary kinds are tried in the order given; the first that fits is planted'
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   assert.equal((await mutate('trigger.html', ['nope', 'fixed-cover', 'verb-swap'])).r.kind, 'fixed-cover');
   assert.equal((await mutate('plain.html', CANARY_KINDS.map(k => k.kind))).r, null);
-  const twice = [await mutate('trigger.html', ['stray-todo']), await mutate('trigger.html', ['stray-todo'])];
+  const twice = [await mutate('trigger.html', ['template-copy']), await mutate('trigger.html', ['template-copy'])];
   assert.deepEqual(twice[0].r, twice[1].r, 'same page, same canary');
 });
 
@@ -125,6 +149,12 @@ test('canary choice is deterministic and comes from the run scope only', async (
   const none = await plantCanaries({ entries, count: 2, seed, tryScene: async () => null });
   assert.equal(none.canaries.length, 0);
   assert.equal(none.tries, 6);
+  // with lenses, a scene only gets the kinds hunted there: a slow screen only L2 and L6 kinds
+  const slow = entries.filter(e => !e.reason && e.status === 'captured').map(e => ({ ...e, id: e.id.replace('normal', 'slow'), state: 'slow' }));
+  const offered = [];
+  await plantCanaries({ entries: slow, count: 1, seed, lenses: BUILTIN, tryScene: async (b, ks) => { offered.push(...ks); return null; } });
+  assert.ok(offered.length > 0);
+  assert.deepEqual([...new Set(offered)].sort(), ['blank-state', 'vague-confirm', 'vague-error']);
 });
 
 test('capture plants canaries in copies, tags them in the manifest and keeps them out of findings.json; deterministic', async t => {
@@ -170,9 +200,9 @@ test('without canaries nothing changes: no canaries.json, no tagged scenes', asy
 
 // ── scoring ──
 const CANARIES = { schema: 1, planted: [
-  { scene: 'a.guest.normal.m.canary-1', of: 'a.guest.normal.m', kind: 'verb-swap', lens: 'L5', checklist: 'L5.same-action-same-verb', selector: 'main > form > button', box: [250, 287, 80, 44] },
-  { scene: 'b.guest.error.d.canary-2', of: 'b.guest.error.d', kind: 'vague-error', lens: 'L6', checklist: 'L6.error-says-what-and-next', selector: 'main > p:nth-of-type(2)', box: [16, 347, 358, 24] },
-  { scene: 'c.guest.normal.m.canary-3', of: 'c.guest.normal.m', kind: 'stray-todo', lens: 'L7', checklist: 'L7.no-dev-leftovers', selector: 'main > p', box: [16, 163, 358, 48] },
+  { scene: 'a.guest.normal.m.canary-1', of: 'a.guest.normal.m', kind: 'verb-swap', lens: 'L5', checklist: 'L5.same-action-different-verb', selector: 'main > form > button', box: [250, 287, 80, 44] },
+  { scene: 'b.guest.error.d.canary-2', of: 'b.guest.error.d', kind: 'vague-error', lens: 'L6', checklist: 'L6.vague-error', selector: 'main > p:nth-of-type(2)', box: [16, 347, 358, 24] },
+  { scene: 'c.guest.normal.m.canary-3', of: 'c.guest.normal.m', kind: 'template-copy', lens: 'L7', checklist: 'L7.template-copy', selector: 'main > p', box: [16, 163, 358, 48] },
 ] };
 const ai = (scene, lens, selector, box, rule = 'x') => ({ source: 'ai', status: 'claimed', lens, rule, severity: 'medium', scene, route: '/a', viewport: 'm', selector, box, evidence: {} });
 
@@ -184,7 +214,7 @@ test('canary score: hit by element, ancestor or overlapping box with the right l
   assert.ok(!sameLocation({ selector: 'div.x', box: [0, 0, 80, 40] }, { selector: 'main > form > button', box: [250, 287, 80, 44] }));
 
   const r = scoreCanaries(CANARIES, [
-    ai('a.guest.normal.m.canary-1', 'L5', 'main > form > button', null, 'L5.same-action-same-verb'),
+    ai('a.guest.normal.m.canary-1', 'L5', 'main > form > button', null, 'L5.same-action-different-verb'),
     ai('b.guest.error.d.canary-2', 'L7', 'main > p:nth-of-type(2)', null),              // right place, wrong lens
     ai('b.guest.error.d', 'L6', 'main > p:nth-of-type(2)', null),                       // the original scene, not the copy
     ai('c.guest.normal.m.canary-3', 'L7', 'main', null),                                 // ancestor
@@ -196,18 +226,26 @@ test('canary score: hit by element, ancestor or overlapping box with the right l
   assert.match(r.note, /upper bound/);
 });
 
-test('a missed canary voids seen for its batch in coverage.json', () => {
-  const coverage = { units: [
-    { id: 'u1', batch: 'b1', lens: 'L6', scenes: ['b.guest.error.d.canary-2', 'x'], seen: true },
-    { id: 'u2', batch: 'b1', lens: 'L6', scenes: ['y'], seen: true },
-    { id: 'u3', batch: 'b2', lens: 'L6', scenes: ['z'], seen: true },
-    { id: 'u4', batch: 'b3', lens: 'L5', scenes: ['b.guest.error.d.canary-2'], seen: true },
+// coverage.json as hunt --record writes it: one cell per lens × scene, with its unit and batch
+const cell = (lens, scene, unit, batch, status = 'seen') => ({ lens, scene, route: '/b', person: 'guest', state: 'error', viewport: 'd', unit, batch, status, ...(status === 'seen' ? {} : { reason: 'not-answered' }) });
+const COVERAGE = { schema: 1, plan: 'p1', run: '0001',
+  summary: { cells: 5, seen: 4, notSeen: { 'not-answered': 1 }, units: { total: 4, seen: 3 } },
+  cells: [
+    cell('L6', 'b.guest.error.d.canary-2', 'u1', 'b1'),
+    cell('L6', 'b.guest.error.d', 'u2', 'b1'),
+    cell('L6', 'b.guest.error.m', 'u2', 'b1'),
+    cell('L6', 'z.guest.error.d', 'u3', 'b2', 'not-seen'),
+    cell('L5', 'b.guest.error.d.canary-2', 'u4', 'b3'),
   ] };
-  const out = voidCoverage(coverage, [{ scene: 'b.guest.error.d.canary-2', lens: 'L6', kind: 'vague-error' }]);
-  assert.deepEqual(out.units.map(u => u.seen), [false, false, true, true]);
-  assert.equal(out.units[0].notSeen, 'canary-missed');
-  assert.deepEqual(out.canaries.voidedUnits, ['u1', 'u2']);
-  assert.equal(coverage.units[0].seen, true, 'input untouched');
+
+test('a missed canary voids seen for its batch in coverage.json', () => {
+  const out = voidCoverage(COVERAGE, [{ scene: 'b.guest.error.d.canary-2', lens: 'L6', kind: 'vague-error' }]);
+  assert.deepEqual(out.cells.map(c => c.status), ['not-seen', 'not-seen', 'not-seen', 'not-seen', 'seen'], 'the copy and the screens it was copied from, for that lens only');
+  assert.deepEqual(out.cells.slice(0, 3).map(c => c.reason), ['canary-missed', 'canary-missed', 'canary-missed']);
+  assert.equal(out.cells[3].reason, 'not-answered', 'other not-seen reasons stay');
+  assert.deepEqual(out.summary, { cells: 5, seen: 1, notSeen: { 'canary-missed': 3, 'not-answered': 1 }, units: { total: 4, seen: 1 } });
+  assert.deepEqual(out.canaries, { missed: [{ scene: 'b.guest.error.d.canary-2', lens: 'L6', kind: 'vague-error' }], voidedUnits: ['u1', 'u2'], voidedBatches: ['b1'] });
+  assert.equal(COVERAGE.cells[0].status, 'seen', 'input untouched');
   assert.deepEqual(voidCoverage({}, []).canaries, { missed: [], voidedUnits: [], voidedBatches: [] });
 });
 
@@ -221,13 +259,13 @@ test('CLI canaries --score: per-lens hit rate, canary-score.json, coverage.json 
   const cli = args => execFileSync(process.execPath, [CLI, ...args], { cwd: work, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   assert.throws(() => cli(['canaries', '--score']), /ai-findings\.json does not exist/);
   writeFileSync(join(run, 'ai-findings.json'), JSON.stringify({ schema: 1, findings: [ai('a.guest.normal.m.canary-1', 'L5', 'main > form > button', null), { ...ai('c.guest.normal.m.canary-3', 'L7', 'main', null), source: 'rule' }] }));
-  writeFileSync(join(run, 'coverage.json'), JSON.stringify({ units: [{ id: 'u1', batch: 'b1', lens: 'L6', scenes: ['b.guest.error.d.canary-2'], seen: true }] }));
+  writeFileSync(join(run, 'coverage.json'), JSON.stringify(COVERAGE));
   const text = cli(['canaries', '--score']);
   assert.match(text, /canaries hit 1\/3 → AI recall ≤ 33%/);
   assert.match(text, /L5 1\/1 · L6 0\/1 · L7 0\/1/, 'rule findings do not count as AI hits');
   const json = JSON.parse(cli(['canaries', '--score', '--run', '0001', '--json']));
   assert.equal(json.hit, 1);
-  assert.deepEqual(json.coverage.voidedUnits, ['u1']);
-  assert.equal(JSON.parse(readFileSync(join(run, 'coverage.json'), 'utf8')).units[0].seen, false);
+  assert.deepEqual(json.coverage.voidedUnits, ['u1', 'u2']);
+  assert.equal(JSON.parse(readFileSync(join(run, 'coverage.json'), 'utf8')).cells[0].status, 'not-seen');
   assert.equal(JSON.parse(readFileSync(join(run, 'canary-score.json'), 'utf8')).planted, 3);
 });
