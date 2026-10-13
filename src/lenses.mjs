@@ -25,7 +25,7 @@ export const EVIDENCE_FILES = ['aria.yml', 'console.json', 'controls.json', 'ful
 
 const LENS_ID = /^L([1-9]|10)$/;
 const ITEM_ID = /^(L(?:[1-9]|10))\.[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const LENS_KEYS = ['schema', 'id', 'name', 'definition', 'checklist', 'examples', 'severityRubric', 'method', 'scenes', 'evidence', 'extends'];
+const LENS_KEYS = ['schema', 'id', 'name', 'definition', 'checklist', 'examples', 'severityRubric', 'method', 'scenes', 'evidence', 'source', 'extends'];
 const ITEM_KEYS = ['id', 'question', 'scenes', 'off'];
 const BUNDLE_KEYS = ['schema', 'name', 'lenses'];
 const EXECUTABLE = /^(on[A-Z_]|script|exec|run|command|cmd|eval|code|func|fn$|handler|hook|require|import|module|plugin|shell|spawn|url$|href$|src$)/i;
@@ -107,6 +107,8 @@ export function lensProblems(lens, where = 'lens', { partial = !!(lens && lens.e
       out.push(`${where}.evidence: a list of distinct evidence files from ${EVIDENCE_FILES.join(', ')}`);
     } else if (!partial && lens.method === 'ai' && !lens.evidence.length) out.push(`${where}.evidence: an AI lens needs at least one evidence file`);
   }
+  // optional: true gives each work unit the source inventory slice of its route (hunt/source/<hash>.json)
+  if (has('source') && typeof lens.source !== 'boolean') out.push(`${where}.source: true or false`);
   if (has('checklist')) {
     if (!Array.isArray(lens.checklist) || (!partial && !lens.checklist.length) || lens.checklist.length > LIMITS.items) {
       out.push(`${where}.checklist: a list of 1–${LIMITS.items} items`);
@@ -166,7 +168,7 @@ const uniq = list => [...new Set(list)];
 // (new ones appended in the overlay's order, `off: true` removes one). `evidence` is replaced.
 export function mergeLens(base, overlay) {
   const out = structuredClone(base);
-  for (const k of ['name', 'definition', 'method']) if (overlay[k] !== undefined) out[k] = overlay[k];
+  for (const k of ['name', 'definition', 'method', 'source']) if (overlay[k] !== undefined) out[k] = overlay[k];
   if (overlay.evidence !== undefined) out.evidence = [...overlay.evidence];
   if (overlay.scenes !== undefined) out.scenes = { ...out.scenes, ...structuredClone(overlay.scenes) };
   if (overlay.severityRubric !== undefined) out.severityRubric = { ...out.severityRubric, ...overlay.severityRubric };

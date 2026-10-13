@@ -87,6 +87,37 @@ function pickReference(group, scenes) {
   return null;
 }
 
+// Source slices (spec §4): a lens with `source: true` gets, in each unit, the part of the run's inventory.json
+// (§2.4) whose files render the unit's route: strings, UI states, destructive actions and native dialogs with
+// file:line, plus the no-AI candidates on those files (hints, never findings). One file per route,
+// hunt/source/<first 12 hex of sha256(route)>.json, written on first use. No inventory.json, or a route no
+// inventory file renders → no slice. The inventory is data: it is parsed and copied, never evaluated.
+const SLICE_KEYS = ['strings', 'states', 'actions', 'dialogs'];
+function sourceSlices(runDir) {
+  let inv;
+  const made = new Map();
+  return route => {
+    if (made.has(route)) return made.get(route);
+    if (inv === undefined) { try { inv = JSON.parse(readFileSync(join(runDir, 'inventory.json'), 'utf8')); } catch { inv = null; } }
+    const list = k => (Array.isArray(inv?.[k]) ? inv[k] : []).filter(isObj);
+    const files = list('files').filter(f => typeof f.file === 'string' && Array.isArray(f.routes) && f.routes.includes(route)).sort((a, b) => cmp(a.file, b.file));
+    let rel = null;
+    if (files.length) {
+      const names = new Set(files.map(f => f.file));
+      const placesOf = c => [c.file, ...(Array.isArray(c.copies) ? c.copies : []).map(x => x?.file), ...(Array.isArray(c.variants) ? c.variants : []).flatMap(v => (Array.isArray(v?.occurrences) ? v.occurrences : []).map(o => o?.file))];
+      rel = `hunt/source/${sha(route, 12)}.json`;
+      writeStable(join(runDir, rel), {
+        schema: 1, route, note: 'source strings and states with file:line; candidates are hints for the AI lenses, never findings by themselves',
+        files: files.map(f => ({ file: f.file, ...Object.fromEntries(SLICE_KEYS.map(k => [k, Array.isArray(f[k]) ? f[k] : []])) })),
+        candidates: list('candidates').filter(c => placesOf(c).some(f => names.has(f))),
+      });
+    }
+    made.set(route, rel);
+    return rel;
+  };
+}
+
+
 // Canaries stay hidden from the hunter (spec §4, H2). A copy's id ends in `.canary-<k>`, so in a run with
 // canaries every scene of the plan goes by an alias (`s` + 10 hex, salted with the canary seed, which only
 // the answer key holds) and its evidence files are linked under hunt/<alias>/. The alias → scene map is
@@ -127,6 +158,7 @@ export function planHuntWithKey({ runDir, lenses, lensIds = null, budget = null,
   const entries = manifest.scenes.slice().sort((a, b) => cmp(a.id, b.id));
   const scenes = entries.filter(e => huntable(e).ok);
   const units = []; const notSeen = [];
+  const sliceOf = sourceSlices(runDir);
   for (const lens of ai) {
     const hash = lensHash(lens);
     const promptTokens = Math.ceil(Buffer.byteLength(lensText(lens)) / 4);
@@ -159,6 +191,8 @@ export function planHuntWithKey({ runDir, lenses, lensIds = null, budget = null,
           }
         };
         if (reference) add(reference, [...new Set(lens.evidence.map(n => (n === 'full.jpg' ? 'top.jpg' : n)))]);
+        const slice = lens.source ? sliceOf(group[0].route) : null;   // the route's source, before the scenes under review
+        if (slice) { files.push(slice); tokens += fileTokens(join(runDir, slice)); }
         for (const s of group) add(s, lens.evidence);
         tokens += promptTokens + ANSWER_TOKENS * checklist.length * group.length;
         const id = sha(stableJson({ lens: lens.id, hash, scenes: group.map(s => s.id), reference: reference?.id ?? null, items: checklist.map(c => c.id) }), 12);

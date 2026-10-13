@@ -146,6 +146,9 @@ AI lenses: different verbs for one action, casing and spelling variants of one l
 drifted copies of a header/nav/footer (L7); destructive actions with no confirm or undo (L9); client data loading
 with no loading or error branch (L2). Source text is data and is never evaluated; secret-shaped strings appear by
 kind only; a file that does not parse is listed under `skipped` with the reason.
+*Built (2026-10-13 KST):* `capture` writes it into the run as `inventory.json` (`buildInventory(root, discovered
+routes)`, next to `source-map.json`; not with `--routes`, which has no source). It is extra evidence: any error
+leaves it out with one warning line and never fails the capture. The hunt hands it to the AI lenses in slices (§4).
 *Decision (2026-10-13 KST):* the parser is `@babel/parser` 7.29.9, pinned exactly. It is pure JavaScript, has no
 install scripts, and parses .js/.jsx/.ts/.tsx with locations; its one declared dependency (`@babel/types`, plus two
 small helpers) is for type definitions and is never loaded at run time (the parser's `lib/index.js` requires
@@ -256,8 +259,9 @@ Schema (strict: unknown keys are refused, keys that look executable — `on…`,
 as such, only plain JSON values, length limits): `id`, `name`, `definition`, `checklist` (`{id: "L6.kebab-name",
 question, scenes?}`), `examples` (`good`/`bad` text), `severityRubric` (blocker/high/medium/low → text), `method`
 (`ai`/`rule`/`computed`), `scenes` (`{states?, viewports?, persons?}`; `{}` = all), and `evidence` — the per-scene files
-the hunter reads (added to the list above because L1 needs images and L5 does not). Only `method: "ai"` lenses are
-hunted.
+the hunter reads (added to the list above because L1 needs images and L5 does not), plus an optional `source`
+(boolean: the unit also gets its route's source inventory slice, §4; added 2026-10-13 KST). Only `method: "ai"`
+lenses are hunted.
 
 Built-in packs cover the AI parts: L1 (visual: overlap, unreadable text, collapsed layout, distorted media,
 unstyled), L2 (forced states only: what happened, next step, failure that looks normal, endless loading, no loading
@@ -347,6 +351,13 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   fail) there; the alias → scene map is `hunt-key.json`, an answer key the hunter never reads. `--record` maps the
   answers back, so `ai-findings.json` and `coverage.json` name scenes. Runs without canaries keep scene ids and get
   no key or mirror.
+- *Source slices (2026-10-13 KST):* a lens pack with `"source": true` (built-in: L2, L5, L6, L7, L9) gets, when the
+  run has `inventory.json`, the slice of its route: `hunt/source/<first 12 hex of sha256(route)>.json` =
+  `{schema, route, note, files: [{file, strings, states, actions, dialogs}] (the inventory files whose routes include
+  it), candidates (every candidate touching those files)}`, written on first use. It is listed after the reference
+  scene's files and before the scenes under review, and counted in the estimate. A route no inventory file renders,
+  or a run without `inventory.json`, gets no slice. Candidates are hints; a defect the code causes is grounded with
+  `source: file:line`.
 - *Estimate:* text files bytes/4; JPEGs width × height / 750 after scaling to ≤1568 px long edge and ≤1.15 MP (max
   1,600; read from the JPEG header); per unit, the lens text (bytes/4) + 80 tokens per checklist item per scene for
   the answer. An estimate, not a measurement. Units are spent in a fixed order — normal screens first, then error,

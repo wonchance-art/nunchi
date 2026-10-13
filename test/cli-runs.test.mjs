@@ -4,12 +4,15 @@ import { fileURLToPath } from 'node:url';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, mkdtempSync, readdirSync, statSync, realpathSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, readdirSync, statSync, realpathSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, extname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { launch } from '../src/capture.mjs';
+import { discover } from '../src/discover.mjs';
+import { buildInventory } from '../src/inventory.mjs';
+import { stableJson, sha } from '../src/stable.mjs';
 
 const SITE = fileURLToPath(new URL('./fixtures/site', import.meta.url));
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -64,4 +67,38 @@ test('ledger CLI: findings by kind, decide on a group, the decision is a committ
   const after = await cli(cwd, 'findings', '--status', 'to-fix');
   assert.deepEqual(after.groups.map(x => x.group), [g.group]);
   assert.ok(!readFileSync(join(cwd, '.nunchi', '.gitignore'), 'utf8').includes('decisions'), 'decisions are committed');
+});
+
+test('capture: inventory.json with discovered routes (same bytes twice), none with --routes; a failure only warns', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  // an invented Next.js app whose one route '/' is served by the fixture site
+  const app = realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-inv-cli-')));
+  writeFileSync(join(app, 'package.json'), JSON.stringify({ dependencies: { next: '15.0.0', react: '19.0.0' } }));
+  mkdirSync(join(app, 'app'));
+  writeFileSync(join(app, 'app', 'page.tsx'), 'export default function Home() {\n  const clearAll = () => store.clear();\n  return <main><h1>Pebble Tasks</h1><button onClick={clearAll}>Delete all</button></main>;\n}\n');
+  const args = ['capture', '--url', base, '--root', app, '--viewports', 'm', '--states', 'normal', '--network', 'live'];
+  const one = await cli(app, ...args);
+  const two = await cli(app, ...args);
+  const inv = readFileSync(join(one.out, 'inventory.json'));
+  assert.ok(inv.equals(readFileSync(join(two.out, 'inventory.json'))), 'deterministic');
+  assert.equal(inv.toString(), stableJson(buildInventory(app, discover(app).routes)), 'what nunchi inventory --json gives');
+  const parsed = JSON.parse(inv);
+  assert.deepEqual(parsed.files.map(f => [f.file, f.routes]), [['app/page.tsx', ['/']]]);
+  assert.ok(parsed.candidates.some(c => c.lens === 'L9' && c.kind === 'unguarded-destructive' && c.file === 'app/page.tsx'));
+  // the hunt plan of that run hands the route's slice to the source lenses
+  const plan = JSON.parse((await promisify(execFile)('node', [CLI, 'hunt', '--plan', '--run', one.run, '--lens', 'L9', '--json'], { cwd: app, encoding: 'utf8' })).stdout);
+  assert.equal(plan.units.length, 1);
+  assert.equal(plan.units[0].files[0], `hunt/source/${sha('/', 12)}.json`, 'no reference scene here: the slice comes first, the scene last');
+  assert.ok(existsSync(join(one.out, plan.units[0].files[0])));
+  // explicit --routes: no source, so no inventory (and no source map)
+  const three = await cli(app, 'capture', '--url', base, '--routes', '/', '--viewports', 'm', '--states', 'normal', '--network', 'live');
+  assert.ok(!existsSync(join(three.out, 'inventory.json')) && !existsSync(join(three.out, 'source-map.json')));
+  // an inventory that cannot be written never fails the capture: one warning line, the evidence is complete
+  const out = join(app, 'o');
+  mkdirSync(join(out, 'inventory.json'), { recursive: true });
+  writeFileSync(join(out, 'inventory.json', 'keep'), 'x');
+  const r = await promisify(execFile)('node', [CLI, ...args, '--out', out, '--json'], { cwd: app, encoding: 'utf8' });
+  assert.equal(JSON.parse(r.stdout).health.status, 'ok');
+  assert.ok(existsSync(join(out, 'manifest.json')) && existsSync(join(out, 'source-map.json')));
+  assert.equal(r.stderr.split('\n').filter(l => l.startsWith('warning: no inventory.json')).length, 1, r.stderr);
 });
