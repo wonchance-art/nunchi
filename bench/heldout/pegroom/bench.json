@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "name": "pegroom",
+  "answers": "../../answers/pegroom.json",
+  "installed": "node_modules/vite",
+  "install": ["npm", "ci", "--no-audit", "--no-fund", "--ignore-scripts"],
+  "build": ["npx", "--no-install", "vite", "build"],
+  "start": ["node", "server.mjs", "--port", "{port}"],
+  "port": 3427,
+  "ready": "/about",
+  "env": {},
+  "samples": { "/bookings/:id": "/bookings/bk-2081" },
+  "auth": { "cookies": [{ "name": "pegroom_sid", "value": "member-ines", "domain": "127.0.0.1", "path": "/", "expires": -1, "httpOnly": false, "secure": false, "sameSite": "Lax" }], "origins": [] }
+}

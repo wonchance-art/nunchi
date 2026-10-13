@@ -8,3 +8,5 @@ bench/pebble/.next/
 bench/pebble/next-env.d.ts
 bench/out/
 .claude/worktrees/
+bench/heldout/pegroom/node_modules/
+bench/heldout/pegroom/dist/
