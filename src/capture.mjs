@@ -9,6 +9,7 @@ import { initScript, collect, FREEZE_CSS } from './collect.mjs';
 import { ruleFindings, secretFindings } from './rules.mjs';
 import { buildFlow } from './flow.mjs';
 import { buildSystem, parityFindings } from './system.mjs';
+import { annotate } from './ledger.mjs';
 import { writeStable, sha } from './stable.mjs';
 import { FONT_HOSTS, BACKEND_SUFFIXES, isBackendHost, isDataRequest, requestKey, forceResponse, Recording, redactUrl, redactText } from './network.mjs';
 
@@ -370,7 +371,8 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   // captured routes are known and links elsewhere are not judged.
   const flowRoutes = flowOpts.routes || [...new Set(scenes.map(s => s.route || s.path))].sort();
   const { flow, findings: flowFindings } = buildFlow({ entries, sceneLinks, routes: flowRoutes, complete: !!flowOpts.routes, wholeApp: flowOpts.wholeApp ?? !!flowOpts.routes, code: flowOpts.code || [] });
-  findings.push(...flowFindings);
+  // an app that did not load shows no links: the flow cannot be judged, nothing is "unreachable"
+  if (!health.problems.some(p => p.status === 'app-unreachable')) findings.push(...flowFindings);
   // L4 and L10: the app's measured design system and phone/desktop parity.
   const { system, findings: systemFindings } = buildSystem({ entries, rowsByScene });
   findings.push(...systemFindings, ...parityFindings({ entries, controlsByScene }));
@@ -382,6 +384,9 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   // How this run got its data (record vs replay) is run metadata, not evidence: kept beside timing.
   const runInfo = { ...runMeta, network: modes, health };
   writeStable(join(out, 'manifest.json'), manifest);
+  // fingerprint (one defect wherever it shows) and group (the same defect across routes): spec §5
+  const ledgerFindings = annotate(findings);
+  findings.splice(0, findings.length, ...ledgerFindings);
   writeStable(join(out, 'findings.json'), { schema: 1, findings });
   writeStable(join(out, 'flow.json'), flow);
   writeStable(join(out, 'design-system.json'), system);
