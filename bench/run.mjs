@@ -53,7 +53,7 @@ const capture = (label, harFrom) => {
   // Signed-in scenes use a saved session, as `nunchi login` would produce.
   writeFileSync(join(work, '.nunchi', 'auth.json'), JSON.stringify({ cookies: [{ name: 'pebble_session', value: 'demo', domain: '127.0.0.1', path: '/', expires: -1, httpOnly: false, secure: false, sameSite: 'Lax' }], origins: [] }));
   const t = Date.now();
-  const summary = JSON.parse(run('node', [CLI, 'capture', '--url', base, '--root', APP, '--samples', '.nunchi/samples.json', '--json'], { cwd: work }));
+  const summary = JSON.parse(run('node', [CLI, 'capture', '--url', base, '--root', APP, '--samples', '.nunchi/samples.json', '--canaries', '3', '--json'], { cwd: work }));
   return { work, out: summary.out, summary, seconds: Math.round((Date.now() - t) / 100) / 10 };
 };
 

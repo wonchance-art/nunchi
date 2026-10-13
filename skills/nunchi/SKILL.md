@@ -49,8 +49,8 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
 
 ## Canaries and the verifier (AI findings only)
 
-Every `capture` plants known defects in copies of a few scenes (manifest entries tagged `canary`, ids ending
-`.canary-<k>`; `--canaries 0` turns this off). They are part of the AI hunt like any other scene. Never open
+When the AI lenses will run, capture with `--canaries 3`: it plants known defects in copies of a few scenes
+(manifest entries tagged `canary`, ids ending `.canary-<k>`; a plain capture plants none). They are part of the AI hunt like any other scene. Never open
 `canaries.json` or `verify-key.json` while hunting or verifying: they are answer keys. Never tell a hunter
 which scenes are canaries, and do not put a canary copy in the same work unit as the scene it copies.
 

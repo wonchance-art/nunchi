@@ -37,7 +37,8 @@ Usage:
     --json                print the summary as JSON
     --changed-since <ref> only screens whose source changed since a git ref (plus uncommitted changes)
     --plan                print the screens that would be captured and exit (no browser)
-    --canaries <n>        plant known defects in copies of n scenes, to measure the AI hunt   default: 3
+    --canaries <n>        plant known defects in copies of n scenes, to measure the AI hunt   default: 0
+                          (use 3 when the AI lenses will run: a capture without them gains nothing)
                           (tagged \`canary\` in manifest.json, listed in canaries.json, never in findings.json)
     exit code 3 when the run is not usable (login expired, app unreachable); the run is kept
   nunchi runs [--json]                      List captured runs (newest last) and which is latest
@@ -198,7 +199,7 @@ if (cmd === 'setup') {
   const out = run ? run.path : resolve(args.out);
   const viewports = (args.viewports || 'm,d').split(',');
   const { DEFAULT_CANARIES } = await import('./canary.mjs');
-  const canaries = args.canaries === undefined ? DEFAULT_CANARIES : Number(args.canaries);
+  const canaries = args.canaries === undefined ? 0 : Number(args.canaries);
   if (!Number.isInteger(canaries) || canaries < 0) { console.error('nunchi capture: --canaries takes a whole number (0 = none)'); process.exit(1); }
   const states = (args.states || 'normal,empty,error,slow,offline').split(',').map(x => x.trim());
   const runMeta = {
