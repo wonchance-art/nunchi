@@ -1,7 +1,7 @@
 // Hunt planner and answer recorder (spec §4) on a synthetic run folder: no browser needed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -9,7 +9,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadLenses } from '../src/lenses.mjs';
 import { planHunt, recordHunt, jpegSize, imageTokens, IMAGE_TOKENS_MAX } from '../src/hunt.mjs';
-import { stableJson } from '../src/stable.mjs';
+import { stableJson, sha } from '../src/stable.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-hunt-')));
@@ -244,4 +244,77 @@ test('cli: hunt --plan writes the same plan twice, --record writes ai-findings.j
   const bad = spawnSync('node', [CLI, 'hunt', '--plan'], { cwd, encoding: 'utf8' });
   assert.equal(bad.status, 2);
   assert.match(bad.stderr, /sha256 .* Refusing to load it/);
+});
+
+// A run-level inventory.json as capture writes it (spec §2.4), for the invented Pebble Garden: the tasks page
+// renders /tasks; another file renders only /notes (not hunted). No file renders '/'.
+function addInventory(runDir) {
+  const inv = {
+    schema: 1, scope: 'routes', summary: {},
+    files: [
+      { file: 'app/notes/page.tsx', routes: ['/notes'], client: false, loadsData: null,
+        strings: [{ kind: 'text', role: 'button', text: 'Erase note', line: 4 }], states: [], actions: [{ line: 4, label: 'Erase note', handler: 'erase', confirm: null, undo: null }], dialogs: [], raw: [], landmarks: [] },
+      { file: 'app/tasks/page.tsx', routes: ['/tasks'], client: true, loadsData: { line: 3, client: true },
+        strings: [{ kind: 'text', role: 'button', text: 'Delete all', line: 9 }, { kind: 'state-message', text: 'Oops! Something went wrong.', line: 7 }],
+        states: [{ state: 'error', line: 7, strings: ['Oops! Something went wrong.'], elements: [] }],
+        actions: [{ line: 9, label: 'Delete all', handler: 'clearAll', confirm: null, undo: null }], dialogs: [], raw: [{ line: 8, via: 'jsx', expression: 'err.message' }], landmarks: [] },
+    ],
+    candidates: [
+      { candidate: true, lens: 'L5', kind: 'verb-variants', concept: 'delete', variants: [
+        { forms: ['Delete'], count: 1, occurrences: [{ file: 'app/tasks/page.tsx', line: 9, text: 'Delete all' }] },
+        { forms: ['Erase'], count: 1, occurrences: [{ file: 'app/notes/page.tsx', line: 4, text: 'Erase note' }] }] },
+      { candidate: true, lens: 'L6', kind: 'vague-error', file: 'app/tasks/page.tsx', line: 7, text: 'Oops! Something went wrong.' },
+      { candidate: true, lens: 'L9', kind: 'unguarded-destructive', file: 'app/notes/page.tsx', line: 4, label: 'Erase note', handler: 'erase' },
+      { candidate: true, lens: 'L9', kind: 'unguarded-destructive', file: 'app/tasks/page.tsx', line: 9, label: 'Delete all', handler: 'clearAll' },
+    ],
+    skipped: [],
+  };
+  writeFileSync(join(runDir, 'inventory.json'), JSON.stringify(inv, null, 2));
+}
+const SLICE = route => `hunt/source/${sha(route, 12)}.json`;
+
+test('plan: source lenses get the route\'s inventory slice after the reference and before the reviewed scenes', () => {
+  const { runDir, lenses } = setup();
+  const before = planHunt({ runDir, lenses, runId: '0001' });
+  addInventory(runDir);
+  const plan = planHunt({ runDir, lenses, runId: '0001' });
+  assert.deepEqual(plan.units.map(u => u.id), before.units.map(u => u.id), 'same units');
+  const tasks = plan.units.find(u => u.lens === 'L6' && u.scenes[0].route === '/tasks' && u.scenes[0].state === 'normal');
+  const slice = SLICE('/tasks');
+  const at = tasks.files.indexOf(slice);
+  assert.ok(at > 0, tasks.files.join('\n'));
+  assert.ok(tasks.files.slice(0, at).every(f => f.startsWith('~.guest.normal.d/')), 'reference files come first');
+  assert.ok(tasks.files.slice(at + 1).every(f => f.startsWith('tasks.guest.normal.')), 'then the scenes under review');
+  assert.ok(tasks.files[tasks.files.length - 1].startsWith('tasks.guest.normal.m/'), 'reviewed scene still last');
+  const old = before.units.find(u => u.id === tasks.id);
+  assert.equal(tasks.tokens, old.tokens + Math.ceil(statSync(join(runDir, slice)).size / 4), 'the slice is in the estimate');
+  // the slice: only files that render /tasks, their strings/states/actions/dialogs, candidates touching them
+  const s = JSON.parse(readFileSync(join(runDir, slice), 'utf8'));
+  assert.equal(s.schema, 1); assert.equal(s.route, '/tasks');
+  assert.deepEqual(s.files.map(f => f.file), ['app/tasks/page.tsx']);
+  assert.deepEqual(Object.keys(s.files[0]).sort(), ['actions', 'dialogs', 'file', 'states', 'strings']);
+  assert.equal(s.files[0].states[0].line, 7);
+  assert.deepEqual(s.candidates.map(c => `${c.lens} ${c.kind}`), ['L5 verb-variants', 'L6 vague-error', 'L9 unguarded-destructive']);
+  assert.ok(s.candidates.every(c => c.file !== 'app/notes/page.tsx'), 'the /notes-only candidate is left out');
+  // every source lens on /tasks gets it; L1 (no `source`) does not; a route no inventory file renders gets none
+  for (const u of plan.units.filter(u => u.scenes[0].route === '/tasks')) {
+    assert.equal(u.files.includes(slice), !!plan.lenses.find(l => l.id === u.lens).source, `${u.lens} ${u.scenes[0].scene}`);
+  }
+  assert.ok(plan.units.some(u => u.lens === 'L1' && u.scenes[0].route === '/tasks'));
+  const home = plan.units.filter(u => u.scenes[0].route === '/');
+  assert.ok(home.some(u => u.lens === 'L6'));
+  assert.ok(home.every(u => !u.files.some(f => f.startsWith('hunt/'))), 'no slice for a route without inventory files');
+  assert.ok(!existsSync(join(runDir, SLICE('/'))));
+  // deterministic: planning again gives the same plan and the same slice bytes
+  const bytes = readFileSync(join(runDir, slice));
+  assert.equal(stableJson(planHunt({ runDir, lenses, runId: '0001' })), stableJson(plan));
+  assert.ok(bytes.equals(readFileSync(join(runDir, slice))));
+});
+
+test('plan: no inventory.json, no slices and nothing written', () => {
+  const { runDir, lenses } = setup();
+  const plan = planHunt({ runDir, lenses, runId: '0001' });
+  assert.ok(plan.units.length);
+  assert.ok(plan.units.every(u => !u.files.some(f => f.startsWith('hunt/'))));
+  assert.ok(!existsSync(join(runDir, 'hunt')));
 });

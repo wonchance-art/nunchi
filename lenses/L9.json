@@ -6,6 +6,7 @@
   "method": "ai",
   "scenes": { "states": ["normal"] },
   "evidence": ["top.jpg", "aria.yml", "controls.json", "text.txt"],
+  "source": true,
   "checklist": [
     { "id": "L9.destructive-without-confirm", "question": "Is there a destructive control (Delete, Remove, Reset, Discard, Cancel subscription, Clear all) with no sign of a confirmation step or undo: its accessible name and aria.yml show no dialog/menu popup, nothing on screen mentions undo or a trash, and (if you read it) its handler deletes immediately?" },
     { "id": "L9.input-lost-on-leave", "question": "Is there a form or editor with several fields or free text where leaving controls (navigation links, Cancel, Close, Back) sit beside it with no sign of a draft, autosave or leave warning (no 'Saved', 'Draft', 'Unsaved changes' text)?" }

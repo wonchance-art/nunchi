@@ -6,6 +6,7 @@
   "method": "ai",
   "scenes": { "states": ["normal", "empty", "error"] },
   "evidence": ["text.txt", "aria.yml", "controls.json"],
+  "source": true,
   "checklist": [
     { "id": "L5.same-action-different-verb", "question": "Is the same action named with different verbs on this screen or against the reference screen (Delete / Remove / Trash, Save / Apply / Done)?" },
     { "id": "L5.same-concept-different-name", "question": "Is one concept called by two names (Project and Workspace, Note and Entry, Team and Group) for the same thing?" },

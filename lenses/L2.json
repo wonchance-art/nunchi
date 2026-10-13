@@ -6,6 +6,7 @@
   "method": "ai",
   "scenes": { "states": ["empty", "error", "slow", "offline"] },
   "evidence": ["top.jpg", "text.txt", "aria.yml", "controls.json"],
+  "source": true,
   "checklist": [
     { "id": "L2.what-happened", "question": "Does the screen say in words what happened (nothing here yet / loading failed / still loading / you are offline)? Answer defect when it does not." },
     { "id": "L2.next-step", "question": "Does the screen offer a next step that fits the state: create the first item (empty), retry (error), reconnect or keep working offline (offline)? Answer defect when there is none.", "scenes": { "states": ["empty", "error", "offline"] } },

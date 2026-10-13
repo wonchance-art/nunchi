@@ -2,7 +2,7 @@
 // nunchi engine CLI. The deterministic half of nunchi: everything here must give the
 // same output for the same input. Judgment (sample values, lenses, fixes) lives in the plugin skill.
 import { resolve, join, relative, isAbsolute } from 'node:path';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, rmSync } from 'node:fs';
 import { discover } from './discover.mjs';
 import { buildSourceMap, affectedRoutes } from './sourcemap.mjs';
 import { startRun, finishRun, gcRuns, latestRun, workTree, ensureGitignore } from './runs.mjs';
@@ -274,7 +274,20 @@ if (cmd === 'setup') {
     });
     const by = { blocker: 0, high: 0, medium: 0, low: 0 };
     for (const f of r.findings) by[f.severity]++;
-    if (!args.routes) { const { writeStable } = await import('./stable.mjs'); writeStable(join(out, 'source-map.json'), buildSourceMap(root, discover(root).routes)); }
+    if (!args.routes) {
+      const { writeStable } = await import('./stable.mjs');
+      const routes = discover(root).routes;
+      writeStable(join(out, 'source-map.json'), buildSourceMap(root, routes));
+      // The source inventory (§2.4) feeds the AI hunt's source slices (§4). It is extra: it never fails a capture.
+      const invPath = join(out, 'inventory.json');
+      try {
+        const { buildInventory } = await import('./inventory.mjs');
+        writeStable(invPath, buildInventory(root, routes));
+      } catch (e) {
+        try { rmSync(invPath, { force: true }); } catch {}
+        console.error(`warning: no inventory.json in this run (${String(e?.message ?? e).split('\n')[0]}); the AI hunt gets no source slices`);
+      }
+    }
     const final = run ? finishRun(runsDir, run.id) : out;
     // fold the run into the local ledger state (what is open, fixed, back again)
     if (run) updateState(join(nunchiDir, 'state', 'ledger.json'), { id: run.id, scope: runMeta.scope, health: r.manifest.health, findings: r.findings });
