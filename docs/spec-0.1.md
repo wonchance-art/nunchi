@@ -53,7 +53,10 @@ scene = route × person × state × viewport.
 ### 2.2 Determinism
 
 - Frozen clock, seeded `Math.random`, animations/transitions/caret off, service workers blocked,
-  toast timers paused, fonts awaited, lazy content scrolled into view.
+  toast timers paused, fonts awaited, lazy content scrolled into view (the window and inner scroll areas).
+- App-shell layouts scroll inside an element, so the full-page image shows only its first view. `measure.json`
+  lists page-sized scroll areas (`scrollers`); an element outside an ancestor's visible area carries
+  `inside: <selector>`, and so does its finding: the board draws boxes only where the image shows them.
 - **Network record/replay (H1):** the first run records the app's *data* responses (fetch/XHR to the app's
   origin or a recognised backend: Supabase, Firebase, Convex, Appwrite, Clerk, plus `--allow-host`) to
   `.nunchi/har/<person>.json`; later runs replay them. Documents, scripts, styles and RSC payloads are never
@@ -260,7 +263,7 @@ hunting model cannot read them.
 
 | Step | Contents | Done when |
 |---|---|---|
-| 0.1-a | **remaining: computed lenses L3 (flow), L4 (measured design system), L10 (parity), scroll-container boxes** · runs + run health + scene ids + URL redaction ✔ · plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login ✔ · record/replay ✔ · forced states ✔ · evidence pack ✔ · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map ✔ · benchmark app ✔ · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
+| 0.1-a | **remaining: computed lenses L3 (flow), L4 (measured design system), L10 (parity)** · runs + run health + scene ids + URL redaction + scroll-area boxes ✔ · plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login ✔ · record/replay ✔ · forced states ✔ · evidence pack ✔ · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map ✔ · benchmark app ✔ · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
 | 0.1-b | inventory extractor · AI lenses · verifier · canaries · decoys · ledger · fingerprints · trust metrics · lens packs · budget | AI-lens recall, precision, fingerprint stability gates |
 | 0.1-c | fix loop · guards · board (mock-ups agreed) · exports · `check` · fast first run · batch decisions | fix-loop gate, field test, all gates |
 

@@ -67,6 +67,20 @@ test('captures seeded defects, keeps the clean page clean, writes the evidence p
   assert.deepEqual(leaked, [], 'credential values in query strings never reach the evidence');
 });
 
+test('app shell: a finding below the inner scroll area\'s fold says it is not in the image', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const out = mkdtempSync(join(tmpdir(), 'nunchi-shell-'));
+  const r = await capture({ baseUrl: base, scenes: [{ route: '/shell.html', path: '/shell.html' }], viewports: ['m'], out });
+  const img = r.findings.filter(f => f.rule === 'broken-image');
+  assert.equal(img.length, 1);
+  assert.equal(img[0].inside, 'main', JSON.stringify(img[0]));
+  const m = JSON.parse(readFileSync(join(out, 'shell.html.guest.normal.m', 'measure.json'), 'utf8'));
+  assert.equal(m.scrollers.length, 1);
+  assert.equal(m.scrollers[0].selector, 'main');
+  assert.ok(m.scrollers[0].scrollHeight > m.scrollers[0].clientHeight * 2);
+  assert.ok(!r.findings.some(f => f.rule !== 'broken-image' && f.inside), 'elements in view are not marked');
+});
+
 test('deterministic: two runs of the same site give byte-identical evidence', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const scenes = [{ route: '/', path: '/' }, { route: '/broken.html', path: '/broken.html' }];

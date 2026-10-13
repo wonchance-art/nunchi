@@ -60,6 +60,31 @@ export function collect() {
   };
   const name = el => (el.getAttribute('aria-label') || el.getAttribute('title') || el.innerText || el.getAttribute('alt') || el.value || '').replace(/\s+/g, ' ').trim().slice(0, 80);
   const doc = document.documentElement;
+  // App-shell layouts scroll inside an element (\`main { overflow: auto }\`), not the window: the
+  // full-page screenshot then shows only the first view of it. Elements outside an ancestor's visible
+  // area are marked \`inside: <that ancestor>\` so a box is never drawn where the image does not show it.
+  const CLIP = /(auto|scroll|overlay|hidden|clip)/;
+  const inside = el => {
+    const r = el.getBoundingClientRect();
+    for (let a = el.parentElement; a && a !== document.body && a !== doc; a = a.parentElement) {
+      const cs = getComputedStyle(a);
+      if (!CLIP.test(cs.overflowX + ' ' + cs.overflowY)) continue;
+      const ar = a.getBoundingClientRect();
+      if (r.bottom <= ar.top || r.top >= ar.bottom || r.right <= ar.left || r.left >= ar.right) return sel(a);
+    }
+    return null;
+  };
+  const where = el => { const i = inside(el); return i ? { inside: i } : {}; };
+  const scrollers = [];
+  for (const el of document.querySelectorAll('body *')) {
+    if (scrollers.length >= 10) break;
+    const cs = getComputedStyle(el);
+    if (!/(auto|scroll|overlay)/.test(cs.overflowX + ' ' + cs.overflowY)) continue;
+    if (!(el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1) || !vis(el)) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width * r.height < 0.2 * innerWidth * innerHeight) continue;   // dropdowns, code blocks: not the page
+    scrollers.push({ selector: sel(el), box: box(el), scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
+  }
 
   const controls = [];
   for (const el of document.querySelectorAll('a[href],button,[role="button"],[role="link"],input,select,textarea,summary')) {
@@ -70,6 +95,7 @@ export function collect() {
       name: name(el), hasText: text.length > 0, text: text.slice(0, 40), box: box(el),
       href: el.localName === 'a' ? el.getAttribute('href') : null,
       inline: el.localName === 'a' && getComputedStyle(el).display === 'inline',
+      ...where(el),
     });
   }
 
@@ -104,7 +130,7 @@ export function collect() {
     if (!ownText) continue;
     const cs = getComputedStyle(el);
     if (!/hidden|clip/.test(cs.overflowX) || cs.textOverflow === 'ellipsis') continue;
-    if (el.scrollWidth > el.clientWidth + 1) clipped.push({ selector: sel(el), box: box(el), text: el.innerText.trim().slice(0, 80), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
+    if (el.scrollWidth > el.clientWidth + 1) clipped.push({ selector: sel(el), box: box(el), text: el.innerText.trim().slice(0, 80), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, ...where(el) });
   }
 
   // Form fields whose only description is a placeholder: it disappears as soon as the user types.
@@ -113,13 +139,13 @@ export function collect() {
     if (fields.length >= 100 || !vis(el)) continue;
     if (/^(hidden|submit|button|reset|checkbox|radio|image|range|color|file)$/i.test(el.type || '')) continue;
     const labelled = (el.labels && el.labels.length > 0) || el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title');
-    fields.push({ selector: sel(el), box: box(el), labelled: !!labelled, placeholder: (el.getAttribute('placeholder') || '').slice(0, 80) });
+    fields.push({ selector: sel(el), box: box(el), labelled: !!labelled, placeholder: (el.getAttribute('placeholder') || '').slice(0, 80), ...where(el) });
   }
 
   const images = [];
   for (const img of document.images) {
     if (!vis(img)) continue;
-    if (img.complete && img.naturalWidth === 0) images.push({ selector: sel(img), box: box(img), src: img.getAttribute('src') });
+    if (img.complete && img.naturalWidth === 0) images.push({ selector: sel(img), box: box(img), src: img.getAttribute('src'), ...where(img) });
   }
 
   const links = [];
@@ -143,6 +169,6 @@ export function collect() {
     scrollHeight: doc.scrollHeight,
     text: (document.body.innerText || '').replace(/ /g, ' '),
     mainText: (main.innerText || '').replace(/ /g, ' '),
-    controls, styles, clipped, images, links, fonts, fields,
+    controls, styles, clipped, images, links, fonts, fields, scrollers,
   };
 }

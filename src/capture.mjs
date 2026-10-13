@@ -167,6 +167,13 @@ async function captureOne(browser, base, scene, opts) {
       const h = document.documentElement.scrollHeight;
       for (let y = 0; y < h; y += innerHeight) { scrollTo(0, y); await new Promise(r => requestAnimationFrame(() => r())); }
       scrollTo(0, 0);
+      // Inner scroll areas (app shells) get the same pass, so their lazy content loads too.
+      for (const el of document.querySelectorAll('body *')) {
+        const cs = getComputedStyle(el);
+        if (!/(auto|scroll|overlay)/.test(cs.overflowY) || el.scrollHeight <= el.clientHeight + 1 || el.clientHeight < innerHeight * 0.3) continue;
+        for (let y = 0; y < el.scrollHeight; y += el.clientHeight) { el.scrollTop = y; await new Promise(r => requestAnimationFrame(() => r())); }
+        el.scrollTop = 0;
+      }
       await document.fonts.ready;
     }).catch(() => {});
     if (scene.state !== 'offline') await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
@@ -228,12 +235,16 @@ async function captureOne(browser, base, scene, opts) {
   // A redirected scene shows another route's page: that page is judged in its own scene. What a
   // redirect itself says is judged here: a signed-in person bounced to a sign-in page lost the session.
   const bounced = ev.redirected && scene.person === 'signed-in' && /(^|\/)(log-?in|sign-?in|auth)(\/|$)/i.test(finalPath || '');
-  const findings = !measure ? [] : ev.redirected
+  const raw = !measure ? [] : ev.redirected
     ? (bounced ? [{ lens: 'L3', rule: 'signed-in-bounced', severity: 'high', scene: scene.id, route: scene.route, viewport: scene.vp, selector: null, box: null, evidence: { finalPath } }] : [])
     : ruleFindings(ev);
+  // A finding on an element outside its scroll area's visible part says so; the box is not in the image.
+  const insideOf = new Map();
+  if (measure) for (const x of [...measure.controls, ...measure.images, ...measure.clipped, ...measure.fields]) if (x.inside) insideOf.set(x.selector, x.inside);
+  const findings = raw.map(f => (insideOf.has(f.selector) ? { ...f, inside: insideOf.get(f.selector) } : f));
   writeStable(join(dir, 'measure.json'), {
     status, finalPath, redirected: ev.redirected, axe: ev.axe,
-    ...(measure ? { scrollWidth: measure.scrollWidth, scrollHeight: measure.scrollHeight, viewport: measure.viewport, clsBand: measure.clsBand, fonts: measure.fonts, clipped: measure.clipped, images: measure.images, h1: measure.h1, title: measure.title } : {}),
+    ...(measure ? { scrollWidth: measure.scrollWidth, scrollHeight: measure.scrollHeight, viewport: measure.viewport, clsBand: measure.clsBand, fonts: measure.fonts, clipped: measure.clipped, images: measure.images, h1: measure.h1, title: measure.title, scrollers: measure.scrollers } : {}),
   });
   writeStable(join(dir, 'volatile.json'), { cls });
   return {
