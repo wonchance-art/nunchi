@@ -60,6 +60,7 @@ const capture = (label, harFrom) => {
 log('capturing (run 1)…');
 const a = capture('a');
 let determinism = null;
+let stability = null;
 if (twice) {
   log('capturing (run 2, replay)…');
   const b = capture('b', a.work);
@@ -68,6 +69,11 @@ if (twice) {
   const fa = files(a.out), fb = files(b.out);
   const differ = fa.filter(f => !fb.includes(f) || !readFileSync(join(a.out, f)).equals(readFileSync(join(b.out, f))));
   determinism = differ.length ? `${differ.length} file(s) differ (${differ.slice(0, 5).join(', ')})` : `identical (${fa.length} files)`;
+  // fingerprint stability (spec §8): the same defects get the same fingerprints when nothing changed
+  const fps = d => new Set(JSON.parse(readFileSync(join(d, 'findings.json'), 'utf8')).findings.map(f => f.fp));
+  const pa = fps(a.out), pb = fps(b.out);
+  const both = [...pa].filter(x => pb.has(x)).length, any = new Set([...pa, ...pb]).size;
+  stability = { same: both, total: any, rate: any ? both / any : 1 };
 }
 stop();
 
@@ -77,11 +83,11 @@ const r = score(ANSWERS, manifest, findings);
 const when = new Date(Date.now() + 9 * 3600e3).toISOString().replace('T', ' ').slice(0, 16) + ' KST';
 const scenes = manifest.scenes.filter(s => s.canary === undefined).length;
 const canaries = manifest.scenes.length - scenes;
-const md = reportMarkdown(r, { app: ANSWERS.app, when, scenes, canaries, seconds: a.seconds, determinism });
+const md = reportMarkdown(r, { app: ANSWERS.app, when, scenes, canaries, seconds: a.seconds, determinism, stability });
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 writeFileSync(join(OUT, 'report.md'), md);
-writeFileSync(join(OUT, 'report.json'), JSON.stringify({ ...r, determinism, seconds: a.seconds, scenes, canaries }, null, 2) + '\n');
+writeFileSync(join(OUT, 'report.json'), JSON.stringify({ ...r, determinism, stability, seconds: a.seconds, scenes, canaries }, null, 2) + '\n');
 console.log(md);
-const pass = r.ruleRecall.rate === 1 && r.cleanFalsePositives.perScene <= 0.1 && (!twice || determinism.startsWith('identical'));
+const pass = r.ruleRecall.rate === 1 && r.cleanFalsePositives.perScene <= 0.1 && (!twice || (determinism.startsWith('identical') && stability.rate >= 0.95));
 process.exit(pass ? 0 : 1);

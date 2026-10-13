@@ -58,6 +58,7 @@ export function reportMarkdown(r, meta) {
     `| Rule-lens recall | 100% | ${r.ruleRecall.found}/${r.ruleRecall.seeded} (${pct(r.ruleRecall.rate)}) |`,
     `| False positives on clean scenes | ≤ 0.1 per scene | ${r.cleanFalsePositives.findings} on ${r.cleanFalsePositives.scenes} scenes (${r.cleanFalsePositives.perScene.toFixed(2)}) |`,
     ...(meta.determinism ? [`| Determinism (2 runs, byte-identical evidence) | identical | ${meta.determinism} |`] : []),
+    ...(meta.stability ? [`| Fingerprint stability (2 runs, no code change) | ≥ 95% | ${Math.round(meta.stability.rate * 1000) / 10}% (${meta.stability.same}/${meta.stability.total}) |`] : []),
     '',
     '## Recall by lens',
     '',

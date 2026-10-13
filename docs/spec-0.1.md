@@ -279,14 +279,34 @@ content and the phone's first view are AI-lens checks (0.1-b).
 
 ## 5. Ledger (0.1-b)
 
-- One finding per file: `.nunchi/findings/<fingerprint>.json`, sorted keys, schema version, committed to git.
-  Evidence and auth are not committed.
-- Fingerprint = lens + rule + location (route template + landmark path + selector without nth) + normalized
-  evidence (numbers bucketed, ids/hashes stripped). Root-cause fingerprint = file + symbol. No line numbers.
-  Collision → counter suffix.
-- States: `new → confirmed → (human) fix | keep | false-positive → fixing → fixed → guarded`, and
-  `fixed/guarded → regressed` when the fingerprint matches again. *keep* and *false-positive* are remembered
-  and never raised again.
+Revised after the board review (N1, N2, N7, N8) and the first field test (1,082 findings on 34 screens are
+unreadable one by one). Built in `src/ledger.mjs`:
+
+- **Fingerprint** (`fp`, v1) = lens + rule + route template + the element (selector without `:nth-*`, React/Radix
+  ids, CSS-module/emotion/styled-components hashes, digits) + evidence with measurement values removed (sizes,
+  notes, the page's data in quoted text; numbers bucketed to powers of two). Person, viewport and state are not
+  part of it: the same defect on the phone and the desktop, in normal and error state, is one. Every finding in a
+  run's `findings.json` carries its `fp`.
+- **Group** = the fingerprint without the route: a shared component's defect on 17 screens is one group, the
+  unit a person decides on and the fix loop fixes. Low contrast groups by its colour pair (the design token),
+  not by element. Root-cause groups by source file + symbol come with the inventory (§2.4).
+- **Decisions** are append-only files, `.nunchi/decisions/<group-…|fp-…>/<id>.json` (committed; two people
+  never edit the same file): `fix`, `keep` (reason `intended` | `out-of-scope`), `false-positive` (reason
+  `not-a-problem` | `wrong-place`), `hold`, `reopen`; who and when (KST). The latest decision on the fingerprint
+  or its group wins; a group decision covers screens found later.
+- **Provenance (N1):** decisions made with `nunchi decide` on this machine are recorded in
+  `.nunchi/state/approved.json` (git-ignored). Anything else came through git: it is shown, but it cannot dismiss
+  a blocker or an L9 (safety/secret) finding, and the fix loop will not act on an unapproved `fix` until
+  `nunchi approve`.
+- **Status is computed, never committed:** each complete run is folded into `.nunchi/state/ledger.json`:
+  `open` → `fixed` when a run that looked again (the route in scope, the same persons, the app reachable, the
+  login working) no longer finds it → `regressed` when it comes back. With decisions: `to-fix`, `kept`,
+  `dismissed`, `held`. `fingerprintVersion` and each fingerprint's inputs are stored so a future v2 can migrate
+  decisions instead of orphaning them.
+- **CLI:** `nunchi findings` (one row per kind; `--rule <rule>` lists its groups; `--status`, `--all`, `--json`),
+  `nunchi decide <id…> <decision> [--reason] [--note]`, `nunchi approve <id…>|--all`, `nunchi trust`.
+
+Field app 1 (§9.2) after this: 1,082 findings → 578 unique defects → 99 groups → 9 kinds on one screen of text.
 
 ## 6. Fix loop (0.1-c)
 
@@ -330,7 +350,7 @@ fills the board live.
 | Precision after verification | ≥85% on a 50-finding human-labelled sample |
 | False positives on clean scenes | ≤0.1 confirmed false positives per defect-free scene |
 | Determinism | same build, 2 runs → byte-identical screenshots |
-| Fingerprint stability | ≥95% identical fingerprints across 3 runs with no code change |
+| Fingerprint stability | ≥95% identical fingerprints across runs with no code change (bench: 2 runs, 100%, 54/54) |
 | Fix loop | ≥90% of seeded defects marked *fix* are gone on re-capture, 0 caused regressions |
 | Time | 25 routes: first run ≤15 min, incremental ≤3 min |
 | Decision time | median ≤10 s per human decision |
@@ -347,7 +367,7 @@ hunting model cannot read them.
 | Step | Contents | Done when |
 |---|---|---|
 | 0.1-a | computed lenses L3 flow ✔ L4 measured design system ✔ L10 parity ✔ · runs + run health + scene ids + URL redaction + scroll-area boxes ✔ · plugin skeleton ✔ · discover ✔ · capture + evidence pack ✔ · rule lenses (L1, L6, L7, L8, L9 rule parts) ✔ · browser network policy ✔ · recorded login ✔ · record/replay ✔ · forced states ✔ · evidence pack ✔ · rule and computed lenses (L1 L3 L4 L6 L7 L8 L9 L10 rule parts) · source map ✔ · benchmark app ✔ · tool security (no telemetry, no install scripts, pinned deps, npm trusted publishing, stripped secrets) | rule-lens recall 100%, 2-run byte identity, timings measured, token budget defaults set |
-| 0.1-b | inventory extractor · AI lenses · verifier · canaries · decoys · ledger · fingerprints · trust metrics · lens packs · budget | AI-lens recall, precision, fingerprint stability gates |
+| 0.1-b | inventory extractor · AI lenses · verifier · canaries · decoys · ledger ✔ · fingerprints ✔ · trust metrics ✔ · lens packs · budget | AI-lens recall, precision, fingerprint stability gates |
 | 0.1-c | fix loop · guards · board (mock-ups agreed) · exports · `check` · fast first run · batch decisions | fix-loop gate, field test, all gates |
 
 Later: 0.2 baseline comparison (Argos-style flake handling), fake sessions + synthetic data (Supabase first),

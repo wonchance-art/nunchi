@@ -7,6 +7,7 @@ import { discover } from './discover.mjs';
 import { buildSourceMap, affectedRoutes } from './sourcemap.mjs';
 import { startRun, finishRun, gcRuns, latestRun, workTree, ensureGitignore } from './runs.mjs';
 import { codeNavigations } from './flow.mjs';
+import { updateState, readState, readDecisions, writeDecision, readApproved, addApproved, view, groups as groupRows, titleOf, DECISIONS } from './ledger.mjs';
 import { execFileSync } from 'node:child_process';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -41,6 +42,15 @@ Usage:
                           (use 3 when the AI lenses will run: a capture without them gains nothing)
                           (tagged \`canary\` in manifest.json, listed in canaries.json, never in findings.json)
     exit code 3 when the run is not usable (login expired, app unreachable); the run is kept
+  nunchi findings [--rule <rule>] [--all] [--status open,to-fix,…] [--json]
+                                            What is open: one row per kind of defect; --rule lists its groups
+                                            (a group = one defect, however many screens it is on)
+  nunchi decide <id…> fix|keep|false-positive|hold|reopen [--reason …] [--note …]
+                                            Record a decision on a group or fingerprint (prefix of its id is enough).
+                                            keep needs --reason intended|out-of-scope; false-positive needs
+                                            --reason not-a-problem|wrong-place. Decisions are files under .nunchi/decisions/
+  nunchi approve <decision id…> | --all     Accept decisions that came through git (made on another machine)
+  nunchi trust [--json]                     Per-lens precision from your decisions (fix ÷ (fix + false positive))
   nunchi runs [--json]                      List captured runs (newest last) and which is latest
   nunchi gc [--keep 5]                      Delete old runs, keep the newest N and the latest
   nunchi map [--root <dir>] [--json]        Which source files each route renders (source ↔ scene map)
@@ -76,7 +86,9 @@ function parse(argv) {
     else if (a === '--no-browser') args.noBrowser = true;
     else if (a === '--root') args.root = argv[++i];
     else if (a === '--keep') args.keep = Number(argv[++i]);
-    else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since', '--run', '--vendor', '--record', '--canaries'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
+    else if (a === '--all') args.all = true;
+    else if (['--reason', '--note', '--run', '--status', '--rule'].includes(a)) args[a.slice(2)] = argv[++i];
+    else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since', '--vendor', '--record', '--canaries'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a === '--version' || a === '-v') args.version = true;
     else args._.push(a);
@@ -229,6 +241,8 @@ if (cmd === 'setup') {
     for (const f of r.findings) by[f.severity]++;
     if (!args.routes) { const { writeStable } = await import('./stable.mjs'); writeStable(join(out, 'source-map.json'), buildSourceMap(root, discover(root).routes)); }
     const final = run ? finishRun(runsDir, run.id) : out;
+    // fold the run into the local ledger state (what is open, fixed, back again)
+    if (run) updateState(join(nunchiDir, 'state', 'ledger.json'), { id: run.id, scope: runMeta.scope, health: r.manifest.health, findings: r.findings });
     const misses = r.manifest.scenes.reduce((n, x) => n + (x.replayMisses || 0), 0);
     const canaryCount = r.canaries ? r.canaries.planted.length : 0;
     const summary = { out: final, run: run?.id ?? null, health: r.manifest.health, scenes: r.manifest.scenes.length - canaryCount, canaries: canaryCount, network: r.run.network, replayMisses: misses, skipped, findings: by, seconds: Math.round(r.totalMs / 100) / 10 };
@@ -256,6 +270,75 @@ if (cmd === 'setup') {
   if (inside(resolve('.nunchi'), out)) ensureGitignore(resolve('.nunchi'));
   try { console.log(`saved login → ${await login({ url: target, out, browserPath: args.browserPath })} (owner-only, git-ignored)`); }
   catch (e) { console.error(e.code === 'NO_BROWSER' ? 'nunchi: ' + e.message : e.stack); process.exit(2); }
+} else if (['findings', 'decide', 'approve', 'trust'].includes(cmd)) {
+  const nunchiDir = resolve('.nunchi');
+  const stateFile = join(nunchiDir, 'state', 'ledger.json');
+  const decisionsDir = join(nunchiDir, 'decisions');
+  const approvedFile = join(nunchiDir, 'state', 'approved.json');
+  const state = readState(stateFile);
+  const rows = view(state, readDecisions(decisionsDir), readApproved(approvedFile));
+  const gs = groupRows(rows);
+  if (!Object.keys(state.items).length && cmd !== 'approve') { console.error('nunchi: nothing captured yet (run nunchi capture first)'); process.exit(1); }
+  if (cmd === 'findings') {
+    const want = args.status ? new Set(args.status.split(',')) : args.all ? null : new Set(['open', 'regressed', 'to-fix', 'mixed']);
+    const shown = gs.filter(g => (!want || want.has(g.status)) && (!args.rule || g.rule === args.rule));
+    const SEV = { blocker: 0, high: 1, medium: 2, low: 3 };
+    const kinds = [];
+    for (const g of shown) {
+      let k = kinds.find(x => x.rule === g.rule);
+      if (!k) kinds.push((k = { rule: g.rule, lens: g.lens, title: g.title, severity: g.severity, groups: 0, routes: new Set(), places: 0 }));
+      k.groups++; k.places += g.places; g.routes.forEach(r => k.routes.add(r));
+      if (SEV[g.severity] < SEV[k.severity]) k.severity = g.severity;
+    }
+    kinds.sort((a, b) => SEV[a.severity] - SEV[b.severity] || b.routes.size - a.routes.size || (a.rule < b.rule ? -1 : 1));
+    if (args.json) console.log(JSON.stringify({ run: state.runs[state.runs.length - 1], kinds: kinds.map(k => ({ ...k, routes: [...k.routes].sort() })), groups: shown }, null, 2));
+    else {
+      const count = st => rows.filter(r => r.status === st).length;
+      console.log(`run ${state.runs[state.runs.length - 1]} · ${rows.length} unique defects in ${gs.length} groups · open ${count('open') + count('regressed')} · to fix ${count('to-fix')} · fixed ${count('fixed')} · kept ${count('kept')} · dismissed ${count('dismissed')}`);
+      if (!args.rule) {
+        for (const k of kinds) console.log(`${k.severity.padEnd(7)} ${k.title} — ${k.groups} group(s) on ${k.routes.size || 'no'} screen(s), ${k.places} place(s)   nunchi findings --rule ${k.rule}`);
+        if (!kinds.length) console.log(want ? 'nothing open — `nunchi findings --all` lists everything' : 'no findings');
+      }
+      for (const g of args.rule ? shown : []) {
+        const where = g.routes.length > 1 ? `${g.routes.length} screens` : (g.routes[0] ?? 'whole app');
+        console.log(`${g.severity.padEnd(7)} ${g.title} — ${where}, ${g.places} place(s) [${g.status}]  ${g.group}`);
+        const ex = g.example;
+        console.log(`        ${g.rule} · e.g. ${ex.route ?? ''} ${ex.selector ?? ''}`.trimEnd());
+      }
+      if (args.rule && !shown.length) console.log(`no ${want ? 'open ' : ''}groups for ${args.rule}`);
+    }
+  } else if (cmd === 'decide') {
+    const [, ...rest] = args._;
+    const decision = rest.find(x => DECISIONS[x]);
+    const ids = rest.filter(x => !DECISIONS[x]);
+    if (!decision || !ids.length) { console.error('usage: nunchi decide <group or fingerprint id…> fix|keep|false-positive|hold|reopen [--reason …] [--note …]'); process.exit(1); }
+    const { execFileSync: run } = await import('node:child_process');
+    let by = process.env.USER || 'unknown';
+    try { by = run('git', ['config', 'user.name'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || by; } catch {}
+    const made = [];
+    for (const id of ids) {
+      const g = gs.filter(x => x.group.startsWith(id)), f = rows.filter(x => x.fp.startsWith(id));
+      if (g.length + f.length !== 1) { console.error(`nunchi: "${id}" matches ${g.length + f.length} groups/fingerprints; give more characters`); process.exit(1); }
+      const target = g.length ? { group: g[0].group } : { fp: f[0].fp };
+      try { made.push(writeDecision(decisionsDir, { target, decision, reason: args.reason || null, note: args.note || null, by })); }
+      catch (e) { console.error('nunchi: ' + e.message); process.exit(1); }
+    }
+    addApproved(approvedFile, made.map(d => d.id));
+    console.log(args.json ? JSON.stringify(made, null, 2) : made.map(d => `${d.decision} → ${d.target.group ? 'group ' + d.target.group : 'fingerprint ' + d.target.fp} (${d.id})`).join('\n'));
+  } else if (cmd === 'approve') {
+    const all = readDecisions(decisionsDir);
+    const approved = readApproved(approvedFile);
+    const pending = all.filter(d => !approved.has(d.id));
+    const ids = args.all ? pending.map(d => d.id) : args._.slice(1).filter(id => pending.some(d => d.id === id));
+    if (!ids.length) { console.log(pending.length ? `${pending.length} decision(s) from git wait for approval: nunchi approve <id…> or --all\n` + pending.map(d => `  ${d.id}  ${d.decision} ${d.target.group || d.target.fp} by ${d.by} at ${d.at}`).join('\n') : 'no decisions waiting for approval'); process.exit(0); }
+    addApproved(approvedFile, ids);
+    console.log(`approved ${ids.length} decision(s)`);
+  } else {
+    const { trust } = await import('./ledger.mjs');
+    const t = trust(rows, readDecisions(decisionsDir));
+    if (args.json) console.log(JSON.stringify(t, null, 2));
+    else for (const [lens, x] of Object.entries(t)) console.log(`${lens.padEnd(4)} precision ${x.precision === null ? '—' : Math.round(x.precision * 100) + '%'} (${x.fix} fix · ${x.falsePositive} false positive of the last ${x.window})${x.suspect ? '  SUSPECT: new findings need a closer look' : ''}  · fixed ${x.fixed}/${x.decidedFix}`);
+  }
 } else if (cmd === 'runs') {
   const { listRuns } = await import('./runs.mjs');
   const dir = resolve('.nunchi/runs');
