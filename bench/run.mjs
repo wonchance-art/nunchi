@@ -53,7 +53,7 @@ const capture = (label, harFrom) => {
   // Signed-in scenes use a saved session, as `nunchi login` would produce.
   writeFileSync(join(work, '.nunchi', 'auth.json'), JSON.stringify({ cookies: [{ name: 'pebble_session', value: 'demo', domain: '127.0.0.1', path: '/', expires: -1, httpOnly: false, secure: false, sameSite: 'Lax' }], origins: [] }));
   const t = Date.now();
-  const summary = JSON.parse(run('node', [CLI, 'capture', '--url', base, '--root', APP, '--samples', '.nunchi/samples.json', '--json'], { cwd: work }));
+  const summary = JSON.parse(run('node', [CLI, 'capture', '--url', base, '--root', APP, '--samples', '.nunchi/samples.json', '--canaries', '3', '--json'], { cwd: work }));
   return { work, out: summary.out, summary, seconds: Math.round((Date.now() - t) / 100) / 10 };
 };
 
@@ -81,11 +81,13 @@ const manifest = JSON.parse(readFileSync(join(a.out, 'manifest.json'), 'utf8'));
 const { findings } = JSON.parse(readFileSync(join(a.out, 'findings.json'), 'utf8'));
 const r = score(ANSWERS, manifest, findings);
 const when = new Date(Date.now() + 9 * 3600e3).toISOString().replace('T', ' ').slice(0, 16) + ' KST';
-const md = reportMarkdown(r, { app: ANSWERS.app, when, scenes: manifest.scenes.length, seconds: a.seconds, determinism, stability });
+const scenes = manifest.scenes.filter(s => s.canary === undefined).length;
+const canaries = manifest.scenes.length - scenes;
+const md = reportMarkdown(r, { app: ANSWERS.app, when, scenes, canaries, seconds: a.seconds, determinism, stability });
 rmSync(OUT, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 writeFileSync(join(OUT, 'report.md'), md);
-writeFileSync(join(OUT, 'report.json'), JSON.stringify({ ...r, determinism, stability, seconds: a.seconds, scenes: manifest.scenes.length }, null, 2) + '\n');
+writeFileSync(join(OUT, 'report.json'), JSON.stringify({ ...r, determinism, stability, seconds: a.seconds, scenes, canaries }, null, 2) + '\n');
 console.log(md);
 const pass = r.ruleRecall.rate === 1 && r.cleanFalsePositives.perScene <= 0.1 && (!twice || (determinism.startsWith('identical') && stability.rate >= 0.95));
 process.exit(pass ? 0 : 1);

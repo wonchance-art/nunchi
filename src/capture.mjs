@@ -1,7 +1,7 @@
 // Deterministic capture: one browser, one fresh context per scene × viewport.
 // Writes the evidence pack (spec §2.4) and returns rule findings. Wall-clock timings go to
 // timing.json only, so every other file is byte-identical across runs of the same build.
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
@@ -11,6 +11,7 @@ import { buildFlow } from './flow.mjs';
 import { buildSystem, parityFindings } from './system.mjs';
 import { annotate } from './ledger.mjs';
 import { writeStable, sha } from './stable.mjs';
+import { canaryMutate, canarySeed, plantCanaries } from './canary.mjs';
 import { FONT_HOSTS, BACKEND_SUFFIXES, isBackendHost, isDataRequest, requestKey, forceResponse, Recording, redactUrl, redactText } from './network.mjs';
 
 const require = createRequire(import.meta.url);
@@ -184,6 +185,11 @@ async function captureOne(browser, base, scene, opts) {
     if (scene.state !== 'offline') await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {});
   }
 
+  // ── canary hook (spec §4 H2) ── only for canary scenes: plant a known defect after load and before
+  // anything is measured, so every evidence file shows it. No suitable element → the copy is dropped.
+  const canary = opts.canaryKinds ? await page.evaluate(canaryMutate, { kinds: opts.canaryKinds }).catch(() => null) : undefined;
+  if (opts.canaryKinds && !canary) { release(); await ctx.close(); return { canary: null }; }
+  // ── end canary hook ──
   let measure = await page.evaluate(collect).catch(e => { errors.push('collect: ' + e.message); return null; });
   // Chromium's own error page (connection refused, empty error response) is not the app's screen.
   const browserErrorPage = !!measure?.browserErrorPage;
@@ -265,7 +271,7 @@ async function captureOne(browser, base, scene, opts) {
       findings: findings.length, dataRequests: dataKeys.length, replayMisses: new Set(drift).size,
       textHash: measure ? sha(measure.mainText) : null,
     },
-    findings, scripts, links: measure ? measure.links : [],
+    findings, scripts, links: measure ? measure.links : [], ...(canary ? { canary } : {}),
     styles: measure ? measure.styles : [], controls: measure ? { visible: measure.controls, hidden: measure.hiddenControls } : null,
   };
 }
@@ -314,7 +320,8 @@ export function runHealth(entries, findings) {
 
 // scenes: [{ route, path, person }] → expanded per viewport and per forced state here.
 // network: 'auto' (replay if a recording exists, else record) | 'record' | 'replay' | 'live'.
-export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {}, flow: flowOpts = {} }) {
+// canaries: how many canary scenes to plant (spec §4 H2); 0 = none (the default for the API; the CLI plants 3).
+export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {}, flow: flowOpts = {}, canaries = 0 }) {
   if (scenes.some(s => s.person === 'signed-in') && !(storageState && existsSync(storageState))) {
     throw Object.assign(new Error(`signed-in scenes need a saved login state, but ${storageState || '(none)'} does not exist`), { code: 'NO_AUTH' });
   }
@@ -380,7 +387,29 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   findings.push(...secretFindings(scripts));
   const order = { blocker: 0, high: 1, medium: 2, low: 3 };
   findings.sort((a, b) => order[a.severity] - order[b.severity] || String(a.scene).localeCompare(String(b.scene)) || a.rule.localeCompare(b.rule) || String(a.selector).localeCompare(String(b.selector)));
-  const manifest = { schema: 1, health, baseUrl, viewports: viewports.map(v => ({ id: v, ...VIEWPORTS[v] })), clock: new Date(clock).toISOString(), states, scenes: entries };
+  // ── canaries (spec §4 H2) ── copies of a few captured scenes with a planted defect, captured after every
+  // finding above is computed: they appear in the manifest (tagged `canary`, `of`) and in canaries.json,
+  // never in findings.json, flow, the design system or run health.
+  let canaryEntries = []; let canaryFile = null;
+  if (canaries > 0) {
+    const seed = canarySeed({ routes: [...new Set(scenes.map(s => s.route || s.path))], persons, viewports, states });
+    const cb = await launch({ browserPath, baseUrl, allowHosts });
+    try {
+      const r = await plantCanaries({ entries, count: canaries, seed, tryScene: async (base, kinds, id) => {
+        const s = scenes.find(x => (x.route || x.path) === base.route && (x.person || 'guest') === base.person);
+        const scene = { ...s, vp: base.viewport, person: base.person, state: base.state, id };
+        const mode = Object.keys(recordings[base.person].entries).length ? 'replay' : 'live';
+        const c = await captureOne(cb, baseUrl, scene, { out, clock, locale, timezone, timeout, storageState: base.person === 'signed-in' ? storageState : undefined, strictPath, allowHosts, mode, loader: recordings[base.person].loader(), canaryKinds: kinds });
+        if (!c.canary) { rmSync(join(out, id), { recursive: true, force: true }); return null; }
+        c.canary.before = redactText(c.canary.before); c.canary.after = redactText(c.canary.after);
+        return c;
+      } });
+      canaryEntries = r.entries;
+      canaryFile = { schema: 1, note: 'answer key for the AI hunt: never give this file to a hunter', seed, requested: canaries, planted: r.canaries };
+    } finally { await cb.close(); }
+  }
+  // ── end canaries ──
+  const manifest = { schema: 1, health, baseUrl, viewports: viewports.map(v => ({ id: v, ...VIEWPORTS[v] })), clock: new Date(clock).toISOString(), states, scenes: canaryEntries.length ? [...entries, ...canaryEntries] : entries };
   // How this run got its data (record vs replay) is run metadata, not evidence: kept beside timing.
   const runInfo = { ...runMeta, network: modes, health };
   writeStable(join(out, 'manifest.json'), manifest);
@@ -392,5 +421,6 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   writeStable(join(out, 'design-system.json'), system);
   writeStable(join(out, 'timing.json'), { totalMs: Date.now() - t0, scenes: timing });
   writeStable(join(out, 'run.json'), runInfo);
-  return { manifest, findings, flow, system, run: runInfo, totalMs: Date.now() - t0 };
+  if (canaryFile) writeStable(join(out, 'canaries.json'), canaryFile);
+  return { manifest, findings, flow, system, run: runInfo, totalMs: Date.now() - t0, ...(canaryFile ? { canaries: canaryFile } : {}) };
 }

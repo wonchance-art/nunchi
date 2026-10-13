@@ -79,9 +79,30 @@ After step 5, when the user wants the deeper sweep. The engine cuts the work and
    ```
    It writes `ai-findings.json` and `coverage.json` into the run. A unit is *seen* only when every item has an
    accepted answer; read `rejected` in ai-findings.json, re-check those against the evidence, and record again.
-5. Report AI findings as **claimed, not verified** (the verifier comes later), apart from rule findings, each with
+5. Report AI findings as **claimed, not verified** until the verifier below has run, apart from rule findings, each with
    scene, selector or file:line and the claim. Say which cells are not seen and why (budget, incomplete, not
    answered, the scene was not captured).
+
+## Canaries and the verifier (AI findings only)
+
+When the AI lenses will run, capture with `--canaries 3`: it plants known defects in copies of a few scenes
+(manifest entries tagged `canary`, ids ending `.canary-<k>`; a plain capture plants none). They are part of the AI hunt like any other scene. Never open
+`canaries.json` or `verify-key.json` while hunting or verifying: they are answer keys. Never tell a hunter
+which scenes are canaries, and do not put a canary copy in the same work unit as the scene it copies.
+
+6. After the hunt has written `ai-findings.json`, run `canaries --score`. Report the hit rate per lens as an
+   upper bound of recall ("≤ 67%"), never as recall. A missed canary means the batch that hunted it is not
+   *seen*: hunt that batch again before reporting its cells as covered.
+7. `verify --plan` writes `verify-packets.json`: one packet per claimed AI finding (the claim and its evidence
+   files, without the hunter's reasoning), with false claims mixed in. Rule-lens findings are not in it.
+8. Start a **fresh context** (a new subagent that has not seen the hunt) as the verifier. Give it only
+   `verify-packets.json`, the files each packet names and the lens definitions. It may re-capture a scene.
+   For every packet it answers `{ "packet", "verdict": "confirmed" | "rejected" | "insufficient",
+   "severity": "blocker" | "high" | "medium" | "low", "reason": "<one line>" }`; write the list to a file.
+9. `verify --record <that file>`. Add `--vendor <name>` only when the verifier really was another vendor's
+   model and the user opted into that; otherwise it is recorded as *same-model check*. If it prints `SUSPECT`
+   (decoys passed through above 10%), say so and verify again in a new fresh context; do not present that
+   run's confirmed findings as verified.
 
 ## Rules
 

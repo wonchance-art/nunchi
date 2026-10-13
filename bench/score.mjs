@@ -30,7 +30,8 @@ export function score(answers, manifest, findings) {
   }
   const clean = new Set(answers.clean || []);
   const cleanFindings = findings.filter(f => clean.has(f.route));
-  const cleanScenes = manifest.scenes.filter(s => clean.has(s.route) && s.status === 'captured').length;
+  // canary copies (spec §4 H2) carry planted defects on purpose: they are not clean scenes
+  const cleanScenes = manifest.scenes.filter(s => clean.has(s.route) && s.status === 'captured' && s.canary === undefined).length;
   const unexpected = findings.filter(f => !used.has(f) && !clean.has(f.route));
   const groups = {};
   for (const f of unexpected) { const k = `${f.rule} ${f.route ?? ''}`.trim(); groups[k] = (groups[k] || 0) + 1; }
@@ -48,7 +49,7 @@ export function reportMarkdown(r, meta) {
   const lines = [
     `# nunchi benchmark — ${meta.app}`,
     '',
-    `${meta.when} · ${meta.scenes} scenes · ${meta.seconds}s${meta.determinism ? ` · determinism: ${meta.determinism}` : ''}`,
+    `${meta.when} · ${meta.scenes} scenes${meta.canaries ? ` (+ ${meta.canaries} canary copies)` : ''} · ${meta.seconds}s${meta.determinism ? ` · determinism: ${meta.determinism}` : ''}`,
     '',
     '## Gates (0.1-a)',
     '',
