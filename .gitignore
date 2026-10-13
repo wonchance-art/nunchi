@@ -7,3 +7,4 @@ bench/pebble/node_modules/
 bench/pebble/.next/
 bench/pebble/next-env.d.ts
 bench/out/
+.claude/worktrees/
