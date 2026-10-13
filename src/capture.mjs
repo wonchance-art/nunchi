@@ -51,6 +51,11 @@ export async function launch({ browserPath, baseUrl, allowHosts = [] } = {}) {
     return await chromium.launch({ executablePath, args: [
       `--proxy-pac-url=${pac}`,
       '--font-render-hinting=none', '--disable-gpu', '--hide-scrollbars',
+      // deterministic raster: same page, same pixels (tiling order and partial raster otherwise
+      // leave 1–3 level differences on anti-aliased edges between runs)
+      '--deterministic-mode', '--run-all-compositor-stages-before-draw', '--disable-partial-raster',
+      '--disable-skia-runtime-opts', '--disable-threaded-animation', '--disable-threaded-scrolling',
+      '--disable-checker-imaging', '--disable-lcd-text', '--force-color-profile=srgb',
       '--disable-background-networking', '--disable-component-update', '--disable-domain-reliability',
       '--disable-sync', '--no-pings', '--no-first-run', '--disable-default-apps', '--safebrowsing-disable-auto-update',
       '--disable-features=OptimizationHints,MediaRouter,Translate,AutofillServerCommunication,CertificateTransparencyComponentUpdater',
@@ -119,7 +124,11 @@ async function captureOne(browser, base, scene, opts) {
     const u = new URL(res.url());
     if (u.origin !== origin) return;
     const req = res.request();
-    requests.push({ path: u.pathname + u.search, method: req.method(), status: res.status(), sameOrigin: true, document: req.resourceType() === 'document', write: !['GET', 'HEAD', 'OPTIONS'].includes(req.method()) });
+    // Router prefetches (Next.js RSC, <link rel=prefetch>) depend on scrolling and idle time,
+    // not on the screen: kept out of the evidence so it stays comparable.
+    const h = req.headers();
+    if (u.searchParams.has('_rsc') || h.rsc === '1' || h['next-router-prefetch'] || /prefetch/i.test(h['sec-purpose'] || h.purpose || '')) return;
+    requests.push({ path: u.pathname + u.search, method: req.method(), status: res.status(), sameOrigin: true, type: req.resourceType(), document: req.resourceType() === 'document', write: !['GET', 'HEAD', 'OPTIONS'].includes(req.method()) });
     if (req.resourceType() === 'script') { try { scripts.push({ path: u.pathname, body: await res.text() }); } catch {} }
   });
 
@@ -162,6 +171,9 @@ async function captureOne(browser, base, scene, opts) {
   const dir = join(opts.out, scene.id);
   const top = await page.screenshot({ type: 'jpeg', quality: 70, animations: 'disabled', caret: 'hide' }).catch(e => { errors.push('top: ' + e.message); return null; });
   const full = await page.screenshot({ type: 'jpeg', quality: 70, fullPage: true, animations: 'disabled', caret: 'hide' }).catch(e => { errors.push('full: ' + e.message); return null; });
+  // Freeze what was seen at capture time; held (slow) requests released afterwards are not evidence.
+  const seen = requests.slice();
+  const seenErrors = pageErrors.slice(); const seenDialogs = nativeDialogs.slice();
   release();
   await ctx.close();
 
@@ -169,8 +181,8 @@ async function captureOne(browser, base, scene, opts) {
   const ev = {
     scene: scene.id, route: scene.route, path: scene.path, viewport: scene.vp, person: scene.person, state: scene.state,
     status, finalPath, redirected: finalPath !== null && finalPath.split('?')[0] !== scene.path.split('?')[0],
-    errors, pageErrors, nativeDialogs,
-    requests: requests.sort((a, b) => (a.path + a.method < b.path + b.method ? -1 : 1)),
+    errors, pageErrors: seenErrors, nativeDialogs: seenDialogs,
+    requests: seen.sort((a, b) => (a.path + a.method < b.path + b.method ? -1 : 1)),
     blocked: [...blocked].sort(), axe: axe.sort((a, b) => (a.id < b.id ? -1 : 1)),
     measure,
   };
@@ -185,8 +197,13 @@ async function captureOne(browser, base, scene, opts) {
   }
   const dataKeys = [...new Set(data)].sort();
   writeStable(join(dir, 'network.json'), { requests: ev.requests, blocked: ev.blocked, data: dataKeys, replayMisses: [...new Set(drift)].sort() });
-  writeStable(join(dir, 'console.json'), { pageErrors, nativeDialogs, errors });
-  const findings = measure ? ruleFindings(ev) : [];
+  writeStable(join(dir, 'console.json'), { pageErrors: seenErrors, nativeDialogs: seenDialogs, errors });
+  // A redirected scene shows another route's page: that page is judged in its own scene. What a
+  // redirect itself says is judged here: a signed-in person bounced to a sign-in page lost the session.
+  const bounced = ev.redirected && scene.person === 'signed-in' && /(^|\/)(log-?in|sign-?in|auth)(\/|$)/i.test(finalPath || '');
+  const findings = !measure ? [] : ev.redirected
+    ? (bounced ? [{ lens: 'L3', rule: 'signed-in-bounced', severity: 'high', scene: scene.id, route: scene.route, viewport: scene.vp, selector: null, box: null, evidence: { finalPath } }] : [])
+    : ruleFindings(ev);
   writeStable(join(dir, 'measure.json'), {
     status, finalPath, redirected: ev.redirected, axe: ev.axe,
     ...(measure ? { scrollWidth: measure.scrollWidth, scrollHeight: measure.scrollHeight, viewport: measure.viewport, clsBand: measure.clsBand, fonts: measure.fonts, clipped: measure.clipped, images: measure.images, h1: measure.h1, title: measure.title } : {}),
@@ -274,9 +291,12 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   findings.push(...secretFindings(scripts));
   const order = { blocker: 0, high: 1, medium: 2, low: 3 };
   findings.sort((a, b) => order[a.severity] - order[b.severity] || String(a.scene).localeCompare(String(b.scene)) || a.rule.localeCompare(b.rule) || String(a.selector).localeCompare(String(b.selector)));
-  const manifest = { schema: 1, baseUrl, viewports: viewports.map(v => ({ id: v, ...VIEWPORTS[v] })), clock: new Date(clock).toISOString(), network: modes, states, scenes: entries };
+  const manifest = { schema: 1, baseUrl, viewports: viewports.map(v => ({ id: v, ...VIEWPORTS[v] })), clock: new Date(clock).toISOString(), states, scenes: entries };
+  // How this run got its data (record vs replay) is run metadata, not evidence: kept beside timing.
+  const runInfo = { network: modes };
   writeStable(join(out, 'manifest.json'), manifest);
   writeStable(join(out, 'findings.json'), { schema: 1, findings });
   writeStable(join(out, 'timing.json'), { totalMs: Date.now() - t0, scenes: timing });
-  return { manifest, findings, totalMs: Date.now() - t0 };
+  writeStable(join(out, 'run.json'), runInfo);
+  return { manifest, findings, run: runInfo, totalMs: Date.now() - t0 };
 }

@@ -23,7 +23,8 @@
   },
   "scripts": {
     "test": "node --test",
-    "validate:plugin": "claude plugin validate --strict ."
+    "validate:plugin": "claude plugin validate --strict .",
+    "bench": "node bench/run.mjs --twice"
   },
   "keywords": [
     "ui",
