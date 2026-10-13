@@ -410,6 +410,262 @@
       "rule": "unreachable-route",
       "route": "/reports",
       "what": "no link or navigation leads to the reports page (not seeded on purpose: found by L3 on 2026-10-13 KST and confirmed in the source)"
+    },
+    {
+      "id": "P42",
+      "lens": "L1",
+      "rule": null,
+      "route": "/app/tasks/[id]",
+      "what": "the attached photo (a round wheel) is squashed to 280×64",
+      "ai": {
+        "match": [
+          "photo",
+          "image",
+          "wheel",
+          "squash",
+          "stretch",
+          "distort"
+        ]
+      }
+    },
+    {
+      "id": "P43",
+      "lens": "L1",
+      "rule": null,
+      "route": "/app/archive",
+      "what": "an 'Archived' stamp sits on top of each archived item's title and hides its first words",
+      "ai": {
+        "match": [
+          "archived",
+          "overlap",
+          "stamp",
+          "hides",
+          "covers"
+        ]
+      }
+    },
+    {
+      "id": "P44",
+      "lens": "L1",
+      "rule": null,
+      "route": "/app/settings",
+      "what": "'Connected apps' renders as a default bullet list in Times New Roman with a browser-blue link",
+      "ai": {
+        "match": [
+          "connected apps",
+          "unstyled",
+          "serif",
+          "times",
+          "bullet",
+          "browser"
+        ]
+      }
+    },
+    {
+      "id": "P45",
+      "lens": "L2",
+      "rule": null,
+      "route": "/app/tasks/[id]",
+      "what": "a failed load leaves 'Loading task…' on screen for ever",
+      "ai": {
+        "states": [
+          "error",
+          "offline"
+        ],
+        "rules": [
+          "L2.endless-loading"
+        ],
+        "match": [
+          "loading task"
+        ]
+      }
+    },
+    {
+      "id": "P46",
+      "lens": "L2",
+      "rule": null,
+      "route": "/app/notes",
+      "what": "the empty notes screen says 'No notes yet.' and offers no way to write one",
+      "ai": {
+        "states": [
+          "empty"
+        ],
+        "rules": [
+          "L2.next-step"
+        ]
+      }
+    },
+    {
+      "id": "P47",
+      "lens": "L4",
+      "rule": null,
+      "route": "/app/archive",
+      "what": "'Restore all' uses #2f5e52, one step off the brand green #2f5d50",
+      "ai": {
+        "match": [
+          "restore all",
+          "2f5e52",
+          "47, 94, 82"
+        ]
+      }
+    },
+    {
+      "id": "P48",
+      "lens": "L4",
+      "rule": null,
+      "route": "/app/settings",
+      "what": "the Daily reminder input is 36px with a 2px radius and a different border, unlike every other input",
+      "ai": {
+        "match": [
+          "reminder",
+          "08:30"
+        ]
+      }
+    },
+    {
+      "id": "P49",
+      "lens": "L4",
+      "rule": null,
+      "route": "/app",
+      "what": "one dashboard card (Weekly review) has its own radius, padding and fill",
+      "ai": {
+        "match": [
+          "weekly review"
+        ]
+      }
+    },
+    {
+      "id": "P50",
+      "lens": "L5",
+      "rule": null,
+      "route": "/app/notes",
+      "what": "the Notes screen calls the same things 'memos'",
+      "ai": {
+        "match": [
+          "memo"
+        ]
+      }
+    },
+    {
+      "id": "P51",
+      "lens": "L6",
+      "rule": null,
+      "route": "/app/tasks/[id]",
+      "what": "internal sync metadata 'rev 7f3a9c2e · etag W/\"t1-42\"' is shown to the user",
+      "ai": {
+        "match": [
+          "rev 7f3a9c2e",
+          "etag",
+          "7f3a9c2e",
+          "synced"
+        ]
+      }
+    },
+    {
+      "id": "P52",
+      "lens": "L7",
+      "rule": null,
+      "route": "/app",
+      "what": "the private dashboard shows marketing copy 'Join 12,000+ people'",
+      "ai": {
+        "match": [
+          "12,000",
+          "join"
+        ]
+      }
+    },
+    {
+      "id": "P53",
+      "lens": "L7",
+      "rule": null,
+      "route": "/app/settings",
+      "what": "an open 'Debug' panel dumps the session and profile as JSON",
+      "ai": {
+        "match": [
+          "debug",
+          "json"
+        ]
+      }
+    },
+    {
+      "id": "P54",
+      "lens": "L9",
+      "rule": null,
+      "route": "/app/archive",
+      "what": "'Empty archive' deletes every archived task with no confirm and no undo",
+      "ai": {
+        "match": [
+          "empty archive"
+        ]
+      }
+    },
+    {
+      "id": "P55",
+      "lens": "L9",
+      "rule": null,
+      "route": "/app/tasks/[id]",
+      "what": "the Details field has no draft or autosave, and 'Back to tasks' sits beside it",
+      "ai": {
+        "rules": [
+          "L9.input-lost-on-leave"
+        ],
+        "match": [
+          "details",
+          "back to tasks"
+        ]
+      }
+    },
+    {
+      "id": "P56",
+      "lens": "L10",
+      "rule": null,
+      "route": "/app/tasks/[id]",
+      "what": "on the phone a fixed 120px tip bar covers the bottom of the Details field and the Save button",
+      "ai": {
+        "viewports": [
+          "m"
+        ],
+        "rules": [
+          "L10.fixed-covers-content"
+        ],
+        "match": [
+          "tip",
+          "swipe"
+        ]
+      }
+    },
+    {
+      "id": "P57",
+      "lens": "L10",
+      "rule": null,
+      "route": "/login",
+      "what": "on the phone a 640px promo block pushes the Login button out of the first view",
+      "ai": {
+        "viewports": [
+          "m"
+        ],
+        "rules": [
+          "L10.primary-not-in-first-view"
+        ],
+        "match": [
+          "login"
+        ]
+      }
+    },
+    {
+      "id": "P58",
+      "lens": "L10",
+      "rule": null,
+      "route": "/",
+      "what": "on the phone the cookie banner covers the footer links (Privacy, Terms, Help)",
+      "ai": {
+        "viewports": [
+          "m"
+        ],
+        "match": [
+          "cookie"
+        ]
+      }
     }
   ]
 }

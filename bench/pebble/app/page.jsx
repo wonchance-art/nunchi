@@ -21,6 +21,10 @@ export default function Home() {
           <Link href="/help">Help</Link>
         </footer>
       </div>
+      <div className="cookies" role="region" aria-label="Cookies">
+        <p>We use cookies to keep you signed in and to count visits. You can change this at any time in your browser.</p>
+        <button className="btn" type="button">Accept</button>
+      </div>
     </>
   );
 }

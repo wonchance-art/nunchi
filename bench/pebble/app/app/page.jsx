@@ -11,12 +11,13 @@ export default function Dashboard() {
   return (
     <>
       <h1>Today</h1>
+      <p>Join 12,000+ people planning calmer days with Pebble.</p>
       {failed && <p>Something went wrong.</p>}
       {data && <p>Completed: {Math.round((done / data.total) * 100)}%</p>}
       <div className="grid">
         <div className="card"><h2>Streaks</h2><p>Coming soon</p></div>
         <div className="card"><h2>Shared lists</h2><p>Coming soon</p></div>
-        <div className="card"><h2>Weekly review</h2><p>Coming soon</p></div>
+        <div className="card" style={{ borderRadius: 18, padding: 28, background: '#f3f5f4', borderColor: '#f3f5f4' }}><h2>Weekly review</h2><p>Coming soon</p></div>
       </div>
     </>
   );

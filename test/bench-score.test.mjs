@@ -61,3 +61,12 @@ test('scoreAi: lens, route, state, and a checklist id or a matching word; canary
   assert.deepEqual(r.byLens, { L6: { seeded: 1, found: 1 }, L2: { seeded: 1, found: 0 }, L9: { seeded: 1, found: 0 } });
   assert.equal(r.cleanClaims.length, 1);
 });
+
+test('scoreAi: a seed limited to the phone is not found by a desktop claim', async () => {
+  const { scoreAi } = await import('../bench/score.mjs');
+  const m = { scenes: [{ id: 'login.guest.normal.m', route: '/login', state: 'normal' }, { id: 'login.guest.normal.d', route: '/login', state: 'normal' }] };
+  const ans = { defects: [{ id: 'S', lens: 'L10', rule: null, route: '/login', ai: { viewports: ['m'], rules: ['L10.primary-not-in-first-view'] } }] };
+  const c = viewport => ({ source: 'ai', status: 'claimed', scene: `login.guest.normal.${viewport}`, route: '/login', viewport, lens: 'L10', rule: 'L10.primary-not-in-first-view', selector: 'button', evidence: { claim: 'below the fold' } });
+  assert.equal(scoreAi(ans, m, [c('d')]).found, 0);
+  assert.equal(scoreAi(ans, m, [c('m')]).found, 1);
+});

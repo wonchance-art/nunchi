@@ -580,6 +580,17 @@ odd one out. These changes are not re-measured yet.
 seeds per lens, none for L1, L4 and L10, all on the app the lenses were written against. Still needed: ≥3 AI seeds
 per lens, the held-out benchmark (§8), and the precision gate (a human-labelled sample of 50 verified findings).
 
+*Seeds added (2026-10-13 KST, P42–P58):* every AI lens now has three seeds in the benchmark app, 24 in all, none of
+them caught by a rule or computed lens (bench: rule recall 34/34, 0 false positives on clean scenes, identical
+evidence). L1: a squashed photo, an "Archived" stamp over item titles, an unstyled "Connected apps" list; L2: a
+"Loading task…" that never ends after a failure, an empty notes screen with no way to write one; L4: a button one
+step off the brand green, an input with its own height and border, one dashboard card styled unlike the others; L5:
+"memos" for notes; L6: sync metadata ("rev 7f3a9c2e · etag …") on screen; L7: marketing numbers on the private
+dashboard, an open debug JSON panel; L9: "Empty archive" without confirm or undo, a details field with no draft
+beside "Back to tasks"; L10 (phone): a fixed tip bar over Save, a promo block that pushes Login below the first
+view, a cookie banner over the footer links. Each has an `ai` match hint (lens, route, state or viewport, checklist
+id or words). Not re-measured yet; the inventory does not yet treat "empty" as a destructive verb (P54).
+
 ## 10. Open items
 
 - *Resolved 2026-10-13 KST:* a plugin installed from git has no `node_modules`, so capture could not start.
