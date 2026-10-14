@@ -30,7 +30,7 @@ import { BASE_CSS, BOARD_CSS } from './look.mjs';
 import { decidedText, CAP_MS } from './shared.mjs';
 import * as P from '../project.mjs';
 import { DECISIONS, protectOf, newId } from '../ledger.mjs';
-import { listRuns } from '../runs.mjs';
+import { listRuns, workTree } from '../runs.mjs';
 import { readGeneration } from '../state.mjs';
 import { readManifest, sceneDir } from '../hunt.mjs';
 import { writeStable, privateDir, sha } from '../stable.mjs';
@@ -331,9 +331,15 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     } catch { return fail(res, 404, 'not found'); } finally { if (fd !== undefined) closeSync(fd); }
   }
 
+  // design §3.4 words: "Screens are from before your latest edits · Re-check" when the working tree is not the one the
+  // latest run captured (asked of git at most every 10 s; no git, no word)
+  let treeMemo = { at: -Infinity, tree: null };
+  const treeNow = () => { const t = Date.now(); if (t - treeMemo.at > 10e3) treeMemo = { at: t, tree: workTree(project).tree }; return treeMemo.tree; };
   function summaryOut() {
     const m = model();
     const s = m.summary;
+    const runTree = m.latestEv?.meta?.tree ?? null;
+    const now = runTree ? treeNow() : null;
     const profile = checkProfile(project);
     let approved = false;
     try { approved = !!profile && approvedProfiles(scriptsApprovedPath(stateDir)).has(profile.hash); } catch {}
@@ -351,6 +357,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
       ai: s.ai, now: nowLines,
       checks: profile ? { requested, approved, profile: { hash: profile.hash, scripts: Object.fromEntries(Object.entries(profile.scripts).map(([k, v]) => [safe(k, 40), safe(v, 400)])), files: Object.fromEntries(Object.entries(profile.files).map(([k, v]) => [safe(k, 120), v ? safe(v, 64) : null])), packageManager: profile.packageManager ? safe(profile.packageManager, 80) : null } } : null,
       counts: { groups: m.groups.length, screens: m.latestEv?.scenes.length || 0 },
+      treeChanged: !!(runTree && now && now !== runTree),
       warnings: [...warnings].map(w => safe(w, 400)),
     };
   }

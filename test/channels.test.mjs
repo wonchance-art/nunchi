@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as L from '../src/ledger.mjs';
 import * as P from '../src/project.mjs';
@@ -14,7 +14,7 @@ import { stableJson } from '../src/stable.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const cli = (cwd, ...a) => new Promise(res => execFile('node', [CLI, ...a], { cwd, encoding: 'utf8' }, (err, stdout, stderr) => res({ code: err ? err.code : 0, stdout, stderr })));
-const decisionFiles = nunchi => readdirSync(join(nunchi, 'decisions'), { recursive: true }).map(String).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(nunchi, 'decisions', f), 'utf8')));
+const decisionFiles = nunchi => { try { return readdirSync(join(nunchi, 'decisions'), { recursive: true }).map(String).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(nunchi, 'decisions', f), 'utf8'))); } catch (e) { if (e.code === 'ENOENT') return []; throw e; } };
 const groupOf = (led, rule) => P.ledgerView(led).groups.find(g => g.rule === rule);
 const sum = led => { const { rows, groups } = P.ledgerView(led); return summary({ state: led.state, rows, groups, stream: led.st.root.stream, runsDir: led.st.runsDir }); };
 
@@ -170,4 +170,29 @@ test('summary: findings --json and the summary agree, deterministically (the sam
   assert.equal(one.bySeverity.blocker, 1);
   assert.equal(one.health.scenes.notSeen, 1);
   assert.deepEqual(scene('/', 'guest', 'normal', 'd').id, '~.guest.normal.d');
+});
+
+// The person's own terminal (design §1 cli-tty): stdin and stdout TTYs plus the typed code. A pseudo-terminal stands in
+// for the person here (util-linux `script`); the deny hook keeps the agent from doing the same (test/deny-hook.test.mjs).
+const hasScript = (() => { try { return process.platform === 'linux' && execFileSync('script', ['--version'], { encoding: 'utf8' }).includes('util-linux'); } catch { return false; } })();
+test('channels: nunchi decide in a terminal shows a 4-character code; typed back it records cli-tty (a person), anything else records nothing', { skip: !hasScript && 'needs util-linux script (Linux)', timeout: 30000 }, async () => {
+  const p = smallProject();
+  const g = groupOf(P.loadLedger(p.nunchi, { root: p.root }), 'raw-error-text').group;
+  const typed = answer => new Promise(res => {
+    const c = spawn('script', ['-qfec', `node ${JSON.stringify(CLI)} decide ${g} keep --reason intended`, '/dev/null'], { cwd: p.root });
+    let out = '', sent = false;
+    c.stdout.on('data', d => { out += d; const m = /Type ([A-Z0-9]{4}) to confirm/.exec(out); if (m && !sent) { sent = true; c.stdin.write(`${answer ?? m[1]}\n`); } });
+    c.on('close', code => res({ code, out, code4: /Type ([A-Z0-9]{4})/.exec(out)?.[1] }));
+  });
+  const wrong = await typed('NOPE');
+  assert.equal(wrong.code, 1, wrong.out);
+  assert.match(wrong.code4, /^[ACDEFHJKMNPRTUVWXY34679]{4}$/);
+  assert.match(wrong.out, /not recorded/);
+  assert.equal(decisionFiles(p.nunchi).length, 0);
+  const right = await typed(null);
+  assert.equal(right.code, 0, right.out);
+  const [d] = decisionFiles(p.nunchi);
+  assert.equal(d.channel, 'cli-tty');
+  const row = P.ledgerView(P.loadLedger(p.nunchi, { root: p.root })).rows.find(r => r.group === g);
+  assert.deepEqual([row.decision.channel, row.decision.human], ['cli-tty', true]);
 });

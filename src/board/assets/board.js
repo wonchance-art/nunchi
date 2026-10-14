@@ -58,6 +58,16 @@ const whereText = g => {
   if (g.where.whole) return g.where.whole;
   return `${g.where.routes.join(', ')}${g.where.more ? ` +${g.where.more} more` : ''}${g.screens ? ` · ${W.plural(g.screens, 'screen')}` : ''}`;
 };
+// A decision's time as the person reads it: relative when recent, else local (the file keeps KST).
+function when(at) {
+  const t = Date.parse(at);
+  if (!Number.isFinite(t)) return at || '';
+  const s = Math.round((Date.now() - t) / 1000);
+  if (s >= 0 && s < 60) return 'just now';
+  if (s >= 0 && s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s >= 0 && s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return new Date(t).toLocaleString();
+}
 function announce(text) { const a = $('announce'); a.textContent = ''; setTimeout(() => { a.textContent = text; }, 30); }
 async function copy(text, btn) {
   try { await navigator.clipboard.writeText(text); if (btn) { const was = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = was; }, 1500); } announce('Copied'); }
@@ -251,7 +261,7 @@ function renderProgress(focus = false) {
   const handoff = s.handoff ? h('p', { class: 'handoff' }, s.handoff.text, copyButton(s.handoff.say, 'Copy “fix them”')) : null;
   const hero = h('section', { class: 'panel-box hero', 'aria-labelledby': 'h-progress' },
     h('div', { class: 'hero-top' }, h('div', null, h('p', { class: 'eyebrow' }, 'Ready to ship?'), h('h1', { id: 'h-progress' }, s.verdict.text)), decideBtn),
-    handoff, h('div', { class: 'tiles' }, tiles),
+    handoff, s.treeChanged ? h('p', { class: 'banner banner-warn', role: 'note' }, W.WORDS['tree-differs'], ' — tell your AI “capture again”') : null, h('div', { class: 'tiles' }, tiles),
     h('p', { class: 'muted small' }, 'Open findings by severity: groups still open, to fix, or held for later. A group is one defect, however many screens show it.'),
     s.now.length ? h('ul', { class: 'now', 'aria-label': 'Now' }, s.now.map(l => h('li', null, l))) : null);
   const confirm = s.confirm.length ? confirmPanel(s.confirm) : null;
@@ -281,7 +291,7 @@ function renderProgress(focus = false) {
 
 // design §1: dismissals your AI recorded (or that came through git) count once you confirm them, in one batch
 function confirmPanel(list) {
-  const words = c => `${W.decidedText(c.decision, c.reason)} · ${c.channel === 'cli-agent' ? 'recorded by your AI' : c.channel === 'git' ? 'came through git' : 'recorded before nunchi knew who decided'}${c.by ? ` (${c.by}` : ''}${c.at ? `${c.by ? ', ' : ' ('}${c.at})` : c.by ? ')' : ''}`;
+  const words = c => `${W.decidedText(c.decision, c.reason)} · ${c.channel === 'cli-agent' ? 'recorded by your AI' : c.channel === 'git' ? 'came through git' : 'recorded before nunchi knew who decided'}${c.by ? ` (${c.by}` : ''}${c.at ? `${c.by ? ', ' : ' ('}${when(c.at)})` : c.by ? ')' : ''}`;
   const btn = h('button', { type: 'button', class: 'b b-primary' }, `Confirm ${list.length === 1 ? 'it' : `all ${list.length}`}`);
   btn.addEventListener('click', async () => {
     btn.disabled = true;
@@ -434,7 +444,7 @@ function renderFindings(focus = false) {
   main().replaceChildren(h('section', { id: 'findings', class: 'view', 'aria-labelledby': 'h-findings' }, h('div', { class: 'stack' },
     h('div', { class: 'head-row' }, h('div', null, h('h1', { id: 'h-findings' }, 'Findings'), h('p', { class: 'muted' }, `${W.plural(L.total, 'group')} · worst first; the list holds still while you decide`))),
     h('div', { class: 'controls' }, tabs, h('label', { class: 'field', for: 'group-by' }, 'Group by', groupSel), h('label', { class: 'field', for: 'search' }, 'Search', h('span', { class: 'kbd', 'aria-hidden': 'true' }, '/'), search)),
-    banner, selbar, listBox, unchecked, decisionBar(() => targetsNow()))));
+    banner, S.summary?.handoff ? h('p', { class: 'handoff' }, S.summary.handoff.text, copyButton(S.summary.handoff.say, 'Copy “fix them”')) : null, selbar, listBox, unchecked, decisionBar(() => targetsNow()))));
   if (focus) { const r = S.focus && $(`row-${S.focus}`); if (r) r.focus(); else focusHeading(); if (S.focus) S.clock.reset(S.focus, nowMs()); }
 }
 async function setStatus(k, { focusTab = false } = {}) {
@@ -649,7 +659,7 @@ function renderDetail(focus = false) {
     codeLine ? [h('dt', null, 'Code'), h('dd', null, h('span', { class: 'mono' }, codeLine), ' ', copyButton(codeLine, 'Copy path'), ' ', g.code.link ? h('a', { class: 'b b-quiet', href: g.code.link }, 'Open in VS Code') : null)] : null,
     g.secret ? [h('dt', null, 'Where'), h('dd', { class: 'mono' }, g.secret.where), h('dt', null, 'Kind'), h('dd', null, g.secret.kind)] : null,
     D.scenes.length ? [h('dt', null, 'Seen on'), h('dd', null, D.scenes.slice(0, 12).map((k, j) => [j ? h('br') : null, `${g.scenes[k]?.route || ''} · ${g.scenes[k]?.label || ''}`]), D.scenes.length > 12 ? [h('br'), h('span', { class: 'muted' }, `+${D.scenes.length - 12} more`)] : null)] : null,
-    decision ? [h('dt', null, 'Decision'), h('dd', null, `${W.decidedText(decision.decision, decision.reason)} · ${decision.by || ''} · ${decision.at || ''}`, decision.channelText ? h('span', { class: decision.human ? 'muted' : 'warn' }, ` · ${decision.channelText}`) : null)] : null,
+    decision ? [h('dt', null, 'Decision'), h('dd', null, `${W.decidedText(decision.decision, decision.reason)} · ${decision.by || ''} · ${when(decision.at)}`, decision.channelText ? h('span', { class: decision.human ? 'muted' : 'warn' }, ` · ${decision.channelText}`) : null)] : null,
     g.notes.map(n => [h('dt', null, 'Note'), h('dd', { class: 'warn' }, n)]),
     g.notLookedAt ? [h('dt', null, 'Looked at'), h('dd', { class: 'warn' }, `Not looked at since run ${g.notLookedAt}: no run since has captured every screen it was on, so it cannot be marked fixed.`)] : null,
     g.verification ? [h('dt', null, 'Reviewer'), h('dd', null, `${g.verification.status}${g.verification.by ? ` · ${g.verification.by}` : ''}${g.verification.suspect ? ' · suspect' : ''}`)] : null);
@@ -660,7 +670,7 @@ function renderDetail(focus = false) {
     g.evidence.map(e => [h('dt', null, e.k), h('dd', { class: e.mono ? 'mono' : '' }, e.v)]),
     h('dt', null, 'History'), h('dd', null, `first seen in run ${g.firstSeen || '—'} · last seen in run ${g.lastSeen || '—'}`)));
   const history = g.history.length ? h('section', { class: 'decide', 'aria-labelledby': 'h-history' }, h('h2', { id: 'h-history' }, 'Decisions'),
-    h('ul', { class: 'history' }, g.history.map(x => h('li', null, h('b', null, W.decidedText(x.decision, x.reason)), h('span', { class: 'muted small' }, `${x.by || ''} · ${x.at || ''}${x.channelText ? ` · ${x.channelText}` : ''}`), x.note ? h('span', { class: 'small' }, `“${x.note}”`) : null))),
+    h('ul', { class: 'history' }, g.history.map(x => h('li', null, h('b', null, W.decidedText(x.decision, x.reason)), h('span', { class: 'muted small' }, `${x.by || ''} · ${when(x.at)}${x.channelText ? ` · ${x.channelText}` : ''}`), x.note ? h('span', { class: 'small' }, `“${x.note}”`) : null))),
     reopen ? h('p', null, reopen) : null) : null;
   main().replaceChildren(h('article', { class: 'view detail', 'aria-labelledby': 'h-detail' },
     h('nav', { class: 'detail-nav', 'aria-label': 'Finding navigation' }, h('a', { href: '#/findings' }, '← All findings'),
