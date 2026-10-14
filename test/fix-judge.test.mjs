@@ -264,3 +264,27 @@ test('flaky rules: the group\'s own flaky defect gone in P1 is looked at once mo
   assert.equal(J.judgeRules({ group: g2, p0: view([D], [gf(D)]), p1: p1b, again: () => [pe] }).outcome, 'regression');
   assert.equal(J.judgeRules({ group: g2, p0: view([D], [gf(D)]), p1: p1b, again: () => null }).outcome, 'inconclusive');
 });
+
+test('old defects pair only by selector, name or an inserted wrapper; a swap or a replacement in place is a regression (round 2)', () => {
+  const G2 = G();
+  // swap: the fix removes another group's image-alt on img.hero and adds one on a far-away image
+  const a0 = fnd('image-alt', D, 'main > img.hero', { fp: 'IMG_HERO0000', box: [0, 0, 300, 200] });
+  const a1 = fnd('image-alt', D, 'footer > img.logo', { fp: 'IMG_LOGO0000', box: [900, 700, 40, 40] });
+  assert.equal(J.judgeRules({ group: G2, p0: view([D], [gf(D), a0]), p1: view([D], [a1]) }).outcome, 'regression');
+  // replacement in place: button.delete where button.close was, both too small, no names
+  const b0 = fnd('target-size-min', D, 'header > button.close', { fp: 'BTN_CLOSE000', box: [10, 10, 20, 20] });
+  const b1 = fnd('target-size-min', D, 'header > button.delete', { fp: 'BTN_DELETE00', box: [12, 10, 20, 20] });
+  assert.equal(J.judgeRules({ group: G2, p0: view([D], [gf(D), b0]), p1: view([D], [b1]) }).outcome, 'regression');
+  const id = (sel, extra = {}) => ({ rule: 'r', route: '/a', cell: 'c', norm: sel, tag: 'button', name: null, box: [0, 0, 30, 10], ...extra });
+  assert.equal(J.sameOldDefect(id('header > button.close'), id('header > button.delete')), false, 'tag and overlap alone are not the element');
+  assert.equal(J.sameOldDefect(id('main > button.save'), id('main > div.wrap > button.save', { box: [0, 40, 30, 10] })), true, 'a wrapper the fix inserted');
+  assert.equal(J.sameOldDefect(id('main > button.save'), id('aside > div > button.save')), false, 'another path to a same-named step');
+  assert.equal(J.sameOldDefect(id('x', { name: 'Save' }), id('y', { name: 'Save', box: [500, 500, 30, 10] })), true, 'the same accessible name');
+  assert.equal(J.wrapped('main > img', 'main > figure > img'), true);
+  assert.equal(J.wrapped('main > img', 'main > img'), false, 'not wrapped: the same');
+  // the last resort: the old element is still on the screen after the fix (by its selector), its finding matched nothing
+  const ctl = { [D.id]: [{ selector: 'header > button.close', tag: 'button', name: null, box: [10, 10, 20, 20] }] };
+  const moved = fnd('target-size-min', D, 'header > span > i', { fp: 'BTN_MOVED000', box: [40, 10, 20, 20] });
+  assert.equal(J.judgeRules({ group: G2, p0: view([D], [gf(D), b0], ctl), p1: view([D], [moved], ctl) }).outcome, 'fixed', 'paired: the old element is still there');
+  assert.equal(J.judgeRules({ group: G2, p0: view([D], [gf(D), b0], ctl), p1: view([D], [moved], {}) }).outcome, 'regression', 'never when the old element is gone');
+});

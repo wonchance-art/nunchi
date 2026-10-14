@@ -53,13 +53,24 @@ export function sameDefect(a, b) {
   if (a.norm && a.norm === b.norm && !(a.name && b.name && a.name !== b.name)) return true;
   return !!a.tag && a.tag === b.tag && !!a.name && a.name === b.name && iou(a.box, b.box) >= IOU_MIN;
 }
-// A defect another group had before the fix, seen again after it (M3 review): the fix may wrap it in a <div> (another
-// selector), rename the element, or leave it unnamed. The same rule and cell, and the same element by its normalised
-// selector or tag, overlapping (IoU ≥ 0.5), is the same defect, whatever the names say.
+// A defect another group had before the fix, seen again after it (M3 review, round 2): the same rule and cell, and the
+// same element by one of — its normalised selector (renamed, moved by padding); its accessible name (the same tag, or
+// a tag unknown); or a wrapper the fix inserted (the old selector's steps are a subsequence of the new one's, ending on
+// the same step). Never by tag and overlap alone: a button.delete where a button.close was is another element.
+const steps = norm => String(norm || '').split(/\s*[>+~]\s*|\s+/).filter(Boolean);
+export function wrapped(oldNorm, newNorm) {
+  const a = steps(oldNorm), b = steps(newNorm);
+  if (!a.length || b.length <= a.length || a[a.length - 1] !== b[b.length - 1]) return false;
+  let i = 0;
+  for (const s of b) if (s === a[i]) i++;
+  return i === a.length;
+}
 export function sameOldDefect(o, x) {
   if (sameDefect(o, x)) return true;
   if (o.rule !== x.rule || o.route !== x.route || o.cell !== x.cell) return false;
-  return ((!!o.norm && o.norm === x.norm) || (!!o.tag && o.tag === x.tag)) && iou(o.box, x.box) >= IOU_MIN;
+  if (o.norm && o.norm === x.norm) return true;
+  if (o.name && x.name && o.name === x.name && (!o.tag || !x.tag || o.tag === x.tag)) return true;
+  return wrapped(o.norm, x.norm);
 }
 // Whether a flaky rule's finding came back on its scene's second look (`again(sceneId)`: findings, null when the second
 // look did not see the screen, undefined when it was not captured again): true, false, or null (nothing can be said).
@@ -76,7 +87,7 @@ export function probeView({ manifest, findings }, controlsOf = () => []) {
     .map(f => ({ f, id: identityOf(f, byId.get(f.scene), controlsOf(f.scene)) }));
   const misses = scenes.reduce((n, s) => n + (Number(s.replayMisses) || 0), 0);
   const problems = (Array.isArray(manifest?.health?.problems) ? manifest.health.problems : []).map(p => String(p.status));
-  return { scenes, looks, all, misses, problems };
+  return { scenes, looks, all, misses, problems, controlsOf };
 }
 
 // What makes a probe unusable as a baseline (P0): a screen it did not capture (failed, redirected, an error page), a
@@ -130,10 +141,16 @@ export function judgeRules({ group, p0, p1, known = new Set(), again = () => und
       fresh.get(k).push(x);
     } else if (!known.has(x.f.fp)) unbaselined.push(x.f);
   }
-  // an old defect that moved past every element test (a wrapper's padding pushed it off its box): per cell and rule,
-  // as many new findings as old ones of other groups that vanished are the old ones moved, not new ones
+  // the last resort: an old defect whose element is still on the screen after the fix (by its selector or its name)
+  // but whose finding no element test matched; per cell and rule, as many new findings as such old ones are the old
+  // ones moved. An old element that is gone from the screen pairs with nothing: what appeared is new.
+  const stillThere = (o, k) => {
+    const s = p1.looks.get(k);
+    const rows = s && typeof p1.controlsOf === 'function' ? p1.controlsOf(s.id) || [] : [];
+    return rows.some(c => c && ((o.id.norm && normalizeSelector(c.selector) === o.id.norm) || (o.id.name && typeof c.name === 'string' && c.name.replace(/\s+/g, ' ').trim() === o.id.name)));
+  };
   for (const [k, xs] of fresh) {
-    const gone = before(k).filter(o => !isGroups(o) && !p1.all.some(x => sameOldDefect(o.id, x.id)));
+    const gone = before(k).filter(o => !isGroups(o) && !p1.all.some(x => sameOldDefect(o.id, x.id)) && stillThere(o, k));
     const left = new Map();
     for (const o of gone) left.set(o.f.rule, (left.get(o.f.rule) || 0) + 1);
     for (const x of xs) { const n = left.get(x.f.rule) || 0; if (n > 0) left.set(x.f.rule, n - 1); else regressions.push(x.f); }
