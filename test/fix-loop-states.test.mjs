@@ -29,7 +29,8 @@ test('claims: another agent fixing in this folder gets the refusal copy as writt
   assert.deepEqual(r.lines, [`Claude Code is already fixing in this folder (branch nunchi/fixes-1014, 4 min). To fix in parallel: \`git worktree add ../${folder}-2 -b nunchi/fixes-2\`, open that folder in Codex, start the app there on another port. Or wait: deciding and capturing still work here.`]);
   assert.equal(latest(p).phase, 'aborted');
   r = await F.startFix(ctxOf(p, { now: () => now }), p.group, { agent: 'Claude Code' });
-  assert.deepEqual(r.lines, ['A fix of another finding (group abcabcabcabc) is still open in this folder (branch nunchi/fixes-1014, 4 min): finish it with `nunchi fix --verify abcabcabcabc`, or stop it with `nunchi fix --abort abcabcabcabc`.']);
+  // that claim was made by hand here: no open attempt owns it, so the line says to wait or release it (never --verify)
+  assert.deepEqual(r.lines, ['A fix of another finding (group abcabcabcabc) is still open in this folder (branch nunchi/fixes-1014, 4 min): no open attempt owns that claim (a command was stopped while it claimed): wait 26 min for it to expire, or release it now with `nunchi fix --abort abcabcabcabc`.']);
   assert.doesNotMatch(r.lines[0], /worktree/);
   // an expired claim (reader's clock: lastRenewal + 30 min) is taken over
   r = await F.startFix(ctxOf(p, { now: () => now + 31 * 60e3 }), p.group, { agent: 'Codex' });

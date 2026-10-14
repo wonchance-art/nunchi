@@ -26,7 +26,8 @@ import { checkProfile, approvedProfiles, scriptsApprovedPath, checksRequestPath,
 import { writeStable, stableJson, sha } from '../stable.mjs';
 import { readKey, writeKey, keyPath } from '../state.mjs';
 import { fixGit, fixTrailers, TRAILERS } from './git.mjs';
-import { acquireClaim, renewClaim, releaseClaim, readClaim, claimLive, refusalText, whileRenewing } from './claims.mjs';
+import { acquireClaim, renewClaim, releaseClaim, readClaim, claimLive, claimMinutes, refusalText, whileRenewing, CLAIM_TTL_MS } from './claims.mjs';
+const CLAIM_TTL_MINUTES = Math.round(CLAIM_TTL_MS / 60e3);
 import { allocate, setPhase, update, latestRecord, currentRecord, allRecords, latestRecords, isOpen, writePlan, readPlan, groupDir, kst } from './records.mjs';
 import { randomBytes } from 'node:crypto';
 import { probeView, probeProblems, judgeRules, judgeAi, MAX_ATTEMPTS, FLAKY, DRIFT_PIXELS } from './judge.mjs';
@@ -160,6 +161,22 @@ function filterRefusal(ctx) {
   if (!hit.length) return null;
   return `This repository runs files through git filters (Git LFS or similar: ${hit.slice(0, 3).join(', ')}${hit.length > 3 ? ` and ${hit.length - 3} more` : ''}). nunchi runs git with every filter switched off, so its checks of the commit and its undo would see the stored form of those files, not the files: the fix loop does not work here yet. Fix by hand, then capture; finding and deciding still work.`;
 }
+
+// What to do about a claim in the way (same agent): resume its attempt at the step it stopped at, or, when no open
+// attempt owns it (a command that was stopped while it claimed), wait for it to expire or release it with --abort.
+function claimHint(ctx, c) {
+  const g = c.group;
+  const holder = latestRecord(ctx.stateDir, g);
+  if (holder && isOpen(holder) && holder.claim?.token && holder.claim.token === c.claim?.token) {
+    if (['starting', 'claiming', 'branching', 'snapshot', 'baseline', 'p0'].includes(holder.phase)) return `resume it with \`nunchi fix --start ${g}\`, or stop it with \`nunchi fix --abort ${g}\``;
+    if (['started', 'checking', 'checked'].includes(holder.phase)) return `go on with \`nunchi fix --checks ${g}\` (then commit and verify), or stop it with \`nunchi fix --abort ${g}\``;
+    return `resume it with \`nunchi fix --verify ${g}\`, or stop it with \`nunchi fix --abort ${g}\``;
+  }
+  const renewed = Date.parse(c.claim?.lastRenewal);
+  const left = Number.isFinite(renewed) ? Math.max(1, Math.ceil((renewed + CLAIM_TTL_MS - ctx.deps.now()) / 60e3)) : CLAIM_TTL_MINUTES;
+  return `no open attempt owns that claim (a command was stopped while it claimed): wait ${left} min for it to expire, or release it now with \`nunchi fix --abort ${g}\``;
+}
+const refusalFor = (ctx, rec, c) => refusalText(c, { me: rec.agent, folder: basename(rec.worktree), worktree: rec.worktree, now: ctx.deps.now(), hint: ['group', 'folder'].includes(c.why) ? claimHint(ctx, c) : null });
 
 // ---- reconcile (design §4.8: every command first) ---------------------------------------------------------------------
 
@@ -374,7 +391,7 @@ async function startFixInner(ctx, id, opts = {}) {
     const c = acquireClaim(ctx.stateDir, { group: g.group, worktree: rec.worktree, branch, url: rec.url || 'serve', files: rec.rootFiles, agent: rec.agent, vendor: rec.vendor, mine: rec.claim?.token || null, fresh: rec.claim?.token || null, now: ctx.deps.now(), generation: ctx.generation });
     if (!c.ok) {
       setPhase(ctx.stateDir, rec, 'aborted', { outcome: { kind: 'aborted', reason: `claim-${c.why}` } }, gen(ctx));
-      return refuse(refusalText(c, { me: rec.agent, folder: basename(rec.worktree), worktree: rec.worktree, now: ctx.deps.now() }), { claim: c.why });
+      return refuse(refusalFor(ctx, rec, c), { claim: c.why });
     }
     rec = setPhase(ctx.stateDir, rec, 'branching', { claim: { token: c.token }, branch }, gen(ctx));
   }
@@ -539,7 +556,7 @@ export async function verifyFix(ctx, id, opts = {}) {
   if (retry) {
     // a retry (needs you c, or an interrupted attempt): the claim again, then P1 again
     const c = acquireClaim(ctx.stateDir, { group: g.group, worktree: rec.worktree, branch: rec.branch, url: opts.url || rec.url || 'serve', files: rec.rootFiles, agent: rec.agent, vendor: rec.vendor, mine: null, now: ctx.deps.now(), generation: ctx.generation });
-    if (!c.ok) return refuse(refusalText(c, { me: rec.agent, folder: basename(rec.worktree), worktree: rec.worktree, now: ctx.deps.now() }));
+    if (!c.ok) return refuse(refusalFor(ctx, rec, c));
     rec = setPhase(ctx.stateDir, rec, 'committed', { claim: { token: c.token }, outcome: null, retried: (rec.retried || 0) + 1 }, gen(ctx));
   }
   const filtered = filterRefusal(ctx);
@@ -841,7 +858,14 @@ function abortFixInner(ctx, id) {
   const found = findGroup(ctx, id);
   if (found.error) return refuse(found.error);
   let { rec, said } = reconcile(ctx, found.g.group);
-  if (!rec || !isOpen(rec)) return refuse([...said, `No attempt of '${found.title}' is open.`]);
+  // a live claim no open attempt owns (a command stopped while it claimed): released here, said
+  const orphan = () => {
+    const c = readClaim(ctx.stateDir, found.g.group);
+    const holder = latestRecord(ctx.stateDir, found.g.group);
+    if (!c || !claimLive(c, ctx.deps.now()) || (holder && isOpen(holder) && holder.claim?.token === c.token)) return null;
+    return releaseClaim(ctx.stateDir, found.g.group, c.token, { generation: ctx.generation }) ? `Released the claim on '${found.title}' that a stopped command left behind.` : null;
+  };
+  if (!rec || !isOpen(rec)) { const freed = orphan(); return freed ? out(0, [...said, freed], { outcome: 'released' }) : refuse([...said, `No attempt of '${found.title}' is open.`]); }
   const committed = rec.commit || (ctx.git ? headIsFix(ctx, rec) : null);
   if (committed) {
     const line = `Stopped fixing '${found.title}' after its commit (${short(committed)}), before nunchi re-checked it. It needs you: tell your AI “retry” to re-check it, or “undo it”.`;
@@ -850,7 +874,8 @@ function abortFixInner(ctx, id) {
   }
   const line = `Stopped fixing '${found.title}' before a commit. It is still to fix.`;
   closeWith(ctx, rec, 'aborted', { kind: 'aborted', reason: 'abort', line });
-  return out(0, [...said, line], { outcome: 'aborted' });
+  const freed = orphan();
+  return out(0, [...said, line, ...(freed ? [freed] : [])], { outcome: 'aborted' });
 }
 
 // The board's [Looks fine, mark fixed] on needs you (a) (design §3.4): only a person (the board's key), and only when

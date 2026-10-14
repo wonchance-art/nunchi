@@ -140,7 +140,9 @@ export async function whileRenewing(stateDir, group, token, fn, { every = RENEW_
 
 // The refusal copy (design §7). `why: 'group' | 'folder'` with another declared agent: the parallel-worktree advice;
 // the same declared agent in this folder (the single-agent path) is never told about worktrees.
-export function refusalText(r, { me = null, folder = 'myapp', worktree = null, now = Date.now() } = {}) {
+// `hint`: what to do about the claim holding the way, from its attempt's record (the loop knows it): resume it at the
+// step it stopped at, or, when no open attempt owns the claim (a command was stopped), wait for it or release it.
+export function refusalText(r, { me = null, folder = 'myapp', worktree = null, now = Date.now(), hint = null } = {}) {
   const c = r.claim || {};
   const who = c.declaredAgent || 'Your AI';
   const min = claimMinutes(c, now);
@@ -151,8 +153,9 @@ export function refusalText(r, { me = null, folder = 'myapp', worktree = null, n
   // worktrees are advice for two different agents, and only when both said who they are: an agent that did not say
   // (no --agent) is taken for the same one (the single-agent path never hears about worktrees)
   const same = !me || !c.declaredAgent || me === c.declaredAgent;
+  const next = hint || `resume with \`nunchi fix --verify ${r.group}\`, or stop it with \`nunchi fix --abort ${r.group}\``;
   if (same) return r.why === 'folder'
-    ? `A fix of another finding (group ${r.group}) is still open in this folder (branch ${branch}${min !== null ? `, ${min} min` : ''}): finish it with \`nunchi fix --verify ${r.group}\`, or stop it with \`nunchi fix --abort ${r.group}\`.`
-    : `This finding is already being fixed (branch ${branch}${min !== null ? `, ${min} min` : ''}): resume with \`nunchi fix --verify ${r.group}\`, or stop it with \`nunchi fix --abort ${r.group}\`.`;
+    ? `A fix of another finding (group ${r.group}) is still open in this folder (branch ${branch}${min !== null ? `, ${min} min` : ''}): ${next}.`
+    : `This finding is already being fixed (branch ${branch}${min !== null ? `, ${min} min` : ''}): ${next}.`;
   return `${who} is already fixing in this folder (branch ${branch}${min !== null ? `, ${min} min` : ''}). To fix in parallel: \`git worktree add ../${folder}-2 -b nunchi/fixes-2\`, open that folder in ${me || 'your AI'}, start the app there on another port. Or wait: deciding and capturing still work here.`;
 }

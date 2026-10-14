@@ -125,3 +125,31 @@ test('a record changed under a command: said in words (what it is now), never a 
   assert.match(v.lines.at(-1), new RegExp(`Nothing more was done\\. The fix had just been undone by commit ${head}: that commit stays; look at it with git show ${head}\\.$`));
   assert.equal(v.code, 1);
 });
+
+test('a claim no open attempt owns (a start killed while claiming, before its token was written): wait N min or --abort, which releases it; never "resume with --verify"', async () => {
+  const p = await fixProject();
+  const sd = stateDir(p);
+  assert.equal((await F.startFix(ctxOf(p), p.group)).code, 0);
+  const real = latest(p);
+  F.abortFix(ctxOf(p), p.group);
+  const { attempt: _a, phase: _p, phases: _ps, rev: _r, claim: _c, outcome: _o, p0: _p0, ...fields } = real;
+  R.setPhase(sd, R.allocate(sd, p.group, fields), 'claiming');                 // no token recorded
+  C.acquireClaim(sd, { group: p.group, worktree: p.root, branch: real.branch, url: real.url, files: real.rootFiles, mine: null });
+  const s = await F.startFix(ctxOf(p), p.group);
+  assert.equal(s.code, 1);
+  assert.doesNotMatch(s.lines.join('\n'), /--verify/);
+  assert.match(s.lines.at(-1), /no open attempt owns that claim \(a command was stopped while it claimed\): wait (29|30) min for it to expire, or release it now with `nunchi fix --abort [0-9a-f]{12}`\.$/);
+  const a = F.abortFix(ctxOf(p), p.group);
+  assert.match(a.lines.at(-1), /^Released the claim on 'Tap target smaller than 24px' that a stopped command left behind\.$/);
+  assert.equal(C.readClaim(sd, p.group), null);
+  assert.equal((await F.startFix(ctxOf(p), p.group)).code, 0, 'it starts again');
+  // a holder that is open stops at a step: the hint names that step, not --verify
+  const q = await fixProject();
+  assert.equal((await F.startFix(ctxOf(q), q.group, { agent: 'Codex' })).code, 0);
+  const other = await fixProject();
+  const qsd = stateDir(q);
+  const c = C.acquireClaim(qsd, { group: q.group, worktree: q.root, branch: 'b', url: 'serve', files: [], mine: 'x' });
+  assert.equal(c.ok, false);
+  assert.match(C.refusalText(c, { me: 'Codex', hint: 'go on with `nunchi fix --checks g`' }), /: go on with `nunchi fix --checks g`\.$/);
+  assert.ok(other);
+});
