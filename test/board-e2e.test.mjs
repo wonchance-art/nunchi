@@ -160,16 +160,18 @@ test('board e2e: the decision bar and the toast never cover each other or the fo
     const p = project();
     const s = await open(p, { viewport: { width, height } });
     const { page } = s;
-    const rect = sel => page.evaluate(q => { const e = document.querySelector(q); if (!e || e.hidden) return null; const r = e.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; }, sel);
+    // every box of one comparison in one evaluation: a live redraw between two calls would compare a detached node
+    const rects = (...sels) => page.evaluate(qs => qs.map(q => { const e = document.querySelector(q); if (!e || e.hidden || !e.isConnected) return null; const r = e.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; }), sels);
     try {
       await page.waitForSelector('#h-progress');
       await page.click('a[data-nav=findings]');
       await page.waitForSelector('#h-findings');
       await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
-      assert.equal(await page.$eval('.dock', e => getComputedStyle(e).position), 'sticky', `${width}px: the bar is sticky`);
+      assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.dock')).position), 'sticky', `${width}px: the bar is sticky`);
       const rows = await page.locator('.row').count();
       for (let i = 0; i < rows; i++) {
-        const dock = await rect('.dock'), row = await rect('.row:focus');
+        const [dock, row] = await rects('.dock', '.row:focus');
+        assert.ok(dock && row, `${width}px row ${i}: the dock and a focused row are there`);
         assert.ok(dock.bottom <= height + 1, `${width}px: the bar is in the window`);
         assert.ok(row.bottom <= dock.top + 1 && row.top >= 0, `${width}px row ${i}: the focused row is not under the bar (${row.top}–${row.bottom} vs ${dock.top})`);
         await page.keyboard.press('j');
@@ -178,7 +180,8 @@ test('board e2e: the decision bar and the toast never cover each other or the fo
       await page.keyboard.press('w');
       await page.waitForSelector('#toast:not([hidden])');
       assert.equal(await page.evaluate(() => document.getElementById('toast').parentElement.classList.contains('dock')), true, 'the toast is in the dock');
-      const toast = await rect('#toast'), bar = await rect('.toolbar'), row = await rect('.row:focus');
+      const [toast, bar, row] = await rects('#toast', '.toolbar', '.row:focus');
+      assert.ok(toast && bar && row, `${width}px: the toast, the bar and the focused row are there`);
       assert.ok(!overlap(toast, bar), `${width}px: the toast is not over the bar`);
       assert.ok(!overlap(toast, row), `${width}px: the toast is not over the focused row`);
       if (width === 1280) {
@@ -189,8 +192,12 @@ test('board e2e: the decision bar and the toast never cover each other or the fo
         for (let i = 0; i < cards; i++) {
           await page.locator('.card button').nth(i).click();
           await page.waitForSelector('#panel-h');
-          const nums = await page.$$eval('.screen-panel .num', els => els.map(e => { const r = e.getBoundingClientRect(); return { left: r.left, top: r.top }; }));
-          const panel = await rect('.panels');
+          // markers and panel in one evaluation: a live redraw (the decision above arriving as a new version) replaces the
+          // view, and $$eval's handles from before it are detached nodes measuring 0,0
+          const { nums, panel } = await page.evaluate(() => {
+            const r = e => { const b = e.getBoundingClientRect(); return { left: b.left, top: b.top }; };
+            return { nums: [...document.querySelectorAll('.screen-panel .num')].map(r), panel: r(document.querySelector('.panels')) };
+          });
           for (const n of nums) { assert.ok(n.left >= panel.left - 0.5 && n.top >= panel.top - 0.5, `marker at ${n.left},${n.top} inside the panel from ${panel.left},${panel.top}`); checked++; }
         }
         assert.ok(checked > 0, 'some markers were checked');
@@ -272,7 +279,9 @@ test('board a11y: non-text contrast of 3:1 or more — field, button, decision b
       await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
       // `edge`: the border against the element's own background and what is behind it; `ring`: the outline against
       // what is behind; `surface`: the background against what is behind and the page
-      const ratios = (sel, kind = 'edge') => page.$$eval(sel, (els, kind) => {
+      // queried and measured in one evaluation (a live redraw between the two would measure detached nodes)
+      const ratios = (sel, kind = 'edge') => page.evaluate(([sel, kind]) => {
+        const els = [...document.querySelectorAll(sel)];
         const rgb = c => (c.match(/[\d.]+/g) || []).map(Number);
         const clear = c => c === 'transparent' || rgb(c)[3] === 0;
         const lum = c => { const [r, g, b] = rgb(c).slice(0, 3).map(v => v / 255).map(v => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
@@ -286,7 +295,7 @@ test('board a11y: non-text contrast of 3:1 or more — field, button, decision b
               : Math.min(ratio(cs.borderTopColor, own), ratio(cs.borderTopColor, behind(e)));
           return { e: e.outerHTML.slice(0, 60), r };
         });
-      }, kind);
+      }, [sel, kind]);
       const low = list => list.filter(x => x.r < 3).map(x => `${x.e} ${x.r.toFixed(2)}`);
       for (const sel of ['#search', '#group-by', '.dbtn', '.row .tick']) {
         const list = await ratios(sel);
@@ -340,7 +349,7 @@ test('board e2e: a long route without a break wraps in its row; no sideways scro
     await page.waitForSelector('#h-progress');
     await page.click('a[data-nav=findings]');
     await page.waitForSelector('#h-findings');
-    const where = await page.$$eval('.row-where', els => els.filter(e => e.textContent.includes('averyvery')).map(e => ({ sw: e.scrollWidth, cw: e.clientWidth, right: e.getBoundingClientRect().right })));
+    const where = await page.evaluate(() => [...document.querySelectorAll('.row-where')].filter(e => e.textContent.includes('averyvery')).map(e => ({ sw: e.scrollWidth, cw: e.clientWidth, right: e.getBoundingClientRect().right })));
     assert.ok(where.length, 'the long route is shown');
     for (const w of where) assert.ok(w.sw <= w.cw + 1 && w.right <= 390 + 1, `it wraps (${w.sw} in ${w.cw}, right edge ${w.right})`);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'no sideways scroll');
@@ -475,7 +484,7 @@ test('board e2e: the list holds still while you work; new findings wait behind a
     await page.click('a[data-nav=findings]');
     await page.waitForSelector('#h-findings');
     await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
-    const ids = () => page.$$eval('.row[data-id]', rs => rs.map(r => r.getAttribute('data-id')));
+    const ids = () => page.evaluate(() => [...document.querySelectorAll('.row[data-id]')].map(r => r.getAttribute('data-id')));
     const before = await ids();
     // a new capture lands: one more defect
     writeRun(p.root, '0002', { parent: '0001', scenes: p.scenes, findings: [...p.findings.map(({ fp, group, ...f }) => f),
@@ -540,7 +549,7 @@ test('board a11y: axe finds nothing on Progress, Findings, Detail and Screens; l
         assert.equal(await page.locator('nav[aria-label=nunchi]').count(), 1);
         assert.equal(await page.locator('main#main').count(), 1);
         // every control is at least 44 px high (and buttons as wide)
-        const small = await page.$$eval('main button, main [role=tab], main [role=option], main select, main input, nav .nav a, main .btn, main .tile, main .meter-row a, nav .side-foot button', els => els
+        const small = await page.evaluate(() => [...document.querySelectorAll('main button, main [role=tab], main [role=option], main select, main input, nav .nav a, main .btn, main .tile, main .meter-row a, nav .side-foot button')]
           .filter(e => e.offsetParent !== null).map(e => ({ e: e.outerHTML.slice(0, 80), r: e.getBoundingClientRect() })).filter(x => x.r.height < 43.5 || (x.e.startsWith('<button') && x.r.width < 43.5)).map(x => `${x.e} ${Math.round(x.r.width)}×${Math.round(x.r.height)}`));
         assert.deepEqual(small, [], `${view} at ${width}px`);
         // severity is said in words, not only by the dot's colour
