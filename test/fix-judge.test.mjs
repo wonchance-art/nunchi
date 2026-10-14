@@ -143,12 +143,19 @@ test('diff policy: each rule has a case that triggers it and one that does not',
     [{ files: ['app/settings/page.jsx'], patch: "+++ b/app/settings/page.jsx\n+fetch('https://tracker.example.dev/collect')" }, 'adds an outbound URL (tracker.example.dev)'],
     [{ files: ['app/settings/page.jsx'], patch: '+++ b/app/settings/page.jsx\n+<script src="/x.js"></script>' }, 'adds a script tag'],
     [{ files: ['app/settings/page.jsx'], patch: "+++ b/app/settings/page.jsx\n+import pad from '@acme/pad/left';" }, 'adds a dependency (@acme/pad)'],
+    // M3 review: a multi-line import, a protocol-relative URL, a script made in code, a link
+    [{ files: ['app/settings/page.jsx'], patch: "+++ b/app/settings/page.jsx\n+import {\n+  pad,\n+} from 'left-pad';" }, 'adds a dependency (left-pad)'],
+    [{ files: ['app/settings/page.jsx'], patch: '+++ b/app/settings/page.jsx\n+<img src="//cdn.tracker.example.dev/p.gif" />' }, 'adds an outbound URL (cdn.tracker.example.dev)'],
+    [{ files: ['app/settings/page.jsx'], patch: "+++ b/app/settings/page.jsx\n+const s = document.createElement('script');" }, 'adds a script (createElement)'],
+    [{ files: ['app/settings/page.jsx'], links: ['app/settings/page.jsx'] }, 'a symbolic link or submodule'],
   ];
   for (const [input, why] of cases) {
     const r = diffPolicy({ patch: '', allowed, deps: new Set(['react']), ...input });
     assert.equal(r.ok, false, why);
     assert.ok(r.flagged.some(f => f.why === why), `${why}: ${JSON.stringify(r.flagged)}`);
   }
+  // what does not trigger them: a declared package's multi-line import, a // comment, a script word in text
+  assert.equal(diffPolicy({ files: ['app/settings/page.jsx'], patch: "+++ b/app/settings/page.jsx\n+} from 'react';\n+// see //docs.example.dev for why\n+const label = 'Run the script';", allowed, deps: new Set(['react']) }).ok, true);
   // an alias is not a package; a prefix maps the app's paths to the repository's
   assert.equal(diffPolicy({ files: ['app/x.jsx'], patch: "+++ b/app/x.jsx\n+import a from '@/lib/a';\n+import b from '~/lib/b';\n+import c from 'lib/c';", allowed: ['app/x.jsx'], aliases: ['lib'] }).ok, true);
   assert.equal(diffPolicy({ files: ['web/app/x.jsx'], allowed: ['app/x.jsx'], prefix: 'web/' }).ok, true);

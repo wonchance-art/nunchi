@@ -434,9 +434,18 @@ export function briefFix(ctx, id) {
 // A probe with its proof (design §4.4). → { runId, runDir, proof } or { error }.
 // `keep`: the server --serve started stays up (its `stop` is returned) until the caller is done judging, so the
 // re-captures of flaky rules see the same app.
+// `--serve start` serves what was last built in this folder: it proves the commit only when the approved build check
+// passed on this very tree (the baseline at P0; the checks whose tree verify compared with the commit's at P1).
 async function probe(ctx, rec, which, { url, serve, scope, harDir, profile, keep = false }) {
   let stop = null, base = url, proof, kept = false;
   if (!snapshotIntact(harDir, rec.har?.shas)) return { error: 'the attempt\'s recording snapshot changed or is missing' };
+  if (serve === 'start') {
+    const built = which === 'P0' ? rec.baseline?.results?.build?.status === 'pass' : rec.checks?.results?.build?.status === 'pass';
+    if (!built) {
+      const why = '--serve start serves what was last built in this folder, and no approved build check passed on this commit: approve a build script, or use --serve dev, or --url with the app started from this folder';
+      return which === 'P0' ? { error: why } : { noProof: why };
+    }
+  }
   if (serve) {
     const s = await ctx.deps.serve({ root: ctx.root, profile, script: serve, url });
     if (!s.ok) return { error: s.why };
@@ -544,7 +553,7 @@ export async function verifyFix(ctx, id, opts = {}) {
     const pkg = readJson(join(ctx.root, 'package.json'), {});
     const tsc = readJson(join(ctx.root, 'tsconfig.json'), null) || readJson(join(ctx.root, 'jsconfig.json'), null);
     const aliases = Object.keys(tsc?.compilerOptions?.paths || {}).map(a => a.replace(/\*$/, '').replace(/\/$/, '')).filter(Boolean);
-    const pol = diffPolicy({ files, patch: ctx.git.diffPatch(rec.base, head), allowed: rec.allowed || [], deps: depsOf(pkg), aliases, prefix });
+    const pol = diffPolicy({ files, patch: ctx.git.diffPatch(rec.base, head), allowed: rec.allowed || [], deps: depsOf(pkg), aliases, prefix, links: ctx.git.diffLinks(rec.base, head) });
     if (!pol.ok) {
       const lines = [`The fix of '${title}' (commit ${short(head)}) touched what only you can approve:`, ...pol.flagged.map(f => `  ${f.file ? `${f.file}: ` : ''}${f.why}`), 'It needs you: look at the commit; tell your AI to undo it (nunchi fix --undo), or to try again within the finding\'s files.'];
       closeWith(ctx, rec, 'needs-you', { kind: 'needs-you', needsYou: 'diff', commit: head, flagged: pol.flagged, files, line: lines[0] });

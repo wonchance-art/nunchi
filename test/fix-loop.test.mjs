@@ -4,7 +4,7 @@
 // working tree (test/fixtures/fix-project.mjs), so no browser is needed here (test/fix-e2e.test.mjs drives a real one).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, existsSync, readdirSync, rmSync, mkdirSync, cpSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, rmSync, mkdirSync, cpSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import * as F from '../src/fix/loop.mjs';
 import * as R from '../src/fix/records.mjs';
@@ -764,14 +764,15 @@ test('revert: a revert the person started (their REVERT_HEAD) is never aborted b
 // ---- flaky re-captures see the app P1 saw (M3 review, blocker 2) -------------------------------------------------------
 
 async function servedProject() {
-  const p = await fixProject({ files: { 'package.json': JSON.stringify({ name: 'x', private: true, scripts: { start: 'next start' }, dependencies: { next: '0.0.0-test' } }) } });
+  const p = await fixProject({ files: { 'package.json': JSON.stringify({ name: 'x', private: true, scripts: { build: 'next build', start: 'next start' }, dependencies: { next: '0.0.0-test' } }) } });
   const { checkProfile, approveProfile, scriptsApprovedPath } = await import('../src/checks.mjs');
   approveProfile(scriptsApprovedPath(stateDir(p)), p.root, { seen: checkProfile(p.root).hash, channel: 'cli-tty', by: 'Tester' });
+  const runChecks = async () => ({ pm: { name: 'npm' }, results: { build: { status: 'pass', exit: 0, count: null, output: '' } } });   // a build: --serve start's proof
   const events = [];
   let up = false;
   const serve = async () => { up = true; events.push('serve'); return { ok: true, url: 'http://127.0.0.1:4999', stop: () => { up = false; events.push('stop'); } }; };
   const capture = async a => { events.push(`capture:${up ? 'up' : 'down'}`); if (!up) return { manifest: { scenes: a.scenes.map(s => ({ id: `${s.route.slice(1) || '~'}.${s.person}.normal.${a.viewports[0]}`, route: s.route, person: s.person, status: 'capture-failed', reason: 'app-unreachable' })), health: { problems: [] } }, findings: [] }; return p.cap.capture(a); };
-  return { p, events, deps: { serve, capture } };
+  return { p, events, deps: { serve, capture, runChecks } };
 }
 
 test('--serve: the flaky re-capture runs while the server P1 used is still up; a page error that keeps coming back is a regression', async () => {
@@ -886,6 +887,37 @@ test('filters: a repository whose files go through git filters (Git LFS) is refu
   const { fixGit } = await import('../src/fix/git.mjs');
   const q = await fixProject();
   assert.deepEqual(fixGit(q.root).filtered(), []);
+});
+
+test('diff policy through git: a file moved away from .github/ (renames off) and a symbolic link are flagged', { skip: process.platform === 'win32' && 'symbolic links need privileges on Windows' }, async () => {
+  const p = await fixProject({ files: { '.github/workflows/ci.yml': 'on: push\n' } });
+  await attempt(p, { change: ['TINY', 'ROOMY'], verify: false, extraEdit: root => {
+    git(root, 'mv', '.github/workflows/ci.yml', 'app/settings/ci.yml');
+    symlinkSync('page.jsx', join(root, 'app', 'settings', 'alias.jsx'));
+    git(root, 'add', 'app/settings/alias.jsx');
+  } });
+  const v = await F.verifyFix(ctxOf(p), p.group);
+  const lines = v.lines.join('\n');
+  assert.match(lines, /\.github\/workflows\/ci\.yml: CI \(\.github\)/);
+  assert.match(lines, /app\/settings\/alias\.jsx: a symbolic link or submodule/);
+  assert.deepEqual([latest(p).phase, latest(p).outcome.needsYou], ['needs-you', 'diff']);
+});
+
+test('--serve start proves the commit only when the approved build check passed on it', async () => {
+  const p = await fixProject({ files: { 'package.json': JSON.stringify({ name: 'x', private: true, scripts: { start: 'next start' }, dependencies: { next: '0.0.0-test' } }) } });
+  const { checkProfile, approveProfile, scriptsApprovedPath } = await import('../src/checks.mjs');
+  approveProfile(scriptsApprovedPath(stateDir(p)), p.root, { seen: checkProfile(p.root).hash, channel: 'cli-tty', by: 'Tester' });
+  let served = 0;
+  const serve = async () => { served++; return { ok: true, url: 'http://127.0.0.1:4999', stop: () => {} }; };
+  const s = await F.startFix(ctxOf(p, { serve }), p.group, { serve: 'start' });
+  assert.equal(s.code, 1);
+  assert.match(s.lines.join('\n'), /--serve start serves what was last built in this folder, and no approved build check passed on this commit/);
+  assert.equal(served, 0, 'not even started');
+  // with a build that passes, it is proof
+  const q = await fixProject({ files: { 'package.json': JSON.stringify({ name: 'x', private: true, scripts: { build: 'node -e 0', start: 'next start' }, dependencies: { next: '0.0.0-test' } }) } });
+  approveProfile(scriptsApprovedPath(stateDir(q)), q.root, { seen: checkProfile(q.root).hash, channel: 'cli-tty', by: 'Tester' });
+  const runChecks = async () => ({ pm: { name: 'npm' }, results: { build: { status: 'pass', exit: 0, count: null, output: '' } } });
+  assert.equal((await F.startFix(ctxOf(q, { serve, runChecks }), q.group, { serve: 'start' })).code, 0);
 });
 
 // ---- M3 review: recovery and races (3.4–3.7) ----------------------------------------------------------------------------

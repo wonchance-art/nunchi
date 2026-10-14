@@ -106,8 +106,16 @@ export function fixGit(root) {
         return { sha: sha.trim(), parents: (parents || '').trim().split(/\s+/).filter(Boolean), trailers: parseTrailers(tr) };
       }).filter(c => (c.trailers[TRAILERS.fix] || []).includes(group) || (c.trailers[TRAILERS.revert] || []).some(v => v.split(/\s+/)[0] === group));
     },
-    diffNames: (base, head) => git(['diff', ...DIFF_SAFE, '--name-only', '-z', '--end-of-options', base, head, '--']).split('\0').filter(Boolean).sort(),
-    diffPatch: (base, head) => git(['diff', ...DIFF_SAFE, '--unified=0', '--no-color', '--end-of-options', base, head, '--']),
+    // without rename detection: a file moved away from .github/ shows as its old path too
+    diffNames: (base, head) => git(['diff', ...DIFF_SAFE, '--no-renames', '--name-only', '-z', '--end-of-options', base, head, '--']).split('\0').filter(Boolean).sort(),
+    diffPatch: (base, head) => git(['diff', ...DIFF_SAFE, '--no-renames', '--unified=0', '--no-color', '--end-of-options', base, head, '--']),
+    // paths whose old or new mode is a symbolic link (120000) or a submodule (160000)
+    diffLinks: (base, head) => {
+      const raw = git(['diff', ...DIFF_SAFE, '--no-renames', '--raw', '-z', '--end-of-options', base, head, '--']).split('\0');
+      const out = [];
+      for (let i = 0; i + 1 < raw.length; i += 2) { const m = /^:(\d{6}) (\d{6})/.exec(raw[i]); if (m && [m[1], m[2]].some(x => x === '120000' || x === '160000')) out.push(raw[i + 1]); }
+      return out.sort();
+    },
     abortRevert: () => tryGit(['revert', '--abort'], { timeout: REVERT_TIMEOUT }) !== null,
     switchNew: name => git(['switch', '--quiet', '--no-guess', '-c', name]),
     switchTo: name => git(['switch', '--quiet', '--no-guess', name]),

@@ -47,8 +47,9 @@ export function packageOf(spec) {
 // `files`: the diff's paths (repository-relative); `patch`: `git diff --unified=0`; `allowed`: root-cause files and
 // the source-map files of the group's routes (app-relative, as `prefix` + path in the repository); `deps`: the names
 // the project's package.json depends on; `aliases`: path aliases (tsconfig paths) that are not packages.
-export function diffPolicy({ files = [], patch = '', allowed = [], deps = new Set(), aliases = [], prefix = '' }) {
+export function diffPolicy({ files = [], patch = '', allowed = [], deps = new Set(), aliases = [], prefix = '', links = [] }) {
   const flagged = [];
+  for (const f of links) flagged.push({ file: f, why: 'a symbolic link or submodule' });
   const ok = new Set(allowed.map(f => `${prefix}${f}`));
   for (const f of files) {
     const hit = CONTROL_PATHS.find(([re]) => re.test(f));
@@ -67,6 +68,15 @@ export function diffPolicy({ files = [], patch = '', allowed = [], deps = new Se
       if (!isLocalHost(host) && !NOT_OUTBOUND.has(host)) flagged.push({ file, why: `adds an outbound URL (${host})` });
     }
     if (/<script\b/i.test(text)) flagged.push({ file, why: 'adds a script tag' });
+    if (/createElement\(\s*['"`]script['"`]/i.test(text)) flagged.push({ file, why: 'adds a script (createElement)' });
+    // protocol-relative URLs: "//cdn.example.net/x.js" in a string, src= or url(…), never a // comment
+    for (const m of text.matchAll(/["'`(=]\s*\/\/([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?=[/:'"`)\s?#]|$)/gi)) {
+      const host = m[1].toLowerCase();
+      if (!isLocalHost(host) && !NOT_OUTBOUND.has(host)) flagged.push({ file, why: `adds an outbound URL (${host})` });
+    }
+    // the closing line of a multi-line import or re-export: `} from 'pkg'`
+    const tail = /^\s*\}?\s*from\s+['"]([^'"\n]+)['"]/.exec(text);
+    if (tail) { const pkg = packageOf(tail[1]); if (pkg && !deps.has(pkg) && !aliases.some(a => tail[1] === a || tail[1].startsWith(a.endsWith('/') ? a : `${a}/`))) flagged.push({ file, why: `adds a dependency (${pkg})` }); }
     for (const re of IMPORT_RE) for (const m of text.matchAll(re)) {
       const pkg = packageOf(m[1]);
       if (pkg && !deps.has(pkg) && !aliases.some(a => m[1] === a || m[1].startsWith(a.endsWith('/') ? a : `${a}/`))) flagged.push({ file, why: `adds a dependency (${pkg})` });
