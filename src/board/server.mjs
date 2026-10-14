@@ -141,7 +141,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   const stateDir = st.root.dir;
   const genFile = st.files.generation;
   const runsDir = st.runsDir;
-  if (mode === 'label' && !LABELLER.test(String(labeller))) throw new Error('label mode needs a labeller name (lower-case letters, digits and -)');
+  if (mode === 'label' && !LABELLER.test(String(labeller))) throw new Error('label mode needs a labeller name (lower-case letters of any script, digits and -)');
   const files = assets();
   const sessions = [];                       // tokens, newest last
   const codes = new Map();                   // launch code → expiry

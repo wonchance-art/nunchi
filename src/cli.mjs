@@ -565,7 +565,7 @@ if (cmd === 'setup') {
   if (args.label) {
     const { slugLabeller, LABELLER } = await import('./labels.mjs');
     labeller = args.labeller ? String(args.labeller) : slugLabeller(P.whoAmI());
-    if (!LABELLER.test(labeller)) { console.error('nunchi open: --labeller takes lower-case letters, digits and - (up to 40)'); process.exit(1); }
+    if (!LABELLER.test(labeller)) { console.error('nunchi open: --labeller takes lower-case letters of any script, digits and - (up to 40)'); process.exit(1); }
   }
   const tty = !!(process.stdin.isTTY && process.stdout.isTTY);
   let r;

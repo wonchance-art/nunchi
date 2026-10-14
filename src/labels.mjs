@@ -19,8 +19,19 @@ import { loadLenses } from './lenses.mjs';
 import { safe, shownPath, runEvidence, evidenceUrl, RUN_ID } from './board/model.mjs';
 import { drawable, LABELS } from './board/shared.mjs';
 
-export const LABELLER = /^[a-z0-9][a-z0-9-]{0,39}$/;
-export const slugLabeller = name => String(name || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'me';
+// A labeller's name as a folder name: lower-case letters of any script, digits and -, up to 40 characters.
+export const LABELLER = /^[\p{Ll}\p{Lo}\p{Lm}\p{Nd}][\p{Ll}\p{Lo}\p{Lm}\p{Nd}-]{0,39}$/u;
+// Names Windows keeps for devices: never a folder name.
+const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)$/;
+// A person's name → their labeller name, the same every time: accents dropped (NFKD, then marks removed, then NFC so
+// a Hangul syllable stays one letter), lower case, anything but letters and digits as -. A name with no letter or
+// digit left, or one Windows reserves, becomes `u-` and 6 hex of its hash (two such people do not share a folder).
+export function slugLabeller(name) {
+  const raw = String(name || '');
+  const slug = [...raw.normalize('NFKD').replace(/\p{M}+/gu, '').normalize('NFC').toLowerCase().replace(/[^\p{L}\p{Nd}]+/gu, '-').replace(/^-+|-+$/g, '')].slice(0, 40).join('').replace(/-+$/, '');
+  if (slug && LABELLER.test(slug) && !RESERVED.test(slug)) return slug;
+  return raw ? `u-${sha(raw, 6)}` : 'me';
+}
 const LABEL_VALUES = new Set(Object.values(LABELS));
 const kst = (d = new Date()) => new Date(d.getTime() + 9 * 3600e3).toISOString().replace('Z', '+09:00');
 const readJsonOr = (p, fallback) => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return fallback; } };
@@ -93,7 +104,7 @@ export function readLabels(nunchiDir, labeller) {
 const isLabelsDoc = d => !!d && Array.isArray(d.labels) && d.labels.every(x => typeof x === 'string');
 // Writes a label through the board (the human channel), then notes its content as made here.
 export function writeLabel(nunchiDir, stateDir, { labeller, item, label, generation = null }) {
-  if (!LABELLER.test(labeller)) throw Object.assign(new Error('a labeller name is lower-case letters, digits and -'), { code: 'BAD_ARGS' });
+  if (!LABELLER.test(labeller)) throw Object.assign(new Error('a labeller name is lower-case letters of any script, digits and -'), { code: 'BAD_ARGS' });
   if (!LABEL_VALUES.has(label)) throw Object.assign(new Error(`a label is one of ${[...LABEL_VALUES].join(', ')}`), { code: 'BAD_ARGS' });
   const rec = { schema: 1, id: item.id, lens: item.lens, rule: item.rule, label, labeller, channel: 'board', at: kst() };
   const text = stableJson(rec);

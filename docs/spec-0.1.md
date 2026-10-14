@@ -1239,7 +1239,9 @@ keeps it in `state/metrics.json` (`metrics.mjs`): singles, batches (once, with t
 decision or batch id, durations only (no clock), stable JSON, never sent. Undo is no decision. `nunchi trust`
 prints "decision time (board): singles median …, p90 … · batches … · later, apart …".
 
-**Label mode (§9.2).** `nunchi open --label [--labeller <name>]` (default: git's user name, lower-cased): a board that
+**Label mode (§9.2).** `nunchi open --label [--labeller <name>]` (default: git's user name as a folder name, the same
+every time: NFKD, marks removed, NFC, lower case, anything but letters of any script and digits as `-`, up to 40
+characters; a name with no letter or digit left, or a Windows device name, becomes `u-<6 hex of its hash>`): a board that
 serves only labelling. The pool is the ledger's AI groups that are still there and the latest run's rejected and
 insufficient claims; decoys and known-true items come from the gate's harness (§9), which knows which they are. Each
 item shows the lens's name, definition and checklist question, the claim, the screenshot with its box, the element

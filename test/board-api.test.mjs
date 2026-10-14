@@ -13,6 +13,7 @@ import * as L from '../src/ledger.mjs';
 import * as P from '../src/project.mjs';
 import { readMetrics, decisionTimes, metricsPath } from '../src/metrics.mjs';
 import { smallProject, withAi, writeRun, HOSTILE } from './fixtures/board-project.mjs';
+import { slugLabeller, LABELLER } from '../src/labels.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const cli = (cwd, ...a) => new Promise(res => execFile('node', [CLI, ...a], { cwd, encoding: 'utf8' }, (err, stdout, stderr) => res({ code: err ? err.code : 0, stdout, stderr })));
@@ -449,6 +450,23 @@ test('decision clock (§3.5): paused while the tab is hidden and after 30 s with
   c.reset('i', 0);
   for (let t = 0; t <= 200000; t += 10000) c.input(t);
   assert.equal(c.read(200000), CAP_MS, 'capped at 120 s');
+});
+
+test('label mode: a labeller name for anyone — accents dropped, any script kept, a name with no letter (or a Windows device name) hashed, the same every time', () => {
+  const cases = [['José Núñez', 'jose-nunez'], ['김철수', '김철수'], ['Ἀλέξανδρος', 'αλεξανδροσ'.replace(/σ$/, 'ς')], ['Zoë O\'Brien', 'zoe-o-brien'], ['  Ann  ', 'ann'], ['ＡＢＣ１２', 'abc12'], ['', 'me']];
+  for (const [name, slug] of cases) {
+    assert.equal(slugLabeller(name), slug, name);
+    assert.ok(LABELLER.test(slug), `${slug} is a labeller name`);
+  }
+  for (const name of ['🙂', '***', 'CON', 'nul', 'Lpt1']) {
+    const s = slugLabeller(name);
+    assert.match(s, /^u-[0-9a-f]{6}$/, name);
+    assert.equal(slugLabeller(name), s, 'the same every time');
+  }
+  assert.notEqual(slugLabeller('🙂'), slugLabeller('🙃'), 'two such people do not share a folder');
+  assert.notEqual(slugLabeller('김철수'), slugLabeller('이영희'), 'two Korean names are two labellers (they were both "me")');
+  assert.equal([...slugLabeller('가'.repeat(60))].length, 40, 'at most 40 characters');
+  for (const bad of ['../x', 'a/b', 'A', '-a', 'a b', 'x'.repeat(41)]) assert.ok(!LABELLER.test(bad), bad);
 });
 
 test('label mode (§9.2): blinded items from the AI pool, its own keys, labels per labeller, no decisions', async () => {
