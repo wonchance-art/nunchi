@@ -4,11 +4,12 @@
 //   - validates the hunter's answers: every checklist item answered, every defect grounded in the
 //     scene's evidence (a selector it contains) or in the app's source (a file:line that exists).
 // Answers and evidence are data: they are parsed and compared as strings, never evaluated.
-import { readFileSync, existsSync, statSync, realpathSync, readdirSync, mkdirSync, rmSync, linkSync, copyFileSync } from 'node:fs';
+import { readFileSync, existsSync, statSync, realpathSync, readdirSync, mkdirSync, rmSync, copyFileSync, utimesSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { stableJson, sha, writeStable, privateDir } from './stable.mjs';
 import { lensHash, lensNumber, SEVERITIES, EVIDENCE_FILES } from './lenses.mjs';
 import { isRedirected } from './flow.mjs';
+import { aiIdentity } from './ai-identity.mjs';
 
 // Token estimate (documented in spec §4):
 //   text files   ceil(bytes / 4)  — chars/4 for ASCII; UTF-8 text with other scripts is over-estimated, never under
@@ -146,6 +147,8 @@ function sourceSlices(runDir) {
 // own (never in a unit with the scene it copies) and is never a reference. Runs without canaries keep the
 // scene ids.
 const ALIAS = /^s[0-9a-f]{10}$/;
+// The modification time every mirrored evidence file gets (2001-09-09T10:46:40+09:00), the same as recheck.mjs's.
+const MIRROR_TIME = 1_000_000_000;
 function aliasesFor(ids, salt) {
   const out = new Map(); const taken = new Set();
   for (const id of [...new Set(ids)].sort(cmp)) {
@@ -260,7 +263,7 @@ export function planHuntWithKey({ runDir, lenses, lensIds = null, budget = null,
   return { plan, key: answerKey };
 }
 
-// Links (or copies, where links are not possible) each aliased scene's evidence files under hunt/<alias>/.
+// Copies each aliased scene's evidence files under hunt/<alias>/, with one modification time for all.
 // Earlier mirrors are replaced; nothing else under hunt/ is touched.
 export function writeHuntMirror(runDir, key) {
   const dir = join(runDir, 'hunt');
@@ -270,9 +273,13 @@ export function writeHuntMirror(runDir, key) {
     const from = join(runDir, id);
     if (!existsSync(from)) continue;
     privateDir(join(dir, a));                                       // 0700, like the run it mirrors (D12)
+    // copies, every one with the same modification time: a hard link shares the original's inode and date, and a
+    // canary copy, captured after the scenes, would be told apart by them
     for (const n of readdirSync(from).filter(n => EVIDENCE_FILES.includes(n)).sort(cmp)) {
-      try { linkSync(join(from, n), join(dir, a, n)); } catch { copyFileSync(join(from, n), join(dir, a, n)); }
+      copyFileSync(join(from, n), join(dir, a, n));
+      utimesSync(join(dir, a, n), MIRROR_TIME, MIRROR_TIME);
     }
+    utimesSync(join(dir, a), MIRROR_TIME, MIRROR_TIME);
   }
 }
 
@@ -329,7 +336,7 @@ export function sceneIndex(runDir, sceneId) {
 }
 
 // A file:line under the app root. Not nunchi's own folder, not dependencies; symlinks must stay inside.
-function checkSource(root, source, cache) {
+export function checkSource(root, source, cache) {
   const m = /^(.+):(\d+)$/.exec(source);
   if (!m) return { error: 'source must look like path/to/file.tsx:42' };
   const rel = m[1].replace(/\\/g, '/'); const line = Number(m[2]);
@@ -385,6 +392,20 @@ export function recordHunt({ runDir, plan, answers, root, key = null }) {
   const findings = [];
   const indexes = new Map();
   const srcCache = new Map();
+  // the identity of each finding (design §2.3: what the ledger's AI fingerprint is made of), taken now, from the
+  // run and the source the hunter read: the grounded line's hash stays the hunt's even if the code changes later
+  const identityCache = new Map(), controlsCache = new Map();
+  let inventory;
+  const controlsOf = scene => {
+    if (!controlsCache.has(scene)) {
+      let rows = [];
+      const d = sceneDir(runDir, scene);
+      try { if (d) rows = JSON.parse(readFileSync(join(d, 'controls.json'), 'utf8')); } catch {}
+      controlsCache.set(scene, Array.isArray(rows) ? rows : []);
+    }
+    return controlsCache.get(scene);
+  };
+  const inventoryOf = () => { if (inventory === undefined) { try { inventory = JSON.parse(readFileSync(join(runDir, 'inventory.json'), 'utf8')); } catch { inventory = null; } } return inventory; };
   const cells = [];
   const ok = new Map();
   for (const unit of plan.units) {
@@ -448,6 +469,9 @@ export function recordHunt({ runDir, plan, answers, root, key = null }) {
             evidence: { claim: d.claim.trim(), unit: unit.id, groundedIn: [where, src ? 'source' : null].filter(Boolean), ...(src ? { file: src.file, line: src.line } : {}) },
             source: 'ai', status: 'claimed',
           };
+          f.identity = aiIdentity({ finding: f, controls: controlsOf(f.scene), inventory: inventoryOf(), root, cache: identityCache });
+          // grounded in a line only: the line must name something, or two defects of one file could not be told apart
+          if (!selector && !f.identity.anchor) { reject({ ...r, reason: 'source-not-found', detail: `${src.file}:${src.line} is a blank line: ground the defect in the line that has the code` }); continue; }
           const dk = stableJson([f.rule, f.scene, f.selector, src ? `${src.file}:${src.line}` : null]);
           const prev = kept.get(dk);
           if (prev) {

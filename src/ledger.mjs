@@ -4,26 +4,37 @@
 // - fingerprint: one defect, wherever and however often it shows. route template + rule + the element
 //   (selector without positions or generated class names) + evidence with volatile values removed. Person,
 //   viewport and state are not part of it: the same defect seen on the phone and on the desktop is one.
+//   AI findings have their own recipe (design §2.3): the element, the grounded file and a hash of the grounded
+//   source line, so a re-hunt with other words, another reference screen or a moved line finds the same item.
 // - group: the fingerprint without the route. A shared component's defect on 17 screens is one group,
-//   which is the unit a person decides on and the fix loop fixes.
+//   which is the unit a person decides on and the fix loop fixes. An AI group is narrower: lens, checklist item
+//   and the component (file and accessible name), so one dismissal never covers every similar button.
 // - decisions are append-only event files under .nunchi/decisions/ (committed; never conflict on merge),
 //   each with who made it. A decision that arrived through git and was not made or approved on this
 //   machine is "unverified": it cannot silence a blocker or a secret, and the fix loop does not act on it.
 //   Approval is bound to the decision's content (SHA-256), not to its id; decisions are ordered by the earlier
 //   of their date and when this machine first saw them.
-// - status (open, fixed, regressed, …) is computed from runs into .nunchi/state/ledger.json (git-ignored),
-//   never hand-edited and never committed. Every complete run is folded, in run order, like for like.
-import { readFileSync, readdirSync, lstatSync, openSync, fstatSync, closeSync, constants } from 'node:fs';
+// - status (open, fixed, regressed, …) is computed into the state store's ledger.json (state.mjs; git-ignored),
+//   never hand-edited and never committed. Every complete run is folded, in run order, like for like. A fold is
+//   keyed by (run, source): `rule` (the capture's findings), `ai` (verified AI findings), `recheck` (the AI
+//   re-check); folding a (run, source) again with other inputs replaces what it contributed (schema 2, §2.1).
+import { readdirSync, lstatSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { sha, stableJson, writeAtomic, withLock } from './stable.mjs';
+import { sha, stableJson, writeAtomic } from './stable.mjs';
 import { listRuns } from './runs.mjs';
+import { readJsonFile as readJson, readDoc, updateDoc, corrupt, present } from './state.mjs';
+
+export { readJsonFile } from './state.mjs';
 
 // Fingerprint versions (spec §5). A version changes the recipe of some rules only; every other rule keeps its
 // version-1 recipe, so its fingerprints, and the decisions made on them, are untouched.
 // - v2 (2026-10-14 KST): secret-in-client-bundle ignores the bundle's content hash (bundleKey). A v1 state is
 //   migrated on read and v1 decisions follow their items (migrateState, currentTargets).
+// - AI findings (`source: "ai"`) have a recipe of their own, AI_RECIPE (design §2.3), which never touches the rule
+//   recipes: no AI item existed before it.
 export const FINGERPRINT_VERSION = 2;
+export const AI_RECIPE = 1;
 const SECRET = 'secret-in-client-bundle';
 const RECIPE = { [SECRET]: 2 };
 const recipeOf = (rule, version) => Math.min(version, RECIPE[rule] || 1);
@@ -83,8 +94,36 @@ export function evidenceKey(rule, evidence = {}, version = FINGERPRINT_VERSION) 
   return out;
 }
 
+// The identity of an AI finding (design §2.3). The words of the claim, the hunt unit, the reference screen, the
+// line number and the severity change from hunt to hunt; what stays is the element, the grounded file and the
+// grounded source line's content. `f.identity` is computed with the run at hand (ai-fold.mjs: an `aria=` selector
+// canonicalised to its controls.json selector, the line's hash, the component that renders it); without it the
+// selector, normalised, and the file stand in.
+const str = v => (typeof v === 'string' && v ? v : null);
+const HEX16 = /^[0-9a-f]{16}$/;
+export function aiIdentityOf(f) {
+  const id = f.identity && typeof f.identity === 'object' ? f.identity : {};
+  const element = Object.hasOwn(id, 'element') ? str(id.element) : normalizeSelector(f.selector);
+  const file = Object.hasOwn(id, 'file') ? str(id.file) : str(f.evidence?.file);
+  const anchor = typeof id.anchor === 'string' && HEX16.test(id.anchor) ? id.anchor : null;
+  // the element's accessible name (normalised): two rows' "Delete" and "Archive" buttons are two defects even when
+  // their selectors normalise alike
+  const name = Object.hasOwn(id, 'name') ? str(id.name) : null;
+  const c = id.component && typeof id.component === 'object' && str(id.component.file) ? { file: id.component.file, name: str(id.component.name) } : null;
+  return { element, file, anchor, name, component: c ?? (file ? { file, name } : null) };
+}
+
 // `version` computes an older version's fingerprint (migration); new findings always get the current one.
 export function fingerprintOf(f, version = FINGERPRINT_VERSION) {
+  if (f.source === 'ai') {
+    const { element, file, anchor, name, component } = aiIdentityOf(f);
+    const inputs = { v: AI_RECIPE, source: 'ai', lens: f.lens, rule: f.rule, route: f.route ?? null, evidence: { anchor, element, file, name } };
+    const fp = sha(stableJson(inputs), 12);
+    // Group = lens + checklist item + component identity (the grounded file, or the inventory file that renders the
+    // element, plus the accessible name). When neither is known, the group is the fingerprint.
+    const group = component ? sha(stableJson({ v: AI_RECIPE, source: 'ai', lens: f.lens, rule: f.rule, component }), 12) : fp;
+    return { fp, group, inputs };
+  }
   const v = recipeOf(f.rule, version);
   const inputs = { v, lens: f.lens, rule: f.rule, route: f.route ?? null, element: normalizeSelector(f.selector), evidence: evidenceKey(f.rule, f.evidence, version) };
   const { route, ...rest } = inputs;
@@ -97,7 +136,7 @@ export function fingerprintOf(f, version = FINGERPRINT_VERSION) {
 // v1 → v2 on read. Items of a rule whose recipe changed get their fingerprint and group recomputed from what
 // they stored (lens, rule, route, selector, evidence); items that now share a fingerprint merge (mergeSightings);
 // `aliases` keeps old → new so decisions made under v1 keep applying. The characters of a secret that v1 stored
-// (`evidence.masked`) are dropped.
+// (`evidence.masked`) are dropped. AI items are never re-keyed here (their recipe is AI_RECIPE).
 const SEEN_ORDER = (a, b) => -byRun(String(a.lastSeen ?? ''), String(b.lastSeen ?? '')) || (!a.goneAt !== !b.goneAt ? (a.goneAt ? 1 : -1) : a.fp < b.fp ? -1 : 1);
 export function migrateState(state) {
   if (!state || !state.items || (state.fingerprintVersion || 1) >= FINGERPRINT_VERSION) return state;
@@ -105,7 +144,7 @@ export function migrateState(state) {
   const items = {};
   const sets = { ...(state.coverage || {}) };
   for (const old of Object.values(state.items).sort(SEEN_ORDER)) {
-    if (recipeOf(old.rule, FINGERPRINT_VERSION) === recipeOf(old.rule, state.fingerprintVersion || 1)) { items[old.fp] = old; continue; }
+    if (old.source === 'ai' || recipeOf(old.rule, FINGERPRINT_VERSION) === recipeOf(old.rule, state.fingerprintVersion || 1)) { items[old.fp] = old; continue; }
     const { masked, ...evidence } = old.evidence || {};
     const { fp, group, inputs } = fingerprintOf({ ...old, evidence });
     if (fp !== old.fp) aliases.fp[old.fp] = fp;
@@ -154,7 +193,7 @@ export const writtenAs = d => WRITTEN.get(d) || d;
 export function currentTargets(decisions, state) {
   const fp = new Map(Object.entries(state?.aliases?.fp || {})), group = new Map(Object.entries(state?.aliases?.group || {}));
   for (const item of Object.values(state?.items || {})) {
-    if (recipeOf(item.rule, FINGERPRINT_VERSION) === 1) continue;
+    if (item.source === 'ai' || recipeOf(item.rule, FINGERPRINT_VERSION) === 1) continue;
     const old = fingerprintOf(item, 1);
     if (old.fp !== item.fp && !fp.has(old.fp)) fp.set(old.fp, item.fp);
     if (old.group !== item.group && !group.has(old.group)) group.set(old.group, item.group);
@@ -206,53 +245,103 @@ export const TITLES = {
 export const titleOf = rule => TITLES[rule] || (rule.startsWith('axe-') ? `Accessibility: ${rule.slice(4).replace(/-/g, ' ')}` : rule);
 
 const SEVERITY = { blocker: 0, high: 1, medium: 2, low: 3 };
-
-// ---- reading nunchi's own files -----------------------------------------------------------------------
-
-// A file nunchi wrote and can no longer read is an error, never "empty": an empty ledger or approval list
-// written back over it would lose what it held. A checkout can put anything at these paths: a link (to a
-// secret, or to a device that never ends) is refused, not followed; a decision has a size cap; and a parse error
-// is reported by its position only, never with the file's text.
-const corrupt = (file, why) => Object.assign(new Error(`${file} ${why}`), { code: 'CORRUPT', file });
-const NOFOLLOW = (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0);
-const present = p => { try { lstatSync(p); return true; } catch { return false; } };
-export function readJsonFile(file, fix, { max = Infinity } = {}) {
-  let st;
-  try { st = lstatSync(file); } catch (e) { throw corrupt(file, `cannot be read (${e.code}): ${fix}`); }
-  if (!st.isFile()) throw corrupt(file, `is not a regular file (a link, a folder or a device): ${fix}`);
-  let fd, buf;
-  try { fd = openSync(file, constants.O_RDONLY | NOFOLLOW); } catch (e) { throw corrupt(file, `cannot be read (${e.code}): ${fix}`); }
-  try {
-    const s = fstatSync(fd);
-    if (!s.isFile()) throw corrupt(file, `is not a regular file (a link, a folder or a device): ${fix}`);
-    if (s.size > max) throw corrupt(file, `is larger than ${max} bytes: ${fix}`);
-    buf = readFileSync(fd);
-  } finally { closeSync(fd); }
-  if (buf.length > max) throw corrupt(file, `is larger than ${max} bytes: ${fix}`);
-  try { return JSON.parse(buf.toString('utf8')); }
-  catch (e) { const at = /position (\d+)/.exec(String(e.message)); throw corrupt(file, `is not valid JSON${at ? ` (at character ${at[1]})` : ''}: ${fix}`); }
-}
+// The most severe of some severities (unknown values are ignored).
+const worst = list => list.filter(s => Object.hasOwn(SEVERITY, s)).sort((a, b) => SEVERITY[a] - SEVERITY[b])[0] ?? null;
+// What a decision may hide: an AI item is protected by the most severe severity anyone gave it (design §2.2: a
+// verifier that lowers a blocker does not lower its protection); display uses the corrected one.
+export const protectOf = item => worst([item.protect, item.severity]) ?? item.severity;
 
 // ---- state (local, computed) ------------------------------------------------------------------------
 
-const REBUILD = 'delete it and the next nunchi command rebuilds it from the runs on disk';
+const REBUILD = 'restore ledger.json.prev beside it, or delete it and the next nunchi command rebuilds it from the runs on disk';
+export const LEDGER_SCHEMA = 2;
+export const emptyState = () => ({ schema: LEDGER_SCHEMA, fingerprintVersion: FINGERPRINT_VERSION, runs: [], folds: [], items: {} });
+// A ledger this nunchi can read: schema 1 (before M1) or 2; a newer schema is refused, never half understood.
+export const isLedger = s => !!s && typeof s === 'object' && Array.isArray(s.runs) && !!s.items && typeof s.items === 'object' && !Array.isArray(s.items)
+  && (s.schema === undefined || s.schema === 1 || (s.schema === LEDGER_SCHEMA && Array.isArray(s.folds)));
 
-// A state written by an older fingerprint version is migrated as it is read (migrateState); syncLedger, which
-// reads it again under the ledger lock, writes the migrated state back.
+// Schema 1 → 2 (design §2.5): `folds` replaces the bare run list as the record of what was folded (each run's rule
+// fold, keyed by its worktree's stream), and every item says its source. Nothing else changes.
+export function upgrade(state, stream = 'main') {
+  if (state.schema === LEDGER_SCHEMA && Array.isArray(state.folds)) return state;
+  const items = {};
+  for (const [fp, i] of Object.entries(state.items || {})) items[fp] = i.source ? i : { ...i, source: 'rule' };
+  return { ...state, schema: LEDGER_SCHEMA, folds: (state.runs || []).map(run => ({ run, source: 'rule', key: null, stream })).sort(byFold), items };
+}
+// Both migrations on read: the schema, then the fingerprint version.
+const migrateAll = (s, stream) => migrateState(upgrade(s, stream));
+
+// A ledger one folder kept (`.nunchi/state`, state.mjs adoptLegacy), taken into the repository's shared state: all it
+// holds came from this worktree's runs, so its folds and items are this worktree's stream (an item another
+// worktree's run never saw is not that worktree's to fix). `decisionsSeen` is never taken (adoptLegacy).
+export function adoptLedger(legacy, stream = 'main') {
+  const { decisionsSeen: _ignored, ...s } = upgrade(legacy, stream);
+  const items = {};
+  for (const [fp, it] of Object.entries(s.items || {})) {
+    if (!isAi(it)) { items[fp] = { ...it, stream }; continue; }
+    const retagged = { ...it, hunts: (it.hunts || []).map(h => ({ ...h, stream })), rechecks: (it.rechecks || []).map(r => ({ ...r, stream })) };
+    items[fp] = deriveAi(retagged) || retagged;
+  }
+  return { ...s, folds: (s.folds || []).map(f => ({ ...f, stream })).sort(byFold), items };
+}
+// A second worktree's `.nunchi/state` ledger, when the shared ledger exists already: the open items the shared
+// ledger does not have (seen in runs since removed, say) are carried over as they stand, tagged with this worktree's
+// stream, with the coverage sets they name. The shared ledger's own record of an item wins. Not carried, and said:
+// items that were fixed already (history only), the record of which runs were folded (this worktree's runs on disk
+// are folded again by the next ledger command) and when decisions were first seen. → { doc, carried, notCarried }.
+export function carryLedger(cur, legacy, stream = 'main') {
+  const from = adoptLedger(legacy, stream);
+  const items = { ...cur.items }, coverage = { ...(cur.coverage || {}) };
+  let carried = 0, fixed = 0;
+  for (const fp of Object.keys(from.items).sort()) {
+    const it = from.items[fp];
+    if (Object.hasOwn(cur.items, fp)) continue;
+    if (it.goneAt) { fixed++; continue; }
+    items[fp] = it;
+    if (it.coverage && from.coverage?.[it.coverage] && !coverage[it.coverage]) coverage[it.coverage] = from.coverage[it.coverage];
+    carried++;
+  }
+  const notCarried = [...(fixed ? [`${fixed} item(s) already fixed there (history only)`] : []), 'which of its runs were folded (this worktree\'s runs on disk are folded again)', 'when each decision was first seen (noted again from now)'];
+  if (!carried) return { doc: cur, carried, notCarried };
+  return { doc: { ...cur, items, coverage }, carried, notCarried };
+}
+
+// A state written by an older schema or fingerprint version is migrated as it is read; syncLedger writes the
+// migrated state back. A file that cannot be read, or is not a ledger, is an error (exit 2), never "empty".
 const MIGRATED = new WeakSet();
 export function readState(file) {
-  if (!present(file)) return { schema: 1, fingerprintVersion: FINGERPRINT_VERSION, runs: [], items: {} };
-  const s = readJsonFile(file, REBUILD);
-  if (!s || !Array.isArray(s.runs) || !s.items || typeof s.items !== 'object') throw corrupt(file, `is not a nunchi ledger: ${REBUILD}`);
-  const m = migrateState(s);
+  if (!present(file)) return emptyState();
+  const s = readJson(file, REBUILD, { retry: true });
+  if (!isLedger(s)) throw corrupt(file, s && s.schema > LEDGER_SCHEMA ? `was written by a newer nunchi (ledger schema ${s.schema}): ${REBUILD}` : `is not a nunchi ledger: ${REBUILD}`);
+  const m = migrateAll(s);
   if (m !== s) MIGRATED.add(m);
   return m;
 }
 
 // Run ids are digits, zero-padded to 4 and longer past 9999: shorter is older.
 export const byRun = (a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
-const minRun = (a, b) => (byRun(a, b) <= 0 ? a : b);
-const maxRun = (a, b) => (!a ? b : byRun(a, b) >= 0 ? a : b);
+const minRun = (a, b) => (!a ? b : !b ? a : byRun(a, b) <= 0 ? a : b);
+const maxRun = (a, b) => (!a ? b : !b ? a : byRun(a, b) >= 0 ? a : b);
+const SOURCES = ['rule', 'ai', 'recheck', 'fix'];
+const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+const byFold = (a, b) => byRun(String(a.run), String(b.run)) || SOURCES.indexOf(a.source) - SOURCES.indexOf(b.source) || cmp(a.stream ?? 'main', b.stream ?? 'main');
+const sameFold = (f, run, source, stream) => f.run === run && f.source === source && (f.stream ?? 'main') === stream;
+// The fold entry of (run, source) for a worktree's stream, or null.
+export const foldOf = (state, run, source, stream = 'main') => (Array.isArray(state.folds) ? state.folds.find(f => sameFold(f, run, source, stream)) ?? null : (source === 'rule' && state.runs?.includes(run) ? { run, source, key: null, stream } : null));
+const withFold = (folds, entry) => [...folds.filter(f => !sameFold(f, entry.run, entry.source, entry.stream)), entry].sort(byFold);
+export const streamOf = x => x?.stream ?? 'main';
+// The capture runs (sweeps and quick runs) one stream folded, oldest first. A schema-1 state has one stream.
+// A run the run list names that no fold records (a ledger written before folds) is the main worktree's.
+export function captureRuns(state, stream = 'main') {
+  if (!Array.isArray(state.folds)) return stream === 'main' ? state.runs.slice().sort(byRun) : [];
+  const rule = state.folds.filter(f => f.source === 'rule');
+  const recorded = new Set(rule.map(f => f.run));
+  const mine = rule.filter(f => streamOf(f) === stream && (f.kind === undefined || f.kind === 'quick')).map(f => f.run);
+  const orphans = stream === 'main' ? (state.runs || []).filter(r => !recorded.has(r)) : [];
+  return [...new Set([...mine, ...orphans])].sort(byRun);
+}
+// The latest capture run of a stream (what `findings` and the review page call "this run"), else the latest of any.
+export const latestRunOf = (state, stream = 'main') => captureRuns(state, stream).pop() ?? state.runs[state.runs.length - 1] ?? null;
 
 // A cell is where a finding was seen on its route: person.state.viewport (the end of the scene id). A key is
 // route|cell, what a run looked at.
@@ -260,7 +349,7 @@ const cellOfScene = id => { const [person, state, vp] = String(id).split('.').sl
 const keyOf = (route, cell) => `${route}|${cell}`;
 const routeOfKey = k => k.slice(0, k.lastIndexOf('|'));
 // Scenes that show their own route: captured, not redirected, not an error page, not a canary copy.
-const looked = s => s.status === 'captured' && s.canary === undefined && !s.redirected && !/^redirected/.test(s.reason || '') && !(s.httpStatus >= 400);
+export const looked = s => s.status === 'captured' && s.canary === undefined && !s.redirected && !/^redirected/.test(s.reason || '') && !(s.httpStatus >= 400);
 // Whole-app detectors judge every route at once (secrets in any bundle, the link graph, the design system's
 // one-offs): an item of theirs keeps what the runs that saw it looked at (`coverage`), and only a whole-app run
 // that looked at all of it again can say it is gone.
@@ -276,6 +365,7 @@ const PARTNER = {
 // Items folded before cells were stored: every combination of what they were seen with (asks for more, never less).
 const cellsOf = item => item.cells || (item.persons || []).flatMap(p => (item.states || []).flatMap(s => (item.viewports || []).map(v => `${p}.${s}.${v}`)));
 export const originOf = url => { try { return new URL(url).origin; } catch { return null; } };
+const isAi = item => item.source === 'ai';
 // A run whose screens mostly show one and the same text (another app, or one error page, at that address)
 // fixes nothing when it would fix many items at once.
 const ONE_PAGE = { items: 10, share: 0.5 };
@@ -308,7 +398,12 @@ function lookedAgain(item, run, sets) {
 
 const setId = keys => sha(JSON.stringify(keys), 16);
 
-// Fold one complete run into the state (design 0.1-c §2.1).
+// Run kinds (design §2.1). Only a sweep folds as a sweep. A quick run is presence-only (it adds and brings back,
+// never fixes). A fix probe (and any kind this nunchi does not know) is not folded by the catch-up: the fix loop
+// folds a probe for its own group (M3). Runs written before kinds existed are sweeps.
+export const RUN_KINDS = ['sweep', 'quick', 'fix-probe'];
+
+// Fold one complete run's rule findings into the state (design 0.1-c §2.1), as the (run, "rule") fold of `stream`.
 // - Gone only like for like: an item gets `goneAt` only when this run, at the same origin, captured every cell it
 //   was seen in (captured and showing its own route), ran its detector over the same scope (whole-app detectors:
 //   a whole-app run that looked at everything the runs that saw the item looked at; parity and state comparisons:
@@ -319,12 +414,18 @@ const setId = keys => sha(JSON.stringify(keys), 16);
 //   `lastSeen` back, and brings an item back only when it saw it after the last run that looked at it.
 // - `lookedAt`: the last run that looked at every cell of the item (or saw it).
 // - A run that would fix many items at once while most of its screens show the same text fixes nothing.
-// - Folding the same run twice changes nothing.
-export function foldRun(state, { id, scope = {}, wholeApp = false, health = { problems: [] }, scenes = [], findings, origin = null }) {
-  if (state.runs.includes(id)) return state;
-  const newest = !state.runs.some(r => byRun(r, id) > 0);
-  const sets = { ...(state.coverage || {}) };
-  const next = { ...state, runs: [...state.runs, id].sort(byRun), items: { ...state.items } };
+// - Folding the same run twice changes nothing. AI items are never touched here: a capture's silence says nothing
+//   about them (only a re-check can, design §2.4).
+export function foldRun(state, { id, scope = {}, wholeApp = false, health = { problems: [] }, scenes = [], findings, origin = null, kind = 'sweep', key = null, stream = 'main' }) {
+  if (foldOf(state, id, 'rule', stream)) return state;
+  const st = upgrade(state, stream);
+  const entry = { run: id, source: 'rule', key, stream, ...(kind !== 'sweep' ? { kind } : {}) };
+  if (kind !== 'sweep' && kind !== 'quick') return { ...st, folds: withFold(st.folds, entry) };
+  // the watermark is per stream (worktree): another worktree's newer run does not make this one's runs old, and
+  // only this stream's newest run may say what is gone (below)
+  const newest = kind === 'sweep' && !captureRuns(st, stream).some(r => byRun(r, id) > 0);
+  const sets = { ...(st.coverage || {}) };
+  const next = { ...st, runs: [...new Set([...st.runs, id])].sort(byRun), folds: withFold(st.folds, entry), items: { ...st.items } };
   const covered = [...new Set(scenes.filter(looked).map(s => keyOf(s.route, `${s.person}.${s.state}.${s.viewport}`)))].sort();
   const coveredSet = new Set(covered);
   const appRoutes = new Set(scope.routes || []);
@@ -332,7 +433,7 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
   // time) makes the run partial. A route no run has looked at (always broken, always redirected, or a path
   // discover cannot resolve, recorded as `unresolved` in run.json) does not: no whole-app item can have been
   // seen there, and the per-item coverage guards the rest.
-  const seenBefore = new Set(state.seenRoutes || []);
+  const seenBefore = new Set(st.seenRoutes || []);
   const seenNow = new Set(scenes.filter(looked).map(s => s.route));
   const whole = wholeApp === true && ![...appRoutes].some(r => seenBefore.has(r) && !seenNow.has(r));
   next.seenRoutes = [...new Set([...seenBefore, ...seenNow])].sort();
@@ -352,6 +453,7 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
   };
   const seen = new Map();
   for (const f of findings) {
+    if (f.source === 'ai') continue;                                            // AI findings fold through foldAi
     if (!seen.has(f.fp)) seen.set(f.fp, { f, persons: new Set(), viewports: new Set(), states: new Set(), cells: new Set(), scenes: [] });
     const p = seen.get(f.fp);
     const c = f.scene ? cellOfScene(f.scene) : null;
@@ -360,8 +462,9 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
   }
   for (const [fp, p] of seen) {
     const old = next.items[fp];
+    if (old && isAi(old)) continue;
     const route = p.f.route ?? null;
-    const base = { fp, group: p.f.group, lens: p.f.lens, rule: p.f.rule, severity: p.f.severity, route, origin,
+    const base = { fp, group: p.f.group, source: 'rule', stream, lens: p.f.lens, rule: p.f.rule, severity: p.f.severity, route, origin,
       persons: [...p.persons].sort(), viewports: [...p.viewports].sort(), states: [...p.states].sort(), places: p.scenes.length, examples: p.scenes.slice(0, 5),
       selector: p.f.selector ?? null, evidence: p.f.evidence, inputs: fingerprintOf(p.f).inputs };
     const cellsNow = [...p.cells].sort();
@@ -382,17 +485,19 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
     next.items[fp] = item;
   }
   const blind = (health.problems || []).map(p => p.status).filter(s => s === 'app-unreachable' || s === 'recording-stale');
-  if (newest && blind.length) next.blind = { ...(state.blind || {}), [id]: blind[0] };
+  if (newest && blind.length) next.blind = { ...(st.blind || {}), [id]: blind[0] };
   else if (newest) {
     const run = { scope, wholeApp: whole, appRoutes, origin, covered: coveredSet, loginExpired: (health.problems || []).some(p => p.status === 'login-expired') };
     const lookedAt = [], gone = [];
     for (const [fp, item] of Object.entries(next.items)) {
-      if (seen.has(fp) || !lookedAgain(item, run, sets)) continue;
+      // only the worktree that last saw an item can say it is gone: worktrees on other branches would otherwise
+      // fix and bring back each other's items in turn (until M6 makes other branches' captures probes)
+      if (isAi(item) || seen.has(fp) || streamOf(item) !== stream || !lookedAgain(item, run, sets)) continue;
       lookedAt.push(fp);
       if (!item.goneAt) gone.push(fp);
     }
-    const open = Object.values(state.items).filter(i => !i.goneAt).length;
-    if (gone.length >= ONE_PAGE.items && gone.length > ONE_PAGE.share * open && onePage(scenes)) next.blind = { ...(state.blind || {}), [id]: 'one-page' };
+    const open = Object.values(st.items).filter(i => !isAi(i) && !i.goneAt).length;
+    if (gone.length >= ONE_PAGE.items && gone.length > ONE_PAGE.share * open && onePage(scenes)) next.blind = { ...(st.blind || {}), [id]: 'one-page' };
     else {
       for (const fp of lookedAt) next.items[fp] = { ...next.items[fp], lookedAt: id };
       for (const fp of gone) next.items[fp] = { ...next.items[fp], goneAt: id };
@@ -405,15 +510,179 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
 }
 
 // What a complete run folder gives the fold. A file of it that cannot be read is an error: a run is never
-// skipped quietly, or the ledger would say nothing about what it saw.
+// skipped quietly, or the ledger would say nothing about what it saw. `key` names the inputs (design §2.1).
 export function runForFold(runDir) {
   const fix = `fix or remove the run folder ${runDir}`;
-  const meta = readJsonFile(join(runDir, 'run.json'), fix);
-  const manifest = readJsonFile(join(runDir, 'manifest.json'), fix);
-  const doc = readJsonFile(join(runDir, 'findings.json'), fix);
+  const meta = readJson(join(runDir, 'run.json'), fix);
+  const manifest = readJson(join(runDir, 'manifest.json'), fix);
+  const doc = readJson(join(runDir, 'findings.json'), fix);
   if (!Array.isArray(manifest?.scenes) || !Array.isArray(doc?.findings)) throw corrupt(runDir, `is not a complete capture run (no scenes in manifest.json or no findings in findings.json): ${fix}`);
-  return { id: basename(runDir), scope: meta?.scope || {}, wholeApp: meta?.wholeApp === true, health: manifest.health || { problems: [] }, scenes: manifest.scenes,
+  const kind = meta?.kind === undefined ? 'sweep' : String(meta.kind);
+  const input = { id: basename(runDir), kind, scope: meta?.scope || {}, wholeApp: meta?.wholeApp === true, health: manifest.health || { problems: [] }, scenes: manifest.scenes,
     origin: originOf(manifest.baseUrl), findings: doc.findings.map(f => (f.fp ? f : { ...f, fp: fingerprintOf(f).fp, group: fingerprintOf(f).group })) };
+  return { ...input, key: sha(stableJson(input), 16) };
+}
+
+// ---- AI items (design §2.2–§2.4) --------------------------------------------------------------------------
+//
+// An AI item keeps what each fold contributed, so a (run, source) folded again replaces its own contribution and
+// nothing else:
+// - `hunts`: one entry per hunt (run) that claimed it — the verdict the run's verifier gave, its severities, the
+//   cells and the screens' hashes — or that saw one of its cells and did not claim it (`silent`);
+// - `rechecks`: one entry per re-check, its verdict per cell.
+// Everything else is derived from those (deriveAi), the same whatever order the folds came in.
+
+const CREATES = s => s === 'confirmed' || s === 'claimed';
+// A hunt's claim says the defect is there unless a verifier that was not suspect rejected it.
+const PRESENT = h => h.claimed && !(h.status === 'rejected' && !h.suspect);
+const STATUS_RANK = { confirmed: 0, claimed: 1, insufficient: 2, rejected: 3 };
+const byEvent = (a, b) => byRun(String(a.run), String(b.run)) || cmp(a.stream ?? 'main', b.stream ?? 'main');
+export const STALE_HUNTS = 2;
+const AI_VERDICTS = new Set(['confirmed', 'rejected', 'insufficient']);
+
+// One AI item from its contributions; null when no hunt claims it as a defect any more (rejected and insufficient
+// claims never make an item, design §2.2).
+export function deriveAi(item) {
+  const hunts = (item.hunts || []).slice().sort(byEvent);
+  const rechecks = (item.rechecks || []).slice().sort(byEvent);
+  const claims = hunts.filter(h => h.claimed);
+  if (!claims.some(h => CREATES(h.status))) return null;
+  const present = claims.filter(PRESENT);
+  const latest = present[present.length - 1] || claims[claims.length - 1];
+  const cells = [...new Set(present.flatMap(h => h.cells || []))].sort();
+  // what happened, in run order: seen (a claim, or a re-check that found it still there or its screen unchanged),
+  // gone (a re-check that was not suspect and said gone in every cell), insufficient (a re-check that could not
+  // tell). In one run, gone goes first: a claim in the same run keeps it open.
+  const events = [];
+  for (const h of present) events.push({ run: h.run, stream: h.stream, t: 2, h });
+  for (const r of rechecks) {
+    const v = r.cells || {};
+    const verdicts = Object.values(v).map(x => x?.verdict);
+    // a re-check of a run older than a sighting already folded when it was recorded compared the wrong screens: it
+    // can say "still there", never "gone" (else the later sighting would read as the defect coming back)
+    const stale = present.some(h => byRun(String(h.run), String(r.run)) > 0 && Number.isFinite(h.at) && Number.isFinite(r.at) && h.at <= r.at);
+    if (verdicts.some(x => x === 'still-there' || x === 'unchanged')) events.push({ run: r.run, stream: r.stream, t: 2, r });
+    else if (!r.suspect && !stale && cells.length && cells.every(c => v[c]?.verdict === 'gone')) events.push({ run: r.run, stream: r.stream, t: 0, r });
+    else if (verdicts.includes('insufficient')) events.push({ run: r.run, stream: r.stream, t: 1, r });
+  }
+  events.sort((a, b) => byEvent(a, b) || a.t - b.t);
+  let goneAt = null, regressedAt = null, lastSeen = null, needsYou = null, lastStream = null;
+  for (const e of events) {
+    if (e.t === 2) {
+      if (goneAt && byRun(e.run, goneAt) > 0) regressedAt = e.run;
+      goneAt = null; needsYou = null;
+      if (!lastSeen || byRun(e.run, lastSeen) >= 0) lastStream = streamOf(e);
+      lastSeen = maxRun(lastSeen, e.run);
+    } else if (e.t === 0) {
+      // as for rule items: only the worktree that last saw it can say it is gone
+      if (!goneAt && (!lastStream || streamOf(e) === lastStream)) goneAt = e.run;
+      if (goneAt) needsYou = null;
+    } else if (!goneAt) needsYou = { reason: 'recheck-insufficient', run: e.run };
+  }
+  const lastHunted = hunts.reduce((m, h) => maxRun(m, h.run), null);
+  const silent = new Set(hunts.filter(h => h.silent && lastSeen && byRun(h.run, lastSeen) > 0).map(h => `${h.run}|${h.stream ?? 'main'}`));
+  // the verdict: the latest one a verifier gave that was not suspect, else the latest suspect one, else claimed
+  const judged = claims.filter(h => AI_VERDICTS.has(h.status));
+  const chosen = judged.filter(h => !h.suspect).pop() || judged.pop() || latest;
+  const verification = {
+    status: chosen.status, by: chosen.by ?? null, ...(chosen.vendor ? { vendor: chosen.vendor } : {}), suspect: !!chosen.suspect, run: chosen.run,
+    ...(AI_VERDICTS.has(chosen.status) && Number.isFinite(chosen.at) ? { at: chosen.at } : {}),
+  };
+  // the screen it was last seen on, per cell, with its element and box there: the old evidence a re-check shows and
+  // compares the new screen with. A claim sets it; a re-check moves it only when the screen was unchanged (the same
+  // pixels and text, so the element and box still hold); a "still there" on a changed screen moves lastSeen only.
+  const seen = {};
+  const note = (cell, s, run) => { if (s && (!seen[cell] || byRun(run, seen[cell].run) >= 0)) seen[cell] = { ...s, run }; };
+  const marks = [...present.map(h => ({ run: h.run, stream: h.stream, h })), ...rechecks.map(r => ({ run: r.run, stream: r.stream, r }))].sort(byEvent);
+  for (const m of marks) {
+    if (m.h) for (const [c, s] of Object.entries(m.h.scenes || {})) note(c, s, m.h.run);
+    else for (const [c, s] of Object.entries(m.r.cells || {})) if (s?.verdict === 'unchanged' && seen[c]) note(c, { ...seen[c], scene: s.scene ?? seen[c].scene, top: s.top ?? null, full: s.full ?? null, textHash: s.textHash ?? null, src: s.src ?? null }, m.r.run);
+  }
+  const parts = cells.map(c => c.split('.'));
+  const out = {
+    fp: item.fp, group: latest.group || item.group, source: 'ai', stream: lastStream || streamOf(latest), lens: item.lens, rule: item.rule, route: item.route ?? null, inputs: item.inputs, addedAt: item.addedAt ?? null,
+    // displayed: the severity a verifier that confirmed it gave; rejected and insufficient keep the claimed one
+    severity: (chosen.status === 'confirmed' ? chosen.verdictSeverity : null) || latest.claimedSeverity,
+    claimedSeverity: latest.claimedSeverity, protect: worst(present.flatMap(h => [h.claimedSeverity, h.verdictSeverity])) || latest.claimedSeverity,
+    verification, cells, persons: [...new Set(parts.map(p => p[0]))].sort(), states: [...new Set(parts.map(p => p[1]))].sort(), viewports: [...new Set(parts.map(p => p[2]))].sort(),
+    places: (latest.examples || []).length, examples: (latest.examples || []).slice(0, 5), selector: latest.selector ?? null, box: latest.box ?? null,
+    evidence: latest.evidence || {}, identity: latest.identity || null, seen,
+    firstSeen: present.reduce((m, h) => minRun(m, h.run), null) || latest.run, lastSeen: lastSeen || latest.run,
+    lookedAt: [lastHunted, ...rechecks.map(r => r.run)].reduce(maxRun, null), lastHunted, silentHunts: silent.size,
+    goneAt, regressedAt, ...(needsYou ? { needsYou } : {}),
+    hunts, rechecks,
+  };
+  return out;
+}
+
+// Fold the (run, "ai") contribution of `stream` (design §2.2). `findings`: the run's AI findings that passed the
+// grounding re-check (ai-fold.mjs aiFoldInput), each with fp, group, its cell, its verdict and severities.
+// `seen`: the cells the hunt saw, as `lens|route|cell`. A finding rejected or insufficient never makes an item; on
+// an existing item it is the verdict this run gave. An item of the same lens whose cell the hunt saw and did not
+// claim gets a silent hunt (staleness). Folding the same inputs again changes nothing; other inputs replace.
+export function foldAi(state, { run, stream = 'main', key = null, findings = [], seen = [], now = Date.now() }) {
+  const prior = foldOf(state, run, 'ai', stream);
+  if (prior && key !== null && prior.key === key) return state;
+  const st = upgrade(state, stream);
+  const items = { ...st.items };
+  const touched = new Set();
+  const mine = h => h.run === run && (h.stream ?? 'main') === stream;
+  if (prior) for (const [fp, it] of Object.entries(items)) if (isAi(it) && (it.hunts || []).some(mine)) { items[fp] = { ...it, hunts: it.hunts.filter(h => !mine(h)) }; touched.add(fp); }
+  const byFp = new Map();
+  for (const f of findings) { if (!byFp.has(f.fp)) byFp.set(f.fp, []); byFp.get(f.fp).push(f); }
+  for (const fp of [...byFp.keys()].sort()) {
+    const list = byFp.get(fp).slice().sort((a, b) => cmp(String(a.scene), String(b.scene)) || cmp(stableJson(a), stableJson(b)));
+    let it = items[fp];
+    if (it && !isAi(it)) continue;
+    if (!it) {
+      if (!list.some(f => CREATES(f.status))) continue;
+      const f = list[0];
+      it = { fp, group: f.group, source: 'ai', lens: f.lens, rule: f.rule, route: f.route ?? null, inputs: f.inputs, addedAt: now, hunts: [], rechecks: [] };
+    }
+    const best = list.slice().sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status])[0];
+    const scenes = {};
+    for (const f of list) if (f.cell && f.sceneHash) scenes[f.cell] = { scene: f.scene, ...f.sceneHash, selector: f.selector ?? null, box: f.box ?? null };
+    const entry = {
+      run, stream, at: now, claimed: true, status: best.status, suspect: list.some(f => !!f.suspect), by: best.by ?? null, ...(best.vendor ? { vendor: best.vendor } : {}),
+      claimedSeverity: worst(list.map(f => f.claimedSeverity)), verdictSeverity: worst(list.filter(f => AI_VERDICTS.has(f.status)).map(f => f.verdictSeverity)),
+      cells: [...new Set(list.map(f => f.cell).filter(Boolean))].sort(), scenes, group: best.group,
+      examples: [...new Set(list.map(f => f.scene).filter(Boolean))].sort().slice(0, 20), selector: best.selector ?? null, box: best.box ?? null,
+      evidence: best.evidence || {}, identity: best.identity || null,
+    };
+    items[fp] = { ...it, hunts: [...(it.hunts || []).filter(h => !mine(h)), entry].sort(byEvent) };
+    touched.add(fp);
+  }
+  // silent hunts: the hunt saw a cell of the item (same lens) and did not claim it
+  const seenSet = new Set(seen);
+  for (const [fp, it] of Object.entries(items)) {
+    if (!isAi(it) || byFp.has(fp)) continue;
+    if (!(it.cells || []).some(c => seenSet.has(`${it.lens}|${it.route}|${c}`))) continue;
+    items[fp] = { ...it, hunts: [...(it.hunts || []).filter(h => !mine(h)), { run, stream, at: now, silent: true }].sort(byEvent) };
+    touched.add(fp);
+  }
+  for (const fp of touched) { const d = deriveAi(items[fp]); if (d) items[fp] = d; else delete items[fp]; }
+  return { ...st, items, folds: withFold(st.folds, { run, source: 'ai', key, stream }) };
+}
+
+// Fold the (run, "recheck") contribution (design §2.4). `results`: per AI item, its verdict per cell
+// (`gone`, `still-there`, `insufficient`, `unchanged` (no packet: nothing changed), `unanswered`, `not-captured`)
+// with the new screen's hashes. A suspect batch never makes anything gone; still-there and unchanged still count.
+export function foldRecheck(state, { run, stream = 'main', key = null, suspect = false, results = [], now = Date.now() }) {
+  const prior = foldOf(state, run, 'recheck', stream);
+  if (prior && key !== null && prior.key === key) return state;
+  const st = upgrade(state, stream);
+  const items = { ...st.items };
+  const touched = new Set();
+  const mine = r => r.run === run && (r.stream ?? 'main') === stream;
+  if (prior) for (const [fp, it] of Object.entries(items)) if (isAi(it) && (it.rechecks || []).some(mine)) { items[fp] = { ...it, rechecks: it.rechecks.filter(r => !mine(r)) }; touched.add(fp); }
+  for (const r of results.slice().sort((a, b) => cmp(a.fp, b.fp))) {
+    const it = items[r.fp];
+    if (!it || !isAi(it)) continue;
+    items[r.fp] = { ...it, rechecks: [...(it.rechecks || []).filter(x => !mine(x)), { run, stream, at: now, suspect: !!suspect, cells: r.cells || {} }].sort(byEvent) };
+    touched.add(r.fp);
+  }
+  for (const fp of touched) { const d = deriveAi(items[fp]); if (d) items[fp] = d; else delete items[fp]; }
+  return { ...st, items, folds: withFold(st.folds, { run, source: 'recheck', key, stream }) };
 }
 
 // When this machine first saw each decision, by id and content (design §8.3 first-seen ordering). Never
@@ -427,22 +696,40 @@ export function noteDecisions(state, decisions, now = Date.now()) {
   return { ...state, decisionsSeen: out };
 }
 
-// Brings the ledger up to date, under the ledger lock: every complete run not folded yet is folded, oldest
-// first, and (with `decisions`) every decision not seen before is noted. A crash after a run is complete and
-// before its fold leaves nothing behind: the next command folds it. A state of an older fingerprint version is
-// written back migrated. Nothing to do: nothing is written.
-export function syncLedger(stateFile, runsDir, { decisions = null, now = Date.now(), timeoutMs } = {}) {
-  const pending = s => listRuns(runsDir).complete.filter(id => !s.runs.includes(id)).sort(byRun);
-  const unseen = s => !!decisions && decisions.some(d => !Object.hasOwn(s.decisionsSeen || {}, approvalKey(d)));
-  const state = readState(stateFile);
-  if (!pending(state).length && !unseen(state) && !MIGRATED.has(state)) return state;
-  return withLock(stateFile, lock => {
-    let s = readState(stateFile);
-    for (const id of pending(s)) { s = foldRun(s, runForFold(join(runsDir, id))); lock.touch(); }
+// Brings the ledger up to date, through the state store (state.mjs updateDoc: read, fold, commit if nobody wrote in
+// between, else read again; the file it replaces is kept as ledger.json.prev):
+// - every complete run of `runsDir` not folded yet for `stream` is folded, oldest first (its rule findings);
+// - with `loaders.ai` / `loaders.recheck` (ai-fold.mjs, recheck.mjs), every run whose verified AI findings or
+//   re-check verdicts are not folded yet, or changed since (a re-verify), is folded as (run, "ai") / (run, "recheck");
+// - with `decisions`, every decision not seen before is noted.
+// A crash after a run is complete and before its fold leaves nothing behind: the next command folds it. A state of
+// an older schema or fingerprint version is written back migrated. Nothing to do: nothing is written.
+// `generation`: the state's generation file, bumped when something is written.
+export function syncLedger(stateFile, runsDir, { decisions = null, now = Date.now(), timeoutMs, stream = 'main', generation = null, loaders = {} } = {}) {
+  const runs = () => listRuns(runsDir).complete.slice().sort(byRun);
+  const out = updateDoc(stateFile, (doc, { lock }) => {
+    const s0 = doc === null ? emptyState() : migrateAll(doc, stream);
+    let s = s0;
+    const ids = runs();
+    for (const id of ids) if (!foldOf(s, id, 'rule', stream)) { s = foldRun(s, { ...runForFold(join(runsDir, id)), stream }); lock?.touch(); }
+    for (const [source, fold] of [['ai', foldAi], ['recheck', foldRecheck]]) {
+      const l = loaders[source];
+      if (!l) continue;
+      for (const id of ids) {
+        const dir = join(runsDir, id);
+        const key = l.key(dir);
+        if (key === null) continue;
+        if (foldOf(s, id, source, stream)?.key === key) continue;
+        const input = l.input(dir);
+        if (!input) continue;
+        s = fold(s, { ...input, run: id, key, stream, now });
+        lock?.touch();
+      }
+    }
     if (decisions) s = noteDecisions(s, decisions, now);
-    writeAtomic(stateFile, stableJson(s), { durable: true });
-    return s;
-  }, { timeoutMs });
+    return s !== s0 || (doc !== null && s0 !== doc) ? s : doc;
+  }, { read: { fix: REBUILD, validate: isLedger, why: 'is not a nunchi ledger' }, timeoutMs, generation });
+  return out === null ? emptyState() : migrateAll(out, stream);
 }
 
 // ---- decisions (committed, append-only) ------------------------------------------------------------
@@ -477,7 +764,7 @@ export function readDecisions(dir) {
     if (!st.isDirectory()) continue;
     for (const f of readdirSync(sub).filter(f => f.endsWith('.json')).sort()) {
       const file = join(sub, f);
-      const d = readJsonFile(file, `a torn write or a bad merge; ${fix}`, { max: DECISION_MAX_BYTES });
+      const d = readJson(file, `a torn write or a bad merge; ${fix}`, { max: DECISION_MAX_BYTES });
       if (!isDecision(d)) throw corrupt(file, `is not a nunchi decision: ${fix}`);
       if (`${d.id}.json` !== f || folderOf(d.target) !== folder) throw corrupt(file, `does not match its place (decision ${d.id} belongs in ${folderOf(d.target)}/${d.id}.json): moved, copied or edited by hand; ${fix}`);
       out.push(d);
@@ -510,22 +797,29 @@ export const writeDecision = (dir, input) => saveDecision(dir, buildDecision(inp
 export const decisionHash = d => sha(stableJson(d), 64);
 export const approvalKey = d => `${d.id}:${decisionHash(d)}`;
 const APPROVED_FIX = 'nothing was written; fix it by hand, or delete it (decisions made here then need nunchi approve again)';
+const strings = x => Array.isArray(x) && x.every(y => typeof y === 'string');
+export const isApprovedDoc = doc => !!doc && strings(doc.approved) && (doc.legacy === undefined || strings(doc.legacy));
+const APPROVED_READ = { fix: APPROVED_FIX, validate: isApprovedDoc, why: 'has no "approved" list' };
+const NOTE = 'decisions made or approved on this machine, by id and content; anything else came through git';
 
 function readApprovedDoc(file) {
-  if (!present(file)) return { approved: new Set(), legacy: [] };
-  const doc = readJsonFile(file, APPROVED_FIX);
-  const strings = x => Array.isArray(x) && x.every(y => typeof y === 'string');
-  if (!doc || !strings(doc.approved) || (doc.legacy !== undefined && !strings(doc.legacy))) throw corrupt(file, `has no "approved" list: ${APPROVED_FIX}`);
-  return { approved: new Set(doc.approved), legacy: doc.legacy || [] };
+  const { doc } = readDoc(file, APPROVED_READ);
+  return doc ? { approved: new Set(doc.approved), legacy: doc.legacy || [] } : { approved: new Set(), legacy: [] };
 }
 export const readApproved = file => readApprovedDoc(file).approved;
+// Two approval lists of this machine, merged (state.mjs adoptLegacy). Every approval and legacy id of both stays.
+export function mergeApprovedDocs(a, b) {
+  const approved = [...new Set([...(a?.approved || []), ...(b?.approved || [])])].sort();
+  const legacy = [...new Set([...(a?.legacy || []), ...(b?.legacy || [])])].sort();
+  return { schema: 2, note: NOTE, approved, ...(legacy.length ? { legacy } : {}) };
+}
 
 // Is a decision on this target one that could hide something serious (a blocker or an L9 finding)? A target the
-// ledger does not know counts as serious.
+// ledger does not know counts as serious. An AI item counts by its protected severity.
 export function seriousTarget(state) {
   const fps = new Map(), groups = new Map();
   for (const i of Object.values(state.items)) {
-    const s = i.severity === 'blocker' || i.lens === 'L9';
+    const s = protectOf(i) === 'blocker' || i.lens === 'L9';
     fps.set(i.fp, s);
     groups.set(i.group, groups.get(i.group) || s);
   }
@@ -561,17 +855,19 @@ export function bindApproved(approved, decisions, { serious = () => true } = {})
   return { approved: out, bound, left };
 }
 
-// Under a lock, so two decides at once both count; a file that cannot be read stops the write. Older approvals
-// are carried over on the way (bindApproved); those not carried over are kept under `legacy`, never honoured.
-export function addApproved(file, keys, { decisions = [], serious } = {}) {
-  return withLock(file, () => {
-    const doc = readApprovedDoc(file);
-    const r = bindApproved(doc.approved, decisions, { serious });
+// Through the state store (read, change, commit if nobody wrote in between, else again), so two decides at once
+// both count; a file that cannot be read stops the write. Older approvals are carried over on the way
+// (bindApproved); those not carried over are kept under `legacy`, never honoured.
+export function addApproved(file, keys, { decisions = [], serious, generation = null } = {}) {
+  let r;
+  updateDoc(file, doc => {
+    const cur = doc ? { approved: new Set(doc.approved), legacy: doc.legacy || [] } : { approved: new Set(), legacy: [] };
+    r = bindApproved(cur.approved, decisions, { serious });
     for (const k of keys) r.approved.add(k);
-    const legacy = [...new Set([...doc.legacy, ...r.left.map(x => x.id)])].sort();
-    writeAtomic(file, stableJson({ schema: 2, note: 'decisions made or approved on this machine, by id and content; anything else came through git', approved: [...r.approved].sort(), ...(legacy.length ? { legacy } : {}) }), { durable: true });
-    return r;
-  });
+    const legacy = [...new Set([...cur.legacy, ...r.left.map(x => x.id)])].sort();
+    return { schema: 2, note: NOTE, approved: [...r.approved].sort(), ...(legacy.length ? { legacy } : {}) };
+  }, { read: APPROVED_READ, prev: false, generation });
+  return r;
 }
 
 // ---- view ------------------------------------------------------------------------------------------
@@ -580,6 +876,8 @@ export function addApproved(file, keys, { decisions = [], serious } = {}) {
 export const FUTURE_SLACK_MS = 5 * 60e3;
 // An open item no run has looked at again for this many runs is said to be so: it cannot be marked fixed.
 export const NOT_LOOKED_RUNS = 3;
+// An AI item double-checked by a verifier that was not suspect.
+export const checkedAi = item => item.verification?.status === 'confirmed' && !item.verification.suspect;
 
 // Status of every fingerprint, from the state and the decisions. The latest decision on the fingerprint or on
 // its group that may count wins (at the same time, the fingerprint's). A decision's time is the earlier of its
@@ -588,6 +886,9 @@ export const NOT_LOOKED_RUNS = 3;
 // of its arrival (or with no readable date), and a keep or false-positive on a blocker or an L9 finding that
 // was not made or approved on this machine (came through git). A decision made under an older fingerprint
 // version follows its item (currentTargets); its approval and arrival stay those of the file as written.
+// AI items (design §2.2): a group decision covers one only when it is double-checked (confirmed, not suspect) or
+// the decision came after its latest verification; on a blocker or L9 item it never covers a fingerprint first
+// seen after the decision. An AI item no longer claimed by 2 hunts that saw its screen is `stale`.
 export function view(state, decisions, approved = new Set(), { now = Date.now() } = {}) {
   decisions = currentTargets(decisions, state);
   const seenAt = state.decisionsSeen || {};
@@ -602,17 +903,26 @@ export function view(state, decisions, approved = new Set(), { now = Date.now() 
     if (!on.has(k)) on.set(k, []);
     on.get(k).push(d);
   }
-  const position = new Map(state.runs.map((r, i) => [r, i]));
+  // "not looked at for 3 runs" counts the runs of the item's own stream (worktree): another worktree's captures do
+  // not look at it (only the stream that last saw an item can fix it)
+  const streams = new Map();
+  const runsOf = s => { if (!streams.has(s)) { const list = captureRuns(state, s); streams.set(s, { list, at: new Map(list.map((r, i) => [r, i])) }); } return streams.get(s); };
   const rows = [];
   for (const item of Object.values(state.items)) {
+    const ai = isAi(item);
     const mine = [...(on.get(`group:${item.group}`) || []).map(d => [d, 0]), ...(on.get(`fp:${item.fp}`) || []).map(d => [d, 1])]
       .sort((a, b) => timeOf(a[0]) - timeOf(b[0]) || a[1] - b[1] || (a[0].id < b[0].id ? -1 : a[0].id > b[0].id ? 1 : 0)).map(x => x[0]);
-    const serious = item.severity === 'blocker' || item.lens === 'L9';
+    const serious = protectOf(item) === 'blocker' || item.lens === 'L9';
     let d = null, note = null;
     for (let i = mine.length - 1; i >= 0 && !d; i--) {
       const x = mine[i];
       if (!dated(x)) { note ||= `a ${x.decision} decision dated ${x.at}, ahead of when it arrived here (or with no readable date), does not count`; continue; }
       if (serious && !approved.has(keyOfDecision(x)) && (x.decision === 'keep' || x.decision === 'false-positive')) { note ||= `a ${x.decision} decision came through git and needs approval on this machine`; continue; }
+      if (ai && !x.target.fp) {
+        if (serious && Number.isFinite(item.addedAt) && timeOf(x) < item.addedAt) { note ||= `a group ${x.decision} decision made before this AI finding was first seen does not cover it (blocker or L9)`; continue; }
+        const at = item.verification?.at;
+        if (!checkedAi(item) && !(Number.isFinite(at) && timeOf(x) >= at)) { note ||= `a group ${x.decision} decision does not cover an AI finding that was not double-checked when it was made`; continue; }
+      }
       d = x;
     }
     const verified = d ? approved.has(keyOfDecision(d)) : true;
@@ -624,9 +934,13 @@ export function view(state, decisions, approved = new Set(), { now = Date.now() 
     else if (d?.decision === 'hold') status = 'held';
     else if (d?.decision === 'fix') status = 'to-fix';
     else status = item.regressedAt ? 'regressed' : 'open';
+    const stale = ai && !item.goneAt && (item.silentHunts || 0) >= STALE_HUNTS;
+    if (stale && (status === 'open' || status === 'regressed')) status = 'stale';
     const last = item.lookedAt || item.lastSeen;
-    const notLookedAt = !item.goneAt && position.has(last) && state.runs.length - 1 - position.get(last) >= NOT_LOOKED_RUNS ? last : null;
-    rows.push({ ...item, status, decision: d ? { id: d.id, decision: d.decision, reason: d.reason, by: d.by, at: d.at, verified } : null, note, notLookedAt });
+    const own = runsOf(streamOf(item));
+    const notLookedAt = !item.goneAt && own.at.has(last) && own.list.length - 1 - own.at.get(last) >= NOT_LOOKED_RUNS ? last : null;
+    rows.push({ ...item, source: item.source || 'rule', status, decision: d ? { id: d.id, decision: d.decision, reason: d.reason, by: d.by, at: d.at, verified } : null, note, notLookedAt,
+      ...(ai ? { stale, needsYou: item.needsYou ?? null, checked: checkedAi(item) } : {}) });
   }
   return rows.sort((x, y) => SEVERITY[x.severity] - SEVERITY[y.severity] || (x.group < y.group ? -1 : x.group > y.group ? 1 : x.fp < y.fp ? -1 : 1));
 }
@@ -635,13 +949,14 @@ export function view(state, decisions, approved = new Set(), { now = Date.now() 
 export function groups(rows) {
   const by = new Map();
   for (const r of rows) {
-    if (!by.has(r.group)) by.set(r.group, { group: r.group, lens: r.lens, rule: r.rule, title: titleOf(r.rule), severity: r.severity, routes: [], fps: [], places: 0, statuses: {}, example: r });
+    if (!by.has(r.group)) by.set(r.group, { group: r.group, lens: r.lens, rule: r.rule, source: r.source || 'rule', title: titleOf(r.rule), severity: r.severity, routes: [], fps: [], places: 0, statuses: {}, example: r });
     const g = by.get(r.group);
     if (SEVERITY[r.severity] < SEVERITY[g.severity]) g.severity = r.severity;
     if (r.route !== null && !g.routes.includes(r.route)) g.routes.push(r.route);
     g.fps.push(r.fp);
     g.places += r.places || 1;
     g.statuses[r.status] = (g.statuses[r.status] || 0) + 1;
+    if (r.source === 'ai') g.checked = (g.checked ?? true) && !!r.checked;
   }
   return [...by.values()].map(g => ({ ...g, routes: g.routes.sort(), fps: g.fps.sort(), status: Object.keys(g.statuses).length === 1 ? Object.keys(g.statuses)[0] : 'mixed' }))
     .sort((a, b) => SEVERITY[a.severity] - SEVERITY[b.severity] || b.routes.length - a.routes.length || b.places - a.places || (a.group < b.group ? -1 : 1));
@@ -649,29 +964,34 @@ export function groups(rows) {
 
 // ---- trust (spec §4) ----------------------------------------------------------------------------------
 
-// Per lens: precision = fix ÷ (fix + false positive) over the last 20 decisions of those two kinds; below 70%
-// the lens's new findings are suspect. "Intended" keeps are not counted: the finding was right, the person
+// Per lens and source (design §2.2: rules and the AI share L1, L2, L4, L6, L7, L9 and L10, and one must not lend the
+// other its record): precision = fix ÷ (fix + false positive) over the last 20 decisions of those two kinds; below
+// 70% the lens's new findings are suspect. "Intended" keeps are not counted: the finding was right, the person
 // wants it that way. Resolution: how many findings decided "fix" are now gone on re-capture.
+// Keys: the lens for rules (as before AI items existed), `<lens>/ai` for the AI; each entry names its lens and source.
+export const trustKey = (lens, source) => (source === 'ai' ? `${lens}/ai` : lens);
 export function trust(rows, decisions, { window = 20, threshold = 0.7 } = {}) {
-  const lensOf = new Map();
-  for (const r of rows) { lensOf.set(`fp:${r.fp}`, r.lens); lensOf.set(`group:${r.group}`, r.lens); }
+  const keyOfTarget = new Map();
+  for (const r of rows) { const k = [r.lens, r.source === 'ai' ? 'ai' : 'rule']; keyOfTarget.set(`fp:${r.fp}`, k); keyOfTarget.set(`group:${r.group}`, k); }
   const out = {};
-  const ensure = l => (out[l] ||= { window, fix: 0, falsePositive: 0, precision: null, suspect: false, decidedFix: 0, fixed: 0 });
-  const per = {};
+  const ensure = (lens, source) => (out[trustKey(lens, source)] ||= { lens, source, window, fix: 0, falsePositive: 0, precision: null, suspect: false, decidedFix: 0, fixed: 0 });
+  const per = new Map();
   for (const d of decisions) {
-    const lens = lensOf.get(d.target.fp ? `fp:${d.target.fp}` : `group:${d.target.group}`);
-    if (!lens || (d.decision !== 'fix' && d.decision !== 'false-positive')) continue;
-    (per[lens] ||= []).push(d);
+    const k = keyOfTarget.get(d.target.fp ? `fp:${d.target.fp}` : `group:${d.target.group}`);
+    if (!k || (d.decision !== 'fix' && d.decision !== 'false-positive')) continue;
+    const id = trustKey(...k);
+    if (!per.has(id)) per.set(id, { k, list: [] });
+    per.get(id).list.push(d);
   }
-  for (const [lens, list] of Object.entries(per)) {
-    const t = ensure(lens);
+  for (const { k, list } of per.values()) {
+    const t = ensure(...k);
     for (const d of list.slice(-window)) d.decision === 'fix' ? t.fix++ : t.falsePositive++;
     t.precision = t.fix + t.falsePositive ? t.fix / (t.fix + t.falsePositive) : null;
     t.suspect = t.precision !== null && t.fix + t.falsePositive >= 5 && t.precision < threshold;
   }
   for (const r of rows) {
     if (r.decision?.decision !== 'fix' && r.status !== 'fixed') continue;
-    const t = ensure(r.lens);
+    const t = ensure(r.lens, r.source === 'ai' ? 'ai' : 'rule');
     if (r.decision?.decision === 'fix') { t.decidedFix++; if (r.status === 'fixed') t.fixed++; }
   }
   return Object.fromEntries(Object.entries(out).sort());

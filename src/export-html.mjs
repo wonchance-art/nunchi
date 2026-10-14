@@ -14,7 +14,9 @@
 import { readFileSync, existsSync, mkdirSync, copyFileSync, writeFileSync, lstatSync, readdirSync, unlinkSync, renameSync, realpathSync, rmdirSync, constants as FS } from 'node:fs';
 import { join, resolve, relative, isAbsolute, dirname, basename } from 'node:path';
 import { createHash } from 'node:crypto';
-import { readState, foldRun, readDecisions, readApproved, view, groups as groupRows, titleOf, annotate, runForFold, migrateState, noteDecisions, byRun, originOf, FINGERPRINT_VERSION } from './ledger.mjs';
+import { readState, foldRun, foldAi, foldOf, readDecisions, readApproved, view, groups as groupRows, titleOf, annotate, runForFold, migrateState, noteDecisions, byRun, originOf, captureRuns, latestRunOf, FINGERPRINT_VERSION } from './ledger.mjs';
+import { stateRoot, stateFiles } from './state.mjs';
+import { foldFinding } from './ai-fold.mjs';
 import { readManifest, jpegSize, sceneIndex, sceneDir } from './hunt.mjs';
 import { scrubSecrets } from './rules.mjs';
 import { redactUrl, redactText } from './network.mjs';
@@ -124,15 +126,21 @@ export function buildModel({ runDir, nunchiDir, ledger = null }) {
   const coverage = readJsonOr(join(runDir, 'coverage.json'), null);
   const flow = readJsonOr(join(runDir, 'flow.json'), null);
 
-  // the ledger through its own functions: the CLI brings it up to date first (syncLedger) and passes it in
-  const state = ledger?.state ?? readState(join(nunchiDir, 'state', 'ledger.json'));
+  // the ledger through its own functions: the CLI brings it up to date first (syncLedger) and passes it in; else it
+  // is read from the state store this project uses (state.mjs: the repository's shared folder, or .nunchi/state)
+  const root = ledger?.st?.root ?? (ledger ? null : stateRoot(dirname(nunchiDir)));
+  const files = ledger ? null : stateFiles(root.dir);
+  const stream = root?.stream ?? 'main';
+  const state = ledger?.state ?? readState(files.ledger);
   const decisions = ledger?.decisions ?? readDecisions(join(nunchiDir, 'decisions'));
-  const approved = ledger?.approved ?? readApproved(join(nunchiDir, 'state', 'approved.json'));
+  const approved = ledger?.approved ?? readApproved(files.approved);
   const now = dataNow(state, decisions);
   const seen = noteDecisions(state, decisions, now);                // in memory only
   const fresh = list => annotate(list.filter(f => f && typeof f === 'object').map(({ fp, group, ...f }) => f)).map(normFinding);
-  const inLedger = runId !== null && state.runs.includes(runId);
-  const latest = state.runs.length ? state.runs[state.runs.length - 1] : null;
+  // this worktree's runs (its stream, §7): another worktree's newer run does not make this one's latest run old
+  const own = captureRuns(state, stream);
+  const inLedger = runId !== null && own.includes(runId);
+  const latest = latestRunOf(state, stream);
   const empty = { schema: 1, fingerprintVersion: 1, runs: [], items: {} };
   // A run the local ledger has not folded (a --out folder, a fresh clone) is folded here, in memory only, with
   // fingerprints of the current version. An older run is shown as the ledger stood after it.
@@ -142,19 +150,23 @@ export function buildModel({ runDir, nunchiDir, ledger = null }) {
     ruleState = noteDecisions(foldRun({ ...empty, fingerprintVersion: FINGERPRINT_VERSION }, { id: runId ?? 'this run', scope: meta.scope || {}, wholeApp: meta.wholeApp === true,
       health: manifest.health || { problems: [] }, scenes: Array.isArray(manifest.scenes) ? manifest.scenes : [], findings: rules, origin: originOf(manifest.baseUrl) }), decisions, now);
   } else {
-    if (runId !== latest) { ({ state: ruleState, asOfNow } = stateAt(state, runId, join(nunchiDir, 'runs'))); ruleState = { ...ruleState, decisionsSeen: seen.decisionsSeen }; }
+    if (runId !== latest) { ({ state: ruleState, asOfNow } = stateAt({ ...state, runs: own }, runId, join(nunchiDir, 'runs'))); ruleState = { ...ruleState, decisionsSeen: seen.decisionsSeen }; }
     // a run captured under an older fingerprint version: its findings are named as the ledger names them now
     const alias = ruleState.aliases || {};
     const list = (Array.isArray(ruleFindings) ? ruleFindings : []).filter(f => f && typeof f === 'object');
     rules = (list.every(f => f.fp && f.group) ? list : annotate(list.map(({ fp, group, ...f }) => f)))
       .map(f => normFinding({ ...f, fp: alias.fp?.[f.fp] || f.fp, group: alias.group?.[f.group] || f.group }));
   }
-  // AI findings are not in the ledger yet (design M1); their decisions still apply by fingerprint and group.
+  // AI findings (design §2.2): from the ledger when it folded this run's (the latest run's) AI hunt or re-check;
+  // otherwise folded here, in memory only, as the ledger would, so their decisions still apply by fingerprint and
+  // group.
   const ai = aiFindings ? fresh(aiFindings) : [];
-  const aiState = noteDecisions(foldRun({ ...empty, fingerprintVersion: FINGERPRINT_VERSION }, { id: runId ?? 'this run', findings: ai }), decisions, now);
+  const aiInLedger = inLedger && runId === latest && (!!foldOf(ruleState, runId, 'ai', stream) || !!foldOf(ruleState, runId, 'recheck', stream));
+  const aiState = aiInLedger ? null : noteDecisions(foldAi({ ...empty, fingerprintVersion: FINGERPRINT_VERSION }, { run: runId ?? 'this run', findings: ai.map(f => foldFinding(f)), now }), decisions, now);
   const present = new Set([...rules, ...ai].map(f => f.fp));
-  const rows = [...view(ruleState, decisions, approved, { now }), ...view(aiState, decisions, approved, { now })].map(normRow)
-    .filter(r => present.has(r.fp) || (inLedger && r.goneAt === runId));
+  const rows = [...view(ruleState, decisions, approved, { now }).filter(r => aiInLedger || r.source !== 'ai'), ...(aiState ? view(aiState, decisions, approved, { now }) : [])].map(normRow)
+    // what this run shows: its findings, what it fixed, and the AI items a re-check of it found still there
+    .filter(r => present.has(r.fp) || (inLedger && r.goneAt === runId) || (aiInLedger && r.source === 'ai' && r.lastSeen === runId));
   // a run that could not tell what was fixed (the app unreachable, the recording stale, every screen the same page)
   const blind = inLedger && ruleState.blind ? str(ruleState.blind[runId]) : null;
 

@@ -6,7 +6,7 @@ import { readdirSync, mkdirSync, readFileSync, existsSync, rmSync, statSync, app
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { writeAtomic, retryBusy, io, privateDir, setMode, refuseLink } from './stable.mjs';
+import { writeAtomic, retryBusy, io, privateDir, setMode, refuseLink, withLock, stableJson } from './stable.mjs';
 
 // Windows refuses renames, removals and new folders for a moment while another capture or reader is busy in the
 // same folder (EPERM, EACCES, EBUSY): those are retried with backoff (retryBusy).
@@ -38,11 +38,29 @@ export function latestRun(dir) {
 // renamed its `<id>.partial` to `<id>`: the id is taken, so the folder just made is removed and the next id tried.
 // Runs hold screenshots and data of signed-in screens: the runs folder and each run are owner-only (D12) whatever
 // the umask, a runs folder an older version made included.
-export function startRun(dir) {
+// `ids`: in a repository, the shared state's run-id counter (state.mjs; design §7). Worktrees share one ledger but
+// each keeps its own runs, so the next id is taken after every id any worktree used, under the counter's lock, and
+// run ids stay one sequence the ledger can order. A counter that cannot be read counts as 0 (the runs folder still
+// gives the floor); folds are keyed by worktree too, so a collision is never mistaken for a folded run.
+export function startRun(dir, { ids = null } = {}) {
   privateDir(dir);
   setMode(dir, 0o700);
-  const { complete, partial } = listRuns(dir);
-  let n = Math.max(0, ...complete.map(Number), ...partial.map(p => Number(PARTIAL.exec(p)[1])));
+  const highest = () => {
+    const { complete, partial } = listRuns(dir);
+    return Math.max(0, ...complete.map(Number), ...partial.map(p => Number(PARTIAL.exec(p)[1])));
+  };
+  if (!ids) return reserve(dir, highest());
+  return withLock(ids, () => {
+    let used = 0;
+    try { const doc = JSON.parse(readFileSync(ids, 'utf8')); if (Number.isInteger(doc?.last) && doc.last > 0) used = doc.last; } catch {}
+    const r = reserve(dir, Math.max(used, highest()));
+    refuseLink(ids);
+    writeAtomic(ids, stableJson({ schema: 1, note: 'the last run id any worktree of this repository used', last: Number(r.id) }), { mode: 0o600 });
+    return r;
+  });
+}
+function reserve(dir, after) {
+  let n = after;
   for (;;) {
     const id = String(++n).padStart(4, '0');
     if (existsSync(join(dir, id))) continue;
@@ -64,14 +82,16 @@ export function finishRun(dir, id) {
 }
 
 // Keeps the newest `keep` complete runs (and `latest`); removes older runs and partial folders that
-// nothing has written to for `staleMs`. Runs referenced by open reviews will be kept too (0.1-c). With
-// `folded` (the runs the ledger holds), a complete run the ledger has not folded is never removed.
-export function gcRuns(dir, { keep = 5, staleMs = 3600e3, now = Date.now(), folded = null } = {}) {
+// nothing has written to for `staleMs`. With `folded` (the runs the ledger holds), a complete run the ledger has
+// not folded is never removed. `pinned` (design §8.1): runs an open item still names (its last sighting, the
+// evidence a re-check compares with) are kept too.
+export function gcRuns(dir, { keep = 5, staleMs = 3600e3, now = Date.now(), folded = null, pinned = null } = {}) {
   const { complete, partial } = listRuns(dir);
   const latest = latestRun(dir);
   const keepSet = new Set(complete.slice(-keep));
   if (latest) keepSet.add(latest);
   if (folded) for (const id of complete) if (!folded.has(id)) keepSet.add(id);
+  if (pinned) for (const id of complete) if (pinned.has(id)) keepSet.add(id);
   const removed = [];
   for (const id of complete) if (!keepSet.has(id)) { rmSync(join(dir, id), RM); removed.push(id); }
   for (const p of partial) {

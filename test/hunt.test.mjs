@@ -11,9 +11,12 @@ import { loadLenses } from '../src/lenses.mjs';
 import { planHunt, planHuntWithKey, writeHuntMirror, recordHunt, jpegSize, imageTokens, IMAGE_TOKENS_MAX } from '../src/hunt.mjs';
 import { voidCoverage } from '../src/canary.mjs';
 import { stableJson, sha } from '../src/stable.mjs';
+import { keyPath } from '../src/state.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-hunt-')));
+// answer keys live in the user's state folder (design §2.2): a private one for these tests, inherited by the CLI
+process.env.XDG_STATE_HOME = mkdtempSync(join(tmpdir(), 'nunchi-hunt-state-'));
 
 // A JPEG header is all the estimate reads: SOI, a baseline SOF0 with the size, EOI.
 function fakeJpeg(width, height) {
@@ -323,7 +326,9 @@ test('cli: a run with canaries gets hunt-key.json and the mirror; --record reads
   const copy = addCanary(runDir);
   const run = (...a) => execFileSync('node', [CLI, 'hunt', ...a], { cwd, encoding: 'utf8' });
   const plan = JSON.parse(run('--plan', '--lens', 'L9', '--json'));
-  const key = JSON.parse(readFileSync(join(runDir, 'hunt-key.json'), 'utf8'));
+  // the answer key is kept outside the project (design §2.2)
+  assert.ok(!existsSync(join(runDir, 'hunt-key.json')), 'no answer key inside the project');
+  const key = JSON.parse(readFileSync(keyPath(runDir, 'hunt-key.json'), 'utf8'));
   assert.equal(key.plan, plan.id);
   const unit = plan.units.find(u => key.scenes[u.scenes[0].scene] === copy);
   assert.ok(unit.files.every(f => existsSync(join(runDir, f))));
