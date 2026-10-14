@@ -21,6 +21,7 @@ import { redactText } from '../network.mjs';
 import { CHECK_SCRIPTS } from '../checks.mjs';
 
 export const CHECK_TIMEOUT_MS = 10 * 60e3;
+export const EXIT_GRACE_MS = 1500;
 export const OUTPUT_KEEP = 4000;
 const SCRIPT = /^[\w:.-]{1,64}$/;
 
@@ -83,15 +84,33 @@ export function commandFor({ pm, script, bin, platform = process.platform, profi
   const extra = extraArgs.map(String);
   if (extra.some(a => !/^[\w:.=-]{1,64}$/.test(a))) return { refused: 'extra arguments must be plain words' };
   if (extra.length) args = pm.name === 'npm' || pm.name === 'pnpm' ? [...args, '--', ...extra] : [...args, ...extra];
+  return launch(bin, args, { platform, name: pm.name });
+}
+// How a manager's binary is started: itself, or on Windows its .cmd shim through cmd.exe.
+function launch(bin, args, { platform = process.platform, name = 'the package manager' } = {}) {
   if (platform === 'win32' && /\.cmd$/i.test(bin)) {
     // cmd expands %VAR% even inside quotes, and a quote would end ours: such a path is not run
-    if (/["%\n]/.test(bin)) return { refused: `the path of ${pm.name} (${bin}) holds a character cmd.exe would read as its own` };
+    if (/["%\n]/.test(bin)) return { refused: `the path of ${name} (${bin}) holds a character cmd.exe would read as its own` };
     const root = /^[A-Za-z]:\\[^"%&|<>^\n]*$/.test(process.env.SystemRoot || '') ? process.env.SystemRoot : 'C:\\Windows';
     // /s strips the outer pair of quotes and keeps the rest as it is: the whole line goes in one more pair, as node
     // does for shell: true, so a path with spaces ("C:\Program Files\nodejs\npm.cmd") stays one word
     return { cmd: join(root, 'System32', 'cmd.exe'), args: ['/d', '/s', '/c', `""${bin}" ${args.join(' ')}"`], opts: { windowsVerbatimArguments: true } };
   }
   return { cmd: bin, args, opts: {} };
+}
+
+// A check line that runs another script through a package manager (`npm run helper`, `pnpm lint`, `yarn helper`, `bun
+// run x`): that nested run would start helper's pre/post lines, which nunchi cannot switch off from outside (measured:
+// a nested `pnpm run helper` ran prehelper). Such a check is not run, and the line says why. Running a binary (`npx`,
+// `pnpm exec`/`dlx`, `yarn exec`/`dlx`, `bunx`, `bun x`) is not a nested run.
+const MANAGER = /(?:^|[\s;&|()`])(npm|pnpm|yarn|bun)(?=\s|$)((?:\s+-{1,2}[\w.=-]+)*)(?:\s+([\w:.-]+))?/g;
+export function nestedRun(line) {
+  for (const m of String(line || '').matchAll(MANAGER)) {
+    const [, pm, , sub] = m;
+    if (['exec', 'dlx', 'x', 'add', 'install', 'i', 'ci', '--version', '-v'].includes(sub)) continue;
+    return `${pm}${sub ? ` ${sub}` : ''}`;
+  }
+  return null;
 }
 
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g;
@@ -126,14 +145,21 @@ export function runProcess({ cmd, args, opts = {}, cwd, env, timeout = CHECK_TIM
     catch (e) { res({ exit: null, signal: null, timedOut: false, output: cleanOutput(String(e.message)), ms: 0, error: true }); return; }
     const take = d => { out += d.toString('utf8'); if (out.length > 4 * OUTPUT_KEEP * 16) out = out.slice(-4 * OUTPUT_KEEP * 8); };
     child.stdout.on('data', take); child.stderr.on('data', take);
-    let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; killTree(child, platform); }, timeout);
-    child.on('error', e => { out += `\n${e.message}`; });
-    child.on('close', (exit, signal) => {
-      clearTimeout(timer);
+    let timedOut = false, done = false, grace = null;
+    // a grandchild that keeps stdout open would hold `close` forever: the run ends at the process's own exit plus a
+    // short grace for its last output, and on the timeout the tree is killed and the pipes are closed from this side
+    const end = (exit, signal) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer); clearTimeout(grace);
+      for (const s of [child.stdout, child.stderr]) { try { s.destroy(); } catch {} }
       const text = cleanOutput(out);
       res({ exit, signal, timedOut, output: text.length > OUTPUT_KEEP ? text.slice(-OUTPUT_KEEP) : text, count: countOf(text), ms: Date.now() - t0 });
-    });
+    };
+    const timer = setTimeout(() => { timedOut = true; killTree(child, platform); grace = setTimeout(() => end(null, 'SIGKILL'), EXIT_GRACE_MS); }, timeout);
+    child.on('error', e => { out += `\n${e.message}`; });
+    child.on('exit', (exit, signal) => { clearTimeout(grace); grace = setTimeout(() => end(exit, signal), EXIT_GRACE_MS); });
+    child.on('close', (exit, signal) => end(exit, signal));
   });
 }
 
@@ -142,9 +168,16 @@ export function runProcess({ cmd, args, opts = {}, cwd, env, timeout = CHECK_TIM
 export async function runChecks({ root, profile, env = process.env, platform = process.platform, timeout = CHECK_TIMEOUT_MS, names = CHECK_SCRIPTS }) {
   const pm = packageManagerOf(root, profile);
   const bin = findBinary(pm.name, { env, platform });
+  // yarn without a packageManager field: its major version from the binary itself (the markers only guess)
+  if (pm.name === 'yarn' && pm.from !== 'packageManager' && bin) {
+    const c = launch(bin, ['--version'], { platform, name: 'yarn' });
+    if (!c.refused) { const v = await runProcess({ ...c, cwd: root, env: childEnv(env, platform), timeout: 30e3, platform }); const m = /^(\d+)\./m.exec(v.output || ''); if (v.exit === 0 && m) Object.assign(pm, { major: Number(m[1]), from: 'yarn --version' }); }
+  }
   const results = {};
   for (const name of names) {
     if (!profile || profile.scripts?.[name] === undefined) { results[name] = { status: 'missing' }; continue; }
+    const nested = [`pre${name}`, name, `post${name}`].map(n => profile.scripts?.[n]).map(nestedRun).find(Boolean);
+    if (nested) { results[name] = { status: 'refused', why: `its line calls \`${nested}\`, and a nested run starts that script's pre/post lines, which nunchi cannot switch off. Put the commands in the ${name} line itself` }; continue; }
     const c = commandFor({ pm, script: name, bin, platform, profile });
     if (c.refused) { results[name] = { status: 'refused', why: c.refused }; continue; }
     const r = await runProcess({ ...c, cwd: root, env: childEnv(env, platform), timeout, platform });
@@ -161,6 +194,7 @@ export function compareChecks(baseline = {}, now = {}) {
   const what = c => (n(c) !== null ? ` (${n(c)} problem${n(c) === 1 ? '' : 's'})` : '');
   for (const name of CHECK_SCRIPTS) {
     const b = baseline[name] || { status: 'missing' }, c = now[name] || { status: 'missing' };
+    if (c.status === 'missing' && b.status !== 'missing') { blocking.push(name); lines.push(`${name} was there when the fix started and is gone now: put it back before committing.`); continue; }
     if (c.status === 'missing') { lines.push(`no ${name} script — nunchi relies on re-capture.`); continue; }
     if (c.status === 'refused') { lines.push(`${name} not run: ${c.why}.`); if (b.status !== 'refused' && b.status !== 'missing') blocking.push(name); continue; }
     if (c.status === 'pass') { lines.push(`${name} passes.`); continue; }
@@ -169,6 +203,9 @@ export function compareChecks(baseline = {}, now = {}) {
     const timedOut = c.status === 'timeout' ? ' (timed out after 10 minutes)' : '';
     if (b.status === 'pass' || b.status === 'missing' || b.status === 'refused') { blocking.push(name); lines.push(`${name} newly fails${what(c)}${timedOut}: fix it before committing.`); continue; }
     if (n(b) !== null && n(c) !== null && n(c) > n(b)) { blocking.push(name); lines.push(`${name} was already failing before this fix${what(b)}, and now has ${n(c)}: fix the new ones before committing.`); continue; }
+    // a suite that crashed instead of failing: no count where there was one, another exit, a timeout where there was none
+    if (n(b) !== null && n(c) === null) { blocking.push(name); lines.push(`${name} was already failing before this fix${what(b)}, and now fails without saying how many (it may have crashed)${timedOut}: look at it before committing.`); continue; }
+    if (c.status !== b.status || (Number.isInteger(b.exit) && Number.isInteger(c.exit) && b.exit !== c.exit)) { blocking.push(name); lines.push(`${name} was already failing before this fix, but now fails another way (${c.status === 'timeout' ? 'it timed out' : `exit ${c.exit ?? c.signal ?? '?'} instead of ${b.exit ?? '?'}`}): look at it before committing.`); continue; }
     lines.push(`${name} was already failing before this fix${what(b)} — not blocking${n(c) !== null ? `; ${n(b) === n(c) ? 'still' : 'now'} ${n(c)} after` : ''}.`);
   }
   return { blocking, lines };

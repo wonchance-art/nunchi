@@ -396,6 +396,7 @@ function checksPanel(c) {
   const scripts = [...Object.entries(c.profile.scripts), ...Object.entries(c.profile.serve || {})];
   return h('section', { class: 'panel-box', 'aria-labelledby': 'h-checks' }, h('h2', { id: 'h-checks' }, 'Your AI asks to run your checks while it fixes'),
     h('p', { class: 'small' }, 'nunchi runs these exact lines of package.json (and nothing else of it) to see that a fix breaks nothing. Approve them once; any change asks again.'),
+    c.profile.others ? h('p', { class: 'small' }, `The approval also covers the other ${c.profile.others} script${c.profile.others === 1 ? '' : 's'} of package.json, since a check may call ${c.profile.others === 1 ? 'it' : 'them'}: changing any script asks again.`) : null,
     scripts.length ? h('dl', { class: 'facts-dl' }, scripts.map(([k, v]) => [h('dt', null, k), h('dd', { class: 'mono' }, v)])) : h('p', { class: 'muted' }, 'No build, typecheck, lint or test script.'),
     c.profile.packageManager ? h('p', { class: 'small muted' }, `Package manager: ${c.profile.packageManager}`) : null, h('div', null, btn));
 }

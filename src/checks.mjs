@@ -6,6 +6,7 @@
 //   (design §4.4 "the approved start script");
 // - the SHA-256 of `.npmrc`, `.yarnrc`, `.yarnrc.yml` (and the file its `yarnPath` names), `bunfig.toml`,
 //   `pnpm-workspace.yaml` and `.pnpmfile.cjs` (absent: null);
+// - every other script line of package.json (`others`): a check may call one, so a change to any script asks again;
 // - the `packageManager` field.
 // Any change gives another hash, which asks again. Approved hashes live in the state store's `scripts-approved.json`
 // (approved.json stays decision provenance). M2 builds the approval channel; the fix loop that reads it is M3.
@@ -42,7 +43,11 @@ export function checkProfile(projectDir) {
     const m = /^\s*yarnPath:\s*["']?([^"'\n]+?)["']?\s*$/m.exec(readFileSync(join(root, '.yarnrc.yml'), 'utf8'));
     if (m) { const p = resolve(root, m[1]); files[`yarnPath:${m[1]}`] = inside(root, p) ? fileHash(p) : 'outside the project'; }
   } catch {}
-  const profile = { scripts, serve, files, packageManager: typeof pkg.packageManager === 'string' ? pkg.packageManager : null };
+  // every other script too: a check line may call one (`… && node scripts/x.js` is in the line; `npm run helper` is
+  // refused by the fix loop, but the hash still asks again when helper changes)
+  const others = {};
+  for (const n of Object.keys(all).sort()) if (typeof all[n] === 'string' && scripts[n] === undefined && serve[n] === undefined) others[n] = all[n];
+  const profile = { scripts, serve, others, files, packageManager: typeof pkg.packageManager === 'string' ? pkg.packageManager : null };
   return { ...profile, hash: sha256(stableJson(profile)).slice(0, 32) };
 }
 
@@ -63,7 +68,7 @@ export function approveProfile(file, projectDir, { seen, channel, by, generation
   updateDoc(file, doc => {
     const cur = doc || { schema: 1 };
     if (cur.profiles?.[now.hash]) return doc;
-    return { ...cur, schema: 1, note: 'check profiles a person approved (design §4.3); any change asks again', profiles: { ...(cur.profiles || {}), [now.hash]: { scripts: now.scripts, serve: now.serve, files: now.files, packageManager: now.packageManager, channel, by } } };
+    return { ...cur, schema: 1, note: 'check profiles a person approved (design §4.3); any change asks again', profiles: { ...(cur.profiles || {}), [now.hash]: { scripts: now.scripts, serve: now.serve, others: now.others, files: now.files, packageManager: now.packageManager, channel, by } } };
   }, { read: READ, prev: false, generation });
   return now.hash;
 }

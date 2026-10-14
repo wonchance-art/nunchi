@@ -146,3 +146,60 @@ test('Windows: a .cmd shim in a folder whose path has spaces runs, with its argu
   assert.equal(r.exit, 0, r.output);
   assert.match(r.output, /ran run --ignore-scripts lint/);
 });
+
+// ---- M3 review: checks that cannot hang, crash quietly or hide a script -------------------------------------------------
+
+test('the timeout bounds the run even when a grandchild keeps the output open; a quick exit is not held by it either', async () => {
+  const hold = "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)'], { stdio: 'inherit', detached: true }).unref()";
+  const quick = project({ test: `node -e "${hold}"` });
+  let t0 = Date.now();
+  const a = await X.runChecks({ root: quick, profile: checkProfile(quick), timeout: 2000 });
+  assert.equal(a.results.test.status, 'pass');
+  assert.ok(Date.now() - t0 < 8000, `took ${Date.now() - t0} ms`);
+  const slow = project({ test: `node -e "${hold}; setTimeout(() => {}, 60000)"` });
+  t0 = Date.now();
+  const b = await X.runChecks({ root: slow, profile: checkProfile(slow), timeout: 2000 });
+  assert.equal(b.results.test.status, 'timeout');
+  assert.ok(Date.now() - t0 < 8000, `took ${Date.now() - t0} ms`);
+});
+
+test('baseline: a suite that crashed (no count where there was one), failed another way, or disappeared blocks', () => {
+  const f = (n, exit = 1) => ({ status: 'fail', count: n, exit });
+  let r = X.compareChecks({ test: f(3) }, { test: f(null) });
+  assert.deepEqual(r.blocking, ['test']);
+  assert.match(r.lines.join('\n'), /test was already failing before this fix \(3 problems\), and now fails without saying how many \(it may have crashed\)/);
+  r = X.compareChecks({ test: f(3) }, { test: f(3, 134) });
+  assert.deepEqual(r.blocking, ['test']);
+  assert.match(r.lines.join('\n'), /fails another way \(exit 134 instead of 1\)/);
+  r = X.compareChecks({ test: f(3) }, { test: { status: 'timeout', count: 3, exit: null } });
+  assert.deepEqual(r.blocking, ['test']);
+  r = X.compareChecks({ test: { status: 'pass' } }, { test: { status: 'missing' } });
+  assert.deepEqual(r.blocking, ['test']);
+  assert.match(r.lines.join('\n'), /test was there when the fix started and is gone now/);
+  assert.deepEqual(X.compareChecks({ test: f(3) }, { test: f(3) }).blocking, [], 'the same failure as before still does not block');
+});
+
+test('the profile covers every script (a helper a check calls); a check that runs another script through a manager is not run', async () => {
+  const root = project({ test: 'node mark.js t.txt && npm run helper', helper: 'node mark.js h.txt' });
+  const before = checkProfile(root);
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'checks-fixture', private: true, scripts: { test: 'node mark.js t.txt && npm run helper', helper: 'node mark.js h2.txt' } }));
+  assert.notEqual(checkProfile(root).hash, before.hash, 'changing helper asks again');
+  assert.deepEqual(checkProfile(root).others, { helper: 'node mark.js h2.txt' });
+  const r = await X.runChecks({ root, profile: checkProfile(root) });
+  assert.equal(r.results.test.status, 'refused');
+  assert.match(r.results.test.why, /^its line calls `npm run`, and a nested run starts that script's pre\/post lines/);
+  assert.ok(!existsSync(join(root, 't.txt')), 'nothing of it ran');
+  for (const [line, hit] of [['pnpm lint', 'pnpm lint'], ['yarn helper', 'yarn helper'], ['bun run x', 'bun run'], ['eslint . && npm test', 'npm test'], ['npx tsc', null], ['pnpm exec tsc', null], ['yarn dlx x', null], ['bunx x', null], ['node npm.js', null]]) assert.equal(X.nestedRun(line), hit, line);
+});
+
+test('yarn: its major version comes from the binary, not from the markers (when installed)', async t => {
+  if (!X.findBinary('yarn')) return t.skip('yarn is not installed here');
+  const root = project(PRE_POST);
+  writeFileSync(join(root, 'yarn.lock'), '');
+  writeFileSync(join(root, '.yarnrc.yml'), 'nodeLinker: node-modules\n');           // a marker of yarn 2+, but yarn here is
+  const r = await X.runChecks({ root, profile: checkProfile(root) });
+  const v = /^(\d+)\./.exec(String((await X.runProcess({ cmd: X.findBinary('yarn'), args: ['--version'], cwd: root, env: X.childEnv() })).output))?.[1];
+  assert.equal(r.pm.major, Number(v));
+  assert.equal(r.pm.from, 'yarn --version');
+  if (Number(v) === 1) assert.equal(r.results.lint.status, 'refused', 'yarn 1 runs pre/post: refused');
+});
