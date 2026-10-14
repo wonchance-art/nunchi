@@ -14,7 +14,8 @@
 // (about one just-noticeable difference). Nothing is random; ties fall back to string order.
 // Radii and font sizes are clustered the same way in one dimension (tolerances below).
 // Roles (background, surface, border, text, muted text, accent, accent foreground, danger, success,
-// warning) are inferred from where each cluster is used, each with a confidence, and the text/background
+// warning) are inferred from where each cluster is used, each with a confidence (the share of that usage the
+// cluster holds among the clusters eligible for the role × how many screens it is seen on, up to 3), and the text/background
 // pairs are checked for WCAG 2.x contrast. The engine never edits the app: the CSS is a proposal file.
 import { join } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
@@ -268,7 +269,7 @@ export function buildTokens({ scenes }) {
     if (!cands.length) return null;
     cands.sort((a, b) => ctxUses(b, ctxs) - ctxUses(a, ctxs) || ctxScreens(b, ctxs) - ctxScreens(a, ctxs) || cmp(a.token, b.token));
     const best = cands[0];
-    const total = palette.reduce((n, cl) => n + ctxUses(cl, ctxs), 0);
+    const total = cands.reduce((n, cl) => n + ctxUses(cl, ctxs), 0);   // share among the eligible clusters
     const share = ctxUses(best, ctxs) / total;
     const coverage = Math.min(1, ctxScreens(best, ctxs) / Math.max(1, Math.min(3, allScreens.size)));
     return { cluster: best, share, coverage, uses: ctxUses(best, ctxs), screens: ctxScreens(best, ctxs) };
@@ -282,7 +283,8 @@ export function buildTokens({ scenes }) {
     return p.cluster;
   };
   const bg = addRole('background', pick(['page']) || pick(['band']), 'page background (html, body or the canvas)');
-  const surface = addRole('surface', pick(['surface', 'band'], cl => cl !== bg), 'container backgrounds');
+  // white cards on a white page are common: the surface may be the background colour
+  const surface = addRole('surface', pick(['surface', 'band']), 'container backgrounds');
   addRole('border', pick(['border']), 'borders');
   const text = addRole('text', pick(['text']), 'text colour');
   const bgColor = (bg || { _color: { lin: [1, 1, 1], alpha: 1 } })._color;
@@ -328,9 +330,9 @@ export function buildTokens({ scenes }) {
   const contrast = [];
   for (const [fg, bgr] of [['text', 'background'], ['text', 'surface'], ['text-muted', 'background'], ['text-muted', 'surface'], ['accent-foreground', 'accent'], ['accent', 'background'], ['danger', 'background']]) {
     const a = roleOf(fg), b = roleOf(bgr);
-    if (!a || !b || a.ref === b.ref) continue;
+    if (!a || !b || a.ref === b.ref || contrast.some(c => c.refs[0] === a.ref && c.refs[1] === b.ref)) continue;   // same pair of colours once
     const ratio = round(contrastRatio(palette.find(c => c.token === a.ref)._color, palette.find(c => c.token === b.ref)._color), 2);
-    contrast.push({ fg, bg: bgr, ratio, aa: ratio >= 4.5, aaLarge: ratio >= 3 });
+    contrast.push({ fg, bg: bgr, refs: [a.ref, b.ref], ratio, aa: ratio >= 4.5, aaLarge: ratio >= 3 });
   }
 
   // ── radii and font sizes ──

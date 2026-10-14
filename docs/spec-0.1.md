@@ -121,6 +121,7 @@ Per scene:
 | `aria.yml` | Playwright `ariaSnapshot` |
 | `text.txt` | visible text |
 | `styles.json` | computed-style samples of visible elements: color, background, font size/weight, line height, radius, shadow, padding, height, plus element role and box |
+| `paint.json` | the colours `styles.json` misses (it keeps only elements with their own text and controls): page and container backgrounds, border and outline colours, inline SVG fill and stroke, each with what it is seen against (§3.2.1) |
 | `controls.json` | buttons, links, inputs: accessible name, box, visible |
 | `network.json` | url, method, status, blocked, replay miss; writes (POST/PUT/PATCH/DELETE) flagged |
 | `console.json` | console errors, page errors |
@@ -131,7 +132,8 @@ Run-level: `manifest.json` (scenes with status and reason, health), `findings.js
 (§2.5), `inventory.json` (source strings and UI states, extracted with Babel/SWC; classified in 0.1-b),
 `canaries.json` (planted defects, an answer key), and after the AI hunt `hunt-plan.json`, `hunt-key.json` and
 `hunt/<alias>/` (runs with canaries: scene aliases, an answer key, and the evidence they point to), `ai-findings.json`,
-`coverage.json`, `canary-score.json`, `verify-packets.json`, `verify-key.json` (an answer key), `verify.json` (§4).
+`coverage.json`, `canary-score.json`, `verify-packets.json`, `verify-key.json` (an answer key), `verify.json` (§4),
+and after `nunchi tokens` `tokens.json` and `tokens.css` (§3.2.1).
 
 **Inventory (0.1-b).** `nunchi inventory` (and `buildInventory(root, routes)` for the run folder) lists, per file the
 source map reaches (or every code file when no routes are found), with file:line: user-facing strings (JSX text
@@ -243,6 +245,90 @@ neither shows nor keeps in a menu (nav, dialog, details, `role=menu|dialog|navig
 visible `aria-controls` toggle opens) is `missing-on-phone` (medium; evidence says `hidden` or `absent`).
 `measure.json` keeps the page's hidden named controls (`hiddenControls`) for this. Fixed elements covering
 content and the phone's first view are AI-lens checks (0.1-b).
+
+### 3.2.1 Tokens: design supporter Stage 0, Tidy (built 2026-10-14 KST)
+
+Stage 0 turns the look the app already has into a token proposal, with no visual change intended. Later stages
+(a concept to move towards, a migration) build on it. Everything here is computed from the evidence. There is no
+AI, and the engine never edits the app (the CSS is a file in the run).
+
+**Measurement (`paint.json`, per scene, schema 1).** It is kept apart from `styles.json`, so the L4 inventory and the
+fingerprints do not move. Rows are deduplicated like `styles.json`: the first element in document order keeps its
+selector. Each list holds at most 400 rows.
+
+| List | Row | Recorded when |
+|---|---|---|
+| `surfaces` | `background`, `radius`, `kind`, `on`, `selector` | `<html>` and `<body>` with a background (`kind: page`); when both are transparent, the browser's white canvas (`canvas`, light scheme only). Any other visible element whose `background-color` is not transparent and whose box is ≥ 256 px² with a short side ≥ 2 px (smaller fills are dots and hairlines). `kind`: `control` (link, button, field), `band` (≥ 90% of the viewport wide) or `box` |
+| `borders` | `color`, `sides` (`trbl` subset, or `outline`), `width`, `on`, `selector` | a visible border side with width > 0, a style other than none or hidden, and a colour that is not transparent; one row per colour; outlines likewise |
+| `svg` | `fill`, `stroke`, `selector` | a visible inline SVG shape (`path`, `circle`, `rect`, `ellipse`, `line`, `polyline`, `polygon`, `text`, `use`) outside `<defs>`, `<symbol>`, masks and patterns; `none`, `url(#…)` paints and zero opacity are left out |
+
+`on` is the background the colour is seen against: for a surface, the nearest ancestor's background; for a border,
+the element's own background, else its ancestor's; the canvas at the top.
+
+**Proposal (`nunchi tokens [--run <id>] [--json]`).** It reads captured scenes only (framework error pages, redirected
+scenes and canary copies are left out) and writes `tokens.json` and `tokens.css` into the run.
+- *Uses.* A use is a distinct style row on a screen (route × person). A screen seen at two widths or in several states
+  counts once.
+- *Colours.* Text colours come from `styles.json`. Backgrounds, borders and SVG paint come from `paint.json`; a run
+  without `paint.json` falls back to the text rows' own backgrounds (`measured: styles-only`).
+  - Colours are clustered in OKLab by leader clustering. In order of uses, then screens, then value, each colour joins
+    the nearest cluster leader within ΔE_OK ≤ 0.03 (about one just-noticeable difference) whose alpha is within 0.1.
+    Otherwise it leads a new cluster.
+  - A colour never joins a cluster that holds a colour it is seen against. Otherwise a card on the page, or a
+    line on a card, would vanish. Such near pairs are listed under `keptApart`.
+  - A cluster's proposed value is its leader, the most-used member, so that colour does not change. Each member
+    lists its uses, its screens, its ΔE from the leader, the contexts it is used in and up to three examples
+    (scene, selector).
+  - Families: OKLCh chroma < 0.05 is grey; otherwise the family comes from the hue angle (red, orange, yellow, green,
+    cyan, blue, purple, pink). Tokens are `--<family>-<n>`, lightest first.
+- *Roles,* inferred from usage, each with a confidence: the share of that usage the cluster holds among the clusters
+  eligible for the role × screen coverage (seen on 3 screens or more = 1). High is ≥ 0.6 and medium ≥ 0.3.
+  - `background`: page records.
+  - `surface`: the most-used container fill. It may equal the background, as with white cards on a white page.
+  - `border`.
+  - `text`.
+  - `text-muted`: a grey on the same side of the background as the text, with less contrast but ≥ 1.5:1.
+  - `accent`: control fills other than the background and the surface, else a coloured link colour.
+  - `accent-foreground`: the text colour most often set on the accent.
+  - `danger`, `success`, `warning`: the most-used red, green, or orange/yellow. These are guessed from hue only, so
+    their confidence is capped at 0.5.
+- *Contrast* (WCAG 2.x, hand-written): text and muted text on the background and the surface, accent foreground on
+  the accent, accent and danger on the background. Each pair reports its ratio, AA (4.5:1) and AA for large text (3:1).
+- *Radii* are one token when |a − b| ≤ max(2 px, 20% of the larger). Values ≥ 500 px are `--radius-full`, and
+  percentages stand alone.
+- *Font sizes* are one token when |a − b| ≤ max(0.5 px, 7% of the larger). The most-used plain-text size is
+  `--font-size-body`.
+- The CLI prints one line, e.g. `23 greys → 6 · 9 blues → 3 · 7 radii → 3 · 11 font sizes → 8`, then the roles and
+  the contrast. The same input gives byte-identical files.
+
+*Limits.* The following are not measured:
+- gradients and `background-image`;
+- images and video;
+- `::before` and `::after` paint;
+- box-shadow colours (they stay strings in `styles.json`);
+- text over images;
+- colours inside shadow DOM and iframes;
+- elements beyond the 400-row caps.
+
+Further caveats:
+- Alpha colours are compared as written, not composited.
+- A use is a distinct style row, not an element, because the evidence deduplicates identical rows.
+- Roles are guesses from usage. A dark-mode capture is not an axis yet (0.2).
+- Two near-white tints of different hue can merge, because their chroma is too low for hue to count (on pegroom a
+  pale green chip fill joins a pale blue one at ΔE 0.023). The member list shows this; there is no hue guard yet.
+
+*Measured (2026-10-14 KST, real-data sanity check, thresholds not tuned to either app).* Capture time is unchanged
+(Pebble 124.5 s against 125.1 s before). `styles.json`, `measure.json`, `findings.json` and `design-system.json` are
+byte-identical to a capture without `paint.json`. Pebble `--twice` stays 34/34 and identical (1,140 files), and
+fingerprints are 52/52.
+
+| App | Scenes · screens | `nunchi tokens` summary | Roles |
+|---|---|---|---|
+| Pebble | 96 · 24 | 10 greys → 9 · 2 blues → 2 · 2 greens → 1 · 6 radii → 4 · 9 font sizes → 7 | background = surface = white; accent green, AA 7.49:1 against its white foreground |
+| pegroom (seen held-out) | 176 · 28 | 14 greys → 12 · 3 reds → 3 · 2 blues → 1 · 1 greens → 1 · 1 oranges → 1 · 1 yellows → 1 · 6 radii → 4 · 10 font sizes → 8 | cream page with white cards; the two are kept apart at ΔE 0.016; all seven contrast pairs pass AA |
+
+Both apps are small and hand-styled, so there are few merges. The sprawl case is covered by the fixture
+`test/fixtures/tokens/greys.html` (12 greys → 5).
 
 
 ### 3.3 Lens packs (built 2026-10-13 KST, 0.1-b)
