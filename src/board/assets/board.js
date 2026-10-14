@@ -507,12 +507,20 @@ function decisionBar(targets) {
 
 // ---- deciding, undo ---------------------------------------------------------------------------------------------------
 
-async function decide(ids, decision, reason, { confirmed = false, ms: given } = {}) {
+// The decision in flight: Z pressed within one round trip of a decision undoes that decision (it waits for it).
+let inflight = null;
+function decide(...args) {
+  const p = decideNow(...args);
+  inflight = p;
+  p.finally(() => { if (inflight === p) inflight = null; }).catch(() => {});
+  return p;
+}
+async function decideNow(ids, decision, reason, { confirmed = false, ms: given } = {}) {
   const ms = given !== undefined ? given : S.clock.id && ids.includes(S.clock.id) ? S.clock.read(nowMs()) : null;
   let r;
   try { r = await api('/api/decide', { method: 'POST', body: { targets: ids, decision, reason, ms, confirmed } }); }
   catch (e) {
-    if (e.status === 409 && e.data?.confirm) { if (await ask(e.data.confirm.text, e.data.confirm.ok)) return decide(ids, decision, reason, { confirmed: true, ms }); return; }
+    if (e.status === 409 && e.data?.confirm) { if (await ask(e.data.confirm.text, e.data.confirm.ok)) return decideNow(ids, decision, reason, { confirmed: true, ms }); return; }
     if (e.status === 409 && e.data?.stale) { announce('The list changed: showing it again'); await loadList(); return renderFindings(true); }
     if (e.status !== 401) announce(`Not recorded: ${e.message}`);
     return;
@@ -535,6 +543,7 @@ function nextAfter(ids) {
   return order.slice(last + 1).find(id => !ids.includes(id)) || order.slice(0, Math.max(0, last)).reverse().find(id => !ids.includes(id)) || null;
 }
 async function undo() {
+  if (inflight) await inflight.catch(() => {});
   const u = S.undo;
   if (!u) return announce('Nothing to undo');
   S.undo = null;

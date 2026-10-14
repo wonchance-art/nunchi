@@ -113,11 +113,12 @@ test('board e2e: batches — Space selects, S decides all with one batch id, Z u
     await page.keyboard.press(' ');
     await page.keyboard.press('j');
     await page.keyboard.press(' ');
-    assert.equal(await page.locator('.row[aria-selected=true]').count(), 2, await page.evaluate(() => JSON.stringify([document.activeElement?.outerHTML?.slice(0, 100), location.hash, document.querySelectorAll('.row').length, document.querySelector('main').textContent.slice(0, 300)])));
+    assert.equal(await page.locator('.row[aria-selected=true]').count(), 2);
     await page.keyboard.press('s');
     const files = await until(() => { const d = decisions(p.nunchi); return d.length === 2 && d; });
     assert.equal(new Set(files.map(d => d.batch)).size, 1, 'one batch');
     assert.ok(files[0].batch);
+    await page.waitForSelector('#toast:not([hidden])');
     await page.keyboard.press('z');
     await until(() => decisions(p.nunchi).length === 4);
     assert.equal(decisions(p.nunchi).filter(d => d.decision === 'reopen').length, 2, 'Z undid the whole batch');
@@ -130,6 +131,26 @@ test('board e2e: batches — Space selects, S decides all with one batch id, Z u
     await page.keyboard.press('Enter');
     await page.waitForSelector('dialog:not([open])', { state: 'attached' });
     assert.equal(decisions(p.nunchi).length, 4, 'nothing written');
+  } finally { await s.close(); }
+});
+
+test('board e2e: Z pressed while the decision is still on its way undoes that decision (a slow round trip)', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = project();
+  const s = await open(p);
+  const { page } = s;
+  try {
+    // every decision takes 600 ms to answer
+    await page.route('**/api/decide', async route => { await new Promise(r => setTimeout(r, 600)); await route.continue(); });
+    await page.waitForSelector('#h-progress');
+    await page.click('a[data-nav=findings]');
+    await page.waitForSelector('#h-findings');
+    await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
+    await page.keyboard.press('j');
+    await page.keyboard.press('s');
+    await page.keyboard.press('z');
+    const files = await until(() => { const d = decisions(p.nunchi); return d.length === 2 && d; });
+    assert.deepEqual(files.map(d => d.decision).sort(), ['hold', 'reopen'], 'the undo waited for the decision and undid it');
   } finally { await s.close(); }
 });
 
