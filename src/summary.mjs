@@ -27,10 +27,12 @@ const STANDING_WORDS = { 'needs-you': n => `${n} need${n === 1 ? 's' : ''} you`,
 // A decision that keeps a finding or calls it not a problem, that no person made or confirmed (design §1).
 export const unconfirmed = d => !!d && DISMISS.has(d.decision) && d.human === false;
 
-// One group's reason to stand in the way (any severity), or null.
-export function standingOf(g, rows) {
+// One group's reason to stand in the way (any severity), or null. `fixNeeds`: groups whose latest fix attempt waits for
+// the person (the fix loop's records, design §4.9).
+export function standingOf(g, rows, fixNeeds = new Set()) {
   const mine = rows.filter(r => r.group === g.group);
   const reasons = new Set();
+  if (fixNeeds.has(g.group) && mine.some(r => !r.goneAt && r.status === 'to-fix')) reasons.add('needs-you');
   for (const r of mine) {
     if (r.goneAt) continue;
     if (r.needsYou) reasons.add('needs-you');
@@ -54,7 +56,7 @@ function fullChecks(state, stream, runsDir) {
 
 // `git`: the hardened git runner of the project (runs.mjs gitRunner), to count commits with a `Nunchi-Fix:` trailer
 // after the last full check's commit; null when there is no git. `running`: a capture folder still being written.
-export function summary({ state, rows, groups, stream = 'main', runsDir, git = null }) {
+export function summary({ state, rows, groups, stream = 'main', runsDir, git = null, fixNeeds = new Set() }) {
   const latest = latestRunOf(state, stream);
   const meta = latest ? readJsonOr(join(runsDir, latest, 'run.json'), {}) : {};
   const manifest = latest ? readJsonOr(join(runsDir, latest, 'manifest.json'), {}) : {};
@@ -80,7 +82,7 @@ export function summary({ state, rows, groups, stream = 'main', runsDir, git = n
     if (keys.has('stale')) keys.add('open');
     for (const k of keys) if (Object.hasOwn(byStatus, k)) byStatus[k]++;
     if ([...keys].some(k => ACTIVE.has(k))) bySeverity[g.severity] = (bySeverity[g.severity] || 0) + 1;
-    const why = standingOf(g, rows);
+    const why = standingOf(g, rows, fixNeeds);
     if (why) standing[why][g.severity]++;
   }
   const serious = Object.fromEntries(STANDING.map(x => [x, standing[x].blocker + standing[x].high]));

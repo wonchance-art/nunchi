@@ -689,6 +689,56 @@ export function foldRecheck(state, { run, stream = 'main', key = null, suspect =
   return { ...st, items, folds: withFold(st.folds, { run, source: 'recheck', key, stream }) };
 }
 
+// Fold a fix probe (design §4.4): the (run, "fix") contribution of P1 for one group, made by the fix loop only on
+// outcome `fixed`. Only the group's fingerprints move: `gone` (rule items the judge found gone, by element identity, in
+// every cell they were seen in) get `goneAt` = the probe; `rechecks` (AI items, the fix loop's re-check from a fresh
+// context, never suspect) are added to the item's re-checks, so it is fixed the way any re-check fixes it. Nothing
+// else of the probe is folded (it saw a few routes, on a fix branch). Folding the same key again changes nothing.
+export function foldFix(state, { run, stream = 'main', key = null, group, gone = [], rechecks = [], now = Date.now() }) {
+  const prior = foldOf(state, run, 'fix', stream);
+  if (prior && key !== null && prior.key === key) return state;
+  const st = prior ? unfoldFix(state, { run, stream }) : upgrade(state, stream);
+  const items = { ...st.items };
+  const done = [];
+  for (const fp of [...new Set(gone)].sort()) {
+    const it = items[fp];
+    if (!it || isAi(it) || it.group !== group || it.goneAt) continue;
+    items[fp] = { ...it, goneAt: run, lookedAt: maxRun(it.lookedAt, run), fixedBy: { run, group } };
+    done.push(fp);
+  }
+  const touched = new Set();
+  for (const r of rechecks.slice().sort((a, b) => cmp(a.fp, b.fp))) {
+    const it = items[r.fp];
+    if (!it || !isAi(it) || it.group !== group) continue;
+    items[r.fp] = { ...it, rechecks: [...(it.rechecks || []).filter(x => !(x.run === run && (x.stream ?? 'main') === stream)), { run, stream, at: now, suspect: false, via: 'fix', cells: r.cells || {} }].sort(byEvent) };
+    touched.add(r.fp);
+  }
+  for (const fp of touched) { const d = deriveAi(items[fp]); if (d) items[fp] = d; else delete items[fp]; }
+  return { ...st, items, folds: withFold(st.folds, { run, source: 'fix', key, stream, group, gone: done, ai: [...touched].sort() }) };
+}
+// Undo a fix fold (`fix --undo`): what that (run, "fix") fold marked gone is open again (unless a later run decided
+// otherwise since), and its re-check entries go.
+export function unfoldFix(state, { run, stream = 'main' }) {
+  const f = foldOf(state, run, 'fix', stream);
+  if (!f) return state;
+  const st = upgrade(state, stream);
+  const items = { ...st.items };
+  for (const fp of f.gone || []) { const it = items[fp]; if (it && it.goneAt === run) { const { fixedBy: _f, ...rest } = it; items[fp] = { ...rest, goneAt: null }; } }
+  for (const fp of f.ai || []) {
+    const it = items[fp];
+    if (!it || !isAi(it)) continue;
+    const d = deriveAi({ ...it, rechecks: (it.rechecks || []).filter(x => !(x.run === run && (x.stream ?? 'main') === stream && x.via === 'fix')) });
+    if (d) items[fp] = d;
+  }
+  return { ...st, items, folds: st.folds.filter(x => !sameFold(x, run, 'fix', stream)) };
+}
+// Read, fold (or unfold) one fix probe, commit (state.mjs updateDoc). → the state as written.
+export function commitFix(stateFile, fn, { generation = null, timeoutMs } = {}) {
+  const out = updateDoc(stateFile, doc => { const s0 = doc === null ? emptyState() : migrateAll(doc); const s = fn(s0); return s === s0 && doc !== null ? doc : s; },
+    { read: { fix: REBUILD, validate: isLedger, why: 'is not a nunchi ledger' }, timeoutMs, generation });
+  return out === null ? emptyState() : migrateAll(out);
+}
+
 // When this machine first saw each decision, by id and content (design §8.3 first-seen ordering). Never
 // forgotten, so a decision that leaves and comes back keeps its first arrival.
 export function noteDecisions(state, decisions, now = Date.now()) {
