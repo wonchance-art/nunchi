@@ -521,9 +521,24 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   The verifier is recorded as *same-model check* unless `--vendor` names another vendor; nothing is sent
   anywhere. A plan refuses verdicts once the claims it was built from changed.
 - *M1 (2026-10-14 KST, design 0.1-c §2.2):*
-  - **Suspect also when fewer decoys than planned.** The key records `decoysPlanned` (max(3, ⌈n/4⌉) for n claims)
-    and `verify.json` says it too; a run whose screens offered fewer decoy targets is suspect ("fewer decoys than
-    planned (0 of 3)"), so a run with no decoy target can no longer pass unchecked.
+  - **Fewer decoys than planned is no double-check.** The key records `decoysPlanned` (max(3, ⌈n/4⌉) for n claims)
+    and `verify.json` says it too, so a run with no decoy target can no longer pass unchecked. *Changed (review of PR
+    #29, round 2, 2026-10-15 KST):* such a run was suspect whatever its verifier did; a small app could never be
+    double-checked and never be told why. Now it has its own outcome, **too few decoys to check the checker**
+    (`verify.json` `outcome: "too-few-decoys"`, `suspect: false`, `tooFewDecoys` with the counts; each verification
+    `tooFewDecoys: true`). It is not suspect, and it is not a double-check either: those AI findings stay *not
+    double-checked* (the ledger's `checkedAi` is false; a rejection there keeps the claim, as a suspect one does), and
+    `verify --record`, `findings`, the board's tag, Detail and Progress line and the export say "too few decoys to
+    check the checker". `verify --plan --again` is refused for it (a new plan of the same screens has no more
+    decoys; capturing more screens gives more). A decoy confirmed or left unanswered in such a run still makes it
+    suspect (pass-through or "no decoy was answered" come first). Decoys are never doubled up on one element to
+    reach 3.
+  - **Decoys stay off what the run claims** (review of PR #29, round 2, 2026-10-15 KST). A selector claimed on any
+    scene of the run is no decoy on any scene (a shared header or nav is the same element on every screen: a decoy
+    there could be true, and a correct verifier confirming it made the run suspect), nor is an element whose
+    accessible name a claim of the same rule names (the claimed control's `controls.json` name, its identity name or
+    its `aria=` name). One element gives at most one decoy: by selector across the run's screens, and by rule and
+    name.
   - **`verify --plan --again`** verifies a suspect run once more: findings whose verdict came from a suspect
     verification are claims again (packets show the severity as claimed, never the earlier verifier's correction),
     and the new verdicts replace them. On a run that is not suspect it is refused (exit 1).
@@ -784,7 +799,8 @@ unreadable one by one). Built in `src/ledger.mjs`:
 - **CLI:** `nunchi findings` (one row per kind; `--rule <rule>` lists its groups; `--status`, `--all`, `--json`),
   `nunchi decide <id…> <decision> [--reason] [--note]`, `nunchi approve <id…>|--all`, `nunchi trust`.
   Since M1 `findings` lists double-checked AI kinds as `AI · <checklist item>` beside the rule kinds, collapses AI
-  groups not double-checked (claimed only, or a verdict that was suspect, rejected or insufficient) into one line
+  groups not double-checked (claimed only, or a verdict that was suspect, rejected or insufficient, or from a run with
+  too few decoys to check the checker, §4) into one line
   (`--all`, `--status` and `--rule` list them; `--json` names them under `notDoubleChecked`), and says how many AI
   groups are stale and how many AI findings need you.
 
@@ -931,13 +947,14 @@ else is derived from those, the same whatever order the folds come in:
   fingerprint, so one dismissal never covers every similar button.
 - *Exists* while some hunt claims it as `confirmed` or `claimed`; `rejected` and `insufficient` never make an item
   (they stay in `ai-findings.json`). A claim counts as seen unless a verifier that was not suspect rejected it.
-- *Verification* (`{status, by, vendor?, suspect, run, at?}`): the latest verdict that was not suspect, else the
-  latest suspect one, else `claimed`. A human decision is above all of them (the view, §5). A later verdict that was
+- *Verification* (`{status, by, vendor?, suspect, tooFewDecoys?, run, at?}`): the latest verdict that was not suspect
+  and not from a run with too few decoys (§4), else the latest other one, else `claimed`. A human decision is above all of them (the view, §5). A later verdict that was
   not suspect and says rejected or insufficient stays on the item (shown not double-checked) rather than hiding it.
 - *Severity:* displayed = the severity a confirming verifier gave, else the claimed one; protection (`protect`, what
   blocker/L9 rules and `seriousTarget` use) = the most severe any present claim or verdict gave, so a verifier that
   lowers a blocker does not let a git dismissal hide it.
-- *Group decisions* (view): one covers an AI item only when the item is double-checked (confirmed, not suspect) or
+- *Group decisions* (view): one covers an AI item only when the item is double-checked (confirmed, not suspect, not
+  from a run with too few decoys) or
   the decision came after its latest verification (`verification.at`, when that verdict was folded; a claimed-only
   item has none); on a blocker or L9 item never a fingerprint first folded after the decision (`addedAt`). Otherwise
   the row's `note` says why. A decision on the fingerprint applies as for rule items.
@@ -1230,7 +1247,8 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
 - *Batches:* group by kind (default), root-cause file (the grounded file of an AI item, else "No file known"),
   screen or lens; "Decide all N ▸" per section; Space toggles a row, Shift+J/K extends.
 - *Not double-checked AI groups* sit in a collapsed last section with [Ask the AI to double-check], which shows the
-  sentence to copy.
+  sentence to copy. One verified in a run with too few decoys (§4) is among them, tagged "AI · not double-checked
+  (too few decoys to check the checker)"; Detail's Reviewer line and the Progress AI line say it too, never "suspect".
 - *Default order:* severity → came back → new since the last full check → reach (screens) → rule before AI; sections
   follow the order of their first group.
 - *Detail:* the crop of the box plus 200 px (at least a first view high), 0 for the whole screen, the white + dark

@@ -533,8 +533,10 @@ export function runForFold(runDir) {
 // Everything else is derived from those (deriveAi), the same whatever order the folds came in.
 
 const CREATES = s => s === 'confirmed' || s === 'claimed';
-// A hunt's claim says the defect is there unless a verifier that was not suspect rejected it.
-const PRESENT = h => h.claimed && !(h.status === 'rejected' && !h.suspect);
+// A verdict that is no double-check: a suspect verifier's, or one from a run with too few decoys to check the checker.
+const weak = h => !!h.suspect || !!h.tooFewDecoys;
+// A hunt's claim says the defect is there unless a verifier that was checked and not suspect rejected it.
+const PRESENT = h => h.claimed && !(h.status === 'rejected' && !weak(h));
 const STATUS_RANK = { confirmed: 0, claimed: 1, insufficient: 2, rejected: 3 };
 const byEvent = (a, b) => byRun(String(a.run), String(b.run)) || cmp(a.stream ?? 'main', b.stream ?? 'main');
 export const STALE_HUNTS = 2;
@@ -581,11 +583,12 @@ export function deriveAi(item) {
   }
   const lastHunted = hunts.reduce((m, h) => maxRun(m, h.run), null);
   const silent = new Set(hunts.filter(h => h.silent && lastSeen && byRun(h.run, lastSeen) > 0).map(h => `${h.run}|${h.stream ?? 'main'}`));
-  // the verdict: the latest one a verifier gave that was not suspect, else the latest suspect one, else claimed
+  // the verdict: the latest one a verifier gave that was checked and not suspect, else the latest other one, else claimed
   const judged = claims.filter(h => AI_VERDICTS.has(h.status));
-  const chosen = judged.filter(h => !h.suspect).pop() || judged.pop() || latest;
+  const chosen = judged.filter(h => !weak(h)).pop() || judged.pop() || latest;
   const verification = {
-    status: chosen.status, by: chosen.by ?? null, ...(chosen.vendor ? { vendor: chosen.vendor } : {}), suspect: !!chosen.suspect, run: chosen.run,
+    status: chosen.status, by: chosen.by ?? null, ...(chosen.vendor ? { vendor: chosen.vendor } : {}), suspect: !!chosen.suspect,
+    ...(chosen.tooFewDecoys && !chosen.suspect ? { tooFewDecoys: true } : {}), run: chosen.run,
     ...(AI_VERDICTS.has(chosen.status) && Number.isFinite(chosen.at) ? { at: chosen.at } : {}),
   };
   // the screen it was last seen on, per cell, with its element and box there: the old evidence a re-check shows and
@@ -643,7 +646,8 @@ export function foldAi(state, { run, stream = 'main', key = null, findings = [],
     const scenes = {};
     for (const f of list) if (f.cell && f.sceneHash) scenes[f.cell] = { scene: f.scene, ...f.sceneHash, selector: f.selector ?? null, box: f.box ?? null };
     const entry = {
-      run, stream, at: now, claimed: true, status: best.status, suspect: list.some(f => !!f.suspect), by: best.by ?? null, ...(best.vendor ? { vendor: best.vendor } : {}),
+      run, stream, at: now, claimed: true, status: best.status, suspect: list.some(f => !!f.suspect), ...(list.some(f => !!f.tooFewDecoys) ? { tooFewDecoys: true } : {}),
+      by: best.by ?? null, ...(best.vendor ? { vendor: best.vendor } : {}),
       claimedSeverity: worst(list.map(f => f.claimedSeverity)), verdictSeverity: worst(list.filter(f => AI_VERDICTS.has(f.status)).map(f => f.verdictSeverity)),
       cells: [...new Set(list.map(f => f.cell).filter(Boolean))].sort(), scenes, group: best.group,
       examples: [...new Set(list.map(f => f.scene).filter(Boolean))].sort().slice(0, 20), selector: best.selector ?? null, box: best.box ?? null,
@@ -920,8 +924,8 @@ export function addApproved(file, keys, { decisions = [], serious, generation = 
 export const FUTURE_SLACK_MS = 5 * 60e3;
 // An open item no run has looked at again for this many runs is said to be so: it cannot be marked fixed.
 export const NOT_LOOKED_RUNS = 3;
-// An AI item double-checked by a verifier that was not suspect.
-export const checkedAi = item => item.verification?.status === 'confirmed' && !item.verification.suspect;
+// An AI item double-checked by a verifier that was not suspect, in a run with enough decoys to check it.
+export const checkedAi = item => item.verification?.status === 'confirmed' && !item.verification.suspect && !item.verification.tooFewDecoys;
 
 // Status of every fingerprint, from the state and the decisions. The latest decision on the fingerprint or on
 // its group that may count wins (at the same time, the fingerprint's). A decision's time is the earlier of its

@@ -453,7 +453,8 @@ if (cmd === 'setup') {
   };
   if (cmd === 'findings') {
     const want = args.status ? new Set(args.status.split(',')) : args.all ? null : new Set(['open', 'regressed', 'to-fix', 'mixed']);
-    // AI groups not double-checked (claimed, or a verdict that was suspect, rejected or insufficient) are kept apart,
+    // AI groups not double-checked (claimed, or a verdict that was suspect, rejected or insufficient, or from a run with
+    // too few decoys to check the checker) are kept apart,
     // collapsed into one line (design §2.2, §3.4); --all, --status and --rule list them
     const unchecked = g => g.source === 'ai' && !g.checked;
     const collapsed = !args.all && !args.status && !args.rule ? gs.filter(g => unchecked(g) && want.has(g.status)) : [];
@@ -492,7 +493,9 @@ if (cmd === 'setup') {
       if (stale) console.log(`${stale} open defect(s) not looked at again for ${NOT_LOOKED_RUNS}+ runs (their screens, states or viewports were not captured like for like): they cannot be marked fixed until a run covers them`);
       if (!args.rule) {
         for (const k of kinds) console.log(`${k.severity.padEnd(7)} ${k.title} — ${k.groups} group(s) on ${k.routes.size || 'no'} screen(s), ${k.places} place(s)   nunchi findings --rule ${k.rule}`);
-        if (collapsed.length) console.log(`AI, not double-checked: ${collapsed.length} group(s) (claimed only, or a verdict that was suspect, rejected or insufficient) — nunchi findings --all lists them`);
+        if (collapsed.length) console.log(`AI, not double-checked: ${collapsed.length} group(s) (claimed only, or a verdict that was suspect, rejected or insufficient, or from a run with too few decoys to check the checker) — nunchi findings --all lists them`);
+        const fewDecoys = new Set(rows.filter(r => r.source === 'ai' && !r.goneAt && r.verification?.tooFewDecoys === true).map(r => r.group)).size;
+        if (fewDecoys) console.log(`${fewDecoys} AI group(s) verified in a run with too few decoys to check the checker: not suspect, and not double-checked either`);
         if (!kinds.length && !collapsed.length) console.log(want ? 'nothing open — `nunchi findings --all` lists everything' : 'no findings');
         if (staleAi && want) console.log(`${staleAi} AI group(s) stale: ${STALE_HUNTS} later hunts saw their screens and did not claim them — nunchi findings --status stale`);
         if (needsYou) console.log(`${needsYou} AI finding(s) need you: the re-check could not tell whether they are gone`);
@@ -696,7 +699,7 @@ if (cmd === 'setup') {
     if (args.again) {
       const oldKey = guard(() => readKey(dir, 'verify-key.json'));
       const judged = V.keyRounds(oldKey).length ? V.verdictsFromKey(aiFindingsOf(dir, 'verify').findings, oldKey) : null;
-      if (!judged?.some(f => f && f.source === 'ai' && f.verification?.suspect === true)) { console.error(`nunchi verify: --again verifies a suspect run once more; ${judged ? 'this run\'s verification is not suspect' : 'this run has not been verified yet (verify --plan)'}`); process.exit(1); }
+      if (!judged?.some(f => f && f.source === 'ai' && f.verification?.suspect === true)) { console.error(`nunchi verify: --again verifies a suspect run once more; ${!judged ? 'this run has not been verified yet (verify --plan)' : judged.some(f => f && f.source === 'ai' && f.verification?.tooFewDecoys === true) ? `this run's verification is not suspect: it had ${V.TOO_FEW_DECOYS}, and a new plan of the same screens has no more (capture more screens)` : 'this run\'s verification is not suspect'}`); process.exit(1); }
     }
     const made = guard(() => {
       const { findings } = aiFindingsOf(dir, 'verify');
@@ -745,6 +748,7 @@ if (cmd === 'setup') {
       console.log(`verified by ${r.verify.verifier.label}${r.verify.verifier.vendor ? ` (${r.verify.verifier.vendor})` : ''}: confirmed ${c.confirmed} · rejected ${c.rejected} · insufficient ${c.insufficient}${c.unanswered ? ` · unanswered ${c.unanswered}` : ''}`);
       console.log(`decoys passed through: ${d.passedThrough}/${d.answered}${d.answered < d.total ? ` (${d.total - d.answered} unanswered)` : ''}`);
       if (r.verify.suspect) console.log(`SUSPECT: ${r.verify.suspectReason}. This run's verifications are marked suspect; verify again in a fresh context (verify --plan --again).`);
+      else if (r.verify.outcome === 'too-few-decoys') console.log(`NOT DOUBLE-CHECKED: ${r.verify.tooFewDecoys}. The verdicts are recorded, but they count as no double-check: \`findings\` keeps these AI findings with those not double-checked. A run that captures more screens offers more decoys.`);
     }
   } else { console.error('nunchi verify: use --plan, or --record <verdicts.json>'); process.exit(1); }
 } else if (cmd === 'recheck') {

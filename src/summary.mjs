@@ -142,7 +142,8 @@ export function summary({ state, rows, groups, stream = 'main', runsDir, git = n
     health: { problems, blind: (latest && state.blind?.[latest]) || null, scenes: { total: scenes.length, checked: scenes.length - notSeen.length, notSeen: notSeen.length, reasons: [...new Set(notSeen.map(s => String(s.reason || s.status)))].sort() } },
     ai: { ran: aiRan, groups: new Set(ai.map(r => r.group)).size, doubleChecked: new Set(ai.filter(r => r.checked).map(r => r.group)).size,
       notDoubleChecked: new Set(ai.filter(r => !r.checked).map(r => r.group)).size, stale: groups.filter(g => g.status === 'stale').length,
-      needsYou: rows.filter(r => r.needsYou && !r.goneAt).length, suspect: ai.some(r => r.verification?.suspect) },
+      needsYou: rows.filter(r => r.needsYou && !r.goneAt).length, suspect: ai.some(r => r.verification?.suspect),
+      tooFewDecoys: ai.some(r => r.verification?.tooFewDecoys === true) },
     commit: meta.commit ?? null, dirty: meta.dirty ?? null,
   };
 }

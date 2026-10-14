@@ -212,7 +212,7 @@ export function buildBoardModel({ nunchiDir, projectDir, warn = () => {} }) {
       gist: ai ? '' : safe(gistOf(first), 120),
       where: { routes: g.routes.slice(0, 2).map(r => safe(r, 120)), more: Math.max(0, g.routes.length - 2), whole: g.routes.length ? null : g.rule === 'secret-in-client-bundle' ? 'Browser bundle' : 'Whole app' },
       routes: g.routes.length, screens, places: g.places,
-      checked: ai ? !!g.checked : true, suspect: ai ? !!verification?.suspect : false,
+      checked: ai ? !!g.checked : true, suspect: ai ? !!verification?.suspect : false, tooFewDecoys: ai ? verification?.tooFewDecoys === true : false,
       decision: decisionOut(decision),
       notLookedAt: mine.map(r => str(r.notLookedAt)).filter(Boolean).sort(byRun)[0] || null,
       needsYou: needsYou ? { reason: safe(needsYou.reason, 40), run: safeOrNull(needsYou.run, 12) } : null,
@@ -341,7 +341,7 @@ export function groupDetail(model, id) {
     evidence: evidenceList(first), selector: safeOrNull(first?.selector, 300), box: first?.box || null,
     secret: g.rule === 'secret-in-client-bundle' ? { where: safe(redactUrl(String(first?.evidence?.url || '')), 300), kind: safe(first?.evidence?.kind || '', 80) } : null,
     code: codeOut(model.projectDir, code),
-    verification: verification ? { status: safe(verification.status, 20), by: safeOrNull(verification.by, 80), vendor: safeOrNull(verification.vendor, 40), suspect: !!verification.suspect, run: safeOrNull(verification.run, 12) } : null,
+    verification: verification ? { status: safe(verification.status, 20), by: safeOrNull(verification.by, 80), vendor: safeOrNull(verification.vendor, 40), suspect: !!verification.suspect, tooFewDecoys: verification.tooFewDecoys === true, run: safeOrNull(verification.run, 12) } : null,
   };
 }
 

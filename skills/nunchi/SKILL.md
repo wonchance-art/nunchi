@@ -143,8 +143,11 @@ nothing in it, so never do it to change a status — verify or re-check again in
    otherwise it is recorded as *same-model check*. It also puts the run's AI findings into the ledger, so
    `findings` lists them beside the rule findings (`AI · <checklist item>`). Have the verifier answer every packet:
    a decoy left unanswered counts as passed through. If it prints `SUSPECT` (decoys passed
-   through above 10%, or the screens offered fewer decoys than planned), say so, run `verify --plan --again` and
-   verify again in a new fresh context; do not present that run's confirmed findings as verified. `findings`
+   through above 10%, or no decoy answered), say so, run `verify --plan --again` and
+   verify again in a new fresh context; do not present that run's confirmed findings as verified. If it prints
+   `NOT DOUBLE-CHECKED: too few decoys to check the checker`, the screens offered fewer decoys than the claims
+   called for: the verdicts are recorded but are no double-check, so do not present them as verified either, and
+   do not re-verify (the same screens give no more decoys); say so, and that a run with more screens would. `findings`
    collapses AI findings that were not double-checked into one line, and says when one is *stale* (two later hunts
    saw its screen and did not claim it).
 

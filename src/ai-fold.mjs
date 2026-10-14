@@ -96,6 +96,8 @@ export function foldFinding(f, scene = null, { suspect = false, src = null } = {
     verdictSeverity: judged && SEVERITIES.includes(v?.severity) ? v.severity : null,
     by: judged ? str(v?.verifier) : null, vendor: judged ? str(v?.vendor) : null,
     suspect: judged && (!!v?.suspect || suspect),
+    // a run with too few decoys to check the checker: its verdict is no double-check (verify.mjs)
+    ...(judged && !v?.suspect && !suspect && v?.tooFewDecoys === true ? { tooFewDecoys: true } : {}),
     sceneHash: scene ? { top: str(scene.top), full: str(scene.full), textHash: str(scene.textHash), src: str(src) } : null,
   };
 }

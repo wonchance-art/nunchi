@@ -25,6 +25,8 @@ export const WORDS = {
   hold: 'Later', held: 'Later', 'needs-human': 'Needs you', 'caused-regression': 'Broke something else — undone',
   'not-seen-budget': 'Not checked: AI budget ran out', 'tree-differs': 'Screens are from before your latest edits: tell your AI “capture again”',
   reopen: 'Reopened',
+  // a verification whose run had fewer decoys than its claims called for: not suspect, and no double-check (verify.mjs)
+  'too-few-decoys': 'too few decoys to check the checker',
 };
 export const REASON_LABEL = { intended: 'intended', 'out-of-scope': 'out of scope', 'not-a-problem': 'nothing wrong here', 'wrong-place': 'right issue, wrong spot' };
 // The decision bar's buttons: label and permanent sub-label (design §3.4).

@@ -74,7 +74,7 @@ const sevChip = s => h('span', { class: `sev sev-${sevOf(s)}` }, h('span', { cla
 const statusChip = s => h('span', { class: `st st-${STATUS_CLASS.has(s) ? s : 'mixed'}` }, statusText(s));
 const statusChips = g => (g.status === 'mixed' ? Object.keys(g.statuses || {}).sort().map(statusChip) : [statusChip(g.status)]);
 const sourceTag = g => (g.source !== 'ai' ? h('span', { class: 'tag' }, 'Rule')
-  : g.checked ? h('span', { class: 'tag tag-ai' }, `AI · double-checked${g.suspect ? ' (suspect)' : ''}`) : h('span', { class: 'tag tag-warn' }, 'AI · not double-checked'));
+  : g.checked ? h('span', { class: 'tag tag-ai' }, `AI · double-checked${g.suspect ? ' (suspect)' : ''}`) : h('span', { class: 'tag tag-warn' }, `AI · not double-checked${g.tooFewDecoys ? ` (${W.WORDS['too-few-decoys']})` : ''}`));
 const decisionTag = g => {
   const dc = g.decision;
   if (!dc || !dc.channel) return null;
@@ -338,7 +338,7 @@ function renderProgress(focus = false) {
   const meter = h('div', { class: 'meter', 'aria-hidden': 'true' }, h('span'));
   meter.firstChild.style.width = `${sc.total ? Math.round((sc.checked / sc.total) * 100) : 0}%`;
   const WHY = { 'login-expired': 'the saved login no longer worked', 'app-unreachable': 'most screens did not load at all', 'recording-stale': 'most screens asked for data the recording does not have' };
-  const ai = s.ai.ran ? `${W.plural(s.ai.groups, 'group')}, ${s.ai.doubleChecked} double-checked${s.ai.notDoubleChecked ? `, ${s.ai.notDoubleChecked} not double-checked` : ''}${s.ai.coverage ? ` · ${s.ai.coverage.seen}/${s.ai.coverage.cells} cells seen` : ''}${s.ai.suspect ? ' · verification suspect' : ''}` : 'not run (rules and computed checks only)';
+  const ai = s.ai.ran ? `${W.plural(s.ai.groups, 'group')}, ${s.ai.doubleChecked} double-checked${s.ai.notDoubleChecked ? `, ${s.ai.notDoubleChecked} not double-checked` : ''}${s.ai.coverage ? ` · ${s.ai.coverage.seen}/${s.ai.coverage.cells} cells seen` : ''}${s.ai.suspect ? ' · verification suspect' : ''}${s.ai.tooFewDecoys ? ` · ${W.WORDS['too-few-decoys']}` : ''}` : 'not run (rules and computed checks only)';
   const health = h('section', { class: 'panel-box', 'aria-labelledby': 'h-health' }, h('h2', { id: 'h-health' }, s.run ? `Run ${s.run}` : 'No run yet'),
     h('div', { class: 'meter-row' }, h('span', null, 'Screens checked'), h('a', { href: '#/screens' }, `${sc.checked} of ${sc.total}`)), meter,
     h('ul', { class: 'facts' }, h('li', null, `AI review: ${ai}`),
@@ -762,7 +762,7 @@ function renderDetail(focus = false) {
     decision ? [h('dt', null, 'Decision'), h('dd', null, `${W.decidedText(decision.decision, decision.reason)} · ${decision.by || ''} · ${when(decision.at)}`, decision.channelText ? h('span', { class: decision.human ? 'muted' : 'warn' }, ` · ${decision.channelText}`) : null)] : null,
     g.notes.map(n => [h('dt', null, 'Note'), h('dd', { class: 'warn' }, n)]),
     g.notLookedAt ? [h('dt', null, 'Looked at'), h('dd', { class: 'warn' }, `Not looked at since run ${g.notLookedAt}: no run since has captured every screen it was on, so it cannot be marked fixed.`)] : null,
-    g.verification ? [h('dt', null, 'Reviewer'), h('dd', null, `${g.verification.status}${g.verification.by ? ` · ${g.verification.by}` : ''}${g.verification.suspect ? ' · suspect' : ''}`)] : null);
+    g.verification ? [h('dt', null, 'Reviewer'), h('dd', null, `${g.verification.status}${g.verification.by ? ` · ${g.verification.by}` : ''}${g.verification.suspect ? ' · suspect' : ''}${g.verification.tooFewDecoys ? ` · ${W.WORDS['too-few-decoys']}: not a double-check` : ''}`)] : null);
   const evidence = h('details', { class: 'evidence' }, h('summary', null, 'Evidence details'), h('dl', { class: 'facts-dl' },
     h('dt', null, 'Rule'), h('dd', { class: 'mono' }, `${g.lens} · ${g.rule}`), h('dt', null, 'Group'), h('dd', { class: 'mono' }, g.id),
     h('dt', null, 'Fingerprints'), h('dd', { class: 'mono' }, g.fps.join(' ')),

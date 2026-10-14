@@ -22,7 +22,7 @@ import { scrubSecrets } from './rules.mjs';
 import { redactUrl, redactText } from './network.mjs';
 import { sha } from './stable.mjs';
 import { BASE_CSS } from './board/look.mjs';
-import { SEV, SEV_LABEL, STATUS_LABEL, FILTERS, WHO, WIDTH, STATES, STATE_LABEL, PERSONS, VPS, drawable as drawableOn, shotGeometry, pct, plural, human, sceneLabelText } from './board/shared.mjs';
+import { SEV, SEV_LABEL, STATUS_LABEL, FILTERS, WHO, WIDTH, STATES, STATE_LABEL, PERSONS, VPS, drawable as drawableOn, shotGeometry, pct, plural, human, sceneLabelText, WORDS } from './board/shared.mjs';
 
 // Board words (design §3.4) and the screenshot geometry come from one table shared with the live board.
 const ACTIVE = new Set(['open', 'regressed', 'to-fix', 'held']);
@@ -215,13 +215,15 @@ export function buildModel({ runDir, nunchiDir, ledger = null }) {
     const own = instances.filter(f => f.group === g.group);
     const ais = own.filter(f => f.source === 'ai');
     const isAi = ais.length > 0 || g.example.inputs?.source === 'ai' || rows.some(r => r.group === g.group && ai.some(f => f.fp === r.fp));
-    const verified = ais.some(f => f.aiStatus === 'confirmed');
+    // confirmed in a run with too few decoys to check the checker is no double-check (verify.mjs)
+    const verified = ais.some(f => f.aiStatus === 'confirmed' && f.verification?.tooFewDecoys !== true);
     const suspect = ais.some(f => f.verification?.suspect);
+    const tooFewDecoys = !verified && ais.some(f => f.verification?.tooFewDecoys === true);
     const keys = new Set(Object.keys(g.statuses));
     if (keys.has('regressed')) keys.add('open');
     return {
       ...g, hid: 'f-' + g.group, instances: own, source: isAi ? 'ai' : 'rule',
-      ai: isAi ? { verified, suspect, verifier: ais.find(f => f.verification)?.verification?.verifier || null } : null,
+      ai: isAi ? { verified, suspect, tooFewDecoys, verifier: ais.find(f => f.verification)?.verification?.verifier || null } : null,
       title: isAi ? human(g.rule) : g.title,
       headline: isAi ? String(own[0]?.evidence?.claim || human(g.rule)) : g.title,
       filterKeys: [...keys].sort(),
@@ -252,7 +254,7 @@ const statusChips = g => (g.status === 'mixed' ? Object.keys(g.statuses).sort((a
 // An open item no run has looked at again for a while (ledger NOT_LOOKED_RUNS): the oldest such run of the group.
 const notLooked = g => g.rows.map(r => str(r.notLookedAt)).filter(Boolean).sort(byRun)[0] || null;
 const sourceTag = g => (!g.ai ? '<span class="tag">Rule</span>'
-  : g.ai.verified ? `<span class="tag tag-ai">AI · double-checked${g.ai.suspect ? ' (suspect)' : ''}</span>` : '<span class="tag tag-warn">AI · not double-checked</span>');
+  : g.ai.verified ? `<span class="tag tag-ai">AI · double-checked${g.ai.suspect ? ' (suspect)' : ''}</span>` : `<span class="tag tag-warn">AI · not double-checked${g.ai.tooFewDecoys ? ` (${WORDS['too-few-decoys']})` : ''}</span>`);
 // plain text (for aria-label, which t() escapes once) and markup
 const sceneLabel = s => t(sceneLabelText(s));
 const whereOf = g => {
@@ -343,9 +345,9 @@ function progressView(m) {
   })() : '<section class="panel-box" aria-labelledby="h-since"><h2 id="h-since">Ledger</h2><p class="muted">This run is not in the local ledger, so there is nothing to compare with. Statuses come from your decisions only.</p></section>';
   const aiLine = !m.ai ? 'not run (rules and computed checks only)'
     : (() => {
-      const n = m.instances.filter(f => f.source === 'ai').length, conf = m.instances.filter(f => f.source === 'ai' && f.aiStatus === 'confirmed').length;
+      const n = m.instances.filter(f => f.source === 'ai').length, conf = m.instances.filter(f => f.source === 'ai' && f.aiStatus === 'confirmed' && f.verification?.tooFewDecoys !== true).length;
       const cov = m.coverage?.summary;
-      return `${plural(n, 'finding')}, ${conf} double-checked${cov ? ` · ${num(cov.seen)}/${num(cov.cells)} cells seen` : ''}${m.verify?.suspect ? ' · <span class="warn">verification suspect</span>' : ''}`;
+      return `${plural(n, 'finding')}, ${conf} double-checked${cov ? ` · ${num(cov.seen)}/${num(cov.cells)} cells seen` : ''}${m.verify?.suspect ? ' · <span class="warn">verification suspect</span>' : ''}${m.verify?.outcome === 'too-few-decoys' ? ` · <span class="warn">${WORDS['too-few-decoys']}</span>` : ''}`;
     })();
   const pctChecked = m.scenes.length ? Math.round((checked / m.scenes.length) * 100) : 0;
   return `<section id="progress" class="view" tabindex="-1" aria-labelledby="h-progress">
@@ -453,7 +455,7 @@ ${seen.length ? `<dt>Seen on</dt><dd>${seen.slice(0, 12).map(s => `<a href="#${s
 ${decision ? `<dt>Decision</dt><dd>${t(decision.decision)}${decision.reason ? ` (${t(decision.reason)})` : ''} · ${t(decision.by)} · ${t(decision.at)}${decision.verified ? '' : ' · <span class="warn">came through git, not approved on this machine</span>'}</dd>` : ''}
 ${notes.map(n => `<dt>Note</dt><dd class="warn">${t(n)}</dd>`).join('')}
 ${notLooked(g) ? `<dt>Looked at</dt><dd class="warn">Not looked at since run ${t(notLooked(g))}: no run since has captured every screen it was on, so it cannot be marked fixed.</dd>` : ''}
-${verification ? `<dt>Reviewer</dt><dd>${t(verification.verdict)} · ${t(verification.verifier || '')}${verification.suspect ? ' · <span class="warn">suspect</span>' : ''}${verification.reason ? ` — ${t(verification.reason, 240)}` : ''}</dd>` : ''}
+${verification ? `<dt>Reviewer</dt><dd>${t(verification.verdict)} · ${t(verification.verifier || '')}${verification.suspect ? ' · <span class="warn">suspect</span>' : ''}${verification.tooFewDecoys === true ? ` · <span class="warn">${WORDS['too-few-decoys']}: not a double-check</span>` : ''}${verification.reason ? ` — ${t(verification.reason, 240)}` : ''}</dd>` : ''}
 </dl>
 <details class="evidence"><summary>Evidence details</summary>
 <dl class="facts-dl">
