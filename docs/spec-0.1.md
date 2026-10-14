@@ -1127,7 +1127,10 @@ never `NODE_*`, `LD_*`, `DYLD_*`, `BROWSER` or `GIT_*` (tested on `/proc/<pid>/e
 - *Strings:* every string the board's code did not write (app text, selectors, claims, decision `by` and `note`, lens
   text, URLs) is redacted (credential URL parts and query values, then secret shapes) and clipped on the server, and
   set with `textContent` on the page. Secret findings show location and kind only. App URLs are never links; the
-  one link to a file is `vscode://file/<path>:<line>` for a file inside the project.
+  one link to a file is `vscode://file/<path>:<line>` for a file inside the project. [Copy path] copies the whole
+  path (redacted, not the clipped one shown, at most 4096 characters); a path holding a control character (C0, C1,
+  DEL, bidi marks and overrides, line separators, BOM) is shown with U+FFFD in their place and gets neither [Copy
+  path] nor a link.
 - *Offline:* no external script, style, font or image (tested on the assets, and in the browser test every request
   goes to the board or a blob of its own).
 

@@ -42,6 +42,27 @@ function aiProject() {
   return { ...p, ai };
 }
 
+test('api: Copy path copies the whole path, never the clipped one shown; a path with a control character is shown marked and not copied or linked', async () => {
+  const p = smallProject();
+  const long = `app/${'deep/'.repeat(70)}page.tsx`;
+  const ai = withAi(p, [
+    { lens: 'L6', rule: 'L6.vague-error', scene: p.scenes[3], selector: 'main p.err', box: [40, 300, 400, 24], claim: 'a long path', status: 'claimed', file: long, line: 7 },
+    { lens: 'L2', rule: 'L2.inconsistent-term', scene: p.scenes[0], selector: 'main > a.more', box: [40, 900, 120, 32], claim: 'a path with controls', status: 'claimed', file: 'app/page.tsx\n; rm -rf ~ \u202etxt.exe', line: 3 },
+  ]);
+  const { b, call } = await board(p);
+  try {
+    const a = (await call(`/api/groups/${ai[0].group}`)).json;
+    assert.ok(long.length > 300 && a.code.file.length <= 300 && a.code.file.endsWith('…'), 'shown clipped');
+    assert.equal(a.code.copy, long, 'copied whole');
+    const c = (await call(`/api/groups/${ai[1].group}`)).json;
+    assert.equal(c.code.copy, null, 'not copied');
+    assert.equal(c.code.link, null, 'not linked');
+    assert.ok(!/[\n\u202e]/.test(c.code.file) && c.code.file.includes('\ufffd'), 'shown with the controls marked');
+  } finally { await b.close(); }
+  const js = readFileSync(fileURLToPath(new URL('../src/board/assets/board.js', import.meta.url)), 'utf8');
+  assert.match(js, /copyButton\(codeCopy, 'Copy path'\)/, 'the page copies code.copy');
+});
+
 test('api: /api/summary is the summary findings --json carries (one function)', async () => {
   const p = smallProject();
   const { b, call } = await board(p);

@@ -664,7 +664,11 @@ function renderDetail(focus = false) {
       shot(sc, boxes, { crop: !D.whole && boxes.length > 0, label: `Screenshot of ${sc.route}, ${sc.label}${boxes.length ? ', with the element outlined' : ''}`, cls: sc.viewport === 'm' ? 'shot-m' : '' }),
       !boxes.length && not ? h('p', { class: 'muted small' }, `Not outlined: ${not.drawable.why}.`) : null);
   }
-  const codeLine = g.code ? `${g.code.file}${g.code.line ? `:${g.code.line}` : ''}` : null;
+  const at = g.code?.line ? `:${g.code.line}` : '';
+  const codeLine = g.code ? `${g.code.file}${at}` : null;
+  // what Copy path copies: the whole path the server sent for copying (never the clipped one shown); none when the
+  // path holds a control character
+  const codeCopy = g.code?.copy ? `${g.code.copy}${at}` : null;
   const decision = g.decision;
   const latest = g.history.find(x => x.decision !== 'reopen');
   const reopen = g.status !== 'open' && g.status !== 'regressed' && g.status !== 'fixed' && latest ? (() => { const b = h('button', { type: 'button', class: 'b' }, 'Reopen'); b.addEventListener('click', () => decide([g.id], 'reopen', null, { confirmed: true, ms: null })); return b; })() : null;
@@ -672,7 +676,7 @@ function renderDetail(focus = false) {
     g.needsYou.reason === 'recheck-insufficient' ? h('span', null, 'The re-check could not tell whether this is gone. Look at the screen, then decide; or tell your AI “re-check it”.') : h('span', null, 'nunchi could not finish this one on its own.')) : null;
   const fixing = g.fixing ? h('p', { class: 'banner' }, `${g.fixing.agent} is fixing this${g.fixing.minutes !== null ? ` · ${g.fixing.minutes} min` : ''}`) : null;
   const facts = h('dl', { class: 'facts-dl' },
-    codeLine ? [h('dt', null, 'Code'), h('dd', null, h('span', { class: 'mono' }, codeLine), ' ', copyButton(codeLine, 'Copy path'), ' ', g.code.link ? h('a', { class: 'b b-quiet', href: g.code.link }, 'Open in VS Code') : null)] : null,
+    codeLine ? [h('dt', null, 'Code'), h('dd', null, h('span', { class: 'mono' }, codeLine), ' ', codeCopy ? copyButton(codeCopy, 'Copy path') : null, ' ', g.code.link ? h('a', { class: 'b b-quiet', href: g.code.link }, 'Open in VS Code') : null)] : null,
     g.secret ? [h('dt', null, 'Where'), h('dd', { class: 'mono' }, g.secret.where), h('dt', null, 'Kind'), h('dd', null, g.secret.kind)] : null,
     D.scenes.length ? [h('dt', null, 'Seen on'), h('dd', null, D.scenes.slice(0, 12).map((k, j) => [j ? h('br') : null, `${g.scenes[k]?.route || ''} · ${g.scenes[k]?.label || ''}`]), D.scenes.length > 12 ? [h('br'), h('span', { class: 'muted' }, `+${D.scenes.length - 12} more`)] : null)] : null,
     decision ? [h('dt', null, 'Decision'), h('dd', null, `${W.decidedText(decision.decision, decision.reason)} · ${decision.by || ''} · ${when(decision.at)}`, decision.channelText ? h('span', { class: decision.human ? 'muted' : 'warn' }, ` · ${decision.channelText}`) : null)] : null,

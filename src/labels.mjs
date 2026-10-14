@@ -16,7 +16,7 @@ import { sha, stableJson, writeAtomic } from './stable.mjs';
 import { readJsonFile, updateDoc, readDoc, present } from './state.mjs';
 import { annotate } from './ledger.mjs';
 import { loadLenses } from './lenses.mjs';
-import { safe, runEvidence, evidenceUrl, RUN_ID } from './board/model.mjs';
+import { safe, shownPath, runEvidence, evidenceUrl, RUN_ID } from './board/model.mjs';
 import { drawable, LABELS } from './board/shared.mjs';
 
 export const LABELLER = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -66,7 +66,7 @@ export function blindItem(model, item, { lenses = null, label = null } = {}) {
   return {
     id: item.id, lens: { id: safe(item.lens, 12), name: lens ? safe(lens.name, 80) : null, definition: lens ? safe(lens.definition, 1200) : null },
     question: question ? safe(question, 400) : null, claim: safe(item.claim, 500),
-    code: item.file ? { file: safe(item.file, 300), line: Number.isInteger(item.line) ? item.line : null } : null,
+    code: item.file ? { file: shownPath(item.file), line: Number.isInteger(item.line) ? item.line : null } : null,
     instances, scenes, label,
   };
 }

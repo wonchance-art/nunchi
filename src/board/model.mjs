@@ -125,9 +125,23 @@ function codeOf(f) {
   if (typeof ev.file === 'string') return { file: ev.file, line: null };
   return null;
 }
+// Characters a path shown or copied must not hold: C0 and C1 controls, DEL, bidi marks, overrides and isolates, line
+// and paragraph separators, BOM (a pasted path could run another command than the one shown).
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2028\u2029\u2066-\u2069\ufeff]/;
+const CONTROLS = new RegExp(CONTROL.source, 'g');
+// A file path as shown: controls as U+FFFD, redacted, clipped.
+export const shownPath = (file, n = 300) => safe(String(file).replace(CONTROLS, '\ufffd'), n);
+// The code location the page shows and copies: `file` clipped for showing, `copy` the whole path (redacted, never
+// clipped; none when it holds a control character or is over 4096 characters), the editor link.
+function codeOut(projectDir, code) {
+  if (!code) return null;
+  const bad = CONTROL.test(code.file);
+  const full = clean(code.file);
+  return { file: shownPath(code.file), line: code.line, copy: bad || full.length > 4096 ? null : full, link: bad ? null : editorLink(projectDir, code) };
+}
 // What the page may link to for a file of the app: an editor link to a file inside the project, never anything else.
 function editorLink(projectDir, code) {
-  if (!code || typeof code.file !== 'string' || /[\0\n\r]/.test(code.file) || isAbsolute(code.file)) return null;
+  if (!code || typeof code.file !== 'string' || CONTROL.test(code.file) || isAbsolute(code.file)) return null;
   const abs = resolve(projectDir, code.file);
   const r = relative(projectDir, abs);
   if (!r || r.startsWith('..') || isAbsolute(r)) return null;
@@ -326,7 +340,7 @@ export function groupDetail(model, id) {
     ...publicGroup(g), instances, scenes, history, notes, rows: rowsOut, fps: [...fps].sort(),
     evidence: evidenceList(first), selector: safeOrNull(first?.selector, 300), box: first?.box || null,
     secret: g.rule === 'secret-in-client-bundle' ? { where: safe(redactUrl(String(first?.evidence?.url || '')), 300), kind: safe(first?.evidence?.kind || '', 80) } : null,
-    code: code ? { file: safe(code.file, 300), line: code.line, link: editorLink(model.projectDir, code) } : null,
+    code: codeOut(model.projectDir, code),
     verification: verification ? { status: safe(verification.status, 20), by: safeOrNull(verification.by, 80), vendor: safeOrNull(verification.vendor, 40), suspect: !!verification.suspect, run: safeOrNull(verification.run, 12) } : null,
   };
 }
