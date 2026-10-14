@@ -1324,7 +1324,8 @@ trust, run the agent in a container or as a separate user.
   approval of a dismissal counts for status but not for "Ready to ship" until confirmed, which keeps the chat path
   (Codex) working; the hook denies the command in Claude Code.
 - Primary buttons have dark text in dark mode (white on the dark accent is 2.6:1), in the shared stylesheet since the
-  review of PR #29, so the export has it too: the export's bytes changed there on purpose.
+  review of PR #29, so the export has it too: the export's bytes changed there on purpose, by that rule and by
+  `.row-where` wrapping anywhere (a long route without a break no longer runs out of its row).
 
 **Measured (2026-10-15 00:32–00:49 KST).** Pebble `node bench/run.mjs --twice` is unchanged: rule recall 34/34, 0 false
 positives on 8 clean scenes, determinism identical (1,141 files; `origin/main` gives the same 1,141 on this machine,

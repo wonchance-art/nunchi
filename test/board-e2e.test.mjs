@@ -320,6 +320,24 @@ test('export a11y: the static page\'s primary button reads in dark mode too (the
   }
 });
 
+test('board e2e: a long route without a break wraps in its row; no sideways scroll at 390 px', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = smallProject();
+  const long = `/${'averyverylongpathsegmentwithoutanybreak'.repeat(4)}`;
+  withAi(p, [{ lens: 'L6', rule: 'L6.vague-error', scene: { ...p.scenes[0], route: long }, selector: 'main p.err', box: [40, 300, 400, 24], claim: 'Short claim', status: 'confirmed', severity: 'high' }]);
+  const s = await open(p, { viewport: { width: 390, height: 844 } });
+  const { page } = s;
+  try {
+    await page.waitForSelector('#h-progress');
+    await page.click('a[data-nav=findings]');
+    await page.waitForSelector('#h-findings');
+    const where = await page.$$eval('.row-where', els => els.filter(e => e.textContent.includes('averyvery')).map(e => ({ sw: e.scrollWidth, cw: e.clientWidth, right: e.getBoundingClientRect().right })));
+    assert.ok(where.length, 'the long route is shown');
+    for (const w of where) assert.ok(w.sw <= w.cw + 1 && w.right <= 390 + 1, `it wraps (${w.sw} in ${w.cw}, right edge ${w.right})`);
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'no sideways scroll');
+  } finally { await s.close(); }
+});
+
 test('board e2e: keys by their place — F on a Korean layout fixes, W with Caps Lock keeps as intended', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = project();

@@ -74,7 +74,7 @@ fieldset.seg{display:flex;flex-wrap:wrap;gap:4px;margin:0;padding:4px;border:0;b
 .rows{margin:0;padding:0;list-style:none}
 .row a{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:6px 14px;padding:12px 20px;border-top:1px solid var(--line-soft);color:var(--ink);text-decoration:none;min-height:44px}
 .row a:hover{background:var(--accent-soft)}
-.row-main{flex:1 1 300px;min-width:0;display:flex;flex-direction:column;gap:2px}.row-what{font-weight:500;overflow-wrap:anywhere}.row-where{font-size:13px;color:var(--muted)}
+.row-main{flex:1 1 300px;min-width:0;display:flex;flex-direction:column;gap:2px}.row-what{font-weight:500;overflow-wrap:anywhere}.row-where{font-size:13px;color:var(--muted);overflow-wrap:anywhere}
 .row-tags{display:flex;flex-wrap:wrap;gap:6px}
 .empty{display:none;margin:0;padding:16px 20px;color:var(--muted)}
 .unchecked .kind{border-top:1px solid var(--line-soft)}.unchecked>p{margin:10px 0}
