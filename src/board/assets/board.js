@@ -821,7 +821,8 @@ function fixNeedsBox(g) {
     return h('div', { class: 'needs', role: 'note' }, head, g.fix.line ? h('span', null, g.fix.line) : null,
       say ? h('span', null, 'To undo it, tell your AI: ', h('code', null, say), ' ', copyButton(say)) : null);
   }
-  const text = k === 'a' ? F.a(W.pctText(g.fix.share)) : k === 'b' ? F.b : F.c;
+  // pixels over the threshold say their share; geometry alone says what moved
+  const text = k === 'a' ? F.a(!g.fix.pixels && g.fix.moved ? `${g.fix.moved} other control${g.fix.moved === 1 ? '' : 's'} moved` : W.pctText(g.fix.share)) : k === 'b' ? F.b : F.c;
   const actions = k === 'a' ? [btn(F.looksFine, () => looksFine(g)), btn(F.undo, () => undoSentence(g)), btn(F.tryAgain, () => tryAgain(g))]
     : k === 'b' ? [btn(F.tryAgain, () => tryAgain(g)), btn(F.keep, () => decide([g.id], 'keep', 'intended')), btn(F.later, () => decide([g.id], 'hold', null))] : [];
   return h('div', { class: 'needs', role: 'note' }, head, h('span', null, text), k === 'c' ? h('span', null, F.cThen) : null,

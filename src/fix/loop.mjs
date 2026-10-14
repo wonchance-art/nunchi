@@ -29,7 +29,7 @@ import { fixGit, fixTrailers, TRAILERS } from './git.mjs';
 import { acquireClaim, renewClaim, releaseClaim, readClaim, claimLive, refusalText, whileRenewing } from './claims.mjs';
 import { allocate, setPhase, update, latestRecord, currentRecord, allRecords, latestRecords, isOpen, writePlan, readPlan, groupDir, kst } from './records.mjs';
 import { randomBytes } from 'node:crypto';
-import { probeView, probeProblems, judgeRules, judgeAi, MAX_ATTEMPTS, FLAKY } from './judge.mjs';
+import { probeView, probeProblems, judgeRules, judgeAi, MAX_ATTEMPTS, FLAKY, DRIFT_PIXELS } from './judge.mjs';
 import { diffPolicy, depsOf, rootCauseFiles } from './policy.mjs';
 import { fixBrief } from './brief.mjs';
 import { runChecks as runChecksReal, compareChecks } from './run.mjs';
@@ -674,7 +674,11 @@ export async function recordFix(ctx, id, verdicts) {
 
 // ---- outcomes -------------------------------------------------------------------------------------------------------
 
-const where = list => [...new Set(list.map(x => x.route).filter(Boolean))].slice(0, 2).join(', ');
+// A route in a chat line: as it is when it looks like a route, else quoted as data (a route comes from the app's file
+// names, which are the app's data, never instructions: design §4.11).
+const ROUTE_TEXT = /^\/[\w\-./[\]()@:+~%]{0,120}$/;
+export const routeText = r => (ROUTE_TEXT.test(String(r)) ? String(r) : JSON.stringify(String(r).slice(0, 120)));
+const where = list => [...new Set(list.map(x => x.route).filter(Boolean))].slice(0, 2).map(routeText).join(', ');
 function finish(ctx, rec, verdict, { title, said = [] }) {
   // the attempt as it is now: an --abort from another terminal while P1 ran is not overwritten (records.mjs rev)
   const cur = currentRecord(ctx.stateDir, rec);
@@ -693,24 +697,32 @@ function finish(ctx, rec, verdict, { title, said = [] }) {
   if (verdict.outcome === 'regression' || verdict.outcome === 'not-fixed') {
     const other = verdict.regressions?.[0];
     const why = verdict.outcome === 'regression'
-      ? `That fix broke '${titleOf(other.rule)}' on ${other.route || 'a screen'}`
+      ? `That fix broke '${titleOf(other.rule)}' on ${other.route ? routeText(other.route) : 'a screen'}`
       : `That fix did not remove '${title}' (it is still there${where(verdict.still) ? ` on ${where(verdict.still)}` : ''})`;
     rec = setPhase(ctx.stateDir, rec, 'reverting', { verdict, phrase: why, revertWhy: verdict.outcome === 'regression' ? 'caused-regression' : 'not-fixed' }, gen(ctx));
     const r = doRevert(ctx, rec, `${verdict.outcome === 'regression' ? 'caused-regression' : 'not-fixed'}: ${why}`, { title });
     return { ...r, lines: [...said, ...r.lines] };
   }
   if (verdict.outcome === 'drift' || verdict.outcome === 'unbaselined') {
-    const pct = verdict.drift ? `${Math.max(1, Math.round(verdict.drift.share * 100))}%` : null;
+    const d = verdict.drift;
+    // pixels over the threshold say their share; geometry alone says what moved (a 1% that was not measured is no fact)
+    const what = d && d.share > DRIFT_PIXELS ? `${Math.max(1, Math.round(d.share * 100))}%` : d ? `${d.moved} other control${d.moved === 1 ? '' : 's'} moved` : null;
     const line = verdict.outcome === 'drift'
-      ? `'${title}' is gone, but the fix also changed other parts of this screen (${pct}). It needs you: look at it in the board (before and after, with a slider).`
+      ? `'${title}' is gone, but the fix also changed other parts of this screen (${what}). It needs you: look at it in the board (before and after, with a slider).`
       : `'${title}' is gone, but ${where(verdict.unbaselined)} (a screen the fix reaches, with nothing to compare against) now shows '${titleOf(verdict.unbaselined[0].rule)}'. It needs you: look at it in the board.`;
-    closeWith(ctx, rec, 'needs-you', { kind: 'needs-you', needsYou: verdict.outcome === 'drift' ? 'a' : 'unbaselined', defectGone: true, commit: rec.commit, share: verdict.drift?.share ?? null, line });
+    closeWith(ctx, rec, 'needs-you', { kind: 'needs-you', needsYou: verdict.outcome === 'drift' ? 'a' : 'unbaselined', defectGone: true, commit: rec.commit, share: verdict.drift?.share ?? null, moved: verdict.drift?.moved ?? null, pixels: !!(d && d.share > DRIFT_PIXELS), line });
     return out(0, [...said, line], { outcome: 'needs-you', needsYou: verdict.outcome === 'drift' ? 'a' : 'unbaselined', share: verdict.drift?.share ?? null });
   }
   // inconclusive → needs you (c): nothing reverted
   const reasons = verdict.reasons || [];
   const screenFailed = reasons.some(x => ['scene-failed', 'app-unreachable', 'p1'].includes(x.why));
-  const line = `Couldn't re-check '${title}': ${screenFailed ? 'the screen didn\'t load' : reasons.map(x => x.text).join('; ')}. ${reasons.some(x => x.why === 'no-proof') ? 'Start the app from this folder (or use --serve), then tell me “retry”.' : 'Start your app, then tell me “retry”.'}`;
+  // screens that loaded before the fix and not after, while the others loaded: the fix may have broken them
+  const failed = reasons.find(x => x.why === 'scene-failed');
+  const brokeRoutes = failed && (failed.before || []).length && (rec.screens || 0) > 0 && !reasons.some(x => ['app-unreachable', 'p1', 'no-proof', 'replay-miss', 'login-expired', 'recording-stale'].includes(x.why))
+    ? [...new Set(failed.before.map(k => k.split('|')[0]))].slice(0, 3) : null;
+  const line = brokeRoutes
+    ? `Couldn't re-check '${title}': after the fix, ${brokeRoutes.map(routeText).join(', ')} did not load (${brokeRoutes.length === 1 ? 'it' : 'they'} did before), so the fix may have broken ${brokeRoutes.length === 1 ? 'that screen' : 'those screens'}. Look at it, then tell me “retry”, or “undo it”.`
+    : `Couldn't re-check '${title}': ${screenFailed ? 'the screen didn\'t load' : reasons.map(x => x.text).join('; ')}. ${reasons.some(x => x.why === 'no-proof') ? 'Start the app from this folder (or use --serve), then tell me “retry”.' : 'Start your app, then tell me “retry”.'}`;
   closeWith(ctx, rec, 'needs-you', { kind: 'needs-you', needsYou: 'c', commit: rec.commit, reasons, line });
   return out(0, [...said, line, ...(screenFailed ? reasons.filter(x => x.text).map(x => `  ${x.text}`) : [])], { outcome: 'needs-you', needsYou: 'c', reasons });
 }
@@ -767,7 +779,7 @@ function finishRevert(ctx, rec, revertSha, lines, { cancelWord = null, title = r
     return;
   }
   const used = attemptsUsed(ctx, rec.group, rec.decision?.id);
-  const why = rec.phrase || (rec.verdict?.outcome === 'regression' ? `That fix broke '${titleOf(rec.verdict.regressions[0].rule)}' on ${rec.verdict.regressions[0].route || 'a screen'}` : `That fix did not remove '${title}'`);
+  const why = rec.phrase || (rec.verdict?.outcome === 'regression' ? `That fix broke '${titleOf(rec.verdict.regressions[0].rule)}' on ${rec.verdict.regressions[0].route ? routeText(rec.verdict.regressions[0].route) : 'a screen'}` : `That fix did not remove '${title}'`);
   if (used >= MAX_ATTEMPTS) {
     const line = `${why}, so I undid it (attempt ${Math.min(used, MAX_ATTEMPTS)} of ${MAX_ATTEMPTS}). The AI couldn't fix this in ${MAX_ATTEMPTS} tries: it needs you in the board.`;
     closeWith(ctx, rec, 'needs-you', { kind: 'needs-you', needsYou: 'b', revert: revertSha, verdict: rec.verdict, line });
@@ -848,7 +860,7 @@ export function statusFix(ctx, id = null) {
 export function summaryFix(ctx) {
   const plan = readPlan(ctx.stateDir);
   if (!plan) return refuse('No fix plan yet: nunchi fix --plan.');
-  let fixed = 0, screens = 0, broke = 0;
+  let fixed = 0, screens = 0, broke = 0, unseen = 0;
   const needs = [], other = [];
   for (const g of plan.groups) {
     const recs = allRecords(ctx.stateDir, g).filter(r => (r.phases?.[0]?.at || '') >= plan.at);
@@ -857,11 +869,12 @@ export function summaryFix(ctx) {
     broke += recs.filter(r => r.verdict?.outcome === 'regression').length;
     const title = last.title || g;
     if (last.phase === 'fixed') { fixed++; screens += last.screens || 0; }
-    else if (last.phase === 'needs-you') needs.push(title);
+    else if (last.phase === 'needs-you') { needs.push(title); if (last.outcome?.needsYou === 'unbaselined') unseen++; }
     else other.push(g);
   }
   const n = plan.groups.length;
-  const head = `Fixed ${fixed} of ${n}${fixed ? ` (re-checked ${screens} screen${screens === 1 ? '' : 's'}, ${broke ? `${broke} fix${broke === 1 ? '' : 'es'} broke something else and ${broke === 1 ? 'was' : 'were'} undone` : 'nothing else broke'})` : ''}.`;
+  const tail = broke ? `${broke} fix${broke === 1 ? '' : 'es'} broke something else and ${broke === 1 ? 'was' : 'were'} undone` : unseen ? `${unseen} fix${unseen === 1 ? '' : 'es'} showed something new on a screen with nothing to compare against` : 'nothing else broke';
+  const head = `Fixed ${fixed} of ${n}${fixed ? ` (re-checked ${screens} screen${screens === 1 ? '' : 's'}, ${tail})` : ''}.`;
   const line = `${head}${needs.length ? ` ${needs.length} need${needs.length === 1 ? 's' : ''} you: ${needs.map(t => `'${t}'`).join(', ')} → the board (nunchi open).` : ''}${other.length ? ` ${other.length} not finished yet.` : ''}`;
   return out(0, line, { fixed, of: n, screens, needsYou: needs, broke, open: other });
 }

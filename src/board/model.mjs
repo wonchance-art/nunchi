@@ -261,7 +261,7 @@ function fixOut(rec, { waiting = true, reachable = false } = {}) {
   return {
     attempt, record: Number.isInteger(rec.attempt) ? rec.attempt : null,
     phase: safe(rec.phase, 20), needs: k === null ? null : NEEDS.has(k) ? k : 'other', kind: k ? safe(k, 20) : null, line: k && !NEEDS.has(k) && rec.outcome?.line ? safe(rec.outcome.line, 600) : null,
-    share: Number.isFinite(rec.outcome?.share) ? rec.outcome.share : null,
+    share: Number.isFinite(rec.outcome?.share) ? rec.outcome.share : null, moved: Number.isInteger(rec.outcome?.moved) ? rec.outcome.moved : null, pixels: rec.outcome?.pixels !== false,
     defectGone: rec.outcome?.defectGone === true, commit, before: run(rec.p0?.run), after: run(rec.p1?.run), drift: drift.slice(0, 20),
     // the after of an attempt that was undone (b): its screens are that attempt's, not the code now
     afterLabel: rec.outcome?.revert || rec.revert ? `Attempt ${attempt ?? '?'} (undone)` : null,

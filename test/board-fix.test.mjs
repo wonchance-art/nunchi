@@ -204,6 +204,18 @@ test('board: the check profile shown and approved is the one of the folder the f
   } finally { await b.close(); }
 });
 
+test('board: needs you (a) by geometry alone says what moved (the card is not handed a share of pixels nobody measured over the line)', async () => {
+  const p = await fixProject();
+  await attempt(p, ['TINY', 'ROOMY MOVE']);
+  const { b, call } = await board(p);
+  try {
+    const g = (await call(`/api/groups/${p.group}`)).json;
+    assert.equal(g.fix.needs, 'a');
+    assert.equal(g.fix.pixels, false);
+    assert.ok(g.fix.moved >= 1);
+  } finally { await b.close(); }
+});
+
 // ---- in a real browser -------------------------------------------------------------------------------------------------
 
 let browser = null, browserOk = true;

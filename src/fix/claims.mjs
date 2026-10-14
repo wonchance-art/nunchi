@@ -148,7 +148,9 @@ export function refusalText(r, { me = null, folder = 'myapp', worktree = null, n
   if (r.why === 'group' && worktree && c.worktree && c.worktree !== worktree) return `${who} is already fixing this finding in another folder (branch ${branch}${min !== null ? `, ${min} min` : ''}). Wait for it, or decide something else in the board: deciding and capturing still work here.`;
   if (r.why === 'url') return `Another fix (branch ${branch}) is checking the app at ${originOf(c.url) || c.url}. Start the app from this folder on a free port (e.g. \`PORT=3001 npm run dev\`), then verify with \`--url http://127.0.0.1:3001\`.`;
   if (r.why === 'file') return `${who} is fixing another finding in ${r.file} right now (branch ${branch}${min !== null ? `, ${min} min` : ''}). Fix this one when that fix is done.`;
-  const same = (me || null) === (c.declaredAgent || null);
+  // worktrees are advice for two different agents, and only when both said who they are: an agent that did not say
+  // (no --agent) is taken for the same one (the single-agent path never hears about worktrees)
+  const same = !me || !c.declaredAgent || me === c.declaredAgent;
   if (same) return r.why === 'folder'
     ? `A fix of another finding (group ${r.group}) is still open in this folder (branch ${branch}${min !== null ? `, ${min} min` : ''}): finish it with \`nunchi fix --verify ${r.group}\`, or stop it with \`nunchi fix --abort ${r.group}\`.`
     : `This finding is already being fixed (branch ${branch}${min !== null ? `, ${min} min` : ''}): resume with \`nunchi fix --verify ${r.group}\`, or stop it with \`nunchi fix --abort ${r.group}\`.`;
