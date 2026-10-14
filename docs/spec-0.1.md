@@ -1199,7 +1199,14 @@ the focus through a redraw.
   in Chromium with axe. Each fix of the M3 review (2026-10-15 KST) has a test that fails without it.
 - The gate harness `bench/fix-gate.mjs` runs the loop on Pebble with recorded fixes (`bench/fixes/pebble.json`): by
   default each seed an independent trial (a fresh copy and state), in a seeded order (`--order`, printed), the serve
-  mode printed (`--serve start|dev`). A harness run is not the gate (§9.5).
+  mode printed (`--serve start|dev`). A harness run is not the gate (§9.5). One run after the review (2026-10-15 07:52
+  KST, independent trials, order seed 1: P01, P18, P03, P15, serve start) printed: P01 reverted, attempt 1 of 2 (its
+  group also holds an overflow on /app/tasks the recorded edit does not touch); P18 fixed (4 screens); P03 needs you (a)
+  (the image now loads and the controls below it moved: 4%); P15 fixed (20 screens); 30–77 s per seed.
+- *Measured (2026-10-15 07:56 KST, after the review):* Pebble `node bench/run.mjs --twice` unchanged: rule recall
+  34/34, 0 false positives on 8 clean scenes, determinism identical (1,141 files), fingerprints 100% (52/52), 145 s per
+  capture. `npm test` 545 of 546 (1 Windows-only test skipped) on Node 22.22.0 and on Node 24.21.0, Chromium included,
+  with bun on PATH and without it (2026-10-15 08:08 KST).
 - Limits: the drift threshold (1%) is not calibrated yet (the gate does that); repositories with git filters are
   refused, not handled; the other *needs you* kinds have no card of their own yet; guards (principle 6) are M4.
 
