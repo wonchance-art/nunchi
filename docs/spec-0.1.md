@@ -1345,6 +1345,10 @@ so the one file more than M1's note is the environment's), fingerprints 100% (52
 pegroom (a scratch copy): 180 screens, rule recall 38/38; the board on that run (1440 px and 390 px, Progress,
 Findings, Detail, Screens, the undo toast) loads every screenshot through the key, sends nothing but to itself, and
 showed two bugs fixed before merge: the favicon lockout and the Progress mark (§7.2 rate limits; tests added).
+After the fixes of the review of PR #29 (2026-10-15 02:56 KST), the bench is unchanged: rule recall 34/34, 0 false
+positives on 8 clean scenes, determinism identical (1,141 files), fingerprints 100% (52/52); 170 s per capture, with
+the Node 24 test suite running beside it. The suite: 429 tests on Node 22.22.0 and on Node 24.21.0, Chromium
+included.
 
 **Known limits (review of PR #29, 2026-10-15 KST; left as they are).**
 - The hook's check of the board's port names `127.0.0.1`, `localhost`, `::1`, `0.0.0.0` and `0`; other spellings of
