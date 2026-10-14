@@ -85,11 +85,14 @@ const redactPart = (part, keep) => {
 };
 
 // A URL or path as it may be written into evidence: credential values replaced, in the query and in
-// a `#a=1&b=2` fragment. Only the query and fragment are touched; everything before them is kept as is.
+// a `#a=1&b=2` fragment, and `scheme://user:password@host` → `scheme://host` (credentials in the authority).
+// Nothing else before the query is changed.
+const USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^/?#@\s"'<>]*@/gi;
 export function redactUrl(url) {
   if (typeof url !== 'string') return url;
   const m = /^([^?#]*)(\?[^#]*)?(#.*)?$/s.exec(url);
-  const [, head, query = '', hash = ''] = m;
+  const [, rawHead, query = '', hash = ''] = m;
+  const head = rawHead.replace(USERINFO, '$1');
   const q = query ? '?' + redactPart(query.slice(1), false) : '';
   const h = hash ? '#' + redactPart(hash.slice(1), false) : '';
   return head + q + h;
@@ -98,7 +101,7 @@ export function redactUrl(url) {
 // Free text (console messages, navigation errors) can quote URLs: credential values in it go too.
 export function redactText(text) {
   if (typeof text !== 'string') return text;
-  return text.replace(/([?&#])([\w.-]+)=([^&#\s"'<>]+)/g, (all, sep, k) => (SECRET_PARAM.test(k) ? `${sep}${k}=REDACTED` : all));
+  return text.replace(USERINFO, '$1').replace(/([?&#])([\w.-]+)=([^&#\s"'<>]+)/g, (all, sep, k) => (SECRET_PARAM.test(k) ? `${sep}${k}=REDACTED` : all));
 }
 
 // Same request across runs → same key: params sorted, cache-busters dropped, epoch-like numbers masked,

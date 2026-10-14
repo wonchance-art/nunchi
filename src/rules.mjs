@@ -147,17 +147,45 @@ function jwtRole(token) {
 // A secret is reported by location and kind only (D8): not one character of it is kept, not even a prefix.
 export const mask = () => '';
 
-// Secret-shaped strings in what capture writes (page text, aria snapshot, every string of the evidence) become
-// `[secret-shaped: <kind>]`, with the patterns above: a private key as its whole block, any JWT (a service_role
-// one named so). Same name and output as the export-time scrubber of the 0.1-c export branch, which widens the
-// patterns; that one may replace this.
-const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
-const KEY_BLOCK = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|$)/g;
+// The bundle scan's JWT (secretFindings below): a service_role key in client JS. Detection only.
+const BUNDLE_JWT = /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+
+// Redaction (design §5, D8): any secret-shaped value in a string becomes `[secret-shaped: <kind>]`, so neither the
+// evidence capture writes (page text, aria snapshot, every string via capture's scrubDeep, selectors via
+// selector-secrets.mjs) nor a page or report built from it carries one, whatever field it came from. A list of its
+// own, wider than the bundle scan above (which it does not change): redaction must over-redact rather than leak.
+// `(?<![A-Za-z0-9])` instead of `\b`, so a key after `_` (`key_ghp_…`) is still caught; Stripe's `sk_live_` and
+// `rk_live_` are distinctive enough to match anywhere, glued to a word included.
+const NB = '(?<![A-Za-z0-9])';
+const shape = (kind, src, flags = 'g') => ({ kind, re: new RegExp(src, flags) });
+export const SCRUB_PATTERNS = [
+  // whole private key blocks, BEGIN to END (or to the end of the text when cut off): RSA, EC, DSA, OPENSSH, ENCRYPTED, PGP
+  shape('private-key', '-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[\\s\\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|$)'),
+  shape('stripe-live-secret-key', `sk_live_[0-9A-Za-z]{16,}`),
+  shape('stripe-live-restricted-key', `rk_live_[0-9A-Za-z]{16,}`),
+  shape('aws-access-key-id', `${NB}(?:AKIA|ASIA)[0-9A-Z]{16}(?![0-9A-Za-z])`),
+  shape('github-token', `${NB}(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})`),
+  shape('slack-token', `${NB}(?:xox[a-z]|xapp)[-.][A-Za-z0-9.-]{8,}`),
+  shape('google-api-key', `${NB}AIza[0-9A-Za-z_-]{35}`),
+  shape('anthropic-api-key', `${NB}sk-ant-[A-Za-z0-9_-]{20,}`),
+  shape('openai-api-key', `${NB}sk-(?:proj-)?[A-Za-z0-9_-]{32,}`),
+];
+// Any JWT (a service_role one named so), also when a line break or spaces were put around its dots.
+const SCRUB_JWT = new RegExp(`${NB}eyJ[A-Za-z0-9_-]{8,}\\s*\\.\\s*eyJ[A-Za-z0-9_-]{8,}\\s*\\.\\s*[A-Za-z0-9_-]{8,}`, 'g');
+// Values after a credential's name: `aws_secret_access_key = …`, `Authorization: Bearer …`, a bare `Bearer …`.
+// A credential value holds a digit somewhere; page text like "Authorization: required" is left alone.
+const NAMED = [
+  { kind: 'aws-secret-access-key', re: /(aws_secret_access_key|aws_session_token)(\s*["']?\s*[=:]\s*["']?)[A-Za-z0-9/+=]{16,}/gi },
+  { kind: 'authorization', re: /(authorization["']?\s*[:=]\s*["']?(?:(?:bearer|basic|token|digest)\s+)?)(?=[A-Za-z._~+/=-]*\d)[A-Za-z0-9._~+/=-]{8,}/gi },
+  { kind: 'bearer-token', re: /((?<![A-Za-z0-9])bearer\s+)(?=[A-Za-z._~+/-]*\d)[A-Za-z0-9._~+/-]{16,}=*/gi },
+];
 export function scrubSecrets(text) {
   if (typeof text !== 'string') return text;
-  let out = text.replace(KEY_BLOCK, '[secret-shaped: private-key]');
-  for (const p of SECRET_PATTERNS) out = out.replace(p.re, `[secret-shaped: ${p.kind}]`);
-  return out.replace(JWT, m => `[secret-shaped: ${jwtRole(m) === 'service_role' ? 'supabase-service-role-jwt' : 'jwt'}]`);
+  let out = text;
+  for (const p of SCRUB_PATTERNS) out = out.replace(p.re, `[secret-shaped: ${p.kind}]`);
+  out = out.replace(SCRUB_JWT, m => `[secret-shaped: ${jwtRole(m.replace(/\s+/g, '')) === 'service_role' ? 'supabase-service-role-jwt' : 'jwt'}]`);
+  for (const p of NAMED) out = out.replace(p.re, (all, name, sep = '') => `${name}${typeof sep === 'string' ? sep : ''}[secret-shaped: ${p.kind}]`);
+  return out;
 }
 
 export function secretFindings(scripts) {
@@ -165,7 +193,7 @@ export function secretFindings(scripts) {
   for (const { path, body } of scripts) {
     const hits = new Map();
     for (const p of SECRET_PATTERNS) for (const m of body.matchAll(p.re)) if (!hits.has(p.kind)) hits.set(p.kind, m[0]);
-    for (const m of body.matchAll(JWT)) {
+    for (const m of body.matchAll(BUNDLE_JWT)) {
       if (jwtRole(m[0]) === 'service_role' && !hits.has('supabase-service-role-jwt')) hits.set('supabase-service-role-jwt', m[0]);
     }
     for (const kind of [...hits.keys()].sort()) {

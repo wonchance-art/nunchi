@@ -83,13 +83,19 @@ Usage:
                                             Check the hunter's answers (every item answered, every defect
                                             grounded in a selector of the scene or a file:line under --root)
                                             and write ai-findings.json and coverage.json into the run
+  nunchi export --html <dir> [--run <id>] [--inline] [--json]
+                                            A static review page of one run and the ledger: <dir>/index.html plus
+                                            <dir>/img/ (screenshots, copied). --inline puts the images inside
+                                            index.html (one file). Offline, no scripts or fonts from anywhere;
+                                            open it in a browser. It shows screenshots of your app: sharing it
+                                            sends them off this machine
   nunchi tokens [--run <id>] [--json]      Tidy: cluster the colours (text, backgrounds, borders, SVG), radii and
                                             font sizes the screens use into a token proposal with roles and WCAG
                                             contrast → tokens.json and tokens.css in the run (never your code)
   nunchi --version
   nunchi --help
 
-Status: 0.1-a in progress. AI lenses, the ledger, the fix loop and the board come later.`;
+Status: 0.1-c in progress. The fix loop and the live board come later.`;
 
 function parse(argv) {
   const args = { _: [] };
@@ -103,8 +109,9 @@ function parse(argv) {
     else if (a === '--root') args.root = argv[++i];
     else if (a === '--keep') args.keep = Number(argv[++i]);
     else if (a === '--all') args.all = true;
+    else if (a === '--inline') args.inline = true;
     else if (['--reason', '--note', '--run', '--status', '--rule'].includes(a)) args[a.slice(2)] = argv[++i];
-    else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since', '--lens', '--budget', '--record', '--vendor', '--canaries'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
+    else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since', '--lens', '--budget', '--record', '--vendor', '--canaries', '--html'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a === '--version' || a === '-v') args.version = true;
     else args._.push(a);
@@ -173,6 +180,30 @@ function sweep(nunchiDir) {
     try { for (const e of readdirSync(join(nunchiDir, sub), { withFileTypes: true })) if (e.isDirectory()) dirs.push(join(nunchiDir, sub, e.name)); } catch {}
   }
   for (const d of dirs) sweepLeftovers(d);
+}
+// The ledger as the ledger commands read it (findings, decide, approve, trust, export): brought up to date (runs
+// not folded yet, decisions not noted yet), with approvals carried over from older versions.
+function loadLedger(nunchiDir) {
+  // the state folder is private before any of these commands writes its first file there (D12): the ledger's
+  // catch-up fold and noted decisions, decide's and approve's approvals
+  try { ensurePrivate(nunchiDir, existsSync(nunchiDir) ? ['state/'] : []); } catch (e) { console.error('nunchi: ' + e.message); process.exit(2); }
+  return ledgerGuard(() => {
+    sweep(nunchiDir);
+    const decisions = readDecisions(join(nunchiDir, 'decisions'));
+    // complete runs a crash left unfolded, and when each decision was first seen here
+    const state = syncLedger(join(nunchiDir, 'state', 'ledger.json'), join(nunchiDir, 'runs'), { decisions });
+    const serious = seriousTarget(state);
+    const raw = readApproved(join(nunchiDir, 'state', 'approved.json'));
+    let { approved, bound, left } = bindApproved(raw, decisions, { serious });
+    // approvals written by older versions: carried over once, each one said
+    if (bound.length || left.length || [...approved].some(k => !raw.has(k))) {
+      const r = addApproved(join(nunchiDir, 'state', 'approved.json'), [], { decisions, serious });
+      for (const b of r.bound) console.error(`nunchi: the approval of decision ${b.id} (${b.decision} on ${b.target}) from an older nunchi now names that decision's content`);
+      for (const l of r.left) console.error(`nunchi: the approval of decision ${l.id} was not carried over (${l.why}); if you made it, approve it again: nunchi approve ${l.id}`);
+      approved = r.approved;
+    }
+    return { state, decisions, approved, serious };
+  });
 }
 const aiFindingsOf = (dir, cmdName) => {
   const p = join(dir, 'ai-findings.json');
@@ -367,26 +398,7 @@ if (cmd === 'setup') {
   const stateFile = join(nunchiDir, 'state', 'ledger.json');
   const decisionsDir = join(nunchiDir, 'decisions');
   const approvedFile = join(nunchiDir, 'state', 'approved.json');
-  // the state folder is private before any of these commands writes its first file there (D12): the ledger's
-  // catch-up fold and noted decisions, decide's and approve's approvals
-  try { ensurePrivate(nunchiDir, existsSync(nunchiDir) ? ['state/'] : []); } catch (e) { console.error('nunchi: ' + e.message); process.exit(2); }
-  const { state, decisions, approved, serious } = ledgerGuard(() => {
-    sweep(nunchiDir);
-    const decisions = readDecisions(decisionsDir);
-    // complete runs a crash left unfolded, and when each decision was first seen here
-    const state = syncLedger(stateFile, join(nunchiDir, 'runs'), { decisions });
-    const serious = seriousTarget(state);
-    const raw = readApproved(approvedFile);
-    let { approved, bound, left } = bindApproved(raw, decisions, { serious });
-    // approvals written by older versions: carried over once, each one said
-    if (bound.length || left.length || [...approved].some(k => !raw.has(k))) {
-      const r = addApproved(approvedFile, [], { decisions, serious });
-      for (const b of r.bound) console.error(`nunchi: the approval of decision ${b.id} (${b.decision} on ${b.target}) from an older nunchi now names that decision's content`);
-      for (const l of r.left) console.error(`nunchi: the approval of decision ${l.id} was not carried over (${l.why}); if you made it, approve it again: nunchi approve ${l.id}`);
-      approved = r.approved;
-    }
-    return { state, decisions, approved, serious };
-  });
+  const { state, decisions, approved, serious } = loadLedger(nunchiDir);
   const rows = view(state, decisions, approved);
   const gs = groupRows(rows);
   if (!Object.keys(state.items).length && cmd !== 'approve') { console.error('nunchi: nothing captured yet (run nunchi capture first)'); process.exit(1); }
@@ -587,6 +599,23 @@ if (cmd === 'setup') {
       if (r.verify.suspect) console.log(`SUSPECT: ${r.verify.suspectReason}. This run's verifications are marked suspect; verify again in a fresh context.`);
     }
   } else { console.error('nunchi verify: use --plan, or --record <verdicts.json>'); process.exit(1); }
+} else if (cmd === 'export') {
+  // A static review page (spec §7): read-only, offline, byte-identical for the same run and ledger.
+  if (typeof args.html !== 'string' || !args.html || args.html.startsWith('--')) { console.error('nunchi export: use --html <dir> (writes <dir>/index.html and <dir>/img/)'); process.exit(1); }
+  const { exportHtml } = await import('./export-html.mjs');
+  const dir = runDirOf(args, 'export');
+  let r;
+  // read-only on the page's side; the ledger is brought up to date first, like `findings` does
+  const ledger = existsSync(resolve('.nunchi')) ? loadLedger(resolve('.nunchi')) : null;
+  try { r = exportHtml({ runDir: dir, nunchiDir: resolve('.nunchi'), outDir: resolve(args.html), inline: !!args.inline, ledger }); }
+  catch (e) { if (e.code !== 'EXPORT_TARGET') throw e; console.error(`nunchi export: ${e.message}`); process.exit(1); }
+  if (args.json) console.log(JSON.stringify(r, null, 2));
+  else {
+    const mb = Math.round(r.bytes / 1e5) / 10;
+    console.log(`review page → ${r.out}${r.inline ? ' (one file, images inline)' : ` (+ ${r.images} screenshots in img/)`} · ${mb} MB`);
+    console.log(`run ${r.run ?? '(not numbered)'} · ${r.scenes} screens · ${r.groups} groups, ${r.open} open${r.inLedger ? '' : ' · this run is not in the local ledger: statuses come from decisions only'}`);
+    console.log('Open it in a browser. It holds screenshots of your app: putting it anywhere else sends them off this machine.');
+  }
 } else if (cmd === 'tokens') {
   // Design supporter, Stage 0 (Tidy): a token proposal from the run's evidence. Writes into the run only.
   const { buildTokens, readRunScenes, formatTokens, tokensCss } = await import('./tokens.mjs');

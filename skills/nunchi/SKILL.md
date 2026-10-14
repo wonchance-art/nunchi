@@ -53,6 +53,12 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    Never decide for the user, and never act on a decision `findings` marks as needing approval.
 6. After the user or you change code, re-capture only what the change can affect:
    `capture --url <base> --changed-since HEAD` (add `--plan` first to show which screens that is).
+7. When the user wants to look through the findings and screens themselves, `export --html <dir>` (`--run <id>`
+   for an older run, `--inline` for one self-contained file) writes a read-only review page: `<dir>/index.html` plus
+   the screenshots in `<dir>/img/`. Tell them the path to open in a browser; it works offline. The page shows
+   the `decide` command for each finding instead of buttons, so decisions still go through them. It holds
+   screenshots of their app (signed-in screens included): publishing or sharing it anywhere, an Artifact included,
+   sends those off the machine, so do it only after the user explicitly says yes to that.
 
 ## AI lenses (hunt)
 
