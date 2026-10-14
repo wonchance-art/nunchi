@@ -198,8 +198,10 @@ test('yarn: its major version comes from the binary, not from the markers (when 
   writeFileSync(join(root, 'yarn.lock'), '');
   writeFileSync(join(root, '.yarnrc.yml'), 'nodeLinker: node-modules\n');           // a marker of yarn 2+, but yarn here is
   const r = await X.runChecks({ root, profile: checkProfile(root) });
-  const v = /^(\d+)\./.exec(String((await X.runProcess({ cmd: X.findBinary('yarn'), args: ['--version'], cwd: root, env: X.childEnv() })).output))?.[1];
-  assert.equal(r.pm.major, Number(v));
+  // asked the way the checks ask it (on Windows yarn is a .cmd shim, started through cmd.exe)
+  const v = await X.majorOf(X.findBinary('yarn'), { root });
+  assert.ok(Number.isInteger(v), 'yarn --version answered');
+  assert.equal(r.pm.major, v);
   assert.equal(r.pm.from, 'yarn --version');
   if (Number(v) === 1) assert.equal(r.results.lint.status, 'refused', 'yarn 1 runs pre/post: refused');
 });

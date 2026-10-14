@@ -99,6 +99,16 @@ function launch(bin, args, { platform = process.platform, name = 'the package ma
   return { cmd: bin, args, opts: {} };
 }
 
+// A manager's major version from `<bin> --version`, started as checks start it (a .cmd shim through cmd.exe on
+// Windows). → a number, or null.
+export async function majorOf(bin, { root, env = process.env, platform = process.platform } = {}) {
+  const c = launch(bin, ['--version'], { platform });
+  if (c.refused) return null;
+  const v = await runProcess({ ...c, cwd: root, env: childEnv(env, platform), timeout: 30e3, platform });
+  const m = /^(\d+)\./m.exec(v.output || '');
+  return v.exit === 0 && m ? Number(m[1]) : null;
+}
+
 // A check line that runs another script through a package manager (`npm run helper`, `pnpm lint`, `yarn helper`, `bun
 // run x`): that nested run would start helper's pre/post lines, which nunchi cannot switch off from outside (measured:
 // a nested `pnpm run helper` ran prehelper). Such a check is not run, and the line says why. Running a binary (`npx`,
@@ -170,8 +180,8 @@ export async function runChecks({ root, profile, env = process.env, platform = p
   const bin = findBinary(pm.name, { env, platform });
   // yarn without a packageManager field: its major version from the binary itself (the markers only guess)
   if (pm.name === 'yarn' && pm.from !== 'packageManager' && bin) {
-    const c = launch(bin, ['--version'], { platform, name: 'yarn' });
-    if (!c.refused) { const v = await runProcess({ ...c, cwd: root, env: childEnv(env, platform), timeout: 30e3, platform }); const m = /^(\d+)\./m.exec(v.output || ''); if (v.exit === 0 && m) Object.assign(pm, { major: Number(m[1]), from: 'yarn --version' }); }
+    const major = await majorOf(bin, { root, env, platform });
+    if (major !== null) Object.assign(pm, { major, from: 'yarn --version' });
   }
   const results = {};
   for (const name of names) {

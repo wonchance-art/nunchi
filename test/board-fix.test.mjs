@@ -182,7 +182,8 @@ test('handoff: a group whose fix waits for the person is not "to fix" for the AI
   const s = buildBoardModel({ nunchiDir: p.nunchi, projectDir: p.root }).summary;
   assert.deepEqual([s.toFix, s.fixNeedsYou, s.handoff], [0, 1, null]);
   const { execFileSync } = await import('node:child_process');
-  const out = execFileSync(process.execPath, [new URL('../src/cli.mjs', import.meta.url).pathname, 'findings'], { cwd: p.root, encoding: 'utf8' });
+  const { fileURLToPath } = await import('node:url');
+  const out = execFileSync(process.execPath, [fileURLToPath(new URL('../src/cli.mjs', import.meta.url)), 'findings'], { cwd: p.root, encoding: 'utf8' });
   assert.match(out, /1 group\(s\) to fix need you: their fix waits for you in the board \(nunchi open\), not for your AI/);
 });
 

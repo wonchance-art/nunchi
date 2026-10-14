@@ -5,7 +5,7 @@
 // Times in records are KST and live only in the state, never in evidence (design §8.2).
 import { join } from 'node:path';
 import { openSync, writeSync, fsyncSync, closeSync, readdirSync, lstatSync, readFileSync } from 'node:fs';
-import { writeAtomic, privateDir, refuseLink, stableJson, withLock } from '../stable.mjs';
+import { writeAtomic, privateDir, refuseLink, stableJson, withLock, retryBusy } from '../stable.mjs';
 import { bumpGeneration, corrupt } from '../state.mjs';
 
 const GROUP = /^[0-9a-f]{12}$/;
@@ -20,12 +20,15 @@ export const CLOSED = new Set(['fixed', 'reverted', 'needs-you', 'cancelled', 'a
 export const isOpen = r => !!r && OPEN.has(r.phase);
 const FIX_MAX = 4 * 1024 * 1024;
 
+// Windows refuses a read for a moment while another command renames a new version into place (EPERM/EBUSY): those are
+// waited out (retryBusy), never read as "no record".
 function readRecord(file) {
   let st;
-  try { st = lstatSync(file); } catch { return null; }
+  try { st = retryBusy(() => lstatSync(file)); } catch (e) { if (e.code === 'ENOENT' || e.code === 'ENOTDIR') return null; throw e; }
   if (!st.isFile()) throw corrupt(file, 'is not a regular file: remove it (nunchi then forgets that attempt; git still counts it)');
   if (st.size > FIX_MAX) throw corrupt(file, 'is too large to be a fix record: remove it');
-  const text = readFileSync(file, 'utf8');
+  let text;
+  try { text = retryBusy(() => readFileSync(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return null; throw e; }
   // the allocation is the record's first write: a crash inside it leaves an empty file, which is an attempt that
   // never started (no side effect happens before its first phase is written)
   if (!text.trim()) return null;
