@@ -209,10 +209,21 @@ test('not fixed: the defect is looked for in every cell P1 saw, not only the led
 });
 
 test('a P1 screen that did not load (a route only P1 has: the fix may have broken it) is inconclusive, never fixed', () => {
-  for (const extra of [{ status: 'capture-failed' }, { httpStatus: 500 }, { redirected: true }]) {
+  for (const extra of [{ status: 'capture-failed' }, { httpStatus: 500 }, { redirected: true, person: 'signed-in' }]) {
     const v = J.judgeRules({ group: G(), p0: view([D], [gf(D)]), p1: view([D, { ...B, ...extra }], []) });
     assert.deepEqual([v.outcome, v.reasons[0].why, v.reasons[0].routes], ['inconclusive', 'scene-failed', ['/b']], JSON.stringify(extra));
   }
+  // round 2: a visitor sent away from a route no capture knew (an auth-only page) is not applicable, not lost
+  const red = { ...B, redirected: true, reason: 'redirected to /login', finalPath: '/login' };
+  assert.equal(J.judgeRules({ group: G(), p0: view([D], [gf(D)]), p1: view([D, red], []) }).outcome, 'fixed', 'redirect only');
+  // …and a lost P1-only screen never hides what P0's screens say: a regression or a defect still there is reverted
+  const failed = { ...B, status: 'capture-failed' };
+  for (const lostScreen of [red, failed]) {
+    assert.equal(J.judgeRules({ group: G(), p0: view([D], [gf(D)]), p1: view([D, lostScreen], [fnd('broken-image', D, 'img.x')]) }).outcome, 'regression', JSON.stringify(lostScreen));
+    assert.equal(J.judgeRules({ group: G(), p0: view([D], [gf(D)]), p1: view([D, lostScreen], [gf(D)]) }).outcome, 'not-fixed', JSON.stringify(lostScreen));
+  }
+  // a P0 screen lost is still first: nothing can be judged there
+  assert.equal(J.judgeRules({ group: G(), p0: view([D], [gf(D)]), p1: view([{ ...D, status: 'capture-failed' }], [gf(D)]) }).outcome, 'inconclusive');
   // the group's own cells lost count even when P0 did not look there
   const v = J.judgeRules({ group: G(['guest.normal.d', 'guest.normal.m']), p0: view([D], [gf(D)]), p1: view([D], []) });
   assert.deepEqual([v.outcome, v.reasons[0].cells], ['inconclusive', ['/a|guest.normal.m']]);

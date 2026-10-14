@@ -120,11 +120,17 @@ export function judgeRules({ group, p0, p1, known = new Set(), again = () => und
   const lost = [...p0.looks.keys()].filter(k => !p1.looks.has(k)).sort();
   const groupCells = [...group.rule, ...group.ai].flatMap(it => (it.cells || []).map(c => `${it.route}|${c}`));
   const lostGroup = [...new Set(groupCells)].filter(k => !p1.looks.has(k)).sort();
-  // a screen of P1 itself that did not load (a route only P1 has, the fix may have broken it): nothing is judged there
-  const lostP1 = p1.scenes.filter(s => !looked(s)).map(s => `${s.route}|${cellOf(s)}`);
-  const lostAll = [...new Set([...lost, ...lostGroup, ...lostP1])].sort();
-  if (lostAll.length) bad.push({ why: 'scene-failed', text: `${lostAll.length} screen(s) did not load or were redirected`, cells: lostAll, routes: [...new Set(lostAll.map(k => k.split('|')[0]))].sort(), before: lostAll.filter(k => p0.looks.has(k)) });
+  // P0's screens and the group's own that P1 lost: nothing can be judged there, so this comes first
+  const lostP0 = [...new Set([...lost, ...lostGroup])].sort();
+  if (lostP0.length) bad.push({ why: 'scene-failed', text: `${lostP0.length} screen(s) did not load or were redirected`, cells: lostP0, routes: [...new Set(lostP0.map(k => k.split('|')[0]))].sort(), before: lostP0.filter(k => p0.looks.has(k)) });
   if (bad.length) return { outcome: 'inconclusive', needsYou: 'c', reasons: bad };
+  // a screen only P1 has that did not load (the fix may have broken it) is said after rows 2 and 3, so it never hides a
+  // regression or a defect still there on P0's screens; a visitor sent away from a route no capture knew (an
+  // auth-only page) is no screen of that route: not applicable, not lost (M3 review, round 2)
+  const p0Routes = new Set([...p0.looks.keys()].map(k => k.split('|')[0]));
+  const notApplicable = s => !p0Routes.has(s.route) && s.person !== 'signed-in' && (s.redirected === true || /^redirected/.test(String(s.reason || '')));
+  const lostP1Only = [...new Set(p1.scenes.filter(s => !looked(s) && !notApplicable(s)).map(s => `${s.route}|${cellOf(s)}`).filter(k => !p0.looks.has(k) && !groupCells.includes(k)))].sort();
+  const lostLater = lostP1Only.length ? { outcome: 'inconclusive', needsYou: 'c', reasons: [{ why: 'scene-failed', text: `${lostP1Only.length} screen(s) did not load or were redirected`, cells: lostP1Only, routes: [...new Set(lostP1Only.map(k => k.split('|')[0]))].sort(), before: [] }] } : null;
   // 2. caused-regression: a new defect in a cell P0 looked at (flaky rules count only when they came back)
   const mine = new Set(group.rule.map(i => i.fp));
   const before = k => p0.all.filter(x => `${x.id.route}|${x.id.cell}` === k);
@@ -175,6 +181,7 @@ export function judgeRules({ group, p0, p1, known = new Set(), again = () => und
   }
   if (still.length) return { outcome: 'not-fixed', still };
   if (unsureOwn.length) return { outcome: 'inconclusive', needsYou: 'c', reasons: [{ why: 'recapture-failed', text: `${new Set(unsureOwn).size} screen(s) captured again for a flaky rule did not load`, cells: [...new Set(unsureOwn)].sort() }] };
+  if (lostLater) return lostLater;
   // 4. what only a person can judge: a new finding on a route P1 added (no baseline), or visual drift
   const driftHit = drift && (drift.share > DRIFT_PIXELS || drift.moved > 0);
   if (group.ai.length) return { outcome: 'recheck', pending: { unbaselined: unbaselined.map(brief), drift: driftHit ? drift : null } };
