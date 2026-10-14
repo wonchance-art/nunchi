@@ -1346,6 +1346,15 @@ pegroom (a scratch copy): 180 screens, rule recall 38/38; the board on that run 
 Findings, Detail, Screens, the undo toast) loads every screenshot through the key, sends nothing but to itself, and
 showed two bugs fixed before merge: the favicon lockout and the Progress mark (§7.2 rate limits; tests added).
 
+**Known limits (review of PR #29, 2026-10-15 KST; left as they are).**
+- The hook's check of the board's port names `127.0.0.1`, `localhost`, `::1`, `0.0.0.0` and `0`; other spellings of
+  loopback (`127.1`, `127.0.1`, `2130706433`, `0x7f000001`) reach the port unseen. The board still answers only with
+  the key, and the Host check refuses any Host but `127.0.0.1:<port>`.
+- On Windows the control socket is a named pipe with the default access of the user's session: another local user
+  may be able to connect and send `open` or `stop` (never a link or a key: the pipe hands out neither).
+- The decision time is measured by the page and sent as `ms` (0 to 120000, checked): whoever holds the tab's key can
+  send any value in that range, so the metric is the person's own record, not a proof.
+
 **Not done in M2:** the fix loop's states (attempts, drift, before/after, `fix --undo`), probe runs hidden from
 `runs`, and Coverage and Screens beyond the wall (M7) are later milestones; label pools from the gate harness (G);
 Korean words (the table is ready).
