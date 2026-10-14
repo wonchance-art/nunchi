@@ -4,7 +4,7 @@
 // fails or its count rises. Synthetic projects in temp folders.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, realpathSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, realpathSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as X from '../src/fix/run.mjs';
@@ -55,7 +55,13 @@ test('the environment is an allow-list (PATH, HOME, LANG, TERM, CI=1, NODE_ENV=t
 test('shell: false; on Windows the .cmd shim starts through cmd.exe /d /s /c with a checked script name; a missing package manager is refused, never downloaded', () => {
   const c = X.commandFor({ pm: { name: 'npm' }, script: 'lint', bin: 'C:\\nodejs\\npm.cmd', platform: 'win32' });
   assert.match(c.cmd, /System32[\\/]cmd\.exe$/);
-  assert.deepEqual(c.args, ['/d', '/s', '/c', '"C:\\nodejs\\npm.cmd" run --ignore-scripts lint']);
+  assert.deepEqual(c.args, ['/d', '/s', '/c', '""C:\\nodejs\\npm.cmd" run --ignore-scripts lint"']);
+  // a path with spaces: /s strips the outer quotes only, so the shim's path stays quoted (what cmd.exe then runs)
+  const spaced = X.commandFor({ pm: { name: 'npm' }, script: 'lint', bin: 'C:\\Program Files\\nodejs\\npm.cmd', platform: 'win32' });
+  const line = spaced.args[3];
+  assert.ok(line.startsWith('"') && line.endsWith('"'));
+  assert.equal(line.slice(1, -1), '"C:\\Program Files\\nodejs\\npm.cmd" run --ignore-scripts lint', 'after /s: the quoted path, then the arguments');
+  assert.match(X.commandFor({ pm: { name: 'npm' }, script: 'lint', bin: 'C:\\%TEMP%\\npm.cmd', platform: 'win32' }).refused, /cmd\.exe would read as its own/);
   assert.equal(c.opts.windowsVerbatimArguments, true);
   assert.match(X.commandFor({ pm: { name: 'npm' }, script: 'lint & calc', bin: 'x', platform: 'win32' }).refused, /not a script name/);
   assert.match(X.commandFor({ pm: { name: 'pnpm' }, script: 'lint', bin: null }).refused, /^no pnpm on PATH: nunchi never downloads a package manager/);
@@ -129,4 +135,14 @@ test('counts: eslint, tsc, node:test, jest, vitest, a generic "N errors"', () =>
   assert.equal(X.countOf('build finished with 7 errors'), 7);
   assert.equal(X.countOf('all good'), null);
   assert.equal(X.cleanOutput('\x1b[31mred\x1b[0m'), 'red');
+});
+
+test('Windows: a .cmd shim in a folder whose path has spaces runs, with its arguments', { skip: process.platform !== 'win32' && 'cmd.exe is Windows only' }, async () => {
+  const dir = join(tmp('nunchi-cmd-'), 'Program Files', 'node js');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'npm.cmd'), '@echo ran %*\r\n');
+  const c = X.commandFor({ pm: { name: 'npm' }, script: 'lint', bin: join(dir, 'npm.cmd'), platform: 'win32' });
+  const r = await X.runProcess({ ...c, cwd: dir, env: X.childEnv(process.env, 'win32') });
+  assert.equal(r.exit, 0, r.output);
+  assert.match(r.output, /ran run --ignore-scripts lint/);
 });

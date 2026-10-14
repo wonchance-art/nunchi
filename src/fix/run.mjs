@@ -84,8 +84,12 @@ export function commandFor({ pm, script, bin, platform = process.platform, profi
   if (extra.some(a => !/^[\w:.=-]{1,64}$/.test(a))) return { refused: 'extra arguments must be plain words' };
   if (extra.length) args = pm.name === 'npm' || pm.name === 'pnpm' ? [...args, '--', ...extra] : [...args, ...extra];
   if (platform === 'win32' && /\.cmd$/i.test(bin)) {
+    // cmd expands %VAR% even inside quotes, and a quote would end ours: such a path is not run
+    if (/["%\n]/.test(bin)) return { refused: `the path of ${pm.name} (${bin}) holds a character cmd.exe would read as its own` };
     const root = /^[A-Za-z]:\\[^"%&|<>^\n]*$/.test(process.env.SystemRoot || '') ? process.env.SystemRoot : 'C:\\Windows';
-    return { cmd: join(root, 'System32', 'cmd.exe'), args: ['/d', '/s', '/c', `"${bin}" ${args.join(' ')}`], opts: { windowsVerbatimArguments: true } };
+    // /s strips the outer pair of quotes and keeps the rest as it is: the whole line goes in one more pair, as node
+    // does for shell: true, so a path with spaces ("C:\Program Files\nodejs\npm.cmd") stays one word
+    return { cmd: join(root, 'System32', 'cmd.exe'), args: ['/d', '/s', '/c', `""${bin}" ${args.join(' ')}"`], opts: { windowsVerbatimArguments: true } };
   }
   return { cmd: bin, args, opts: {} };
 }
