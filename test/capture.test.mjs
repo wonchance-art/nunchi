@@ -22,6 +22,8 @@ before(async () => {
   writeFileSync(join(site, 'app.js'), `window.__cfg = { stripe: "${'sk_' + 'live_' + 'Zz9Yy8Xx7Ww6Vv5Uu4Tt3Ss2'}", db: "${serviceRole}" };\n`);
   server = createServer((req, res) => {
     const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    // a moved page: the server sends the visitor on to another route
+    if (path === '/moved.html') { res.writeHead(302, { location: '/shell.html' }); return res.end(); }
     const file = join(site, path === '/' ? 'index.html' : path);
     if (!file.startsWith(site) || !existsSync(file) || statSync(file).isDirectory()) { res.writeHead(404); return res.end('not found'); }
     res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream' });
@@ -82,6 +84,26 @@ test('app shell: a finding below the inner scroll area\'s fold says it is not in
   assert.equal(m.scrollers[0].selector, 'main');
   assert.ok(m.scrollers[0].scrollHeight > m.scrollers[0].clientHeight * 2);
   assert.ok(!r.findings.some(f => f.rule !== 'broken-image' && f.inside), 'elements in view are not marked');
+});
+
+test('a redirected scene is flagged in the manifest and kept out of the link graph and the design system', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const out = mkdtempSync(join(tmpdir(), 'nunchi-redirect-'));
+  // /moved.html sends the visitor to /shell.html, which no captured screen links to
+  const r = await capture({ baseUrl: base, scenes: [{ route: '/', path: '/' }, { route: '/moved.html', path: '/moved.html' }], viewports: ['m'], out,
+    flow: { routes: ['/', '/broken.html', '/moved.html', '/shell.html'] } });
+  const manifest = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf8'));
+  const moved = manifest.scenes.find(e => e.id === 'moved.html.guest.normal.m');
+  assert.equal(moved.reason, 'redirected to /shell.html');
+  assert.equal(moved.redirected, true, 'the manifest entry says the scene was redirected');
+  assert.equal(manifest.scenes.find(e => e.id === '~.guest.normal.m').redirected, false);
+  // L3: the page the redirect showed is not /moved.html's page, and the redirect itself reaches /shell.html
+  assert.deepEqual(r.flow.edges.filter(e => e.from === '/moved.html'), [], 'no links are read from a redirected scene');
+  assert.equal(r.flow.nodes.find(n => n.route === '/shell.html').reachedBy, 'redirect');
+  assert.deepEqual(r.findings.filter(f => f.rule === 'unreachable-route').map(f => f.route), ['/moved.html']);
+  // L4: the design system measures each route's own page only
+  const screens = Object.values(r.system.viewports.m).filter(Array.isArray).flatMap(list => list.flatMap(v => v.screens));
+  assert.ok(screens.length > 0 && !screens.includes('/moved.html'), 'a redirected scene is not one of the design system\'s screens');
 });
 
 test('deterministic: two runs of the same site give byte-identical evidence', async t => {

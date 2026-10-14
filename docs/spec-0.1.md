@@ -127,7 +127,11 @@ Per scene:
 | `links.json` | internal links → target route, status |
 | `measure.json` | rule-lens measurements (§3) |
 
-Run-level: `manifest.json` (scenes with status and reason, health), `findings.json`, `timing.json`, `run.json`, `source-map.json`
+Run-level: `manifest.json` (scenes with status, reason, `finalPath` and `redirected`, health; a scene is
+redirected when its final path differs from the path it opened, query and fragment aside. Readers derive the flag
+from `reason`, `path` and `finalPath` for manifests written before it existed, so older runs read the same; a
+redirected scene feeds no link edges, design-system screens or parity pairs, and counts as a redirect to its
+final route), `findings.json`, `timing.json`, `run.json`, `source-map.json`
 (§2.5), `inventory.json` (source strings and UI states, extracted with Babel/SWC; classified in 0.1-b),
 `canaries.json` (planted defects, an answer key), and after the AI hunt `hunt-plan.json`, `hunt-key.json` and
 `hunt/<alias>/` (runs with canaries: scene aliases, an answer key, and the evidence they point to), `ai-findings.json`,

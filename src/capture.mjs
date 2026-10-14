@@ -272,7 +272,7 @@ async function captureOne(browser, base, scene, opts) {
       id: scene.id, route: scene.route, path: redactUrl(scene.path), person: scene.person, state: scene.state, viewport: scene.vp,
       status: measure ? (ev.redirected && opts.strictPath ? 'capture-failed' : 'captured') : 'capture-failed',
       reason: !measure ? (loop ? 'redirect-loop' : browserErrorPage ? 'browser-error-page' : 'no-dom') : ev.redirected ? `redirected to ${finalPath}` : null,
-      finalPath, httpStatus: status,
+      finalPath, redirected: ev.redirected, httpStatus: status,
       top: top ? sha(top) : null, full: full ? sha(full) : null,
       findings: findings.length, dataRequests: dataKeys.length, replayMisses: new Set(drift).size,
       textHash: measure ? sha(measure.mainText) : null,
