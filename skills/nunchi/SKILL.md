@@ -57,9 +57,11 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    `nunchi open` in their own terminal. Never run `open --label` (labelling is the user's, in their terminal).
    If the user tells you a decision in chat instead, record it with `decide <group id> fix|keep|false-positive|hold
    --from-chat` (`keep` needs `--reason intended|out-of-scope`, `false-positive` needs `--reason
-   not-a-problem|wrong-place`; `not-a-problem` and `later` work as words too) and say that a *keep* or *not a
-   problem* you recorded counts for "ready to ship" only once they confirm it in the board. Never decide for the
-   user, never run `approve`, and never act on a decision `findings` marks as needing approval or confirmation.
+   not-a-problem|wrong-place`, `fix` and `hold` take none; `not-a-problem` and `later` work as words too; a group
+   whose AI findings nobody double-checked is decided on each of them, which `decide` does by itself) and say that
+   a *keep* or *not a problem* you recorded counts for "ready to ship" only once they confirm it in the board. Never
+   decide for the user, never run `approve`, and never act on a decision `findings` marks as needing approval or
+   confirmation.
 7. After the user or you change code, re-capture only what the change can affect:
    `capture --url <base> --changed-since HEAD` (add `--plan` first to show which screens that is).
 8. When the user wants a copy to keep or share (the board is live and local), `export --html <dir>` (`--run <id>`
