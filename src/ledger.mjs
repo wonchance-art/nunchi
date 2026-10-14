@@ -25,13 +25,23 @@ const SECRET = 'secret-in-client-bundle';
 const RECIPE = { [SECRET]: 2 };
 const recipeOf = (rule, version) => Math.min(version, RECIPE[rule] || 1);
 
-// A build names a bundle after its content, so a rebuild that leaves a secret in place renames the file. The
-// hash-like parts of a bundle path become `[hash]`: Vite/Rollup's `-<8 characters>` suffix, and any run of 6+
-// letters and digits that is lower-case hex (webpack, Parcel, CRA) or holds a digit (Turbopack, esbuild).
+// A build names a bundle after its content, so a rebuild that leaves a secret in place renames the file. Only a
+// hash-like part of the file name becomes `[hash]`; folders, words and words with a number (`checkout2`) stay,
+// so two bundles never become one:
+// - Turbopack: the whole name is 13 characters of [0-9a-z_-] with a digit (`1grrdrpshlkcw.js`);
+// - Vite/Rollup, esbuild: a `-<8 characters>` suffix with a digit, `_`, `-` or an inner capital (`index-Boalzs1w.js`);
+// - webpack, CRA, Parcel, and Turbopack's own runtime: a `-`/`.`-separated part of 8+ letters and digits that is
+//   lower-case hex or has a digit between letters (`page-4f1c2a9b8e7d6c5b.js`, `main.8f3e2a1b.js`).
+const hashPart = p => p.length >= 8 && (/^[0-9a-f]+$/.test(p) || /[A-Za-z][0-9]+[A-Za-z]/.test(p));
 export function bundleKey(path) {
-  return String(path)
-    .replace(/-([A-Za-z0-9_-]{8})(\.[A-Za-z0-9]+)$/, (all, h, ext) => (/[0-9_-]/.test(h) || /.[A-Z]/.test(h) ? `-[hash]${ext}` : all))
-    .replace(/[A-Za-z0-9]{6,}/g, t => (/^[0-9a-f]+$/.test(t) || /\d/.test(t) ? '[hash]' : t));
+  const s = String(path), cut = s.lastIndexOf('/') + 1;
+  const dir = s.slice(0, cut), m = /^(.+?)((?:\.[A-Za-z0-9]{1,5})?)$/.exec(s.slice(cut));
+  if (!m) return s;
+  const [, stem, ext] = m;
+  if (/^[0-9a-z_-]{13}$/.test(stem) && /\d/.test(stem)) return `${dir}[hash]${ext}`;
+  const vite = /^(.+)-([A-Za-z0-9_-]{8})$/.exec(stem);
+  if (vite && (/[0-9_-]/.test(vite[2]) || /.[A-Z]/.test(vite[2]))) return `${dir}${vite[1]}-[hash]${ext}`;
+  return dir + stem.split(/([-.])/).map(p => (hashPart(p) ? '[hash]' : p)).join('') + ext;
 }
 
 // Positions, framework ids and generated class names change without the element changing.
@@ -115,12 +125,27 @@ export function currentTargets(decisions, state) {
     if (old.fp !== item.fp && !fp.has(old.fp)) fp.set(old.fp, item.fp);
     if (old.group !== item.group && !group.has(old.group)) group.set(old.group, item.group);
   }
-  return decisions.map(d => {
+  const moved = decisions.map(d => {
     const t = d.target || {};
     if ((d.fingerprintVersion || 1) >= FINGERPRINT_VERSION) return d;
     const to = t.fp && fp.has(t.fp) ? { fp: fp.get(t.fp) } : t.group && group.has(t.group) ? { group: group.get(t.group) } : null;
     return to ? { ...d, target: to, targetWas: t } : d;
   });
+  // Items merged by the migration whose old decisions disagree (one dismissed, another to fix, hold or reopen):
+  // the dismissal does not carry over, so the item stays visible. Open beats dismissed.
+  const key = t => (t.fp ? `fp:${t.fp}` : `group:${t.group}`);
+  const lastByOld = new Map();                            // new target → old target → its latest moved decision
+  for (const d of moved) if (d.targetWas) {
+    const k = key(d.target);
+    if (!lastByOld.has(k)) lastByOld.set(k, new Map());
+    lastByOld.get(k).set(key(d.targetWas), d);
+  }
+  const DISMISS = new Set(['keep', 'false-positive']);
+  const conflicted = new Set([...lastByOld].filter(([, olds]) => {
+    const kinds = [...olds.values()].map(d => DISMISS.has(d.decision));
+    return kinds.includes(true) && kinds.includes(false);
+  }).map(([k]) => k));
+  return moved.filter(d => !(d.targetWas && conflicted.has(key(d.target)) && DISMISS.has(d.decision)));
 }
 
 export function annotate(findings) {

@@ -45,8 +45,9 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    reading any finding. Then run `findings`: one line per kind of defect, most serious first, with how many
    screens and places it covers. Report those kinds, not individual occurrences; `findings --rule <rule>` lists
    the groups of one kind (a group is one defect however many screens show it). Say which routes were skipped and
-   why, and how many replay misses there were (a miss was never sent to the server and failed in the page; it
-   means the recording is stale: suggest `--network record`).
+   why, and how many replay misses there were. In replay every fetch/XHR/EventSource miss and every non-GET is
+   aborted and WebSockets are closed, so nothing reached a server; a miss means the recording is stale (suggest
+   `--network record`), while a closed stream is listed apart and re-recording does not change it.
    When the user decides on a group, record it with `decide <group id> fix|keep|false-positive|hold`
    (`keep` needs `--reason intended|out-of-scope`, `false-positive` needs `--reason not-a-problem|wrong-place`).
    Never decide for the user, and never act on a decision `findings` marks as needing approval.

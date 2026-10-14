@@ -6,7 +6,9 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { secretFindings, mask } from '../src/rules.mjs';
-import { fingerprintOf, annotate, readState, view, FINGERPRINT_VERSION } from '../src/ledger.mjs';
+import * as ledger from '../src/ledger.mjs';
+const { fingerprintOf, annotate, readState, view, FINGERPRINT_VERSION } = ledger;
+const bundleKey = p => ledger.bundleKey(p);
 
 const secret = (url, kind = 'stripe-live-secret-key', extra = {}) => ({ lens: 'L9', rule: 'secret-in-client-bundle', severity: 'blocker', scene: null, route: null, viewport: null, selector: null, box: null, evidence: { url, kind, ...extra } });
 
@@ -39,10 +41,21 @@ test('fp v2: a rebuild that renames the bundle keeps the secret\'s fingerprint, 
     ['/build/_shared/chunk-ABCDEFGH.js', '/build/_shared/chunk-Q2W3E4R5.js'],                                       // esbuild
   ];
   for (const [a, b] of same) assert.equal(fingerprintOf(secret(a)).fp, fingerprintOf(secret(b)).fp, `${a} vs ${b}`);
-  // what tells two bundles apart is kept
-  for (const [a, b] of [['/app.js', '/admin.js'], ['/assets/index-DiwrgTda.js', '/assets/settings-DiwrgTda.js'], ['/js/user-settings.js', '/js/user-profile.js']]) {
+  // what tells two bundles apart is kept: names, short words, words with a number, folders
+  for (const [a, b] of [['/app.js', '/admin.js'], ['/assets/index-DiwrgTda.js', '/assets/settings-DiwrgTda.js'], ['/js/user-settings.js', '/js/user-profile.js'],
+    ['/js/checkout2.js', '/js/payments2.js'], ['/js/facade.js', '/js/decade.js'],
+    ['/a1b2c3d4e5/app.js', '/f6e5d4c3b2/app.js'], ['/_next/static/chunks/turbopack-08unf7310vpqi.js', '/_next/static/chunks/08unf7310vpqi.js']]) {
     assert.notEqual(fingerprintOf(secret(a)).fp, fingerprintOf(secret(b)).fp, `${a} vs ${b}`);
   }
+  // the bench apps' real bundle names (Pebble: Next 16 + Turbopack; pegroom: Vite)
+  const pebble = ['0cz1d0mv5g_q7', '0hf0csprl-qay', '1grrdrpshlkcw', '1gyiq9szzyd7y', '1jhkz7-phbjq2', '1zkag9d667vt5', '2bd9w9wjwxp4q', '2fceuzry3ehkj',
+    '37_gtamvd34h5', '39d3h1v75a-x2', '3fjylfovv-ufb', '3gognr0kg886d', '3m97xjh6caoar', '3mjmeg-fol7d9', '3ulxh7l11ie-3'];
+  for (const n of pebble) assert.equal(bundleKey(`/_next/static/chunks/${n}.js`), '/_next/static/chunks/[hash].js', n);
+  assert.equal(bundleKey('/_next/static/chunks/2c7xnr69h5xvw.css'), '/_next/static/chunks/[hash].css');
+  assert.equal(bundleKey('/_next/static/chunks/turbopack-08unf7310vpqi.js'), '/_next/static/chunks/turbopack-[hash].js');
+  assert.equal(bundleKey('/assets/index-Boalzs1w.js'), '/assets/index-[hash].js');
+  assert.equal(bundleKey('/assets/index-w0w4_8WA.css'), '/assets/index-[hash].css');
+  assert.equal(bundleKey('/_next/static/chunks/app/tasks/%5Bid%5D/page-4f1c2a9b8e7d6c5b.js'), '/_next/static/chunks/app/tasks/%5Bid%5D/page-[hash].js');
   assert.notEqual(fingerprintOf(secret('/app.js')).fp, fingerprintOf(secret('/app.js', 'github-token')).fp, 'another kind is another defect');
   assert.deepEqual(fingerprintOf(secret('/_next/static/chunks/1grrdrpshlkcw.js')).inputs.evidence, { kind: 'stripe-live-secret-key', url: '/_next/static/chunks/[hash].js' });
   // v1 still computes the old fingerprint (migration needs it): the content hash was part of it
@@ -109,4 +122,27 @@ test('fp v2 migration: a v1 ledger is re-keyed on read, its v1 decisions keep ap
   const fresh = { schema: 1, fingerprintVersion: 2, runs: ['0001'], items: { [v2item.fp]: v2item } };
   const remote = [{ ...decisions[0], id: 'd3', target: { fp: fingerprintOf(after, 1).fp } }];
   assert.equal(view(fresh, remote, new Set(['d3']))[0].status, 'dismissed');
+});
+
+test('fp v2 migration: two secrets are never merged into one dismissal; merged items with conflicting decisions stay open', () => {
+  const at = m => `2026-10-14T10:0${m}:00.000+09:00`;
+  const dec = (id, target, decision, reason, m) => ({ schema: 1, id, target, decision, reason, by: 'me', at: at(m), fingerprintVersion: 1 });
+  // Two different bundles (not a rebuild of one): a fix decided on one, a false positive on the other.
+  const checkout = storedV1(secret('/js/checkout2.js')), payments = storedV1(secret('/js/payments2.js'));
+  const file = join(mkdtempSync(join(tmpdir(), 'nunchi-fp2c-')), 'ledger.json');
+  writeFileSync(file, JSON.stringify({ schema: 1, fingerprintVersion: 1, runs: ['0001'], items: { [checkout.fp]: checkout, [payments.fp]: payments } }));
+  const decisions = [dec('d1', { fp: checkout.fp }, 'fix', null, 1), dec('d2', { fp: payments.fp }, 'false-positive', 'not-a-problem', 2)];
+  const st = readState(file);
+  assert.equal(Object.keys(st.items).length, 2, 'two bundles stay two items');
+  const rows = view(st, decisions, new Set(['d1', 'd2']));
+  assert.deepEqual(rows.map(r => [r.evidence.url, r.status]).sort(), [['/js/checkout2.js', 'to-fix'], ['/js/payments2.js', 'dismissed']]);
+  // Two builds of one bundle do merge; if their v1 decisions disagree, the merged item is not dismissed.
+  const a = storedV1(secret('/assets/index-Ab12Cd34.js')), b = { ...storedV1(secret('/assets/index-Ef56Gh78.js')), lastSeen: '0002' };
+  const file2 = join(mkdtempSync(join(tmpdir(), 'nunchi-fp2c-')), 'ledger.json');
+  writeFileSync(file2, JSON.stringify({ schema: 1, fingerprintVersion: 1, runs: ['0001', '0002'], items: { [a.fp]: a, [b.fp]: b } }));
+  const merged = readState(file2);
+  assert.equal(Object.keys(merged.items).length, 1);
+  const conflicting = [dec('d1', { fp: a.fp }, 'fix', null, 1), dec('d2', { fp: b.fp }, 'false-positive', 'not-a-problem', 2)];
+  assert.equal(view(merged, conflicting, new Set(['d1', 'd2']))[0].status, 'to-fix', 'open beats dismissed');
+  assert.equal(view(merged, conflicting.slice(1), new Set(['d2']))[0].status, 'dismissed', 'one decision, no conflict: it carries over');
 });

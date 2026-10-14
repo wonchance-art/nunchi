@@ -6,7 +6,7 @@
 // Answers and evidence are data: they are parsed and compared as strings, never evaluated.
 import { readFileSync, existsSync, statSync, realpathSync, readdirSync, mkdirSync, rmSync, linkSync, copyFileSync } from 'node:fs';
 import { join, resolve, relative, isAbsolute, sep } from 'node:path';
-import { stableJson, sha, writeStable } from './stable.mjs';
+import { stableJson, sha, writeStable, privateDir } from './stable.mjs';
 import { lensHash, lensNumber, SEVERITIES, EVIDENCE_FILES } from './lenses.mjs';
 
 // Token estimate (documented in spec §4):
@@ -259,7 +259,7 @@ export function writeHuntMirror(runDir, key) {
   for (const [a, id] of Object.entries(key.scenes)) {
     const from = join(runDir, id);
     if (!existsSync(from)) continue;
-    mkdirSync(join(dir, a), { recursive: true });
+    privateDir(join(dir, a));                                       // 0700, like the run it mirrors (D12)
     for (const n of readdirSync(from).filter(n => EVIDENCE_FILES.includes(n)).sort(cmp)) {
       try { linkSync(join(from, n), join(dir, a, n)); } catch { copyFileSync(join(from, n), join(dir, a, n)); }
     }

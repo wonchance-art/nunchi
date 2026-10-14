@@ -13,7 +13,9 @@ const v4 = h => {
   const n = m && m.slice(1).map(Number);
   return n && n.every(x => x <= 255) ? n : null;
 };
-const localV4 = ([a, b, c, d]) => a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || a + b + c + d === 0;
+// Link-local addresses (169.254/16, fe80::/10) are not on the list: cloud metadata services answer there
+// (169.254.169.254), as does AWS's on fd00:ec2::254. A user can still list one.
+const localV4 = ([a, b, c, d]) => a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a + b + c + d === 0;
 export function isLocalHost(host) {
   const h = bare(host);
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) return true;
@@ -24,7 +26,7 @@ export function isLocalHost(host) {
   if (h === '::1' || h === '::') return true;
   const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
   if (mapped) { const [x, y] = mapped.slice(1).map(g => parseInt(g, 16)); return localV4([x >> 8, x & 255, y >> 8, y & 255]); }
-  return /^f[cd][0-9a-f]{2}:/.test(h) || /^fe[89ab][0-9a-f]:/.test(h);   // unique local fc00::/7, link-local fe80::/10
+  return /^f[cd][0-9a-f]{2}:/.test(h) && h !== 'fd00:ec2::254';      // unique local fc00::/7, not the metadata address
 }
 const listed = entry => { try { return bare(new URL(String(entry).includes('://') ? entry : `http://${entry}`).hostname); } catch { return null; } };
 const parse = url => { try { return new URL(url); } catch { return null; } };

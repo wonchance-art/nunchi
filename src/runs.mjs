@@ -6,7 +6,7 @@ import { readdirSync, mkdirSync, renameSync, readFileSync, writeFileSync, exists
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { privateDir, setMode } from './stable.mjs';
+import { privateDir, setMode, refuseLink } from './stable.mjs';
 
 const ID = /^\d{4,}$/;
 const PARTIAL = /^(\d{4,})\.partial$/;
@@ -73,28 +73,43 @@ export function gcRuns(dir, { keep = 5, staleMs = 3600e3, now = Date.now() } = {
 // Git with the repository's own programs switched off (design §4.7, D9). A repository's config can name an
 // external diff, a textconv or diff driver, a clean filter, an fsmonitor hook or a hooks folder; a plain
 // `git diff` runs them, and their output stands in for the real diff. nunchi only reads, so none may run:
-// - `-c` for the fixed ones, and every filter driver the config defines gets its commands emptied;
+// - config overrides for the fixed ones, and every filter driver the config defines gets its commands emptied.
+//   They go in as GIT_CONFIG_COUNT/KEY_n/VALUE_n (git ≥ 2.31), which take any key: `-c` cannot name a filter
+//   called `a=b`. Older git, or a filter command still set after the overrides, fails closed (GIT_UNSAFE):
+//   workTree then reports no repository and --changed-since refuses;
 // - diffs take DIFF_SAFE: no external diff, no textconv, and no git run inside a submodule (whose own config
 //   could name other programs), so an edit inside a submodule is not seen;
 // - no optional locks: the index is never rewritten, so no post-index-change hook;
 // - the caller's GIT_* variables are dropped; no system config, no pager, no prompt; a timeout.
 export const DIFF_SAFE = ['--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty'];
-const GIT_SAFE = ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external=', '-c', 'core.pager=cat'];
-export function gitEnv(env = process.env) {
+export const GIT_OVERRIDES = [['core.fsmonitor', 'false'], ['core.hooksPath', '/dev/null'], ['diff.external', ''], ['core.pager', 'cat']];
+export function gitEnv(env = process.env, overrides = GIT_OVERRIDES) {
   const out = {};
   for (const [k, v] of Object.entries(env)) if (!/^GIT_/i.test(k)) out[k] = v;
+  out.GIT_CONFIG_COUNT = String(overrides.length);
+  overrides.forEach(([k, v], i) => { out[`GIT_CONFIG_KEY_${i}`] = k; out[`GIT_CONFIG_VALUE_${i}`] = v; });
   return { ...out, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', GIT_OPTIONAL_LOCKS: '0' };
 }
-// → git(args, { encoding }) for one repository. Throws like execFileSync when git fails.
+const gitUnsafe = why => Object.assign(new Error(`git cannot be run safely here: ${why}`), { code: 'GIT_UNSAFE' });
+// → git(args, { encoding }) for one repository. Throws like execFileSync when git fails, GIT_UNSAFE when its
+// programs cannot be switched off.
 export function gitRunner(root, { timeout = 60_000 } = {}) {
-  const run = (args, extra = []) => execFileSync('git', [...GIT_SAFE, ...extra, '-C', root, ...args], { env: gitEnv(), timeout, maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
-  let filters = [];
-  try {
-    const names = run(['config', '--name-only', '--get-regexp', '^filter\\.']).toString().split('\n').map(k => /^filter\.(.+)\.(clean|smudge|process|required)$/i.exec(k.trim())?.[1]);
-    filters = [...new Set(names.filter(n => n && !n.includes('=')))].sort()
-      .flatMap(n => ['clean=', 'smudge=', 'process=', 'required=false'].flatMap(x => ['-c', `filter.${n}.${x}`]));
-  } catch {}                                                          // no filter defined: git config exits 1
-  return (args, { encoding } = {}) => { const out = run(args, filters); return encoding ? out.toString(encoding) : out; };
+  const opts = env => ({ env, timeout, maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  const version = /(\d+)\.(\d+)/.exec(execFileSync('git', ['--version'], opts(gitEnv(process.env, []))).toString());
+  if (!version || +version[1] < 2 || (+version[1] === 2 && +version[2] < 31)) throw gitUnsafe(`git ${version ? version[0] : '(unknown)'} is older than 2.31`);
+  const run = (args, overrides) => execFileSync('git', ['--no-optional-locks', '-C', root, ...args], opts(gitEnv(process.env, overrides)));
+  const config = (re, overrides) => {                                 // [key, value] in the order git reads them
+    try { return run(['config', '-z', '--get-regexp', re], overrides).toString().split('\0').filter(Boolean).map(e => { const i = e.indexOf('\n'); return i < 0 ? [e, ''] : [e.slice(0, i), e.slice(i + 1)]; }); }
+    catch (e) { if (e.status === 1) return []; throw e; }             // exit 1: no such key
+  };
+  const names = [...new Set(config('^filter\\.', GIT_OVERRIDES).map(([k]) => /^filter\.([\s\S]+)\.(clean|smudge|process|required)$/i.exec(k)?.[1]).filter(n => n !== undefined))].sort();
+  const overrides = [...GIT_OVERRIDES, ...names.flatMap(n => [['clean', ''], ['smudge', ''], ['process', ''], ['required', 'false']].map(([x, v]) => [`filter.${n}.${x}`, v]))];
+  if (names.length) {
+    const last = new Map(config('^filter\\..*\\.(clean|smudge|process)$', overrides));
+    const live = [...last].filter(([, v]) => v !== '').map(([k]) => k);
+    if (live.length) throw gitUnsafe(`filter commands still set: ${live.join(', ')}`);
+  }
+  return (args, { encoding } = {}) => { const out = run(args, overrides); return encoding ? out.toString(encoding) : out; };
 }
 
 // What the app's source looked like when it was captured. `tree` changes with any edit, committed or
@@ -128,16 +143,15 @@ export function ensureGitignore(nunchiDir) {
   if (missing.length) appendFileSync(f, (have.length && have[have.length - 1] !== '' ? '\n' : '') + missing.join('\n') + '\n');
 }
 
-// The same paths are owner-only (D12). The folders capture writes into are made 0700 before it starts (the
-// ledger state's too, so its first write lands in a private folder); what an older version wrote with the
-// default umask is tightened.
-export function ensurePrivate(nunchiDir) {
+// The same paths are owner-only (D12). The folders a command writes into (`create`; capture: har, runs, state)
+// are made 0700 before it starts, so the ledger's first write lands in a private folder; what an older version
+// wrote with the default umask is tightened. A symbolic link among them is refused (UNSAFE_PATH), never followed.
+export function ensurePrivate(nunchiDir, create = ['har/', 'runs/', 'state/']) {
   for (const p of IGNORED) {
-    const f = join(nunchiDir, p);
-    try {
-      if (p !== 'evidence/' && p.endsWith('/')) privateDir(f);
-      if (existsSync(f)) setMode(f, p.endsWith('/') ? 0o700 : 0o600);
-    } catch {}
+    const f = join(nunchiDir, p.replace(/\/$/, ''));            // no trailing slash: lstat must see a link
+    refuseLink(f);
+    if (create.includes(p)) privateDir(f);
+    if (existsSync(f)) setMode(f, p.endsWith('/') ? 0o700 : 0o600);
   }
 }
 

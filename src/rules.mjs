@@ -147,12 +147,25 @@ function jwtRole(token) {
 // A secret is reported by location and kind only (D8): not one character of it is kept, not even a prefix.
 export const mask = () => '';
 
+// Secret-shaped strings in what capture writes (page text, aria snapshot, every string of the evidence) become
+// `[secret-shaped: <kind>]`, with the patterns above: a private key as its whole block, any JWT (a service_role
+// one named so). Same name and output as the export-time scrubber of the 0.1-c export branch, which widens the
+// patterns; that one may replace this.
+const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+const KEY_BLOCK = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?(?:-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|$)/g;
+export function scrubSecrets(text) {
+  if (typeof text !== 'string') return text;
+  let out = text.replace(KEY_BLOCK, '[secret-shaped: private-key]');
+  for (const p of SECRET_PATTERNS) out = out.replace(p.re, `[secret-shaped: ${p.kind}]`);
+  return out.replace(JWT, m => `[secret-shaped: ${jwtRole(m) === 'service_role' ? 'supabase-service-role-jwt' : 'jwt'}]`);
+}
+
 export function secretFindings(scripts) {
   const out = [];
   for (const { path, body } of scripts) {
     const hits = new Map();
     for (const p of SECRET_PATTERNS) for (const m of body.matchAll(p.re)) if (!hits.has(p.kind)) hits.set(p.kind, m[0]);
-    for (const m of body.matchAll(/\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g)) {
+    for (const m of body.matchAll(JWT)) {
       if (jwtRole(m[0]) === 'service_role' && !hits.has('supabase-service-role-jwt')) hits.set('supabase-service-role-jwt', m[0]);
     }
     for (const kind of [...hits.keys()].sort()) {

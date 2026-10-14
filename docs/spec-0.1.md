@@ -65,11 +65,16 @@ scene = route × person × state × viewport.
   subset of scenes captured never changes what a scene sees. The recording is nunchi's own JSON rather than
   HAR because replay needs this normalization and forced states need to rewrite responses. Volatile URL/body values (timestamps, cache busters, nonces) are normalized before
   recording. A replay miss is logged as *capture drift*, never as a UI defect, and offers a re-record.
-  *Strict replay (2026-10-14 KST, design 0.1-c D11):* in replay (forced states and canary copies included) a request
-  the recording cannot answer is aborted, never sent live, reads included: the page sees a failed request and the
-  miss is counted. A write (not GET/HEAD/OPTIONS) that is not a data request (a beacon, a form post, a server action)
-  is aborted and counted the same way. Recording still goes live: the app's server must be an allowed base URL
-  (§2.4), and a backend the app calls from the browser is reached as the app would reach it.
+  *Strict replay (2026-10-14 KST, design 0.1-c D11):* in replay every fetch/XHR miss and every non-GET is aborted,
+  never sent live: a data request the recording cannot answer (read or write) fails in the page and is counted as a
+  miss when it is asked for (a slow scene's too); a write that is not a data request (a beacon, a form post, a
+  server action) is aborted and counted the same way. An EventSource stream is aborted and a WebSocket closed before
+  it reaches a server; both are listed as `streams` in `network.json`, apart from the misses (a stream is never
+  recorded, so re-recording would not help). Leaving a page, replay goes offline and unloads it while routing still
+  holds, so a write sent on the way out (a keepalive fetch on pagehide) is stopped too. Forced states and canary
+  copies replay whenever their person does not capture live, even from an empty recording. Recording still goes
+  live: the app's server must be an allowed base URL (§2.4), and a backend the app calls from the browser is reached
+  as the app would reach it; a held slow request that outlives its page is dropped, not a crash.
   A recording is saved by writing a temporary file and renaming it, so a reader never sees half of one; one that does
   not parse is an error naming the way out (delete it or `--network record`), not a crash.
   Server-side requests (SSR/RSC) are not covered in 0.1: those cells show *not seen: server render*.
@@ -86,8 +91,14 @@ scene = route × person × state × viewport.
 - *Form fields (2026-10-14 KST, D7):* what an input, textarea or select holds (typed, or filled in by the app: a key
   on a settings page, a name) is never written. In `controls.json` a field has its `type`, its `label` (`<label>` or
   `aria-labelledby`) and, as its name, only `aria-label`/`title`; a submit/button/reset input keeps its value as its
-  name (the app's own label). In `aria.yml` the field's node, name, state and placeholder stay and its value is cut
-  (`- textbox "API key"`). Screenshots are not masked: they are what the image lenses judge.
+  name (the app's own label). In `aria.yml` a field (textbox, searchbox, spinbutton, combobox, slider, listbox) keeps
+  its node, name, state and placeholder; its value and every other child (a select's options and `[selected]`) are
+  cut (`- textbox "API key"`). Editors hold what the user wrote too: the text of contenteditable regions and
+  `role=textbox|searchbox` elements is cut from `text.txt` and `aria.yml`, and their controls and links are left out.
+  Screenshots are not masked: they are what the image lenses judge.
+- *Secret-shaped strings on the page (2026-10-14 KST):* every string capture writes (page text, aria snapshot,
+  controls, measurements, console, network keys, findings) goes through the secret check of §3 L9 (plus a whole
+  private-key block and any JWT); a match is written as `[secret-shaped: <kind>]`.
 - Gate: same build, two runs → byte-identical screenshots.
 
 ### 2.3 Forced states
@@ -116,19 +127,28 @@ network mode per person, run health.
 
 *Safety (2026-10-14 KST, design 0.1-c D9, D10, D12):*
 - **Base URL.** `capture` refuses a base URL that is not loopback (`localhost`, `*.localhost`, 127/8, `::1`,
-  `0.0.0.0`), a private address (10/8, 172.16/12, 192.168/16, 169.254/16, fc00::/7, fe80::/10) or `*.local`, unless
-  its host is listed in `.nunchi/config.json` (`{"allowHosts": ["preview.example.dev"]}`, exact host names), a file
-  the user writes. Judged on the URL as written, never by DNS; http and https only. The refusal (exit 2) says how to
+  `0.0.0.0`), a private address (10/8, 172.16/12, 192.168/16, fc00::/7) or `*.local`, unless its host is listed in
+  `.nunchi/config.json` (`{"allowHosts": ["preview.example.dev"]}`, exact host names), a file the user writes.
+  Link-local addresses (169.254/16, fe80::/10) and `fd00:ec2::254` are refused unless listed: cloud metadata services
+  answer there. Judged on the URL as written, never by DNS; http and https only. The refusal (exit 2) says how to
   list a preview host; no run folder is made. A config file that does not parse is an error, not "nothing listed".
-- **git** runs with the repository's own programs off: `--no-optional-locks`, `-c core.fsmonitor=false
-  -c core.hooksPath=/dev/null -c diff.external= -c core.pager=cat`, every configured filter driver's commands emptied,
-  `--no-ext-diff --no-textconv --ignore-submodules=dirty` on diffs, the caller's `GIT_*` variables dropped,
-  `GIT_CONFIG_NOSYSTEM=1`, no prompt, a 60 s timeout (`workTree` and `--changed-since`). An edit inside a submodule
-  is therefore not part of `tree`.
-- **File modes.** Run folders, evidence and recordings (everything written through `writeStable`) are 0700
-  (folders) and 0600 (files), set explicitly whatever the umask. Before it starts, `capture` makes `.nunchi/har/`,
-  `runs/` and `state/` 0700 (so the ledger's first write lands in a private folder) and tightens `auth.json` and
-  `evidence/` left by an older version. Windows has no POSIX modes and keeps its ACLs.
+  Redirect hops are not routed, so a scene whose page ends on another origin is not captured: `capture-failed`,
+  reason `redirected-off-origin`, with `finalOrigin` in the manifest and nothing collected from that page.
+- **git** runs with the repository's own programs off: `--no-optional-locks`; config overrides
+  `core.fsmonitor=false`, `core.hooksPath=/dev/null`, `diff.external=`, `core.pager=cat`, and every configured filter
+  driver's commands emptied, passed as `GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n` so any filter name works (`a=b`
+  included); `--no-ext-diff --no-textconv --ignore-submodules=dirty` on diffs; the caller's `GIT_*` variables dropped;
+  `GIT_CONFIG_NOSYSTEM=1`, no prompt, a 60 s timeout; `--end-of-options` before a `--changed-since` ref. git older
+  than 2.31, or a filter command still set after the overrides, fails closed: `workTree` reports no repository and
+  `--changed-since` refuses (`workTree` and `--changed-since` are the engine's git calls). An edit inside a
+  submodule is not part of `tree`.
+- **File modes.** Run folders, evidence, recordings and the hunt mirror (everything written through `writeStable`
+  or `privateDir`) are 0700 (folders) and 0600 (files), set explicitly whatever the umask. Before it starts, `capture`
+  makes `.nunchi/har/`, `runs/` and `state/` 0700 (so the ledger's first write lands in a private folder; `decide` and
+  `approve` do the same for `state/`) and tightens `auth.json` and `evidence/` left by an older version. A symbolic
+  link at any of these paths, or at a file the engine writes, is refused (exit 2), never followed. Windows has no
+  POSIX modes and keeps its ACLs. The ledger's own files (`ledger.json`, `approved.json`) are written by the ledger
+  and protected by the 0700 `state/` folder.
 
 **Run health** — whole-run failures are reported once instead of as one finding per screen, judged from the
 evidence only: *login-expired* (≥2 and ≥half of signed-in screens bounced to a sign-in page: every signed-in scene
@@ -423,15 +443,20 @@ unreadable one by one). Built in `src/ledger.mjs`:
   run's `findings.json` carries its `fp`.
 - **Fingerprint v2** (2026-10-14 KST, design 0.1-c §4.5): a version changes the recipe of named rules only, and
   `inputs.v` says which recipe made a fingerprint. v2 changes `secret-in-client-bundle` alone: a build names a bundle
-  after its content, so the bundle path's hash-like parts become `[hash]` (Vite/Rollup's `-<8 characters>` suffix;
-  any run of 6+ letters and digits that is lower-case hex or holds a digit: webpack, Parcel, CRA, Turbopack's
-  `1grrdrpshlkcw.js`, esbuild), and a rebuild keeps the secret's fingerprint. Every other rule's fingerprint is the
+  after its content, so a hash-like part of the bundle's file name becomes `[hash]` and a rebuild keeps the secret's
+  fingerprint. Only the file name, never a folder, and only these parts: a whole name of 13 characters of
+  `[0-9a-z_-]` with a digit (Turbopack, `1grrdrpshlkcw.js`); a `-<8 characters>` suffix with a digit, `_`, `-` or an
+  inner capital (Vite/Rollup, esbuild, `index-Boalzs1w.js`); a `-`/`.`-separated part of 8+ letters and digits that is
+  lower-case hex or has a digit between letters (webpack, CRA, Parcel). Words and words with a number
+  (`checkout2.js`, `facade.js`) stay, so two bundles never become one. Every other rule's fingerprint is the
   v1 one (a contract test pins v1 values). The evidence of a secret is `{url, kind}`: v1's `masked` (four characters
   of the value) is gone. **Migration:** a v1 `ledger.json` is migrated on read: secret items get their v2 fingerprint
-  and group from what they stored (rule, route, selector, evidence), items that now share one merge (first seen is the
-  earliest), `masked` is dropped, and `aliases` (old → new) is kept in the state. A decision made under v1 follows its
-  item: through `aliases`, or, for one from another machine, by the v1 fingerprint of what the state holds now. The
-  decision file is never rewritten; the view moves its target and keeps its id (`targetWas`).
+  and group from what they stored (rule, route, selector, evidence), items that now share one (two builds of one
+  bundle) merge (first seen is the earliest), `masked` is dropped, and `aliases` (old → new) is kept in the state. A
+  decision made under v1 follows its item: through `aliases`, or, for one from another machine, by the v1
+  fingerprint of what the state holds now. When a merged item's old decisions disagree (one dismissed, another to
+  fix, hold or reopen), the dismissal does not carry over: open beats dismissed. The decision file is never
+  rewritten; the view moves its target and keeps its id (`targetWas`).
 - **Group** = the fingerprint without the route: a shared component's defect on 17 screens is one group, the
   unit a person decides on and the fix loop fixes. Low contrast groups by its colour pair (the design token),
   not by element. Root-cause groups by source file + symbol come with the inventory (§2.4).

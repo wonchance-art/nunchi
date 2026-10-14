@@ -251,7 +251,7 @@ if (cmd === 'setup') {
   if (refusal) { console.error('nunchi capture: ' + refusal); process.exit(2); }
   // Evidence holds screenshots of the user's app and login state holds tokens: never committed, owner-only.
   ensureGitignore(nunchiDir);
-  ensurePrivate(nunchiDir);
+  try { ensurePrivate(nunchiDir); } catch (e) { console.error('nunchi: ' + e.message); process.exit(2); }
   const run = args.out ? null : startRun(runsDir);
   const out = run ? run.path : resolve(args.out);
   const viewports = (args.viewports || 'm,d').split(',');
@@ -340,6 +340,8 @@ if (cmd === 'setup') {
   const stateFile = join(nunchiDir, 'state', 'ledger.json');
   const decisionsDir = join(nunchiDir, 'decisions');
   const approvedFile = join(nunchiDir, 'state', 'approved.json');
+  // the state folder is private before decide or approve writes its first file (D12)
+  try { ensurePrivate(nunchiDir, cmd === 'decide' || cmd === 'approve' ? ['state/'] : []); } catch (e) { console.error('nunchi: ' + e.message); process.exit(2); }
   const state = readState(stateFile);
   const rows = view(state, readDecisions(decisionsDir), readApproved(approvedFile));
   const gs = groupRows(rows);
