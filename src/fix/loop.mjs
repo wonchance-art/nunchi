@@ -27,7 +27,8 @@ import { writeStable, stableJson, sha } from '../stable.mjs';
 import { readKey, writeKey, keyPath } from '../state.mjs';
 import { fixGit, fixTrailers, TRAILERS } from './git.mjs';
 import { acquireClaim, renewClaim, releaseClaim, readClaim, claimLive, refusalText, whileRenewing } from './claims.mjs';
-import { allocate, setPhase, update, latestRecord, allRecords, latestRecords, isOpen, writePlan, readPlan, groupDir, kst } from './records.mjs';
+import { allocate, setPhase, update, latestRecord, currentRecord, allRecords, latestRecords, isOpen, writePlan, readPlan, groupDir, kst } from './records.mjs';
+import { randomBytes } from 'node:crypto';
 import { probeView, probeProblems, judgeRules, judgeAi, MAX_ATTEMPTS, FLAKY } from './judge.mjs';
 import { diffPolicy, depsOf, rootCauseFiles } from './policy.mjs';
 import { fixBrief } from './brief.mjs';
@@ -180,10 +181,12 @@ export function reconcile(ctx, group) {
     if (fixCommit) rec = setPhase(ctx.stateDir, rec, 'committed', { commit: fixCommit }, gen(ctx));
   }
   const committed = rec.commit || headIsFix(ctx, rec);
-  // a decision changed during the claim (design U8): cancelled, the commit undone when it is still HEAD
-  const { fixing } = toFix(ctx.rows.filter(r => r.group === group));
-  if (!fixing.length) {
-    const now = ctx.rows.find(r => r.group === group && r.decision)?.decision?.decision || 'reopen';
+  // a decision changed during the claim (design U8): cancelled, the commit undone when it is still HEAD. Only a
+  // decision that moved away from Fix cancels: rows a sweep folded as gone (a capture on the fix branch) do not
+  const mine = ctx.rows.filter(r => r.group === group);
+  const latestDecision = mine.map(r => r.decision).filter(Boolean).sort((a, b) => cmp(a.at || '', b.at || '') || cmp(a.id, b.id)).pop() || null;
+  if (latestDecision?.decision !== 'fix') {
+    const now = latestDecision?.decision || 'reopen';
     const word = { keep: 'Keep', 'false-positive': 'Not a problem', hold: 'Later', reopen: 'to reopen it' }[now] || now;
     if (committed && ctx.git.head() === committed) {
       rec = setPhase(ctx.stateDir, rec, 'reverting', { cancel: { decision: now }, commit: committed, revertWhy: `the person decided ${now} while it was being fixed` }, gen(ctx));
@@ -195,7 +198,7 @@ export function reconcile(ctx, group) {
     return { rec, said: [rec.outcome.line] };
   }
   // the claim expired (or was taken over): before the commit → to fix again; after → needs you, the commit shown
-  if (rec.phase !== 'starting' && rec.claim?.token && !claimOk(ctx, rec)) {
+  if (!['starting', 'claiming'].includes(rec.phase) && rec.claim?.token && !claimOk(ctx, rec)) {
     if (committed) close('needs-you', { outcome: { kind: 'needs-you', needsYou: 'interrupted', commit: committed, line: `The fix of this finding (commit ${short(committed)}) was not re-checked before its claim expired. It needs you: tell your AI “retry” to re-check it, or “undo it”.` } });
     else close('aborted', { outcome: { kind: 'aborted', line: 'Stopped fixing: the claim expired before a fix was committed. It is still to fix.' } });
     return { rec, said: [rec.outcome.line] };
@@ -274,7 +277,7 @@ export async function startFix(ctx, id, opts = {}) {
       if (COMMITTED.has(rec.phase)) return refuse([...said, `HEAD carries an unverified fix of '${title}' (commit ${short(rec.commit)}): resume with nunchi fix --verify ${g.group}.`]);
       return out(0, [...said, `'${title}' is being fixed already (attempt ${rec.attempt}, ${rec.phase}). Edit, then nunchi fix --checks ${g.group}.`, '', briefFor(ctx, g, rows, rec)], { attempt: rec.attempt, phase: rec.phase, resumed: true });
     }
-    if (rec.phase !== 'starting' && !claimOk(ctx, rec)) return refuse([...said, 'This start lost its claim; run nunchi fix --start again.']);
+    if (!['starting', 'claiming'].includes(rec.phase) && !claimOk(ctx, rec)) return refuse([...said, 'This start lost its claim; run nunchi fix --start again.']);
   } else rec = null;
   const early = !rec || ['starting', 'claiming', 'branching'].includes(rec.phase);
   if (!tf.fixing.length) return refuse([...said, `'${title}' is not decided Fix (it is ${g.status}): decide in the board first.`]);
@@ -350,9 +353,10 @@ export async function startFix(ctx, id, opts = {}) {
   }
   // claim first (design §7), then the branch
   if (rec.phase === 'starting' || rec.phase === 'claiming') {
-    rec = setPhase(ctx.stateDir, rec, 'claiming', {}, gen(ctx));
+    // the token goes into the record before the claim is taken: a command killed in between finds the claim its own
+    if (rec.phase === 'starting') rec = setPhase(ctx.stateDir, rec, 'claiming', { claim: { token: randomBytes(16).toString('hex') } }, gen(ctx));
     const branch = planBranch(ctx, g.group);
-    const c = acquireClaim(ctx.stateDir, { group: g.group, worktree: rec.worktree, branch, url: rec.url || 'serve', files: rec.rootFiles, agent: rec.agent, vendor: rec.vendor, mine: rec.claim?.token || null, now: ctx.deps.now(), generation: ctx.generation });
+    const c = acquireClaim(ctx.stateDir, { group: g.group, worktree: rec.worktree, branch, url: rec.url || 'serve', files: rec.rootFiles, agent: rec.agent, vendor: rec.vendor, mine: rec.claim?.token || null, fresh: rec.claim?.token || null, now: ctx.deps.now(), generation: ctx.generation });
     if (!c.ok) {
       setPhase(ctx.stateDir, rec, 'aborted', { outcome: { kind: 'aborted', reason: `claim-${c.why}` } }, gen(ctx));
       return refuse(refusalText(c, { me: rec.agent, folder: basename(rec.worktree), worktree: rec.worktree, now: ctx.deps.now() }), { claim: c.why });
@@ -377,11 +381,12 @@ export async function startFix(ctx, id, opts = {}) {
   }
   if (rec.phase === 'baseline') {
     renewClaim(ctx.stateDir, g.group, rec.claim.token, ctx.deps.now());
-    const base = profile && checkNames.length ? await ctx.deps.runChecks({ root: ctx.root, profile }) : { pm: null, results: {} };
+    const base = profile && checkNames.length ? await whileRenewing(ctx.stateDir, g.group, rec.claim.token, () => ctx.deps.runChecks({ root: ctx.root, profile }), { now: ctx.deps.now }) : { pm: null, results: {} };
     rec = setPhase(ctx.stateDir, rec, 'p0', { baseline: { pm: base.pm, results: trimResults(base.results), profile: profile?.hash ?? null } }, gen(ctx));
   }
   if (rec.phase === 'p0') {
     const p = await probe(ctx, rec, 'P0', { url: opts.url || rec.url, serve: opts.serve || rec.serve, scope: rec.scope, harDir, profile });
+    rec = currentRecord(ctx.stateDir, rec);
     if (p.error) { closeWith(ctx, rec, 'aborted', { kind: 'aborted', reason: 'p0', line: p.error }); return out(p.code || 1, [`Couldn't capture the screens before the fix: ${p.error}. Start your app, then tell your AI “retry”.`]); }
     const view = probeView(readProbe(p.runDir), controlsReader(p.runDir));
     const bad = probeProblems(view);
@@ -478,7 +483,7 @@ export async function checkFix(ctx, id) {
   }
   const tree = ctx.git.workingTree();
   rec = setPhase(ctx.stateDir, rec, 'checking', {}, gen(ctx));
-  const now = names.length ? await ctx.deps.runChecks({ root: ctx.root, profile }) : { results: {} };
+  const now = names.length ? await whileRenewing(ctx.stateDir, rec.group, rec.claim.token, () => ctx.deps.runChecks({ root: ctx.root, profile }), { now: ctx.deps.now }) : { results: {} };
   const after = ctx.git.workingTree();
   if (after !== tree) { rec = setPhase(ctx.stateDir, rec, 'started', { checks: null }, gen(ctx)); return refuse('The checks changed your files while they ran (a formatter or generator?): look at the change, then run nunchi fix --checks again.'); }
   const cmpd = compareChecks(rec.baseline?.results || {}, now.results);
@@ -558,11 +563,16 @@ export async function verifyFix(ctx, id, opts = {}) {
   rec = setPhase(ctx.stateDir, rec, 'p1', { p1: { scope: scope1 } }, gen(ctx));
   const p = await probe(ctx, rec, 'P1', { url: opts.url || rec.url, serve: opts.serve || rec.serve, scope: scope1, harDir, profile, keep: true });
   try {
-    rec = latestRecord(ctx.stateDir, g.group);
+    rec = currentRecord(ctx.stateDir, rec);
+    // an --abort or a decision from elsewhere while P1 ran: what it wrote stands
+    if (rec.phase !== 'p1') return out(0, [...said, `'${title}' changed while it was being re-checked (it is ${rec.phase} now): nothing more was done.`], { outcome: rec.phase });
     if (p.noProof) return finish(ctx, rec, { outcome: 'inconclusive', needsYou: 'c', reasons: [{ why: 'no-proof', text: p.noProof }] }, { title, said });
     if (p.error) return finish(ctx, rec, { outcome: 'inconclusive', needsYou: 'c', reasons: [{ why: 'p1', text: p.error }] }, { title, said });
     rec = update(ctx.stateDir, rec, { p1: { run: p.runId, proof: p.proof, scope: scope1 } }, gen(ctx));
     return await judgeAttempt(ctx, rec, { g, title, said, p, harDir, base: p.base });
+  } catch (e) {
+    if (e.code !== 'RECORD_CHANGED') throw e;
+    return out(0, [...said, `'${title}' changed while it was being re-checked (it is ${e.current?.phase ?? 'closed'} now): nothing more was done.`], { outcome: e.current?.phase ?? null });
   } finally { if (p.stop) p.stop(); }
 }
 
@@ -657,7 +667,13 @@ export async function recordFix(ctx, id, verdicts) {
 
 const where = list => [...new Set(list.map(x => x.route).filter(Boolean))].slice(0, 2).join(', ');
 function finish(ctx, rec, verdict, { title, said = [] }) {
-  const n = rec.attempt;
+  // the attempt as it is now: an --abort from another terminal while P1 ran is not overwritten (records.mjs rev)
+  const cur = currentRecord(ctx.stateDir, rec);
+  if (cur && (cur.rev ?? 0) !== (rec.rev ?? 0)) return out(0, [...said, `'${title}' changed while it was being re-checked (it is ${cur.phase} now): nothing more was done.`], { outcome: cur.phase });
+  // a decision the person made while P1 ran: Keep, Not a problem or Later cancel the attempt (its commit undone)
+  refresh(ctx);
+  const d = ctx.rows.filter(r => r.group === rec.group).map(r => r.decision).filter(Boolean).sort((a, b) => cmp(a.at || '', b.at || '') || cmp(a.id, b.id)).pop();
+  if (d && d.decision !== 'fix') { const r = reconcile(ctx, rec.group); return out(0, [...said, ...r.said], { outcome: r.rec?.phase ?? null }); }
   if (verdict.outcome === 'fixed') {
     const screens = rec.screens || 0;
     const line = `Fixed '${title}' (re-checked ${screens} screen${screens === 1 ? '' : 's'}, nothing else broke).`;

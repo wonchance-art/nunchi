@@ -62,7 +62,9 @@ function dropClaim(stateDir, group, c) {
 // Takes the claim of `group`, or says who holds what stands in the way. `mine`: the token of this attempt's claim
 // (a resumed attempt keeps it). → { ok: true, token, claim } | { ok: false, why: 'group' | 'folder' | 'url' | 'file',
 // claim, group, file? }.
-export function acquireClaim(stateDir, { group, worktree, branch, url, files = [], agent = null, vendor = null, mine = null, now = Date.now(), generation = null }) {
+// `fresh`: the token a new claim gets (the caller wrote it into its record first, so a command that dies right after
+// taking the claim finds it its own when it resumes).
+export function acquireClaim(stateDir, { group, worktree, branch, url, files = [], agent = null, vendor = null, mine = null, fresh = null, now = Date.now(), generation = null }) {
   if (!GROUP.test(group)) throw new Error('a claim names a 12-hex group');
   privateDir(markersDir(stateDir));
   const r = withLock(lockOf(stateDir), () => {
@@ -78,7 +80,7 @@ export function acquireClaim(stateDir, { group, worktree, branch, url, files = [
     if (sameUrl) return { ok: false, why: 'url', claim: sameUrl.claim, group: sameUrl.group };
     // expired claims are taken over (theirs and their markers removed)
     for (const x of all) if (!x.live) dropClaim(stateDir, x.group, x.claim);
-    const token = own && own.claim.token === mine && mine ? mine : randomBytes(16).toString('hex');
+    const token = own && own.claim.token === mine && mine ? mine : (typeof fresh === 'string' && /^[0-9a-f]{32}$/.test(fresh) ? fresh : randomBytes(16).toString('hex'));
     const sorted = [...new Set(files.map(String))].sort();
     const made = [];
     for (const f of sorted) {
@@ -131,9 +133,9 @@ export function releaseClaim(stateDir, group, token, { generation = null } = {})
 }
 
 // Renews every RENEW_MS while `fn` runs (a capture can take longer than the claim lives). → fn's result.
-export async function whileRenewing(stateDir, group, token, fn, { every = RENEW_MS } = {}) {
-  const t = setInterval(() => { try { renewClaim(stateDir, group, token); } catch {} }, every);
-  try { return await fn(); } finally { clearInterval(t); try { renewClaim(stateDir, group, token); } catch {} }
+export async function whileRenewing(stateDir, group, token, fn, { every = RENEW_MS, now = Date.now } = {}) {
+  const t = setInterval(() => { try { renewClaim(stateDir, group, token, now()); } catch {} }, every);
+  try { return await fn(); } finally { clearInterval(t); try { renewClaim(stateDir, group, token, now()); } catch {} }
 }
 
 // The refusal copy (design §7). `why: 'group' | 'folder'` with another declared agent: the parallel-worktree advice;

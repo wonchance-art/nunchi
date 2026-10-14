@@ -5,7 +5,7 @@
 // Times in records are KST and live only in the state, never in evidence (design §8.2).
 import { join } from 'node:path';
 import { openSync, writeSync, fsyncSync, closeSync, readdirSync, lstatSync, readFileSync } from 'node:fs';
-import { writeAtomic, privateDir, refuseLink, stableJson } from '../stable.mjs';
+import { writeAtomic, privateDir, refuseLink, stableJson, withLock } from '../stable.mjs';
 import { bumpGeneration, corrupt } from '../state.mjs';
 
 const GROUP = /^[0-9a-f]{12}$/;
@@ -37,11 +37,33 @@ export function attemptNumbers(stateDir, group) {
   try { names = readdirSync(groupDir(stateDir, group)); } catch { return []; }
   return names.map(n => /^(\d+)\.json$/.exec(n)?.[1]).filter(Boolean).map(Number).sort((a, b) => a - b);
 }
-// The latest attempt's record of a group, or null.
+// The latest attempt's record of a group, or null: the newest open one when there is one (a later number that closed
+// at once, a refused start, must not hide an attempt still in flight), else the newest.
 export function latestRecord(stateDir, group) {
   const ns = attemptNumbers(stateDir, group);
-  for (let i = ns.length - 1; i >= 0; i--) { const r = readRecord(recordPath(stateDir, group, ns[i])); if (r) return r; }
-  return null;
+  let newest = null;
+  for (let i = ns.length - 1; i >= 0; i--) {
+    const r = readRecord(recordPath(stateDir, group, ns[i]));
+    if (!r) continue;
+    if (OPEN.has(r.phase)) return r;
+    newest ||= r;
+  }
+  return newest;
+}
+// This attempt's record as it is on disk now.
+export const currentRecord = (stateDir, rec) => readRecord(recordPath(stateDir, rec.group, rec.attempt));
+// A record write is a compare-and-swap on `rev`: one written since `rec` was read (an --abort from another terminal,
+// say) is never overwritten. → throws RECORD_CHANGED.
+function writeRecord(stateDir, rec, next) {
+  const file = recordPath(stateDir, rec.group, rec.attempt);
+  refuseLink(file);
+  return withLock(join(groupDir(stateDir, rec.group), 'records'), () => {
+    const cur = readRecord(file);
+    if (cur && (cur.rev ?? 0) !== (rec.rev ?? 0)) throw Object.assign(new Error(`fix attempt ${rec.attempt} of ${rec.group} changed while this command ran (it is ${cur.phase} now)`), { code: 'RECORD_CHANGED', current: cur });
+    const out = { ...next, rev: (rec.rev ?? 0) + 1 };
+    writeAtomic(file, stableJson(out), { durable: true, mode: 0o600 });
+    return out;
+  });
 }
 export function allRecords(stateDir, group) {
   return attemptNumbers(stateDir, group).map(n => readRecord(recordPath(stateDir, group, n))).filter(Boolean);
@@ -62,7 +84,7 @@ export function allocate(stateDir, group, fields, { generation = null, now = Dat
   for (let n = (attemptNumbers(stateDir, group).pop() || 0) + 1; ; n++) {
     const file = recordPath(stateDir, group, n);
     refuseLink(file);
-    const rec = { schema: 1, note: 'one attempt of the fix loop (design §4.8); phases are written before each side effect', group, attempt: n, ...fields, phase: 'starting', phases: [{ phase: 'starting', at: kst(now) }] };
+    const rec = { schema: 1, note: 'one attempt of the fix loop (design §4.8); phases are written before each side effect', group, attempt: n, ...fields, phase: 'starting', phases: [{ phase: 'starting', at: kst(now) }], rev: 1 };
     let fd;
     try { fd = openSync(file, 'wx', 0o600); } catch (e) { if (e.code === 'EEXIST') continue; throw e; }
     try { writeSync(fd, stableJson(rec)); fsyncSync(fd); } finally { closeSync(fd); }
@@ -75,19 +97,13 @@ export function allocate(stateDir, group, fields, { generation = null, now = Dat
 // sees it. → the record as written.
 export function setPhase(stateDir, rec, phase, fields = {}, { generation = null, now = Date.now() } = {}) {
   if (!OPEN.has(phase) && !CLOSED.has(phase)) throw new Error(`unknown fix phase ${phase}`);
-  const next = { ...rec, ...fields, phase, phases: [...(rec.phases || []), { phase, at: kst(now) }] };
-  const file = recordPath(stateDir, rec.group, rec.attempt);
-  refuseLink(file);
-  writeAtomic(file, stableJson(next), { durable: true, mode: 0o600 });
+  const next = writeRecord(stateDir, rec, { ...rec, ...fields, phase, phases: [...(rec.phases || []), { phase, at: kst(now) }] });
   if (generation) bumpGeneration(generation);
   return next;
 }
 // Fields only, the phase unchanged (results of a step that has its own phase already).
 export function update(stateDir, rec, fields, { generation = null } = {}) {
-  const next = { ...rec, ...fields };
-  const file = recordPath(stateDir, rec.group, rec.attempt);
-  refuseLink(file);
-  writeAtomic(file, stableJson(next), { durable: true, mode: 0o600 });
+  const next = writeRecord(stateDir, rec, { ...rec, ...fields });
   if (generation) bumpGeneration(generation);
   return next;
 }

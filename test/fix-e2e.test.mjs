@@ -81,12 +81,19 @@ test('fix e2e: capture, decide, fix --start, edit, fix --checks, commit, fix --v
     assert.equal(checks.code, 0, checks.lines.join('\n'));
     assert.match(checks.lines.join('\n'), /no test script — nunchi relies on re-capture\./);
     git(root, 'commit', '-q', '-a', '-m', 'Make "More about reminders" go somewhere', '-m', checks.trailers.join('\n'));
+    // a capture on the fix branch (design §7) is a fix probe: kept apart, never latest, the finding still to fix
+    const onBranch = await cli(root, 'capture', '--url', url, '--json');
+    assert.equal(onBranch.code, 0, onBranch.stderr);
+    const probeRun = JSON.parse(onBranch.stdout).run;
+    assert.equal(JSON.parse(readFileSync(join(root, '.nunchi', 'runs', probeRun, 'run.json'), 'utf8')).kind, 'fix-probe');
+    assert.equal(readFileSync(join(root, '.nunchi', 'runs', 'latest'), 'utf8').trim(), '0001');
+    assert.equal(JSON.parse((await cli(root, 'findings', '--all', '--json')).stdout).groups.find(g => g.group === dead.group).status, 'to-fix');
     const v = await cli(root, 'fix', '--verify', dead.group);
     assert.equal(v.code, 0, v.stderr);
     assert.equal(v.stdout.trim(), "Fixed 'Link that goes nowhere (#)' (re-checked 2 screens, nothing else broke).");
     const after = JSON.parse((await cli(root, 'findings', '--all', '--json')).stdout).groups.find(g => g.group === dead.group);
     assert.equal(after.status, 'fixed');
-    assert.match((await cli(root, 'runs')).stdout, /^\(2 fix probe runs hidden: nunchi runs --all lists them\)/);
+    assert.match((await cli(root, 'runs')).stdout, /^\(3 fix probe runs hidden: nunchi runs --all lists them\)/);
     assert.match((await cli(root, 'fix', '--summary')).stdout, /^Fixed 1 of 1 \(re-checked 2 screens, nothing else broke\)\./);
     assert.equal(git(root, 'status', '--porcelain', '--', '.', ':!.nunchi'), '', 'the probe file is gone, nothing left behind');
   } finally { server.kill(); }

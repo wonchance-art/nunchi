@@ -376,10 +376,14 @@ if (cmd === 'setup') {
     catch (e) { console.error(`nunchi capture: lens packs not loaded (${String(e.message).split('\n')[0]}); canaries follow the built-in packs`); }
   }
   const states = (args.states || 'normal,empty,error,slow,offline').split(',').map(x => x.trim());
+  // design §7: only runs on the tracked branch fold as sweeps; a capture on a nunchi/fix… branch is a fix probe
+  // (kept apart, folded by nobody), so a fix not yet judged never reads as fixed, and never cancels its own attempt
+  let fixBranch = null;
+  try { const b = gitRunner(root)(['symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8' }).trim(); if (/^nunchi\/fix/.test(b)) fixBranch = b; } catch {}
   const runMeta = {
     // kind (design §2.1): a full capture is a sweep; only a sweep folds as one. worktree: whose runs these are
     // (runs stay per worktree, the ledger is shared, §7).
-    schema: 1, id: run?.id ?? null, parent: run?.parent ?? null, kind: 'sweep', worktree: st.root.stream, ...workTree(root),
+    schema: 1, id: run?.id ?? null, parent: run?.parent ?? null, kind: fixBranch ? 'fix-probe' : 'sweep', ...(fixBranch ? { fixBranch } : {}), worktree: st.root.stream, ...workTree(root),
     scope: { routes: [...new Set(all.map(s => s.route))].sort(), persons, viewports, states, changedSince: args.changedSince || null },
     // every route the source has, none skipped for this run only (a dynamic route without a sample), so
     // whole-app detectors (secrets, the link graph, one-offs) judged the whole app. Paths discover cannot
@@ -425,7 +429,7 @@ if (cmd === 'setup') {
         console.error(`warning: no inventory.json in this run (${String(e?.message ?? e).split('\n')[0]}); the AI hunt gets no source slices`);
       }
     }
-    const final = run ? finishRun(runsDir, run.id) : out;
+    const final = run ? finishRun(runsDir, run.id, { latest: !fixBranch }) : out;
     // fold the run into the local ledger state (what is open, fixed, back again), with any complete run a
     // crash left unfolded; if this fails, the next ledger command folds it
     if (run) {
@@ -438,6 +442,7 @@ if (cmd === 'setup') {
     if (args.json) console.log(JSON.stringify(summary, null, 2));
     else {
       console.log(`captured ${summary.scenes} scenes${canaryCount ? ` (+ ${canaryCount} canary copies)` : ''} in ${summary.seconds}s → ${final}${run ? ` (run ${run.id})` : ''}`);
+      if (fixBranch) console.log(`This ran on the fix branch ${fixBranch}: it is kept apart as a fix probe (nunchi runs --all lists it) and does not change the findings. nunchi fix --verify judges a fix; capture on your main branch for a sweep.`);
       const why = { 'login-expired': 'the saved login no longer works: signed-in screens showed the sign-in page and were not judged. Run `nunchi login` again.', 'app-unreachable': 'most screens did not load at all. Is the app running at --url?', 'recording-stale': 'most screens asked for data the recording does not have. Re-record with --network record.' };
       for (const p of r.manifest.health.problems) console.log(`RUN PROBLEM ${p.status} (${p.scenes}/${p.of} screens): ${why[p.status]}`);
       console.log(`rule findings: blocker ${by.blocker} · high ${by.high} · medium ${by.medium} · low ${by.low}`);
