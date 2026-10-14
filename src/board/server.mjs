@@ -46,6 +46,10 @@ export const SECURITY_HEADERS = {
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), clipboard-read=()',
 };
 export const MAX_BODY = 64 * 1024;
+// the link trade's body is a 64-hex code: read no more than this before anything is checked
+export const MAX_SESSION_BODY = 1024;
+// connections at once (the page needs a handful, 8 of them live streams): more are refused by node
+export const MAX_CONNECTIONS = 64;
 export const MAX_URL = 2048;
 export const CODE_TTL_MS = 120e3;
 export const IDLE_MS = 2 * 3600e3;
@@ -232,16 +236,17 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   poll.unref?.(); ping.unref?.();
 
   // ---- request pipeline ------------------------------------------------------------------------------------------------
-  const readBody = req => new Promise((res, rej) => {
+  const readBody = (req, max = MAX_BODY) => new Promise((res, rej) => {
+    const too = `the request body is larger than ${max >= 1024 * 1024 ? `${max / 1024 / 1024} MB` : `${max / 1024} KB`}`;
     const len = Number(req.headers['content-length']);
-    if (Number.isFinite(len) && len > MAX_BODY) { rej(new HttpError(413, 'the request body is larger than 64 KB')); req.resume(); return; }
+    if (Number.isFinite(len) && len > max) { rej(new HttpError(413, too)); req.resume(); return; }
     const chunks = []; let n = 0;
-    req.on('data', c => { n += c.length; if (n > MAX_BODY) { rej(new HttpError(413, 'the request body is larger than 64 KB')); req.destroy(); return; } chunks.push(c); });
+    req.on('data', c => { n += c.length; if (n > max) { rej(new HttpError(413, too)); req.destroy(); return; } chunks.push(c); });
     req.on('end', () => res(Buffer.concat(chunks)));
     req.on('error', rej);
   });
-  const readJsonBody = async req => {
-    const buf = await readBody(req);
+  const readJsonBody = async (req, max) => {
+    const buf = await readBody(req, max);
     try { const v = JSON.parse(buf.toString('utf8')); if (!v || typeof v !== 'object' || Array.isArray(v)) throw 0; return v; } catch { throw new HttpError(400, 'the body is not a JSON object'); }
   };
 
@@ -274,7 +279,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     // the one route without a token: trading a launch code for one. The code is tried first, so a fresh link always
     // works; only failed trades are limited (and, after too many, wait out the lockout)
     if (req.method === 'POST' && path === '/api/session') {
-      const body = await readJsonBody(req);
+      const body = await readJsonBody(req, MAX_SESSION_BODY);
       if (spendCode(body.code)) {
         const token = randomBytes(32).toString('hex');
         sessions.push(token);
@@ -538,6 +543,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   server.requestTimeout = 30e3;
   server.keepAliveTimeout = 5e3;
   server.maxHeadersCount = 60;
+  server.maxConnections = MAX_CONNECTIONS;
   await new Promise((res, rej) => { server.once('error', rej); server.listen({ host: '127.0.0.1', port, exclusive: true }, res); });
   const actual = server.address().port;
   origin = `http://127.0.0.1:${actual}`;

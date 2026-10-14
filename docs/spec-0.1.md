@@ -1138,7 +1138,9 @@ still has it.
   and be ≤ 2048 characters (414); GET and POST only, OPTIONS 405; a GET has no body (413, by Content-Length or any
   Transfer-Encoding, the page shell included); writes need `Content-Type: application/json` (415), `Origin` equal to
   `http://127.0.0.1:<port>` (403) and a body ≤ 64 KB (413,
-  by Content-Length or while streaming). No CORS header on any response.
+  by Content-Length or while streaming); the link trade (`POST /api/session`) reads at most 1 KB, so a long body is
+  refused before its code is looked at. At most 64 connections at once (`server.maxConnections`; the page needs a
+  handful); node closes one more. No CORS header on any response.
 - *Headers* on every response, refusals included: the CSP of the design, `X-Frame-Options: DENY`, `nosniff`,
   `Referrer-Policy: no-referrer`, CORP and COOP `same-origin`, `Cache-Control: no-store`, and a Permissions-Policy.
 - *Files:* the bundled assets and `/evidence/<run>/<scene>/<full.jpg|top.jpg>` only. The run must be a complete run

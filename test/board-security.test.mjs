@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
-import { startBoard, CSP, SECURITY_HEADERS, MAX_BODY, LIMITS, MAX_STREAMS, openerCommand, openerEnv, sameSecret, CODE_TTL_MS } from '../src/board/server.mjs';
+import { startBoard, CSP, SECURITY_HEADERS, MAX_BODY, MAX_SESSION_BODY, MAX_CONNECTIONS, LIMITS, MAX_STREAMS, openerCommand, openerEnv, sameSecret, CODE_TTL_MS } from '../src/board/server.mjs';
 import { openBoard, stopBoards, serverEnv, real } from '../src/board/launch.mjs';
 import { smallProject, jpeg, writeRun } from './fixtures/board-project.mjs';
 
@@ -144,6 +144,45 @@ test('§3.2 request target: req.url must start with /, and is at most 2048 chara
     assert.equal((await raw(b.port, { path: `/api/groups?q=${'x'.repeat(2100)}`, headers: auth(token) })).status, 414);
     assert.equal((await raw(b.port, { path: '//evil.example/api/summary', headers: auth(token) })).status, 404, 'a path that looks like another host is only a path');
   } finally { await b.close(); }
+});
+
+test('§3.2 the link trade reads at most 1 KB: a longer body is refused before the code is looked at (by length or streamed)', async () => {
+  const { b, origin, code } = await board();
+  try {
+    assert.equal(MAX_SESSION_BODY, 1024);
+    const c = code();
+    const big = JSON.stringify({ code: c, pad: 'x'.repeat(MAX_SESSION_BODY) });
+    const trade = (body, headers = {}) => raw(b.port, { method: 'POST', path: '/api/session', headers: { 'content-type': 'application/json', origin, ...headers }, body });
+    const byLength = await trade(big);
+    assert.equal(byLength.status, 413, 'by Content-Length');
+    assert.match(byLength.json.error, /larger than 1 KB/);
+    const streamed = await trade(big, { 'transfer-encoding': 'chunked', 'content-length': undefined }).catch(() => ({ status: 'closed' }));
+    assert.ok(streamed.status === 413 || streamed.status === 'closed', `streamed past the cap: ${streamed.status}`);
+    // nothing was read as a trade: the code is still good
+    const ok = await trade(JSON.stringify({ code: c }));
+    assert.equal(ok.status, 200);
+    assert.match(ok.json.token, /^[0-9a-f]{64}$/);
+  } finally { await b.close(); }
+});
+
+test('§3.2 connections: at most 64 at once; one more is closed by the server, and freed slots serve again', async () => {
+  const { b } = await board();
+  const socks = [];
+  try {
+    assert.equal(b.server.maxConnections, MAX_CONNECTIONS);
+    assert.equal(MAX_CONNECTIONS, 64);
+    const open = () => new Promise((res, rej) => { const s = connect({ host: '127.0.0.1', port: b.port }); s.once('connect', () => res(s)); s.once('error', rej); });
+    while (socks.length < MAX_CONNECTIONS) socks.push(await open());
+    // the server counts a connection once it accepted it
+    for (let i = 0; i < 100; i++) { const n = await new Promise(r => b.server.getConnections((e, k) => r(k))); if (n >= MAX_CONNECTIONS) break; await new Promise(r => setTimeout(r, 10)); }
+    const extra = await open();
+    const closed = await new Promise(res => { const t = setTimeout(() => res(false), 3000); extra.once('close', () => { clearTimeout(t); res(true); }); extra.write('GET / HTTP/1.1\r\nHost: 127.0.0.1:' + b.port + '\r\n\r\n'); extra.on('data', () => {}); });
+    assert.equal(closed, true, 'the 65th connection is closed without an answer');
+    // (an idle keep-alive connection of the session trade may hold a slot too: free them all)
+    while (socks.length) socks.pop().destroy();
+    await new Promise(r => setTimeout(r, 200));
+    assert.equal((await raw(b.port)).status, 200, 'freed slots are served again');
+  } finally { for (const s of socks) s.destroy(); await b.close(); }
 });
 
 test('§3.2 writes: POST only, application/json, Origin equal to the board, a body of at most 64 KB; no CORS (OPTIONS 405)', async () => {
