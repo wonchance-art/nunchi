@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, mkdtempSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { capture, launch } from '../src/capture.mjs';
@@ -46,6 +46,7 @@ test('paint.json: container backgrounds, borders and SVG paint, with what each i
   const out = await run('greys.html');
   const paint = JSON.parse(readFileSync(join(out, 'greys.html.guest.normal.d', 'paint.json'), 'utf8'));
   assert.equal(paint.schema, 1);
+  if (process.platform !== 'win32') assert.equal(statSync(join(out, 'greys.html.guest.normal.d', 'paint.json')).mode & 0o777, 0o600, 'evidence is owner-only (D12)');
   assert.deepEqual(paint.surfaces.map(s => [s.kind, s.background, s.on ?? null, s.radius]), [
     ['page', 'rgb(255, 255, 255)', null, '0px'],
     ['box', 'rgb(249, 250, 251)', 'rgb(255, 255, 255)', '8px'],
@@ -124,7 +125,7 @@ test('paint.json: a secret-shaped id in a container selector is redacted', async
   const out = await run('secret.html');
   const text = readFileSync(join(out, 'secret.html.guest.normal.d', 'paint.json'), 'utf8');
   assert.ok(!text.includes(KEY) && !text.includes('Kettle0000'), text);
-  assert.ok(JSON.parse(text).surfaces.some(s => s.selector === 'div#sess_REDACTED'), text);
+  assert.ok(JSON.parse(text).surfaces.some(s => s.selector === 'div#sess_[secret-shaped: stripe-live-secret-key]'), text);
 });
 
 test('paint walk stays linear: the background behind each element is looked up once per ancestor', async t => {

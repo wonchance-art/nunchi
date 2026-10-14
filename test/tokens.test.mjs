@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -145,6 +145,7 @@ test('CLI: nunchi tokens --run writes tokens.json and tokens.css into the run, b
   assert.match(out, /greys → \d+ · 1 blues → 1/);
   const first = readFileSync(join(dir, 'tokens.json'));
   assert.ok(existsSync(join(dir, 'tokens.css')));
+  if (process.platform !== 'win32') for (const f of ['tokens.json', 'tokens.css']) assert.equal(statSync(join(dir, f)).mode & 0o777, 0o600, `${f} is owner-only`);
   assert.ok(!first.toString().includes('rgb(255, 0, 0)'), 'nothing from the canary copy or the error page');
   execFileSync('node', [CLI, 'tokens', '--run', dir], { encoding: 'utf8' });
   assert.ok(first.equals(readFileSync(join(dir, 'tokens.json'))));

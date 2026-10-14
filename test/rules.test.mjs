@@ -82,7 +82,7 @@ test('L9: native dialogs', () => {
   assert.deepEqual(rules(ruleFindings(ev)), ['native-dialog']);
 });
 
-test('secrets: kinds found, values masked, service_role JWT recognised, anon JWT ignored', () => {
+test('secrets: kinds found, values never kept, service_role JWT recognised, anon JWT ignored', () => {
   const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
   const jwt = role => `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ role, iss: 'supabase' })}.${'s'.repeat(20)}`;
   const stripe = 'sk_' + 'live_' + 'A1b2C3d4E5f6G7h8I9j0K1l2';
@@ -96,7 +96,8 @@ test('secrets: kinds found, values masked, service_role JWT recognised, anon JWT
     ['/app.js', 'supabase-service-role-jwt', 'blocker'],
   ]);
   for (const x of f) assert.ok(!JSON.stringify(x).includes(stripe.slice(8)), 'secret value must not appear in a finding');
-  assert.equal(mask('sk_live_abcdef'), 'sk_l…');
+  assert.equal(mask('sk_live_abcdef'), '', 'location and kind only: no character of the value (D8)');
+  for (const x of f) assert.deepEqual(Object.keys(x.evidence).sort(), ['kind', 'url']);
 });
 
 test('L1: failures nunchi forced (error/offline states) are not reported as failed requests', () => {

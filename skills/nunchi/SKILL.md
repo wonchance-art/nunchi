@@ -38,12 +38,16 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    `capture --url <base> --samples .nunchi/samples.json`. The first run records the app's data
    responses; later runs replay them so screens are comparable. Screens that load data are also
    captured in forced empty, error, slow and offline states. If it says the engine is not set up
-   or Chromium is missing, go back to step 0.
+   or Chromium is missing, go back to step 0. Capture refuses a host that is not local or private: if the user
+   confirms it is a preview or staging server with test data, they add it to `.nunchi/config.json` themselves
+   (the message shows the line). Never write that file for them.
 5. If the capture printed `RUN PROBLEM`, say so first and fix that (log in again, start the app) before
    reading any finding. Then run `findings`: one line per kind of defect, most serious first, with how many
    screens and places it covers. Report those kinds, not individual occurrences; `findings --rule <rule>` lists
    the groups of one kind (a group is one defect however many screens show it). Say which routes were skipped and
-   why, and how many replay misses there were (a miss means the recording is stale: suggest `--network record`).
+   why, and how many replay misses there were. In replay every fetch/XHR/EventSource miss and every non-GET is
+   aborted and WebSockets are closed, so nothing reached a server; a miss means the recording is stale (suggest
+   `--network record`), while a closed stream is listed apart and re-recording does not change it.
    When the user decides on a group, record it with `decide <group id> fix|keep|false-positive|hold`
    (`keep` needs `--reason intended|out-of-scope`, `false-positive` needs `--reason not-a-problem|wrong-place`).
    Never decide for the user, and never act on a decision `findings` marks as needing approval.
@@ -70,7 +74,8 @@ After step 5, when the user wants the deeper sweep. The engine cuts the work and
    with a `scenes` list applies only to those scenes. A defect names:
    - `scene`: one of the unit's `scenes` (never the reference),
    - `selector`: copied exactly from that scene's controls.json, styles.json, links.json or measure.json, or
-     `aria=<node>` with an aria.yml line minus its leading `- ` (e.g. `aria=button "Delete garden"`), and/or
+     `aria=<node>` with an aria.yml line minus its leading `- ` (e.g. `aria=button "Delete garden"`; a node with text
+     after its name, `group "Week 3": Mon Tue …`, may be cited by role and name: `aria=group "Week 3"`), and/or
    - `source`: `path/to/file.tsx:42` under the app root, when you read the code that causes it (the source
      slice's file:line is a good ground when the defect on screen comes from that line),
    - `claim`: one short sentence, and `severity` (blocker, high, medium, low) from the lens's rubric.

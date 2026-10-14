@@ -120,9 +120,9 @@ test('tampered evidence cannot inject CSS: values are parsed strictly and re-ser
 
 test('selectors in token examples never carry a secret-shaped id', () => {
   const key = 'sk_' + 'live_' + 'Q'.repeat(10) + '1234567890ab';   // built at run time: no secret-shaped literal in the repo
-  assert.equal(redactSelector(`div#sess_${key}`), 'div#sess_REDACTED');
+  assert.equal(redactSelector(`div#sess_${key}`), 'div#sess_[secret-shaped: stripe-live-secret-key]', 'the evidence scrubber\'s format, though the id has no word boundary');
   assert.equal(redactSelector('main > div:nth-of-type(2)'), 'main > div:nth-of-type(2)', 'ordinary selectors are untouched');
-  assert.equal(redactSelector(`div[data-testid="${'a1'.repeat(25)}"]`), 'div[data-testid="REDACTED"]', 'a 40+ character token mixing letters and digits');
+  assert.equal(redactSelector(`div[data-testid="${'a1'.repeat(25)}"]`), 'div[data-testid="[secret-shaped: long-token]"]', 'a 40+ character token mixing letters and digits');
   const r = buildTokens({ scenes: [scene('a', '/a', [row(`div#sess_${key} > p`)])] });
   assert.ok(!JSON.stringify(r).includes(key));
 });

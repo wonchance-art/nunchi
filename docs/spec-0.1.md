@@ -65,6 +65,22 @@ scene = route × person × state × viewport.
   subset of scenes captured never changes what a scene sees. The recording is nunchi's own JSON rather than
   HAR because replay needs this normalization and forced states need to rewrite responses. Volatile URL/body values (timestamps, cache busters, nonces) are normalized before
   recording. A replay miss is logged as *capture drift*, never as a UI defect, and offers a re-record.
+  *Strict replay (2026-10-14 KST, design 0.1-c D11):* in replay every fetch/XHR miss and every non-GET is aborted,
+  never sent live: a data request the recording cannot answer (read or write) fails in the page and is counted as a
+  miss when it is asked for (a slow scene's too); a write that is not a data request (a beacon, a form post, a
+  server action) is aborted and counted the same way. An EventSource stream is aborted and a WebSocket closed before
+  it reaches a server; both are listed as `streams` in `network.json`, apart from the misses (a stream is never
+  recorded, so re-recording would not help). What a page sends while it unloads never leaves the browser, in every
+  mode: a keepalive fetch or a beacon sent on beforeunload/pagehide/unload (a navigation inside the scene, an iframe
+  moving on) is sent by Chromium from the browser process, where request routing and offline emulation do not reach
+  (measured on Chromium 141 and 153), so an init script in every frame drops fetch, XHR and `sendBeacon` once the
+  page starts to unload, and `fetchLater()` never sends. A scene ends by disposing its context, which runs no unload
+  handler. Forced states and canary
+  copies replay whenever their person does not capture live, even from an empty recording. Recording still goes
+  live: the app's server must be an allowed base URL (§2.4), and a backend the app calls from the browser is reached
+  as the app would reach it; a held slow request that outlives its page is dropped, not a crash.
+  A recording is saved by writing a temporary file and renaming it, so a reader never sees half of one; one that does
+  not parse is an error naming the way out (delete it or `--network record`), not a crash.
   Server-side requests (SSR/RSC) are not covered in 0.1: those cells show *not seen: server render*.
 - Third-party requests (analytics, ads, payment widgets) are blocked and listed. The browser itself runs
   under a PAC policy: the app's host and local hosts go direct, font hosts go direct or through the user's
@@ -76,6 +92,17 @@ scene = route × person × state × viewport.
   query and fragment parameters (`token`, `access_token`, `apikey`, `code`, `X-Amz-Signature`, …) are replaced
   by `REDACTED` in every URL the evidence keeps (requests, links, image sources, final path, aria snapshot,
   console text); recording keys keep a short hash instead, so requests that differ only by token stay distinct.
+- *Form fields (2026-10-14 KST, D7):* what an input, textarea or select holds (typed, or filled in by the app: a key
+  on a settings page, a name) is never written. In `controls.json` a field has its `type`, its `label` (`<label>` or
+  `aria-labelledby`) and, as its name, only `aria-label`/`title`; a submit/button/reset input keeps its value as its
+  name (the app's own label). In `aria.yml` a field (textbox, searchbox, spinbutton, combobox, slider, listbox) keeps
+  its node, name, state and placeholder; its value and every other child (a select's options and `[selected]`) are
+  cut (`- textbox "API key"`). Editors hold what the user wrote too: the text of contenteditable regions and
+  `role=textbox|searchbox` elements is cut from `text.txt` and `aria.yml`, and their controls and links are left out.
+  Screenshots are not masked: they are what the image lenses judge.
+- *Secret-shaped strings on the page (2026-10-14 KST):* every string capture writes (page text, aria snapshot,
+  controls, measurements, console, network keys, findings) goes through the secret check of §3 L9 (plus a whole
+  private-key block and any JWT); a match is written as `[secret-shaped: <kind>]`.
 - Gate: same build, two runs → byte-identical screenshots.
 
 ### 2.3 Forced states
@@ -100,7 +127,37 @@ in place without a run (tests, scripts).
 `run.json` (metadata, not compared between runs): id, parent run, git commit, `dirty` and a `tree` hash of the
 working tree (uncommitted and untracked edits included, `.nunchi/` excluded) — so *evidence is from the code you
 have now* holds without the user committing — scope (routes, persons, viewports, states, `--changed-since`),
-network mode per person, run health.
+`wholeApp` (no `--routes`, no `--changed-since` and no dynamic route skipped for a missing sample: whole-app
+detectors judged every route), `unresolved` (paths discover cannot resolve, skipped by every run; they never
+make a run partial, and are listed so they stay visible), network mode per person, run health. Every file of a run is
+written to a temp file in the same folder (created exclusively, keeping the mode of the file it replaces) and
+renamed into place, so files written into a complete run later (hunt, verify, canary score) are never seen half
+written. Two captures started at once never get the same id.
+
+*Safety (2026-10-14 KST, design 0.1-c D9, D10, D12):*
+- **Base URL.** `capture` refuses a base URL that is not loopback (`localhost`, `*.localhost`, 127/8, `::1`,
+  `0.0.0.0`), a private address (10/8, 172.16/12, 192.168/16, fc00::/7) or `*.local`, unless its host is listed in
+  `.nunchi/config.json` (`{"allowHosts": ["preview.example.dev"]}`, exact host names), a file the user writes.
+  Link-local addresses (169.254/16, fe80::/10) and `fd00:ec2::254` are refused unless listed: cloud metadata services
+  answer there. Judged on the URL as written, never by DNS; http and https only. The refusal (exit 2) says how to
+  list a preview host; no run folder is made. A config file that does not parse is an error, not "nothing listed".
+  Redirect hops are not routed, so a scene whose page ends on another origin is not captured: `capture-failed`,
+  reason `redirected-off-origin`, with `finalOrigin` in the manifest and nothing collected from that page.
+- **git** runs with the repository's own programs off: `--no-optional-locks`; config overrides
+  `core.fsmonitor=false`, `core.hooksPath=/dev/null`, `diff.external=`, `core.pager=cat`, and every configured filter
+  driver's commands emptied, passed as `GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n` so any filter name works (`a=b`
+  included); `--no-ext-diff --no-textconv --ignore-submodules=dirty` on diffs; the caller's `GIT_*` variables dropped;
+  `GIT_CONFIG_NOSYSTEM=1`, no prompt, a 60 s timeout; `--end-of-options` before a `--changed-since` ref. git older
+  than 2.31, or a filter command still set after the overrides, fails closed: `workTree` reports no repository and
+  `--changed-since` refuses (`workTree` and `--changed-since` are the engine's git calls). An edit inside a
+  submodule is not part of `tree`.
+- **File modes.** Run folders, evidence, recordings and the hunt mirror (everything written through `writeStable`
+  or `privateDir`) are 0700 (folders) and 0600 (files), set explicitly whatever the umask. Before it starts, `capture`
+  makes `.nunchi/har/`, `runs/` and `state/` 0700 (so the ledger's first write lands in a private folder; the ledger
+  commands and `gc`, whose catch-up fold can write it first, do the same for `state/`) and tightens `auth.json` and `evidence/` left by an older version. A symbolic
+  link at any of these paths, or at a file the engine writes, is refused (exit 2), never followed. Windows has no
+  POSIX modes and keeps its ACLs. The ledger's own files (`ledger.json`, `approved.json`) are written by the ledger
+  and protected by the 0700 `state/` folder.
 
 **Run health** — whole-run failures are reported once instead of as one finding per screen, judged from the
 evidence only: *login-expired* (≥2 and ≥half of signed-in screens bounced to a sign-in page: every signed-in scene
@@ -128,7 +185,11 @@ Per scene:
 | `links.json` | internal links → target route, status |
 | `measure.json` | rule-lens measurements (§3) |
 
-Run-level: `manifest.json` (scenes with status and reason, health), `findings.json`, `timing.json`, `run.json`, `source-map.json`
+Run-level: `manifest.json` (scenes with status, reason, `finalPath` and `redirected`, health; a scene is
+redirected when its final path differs from the path it opened, query and fragment aside. Readers derive the flag
+from `reason`, `path` and `finalPath` for manifests written before it existed, so older runs read the same; a
+redirected scene feeds no link edges, design-system screens or parity pairs, and counts as a redirect to its
+final route), `findings.json`, `timing.json`, `run.json`, `source-map.json`
 (§2.5), `inventory.json` (source strings and UI states, extracted with Babel/SWC; classified in 0.1-b),
 `canaries.json` (planted defects, an answer key), and after the AI hunt `hunt-plan.json`, `hunt-key.json` and
 `hunt/<alias>/` (runs with canaries: scene aliases, an answer key, and the evidence they point to), `ai-findings.json`,
@@ -163,8 +224,15 @@ would have to get TypeScript generics, JSX entities and template literals right 
 A small built-in import graph (static `import`/`export … from`/`import()`/`require`/CSS `@import`, resolved
 through relative paths, tsconfig/jsconfig `paths` and `baseUrl`, and the `@/` convention) plus the files that
 frame a route without importing it (Next.js layouts, templates, loading/error/not-found, middleware; pages-router
-`_app`/`_document`; TanStack root and parent routes). It over-approximates on purpose: a missed edge would hide a
-stale screen. A change to a dependency or build config (`package.json`, lockfiles, `next/vite/tailwind/postcss`
+`_app`/`_document`; TanStack root and parent routes). React Router routes start from what the route config says
+they render, not from the config file, which imports every page:
+- discover records each route's `components` (from `element`, `Component`, and wrappers such as
+  `<Guard><Page/></Guard>`, plus those of its enclosing layout routes) and its `lazy` modules;
+- the map follows those through the config file's imports;
+- the config file itself is part of every route it declares, but its imports are not followed.
+
+A component that can't be followed (defined in the config file itself, or with no import found) falls back to the
+config file and everything it imports. It over-approximates on purpose: a missed edge would hide a stale screen. A change to a dependency or build config (`package.json`, lockfiles, `next/vite/tailwind/postcss`
 config, `tsconfig*`) affects every route. `nunchi map` prints it; `capture --changed-since <ref>` captures only the
 routes it says changed (uncommitted and untracked files included); `capture` writes `source-map.json` with the
 evidence.
@@ -192,7 +260,7 @@ Later packs override earlier ones (ESLint-style `extends`).
 | L6 copy quality | errors that don't say what happened and what to do, confirms that don't say what is deleted, `undefined`/`NaN`/`[object Object]`, raw errors | rule + AI | a / b |
 | L7 vibe-coding leftovers | Lorem ipsum, John Doe, example.com, TODO on screen, "Coming soon" sprawl, `href="#"`, empty `onClick`, hard-coded fake numbers, debug UI, drifted copies of nav/footer | rule + AI | a / b |
 | L8 accessibility | axe (contrast, names, alt, labels, duplicate ids), target size (WCAG 2.5.8: < 24px medium, < 44px low; links inline in text exempt), no focus style | rule | a |
-| L9 safety | destructive action without confirm/undo, `window.confirm`, input lost on leave, secret-shaped strings in client JS (location and kind only, value masked) | rule + AI | a / b |
+| L9 safety | destructive action without confirm/undo, `window.confirm`, input lost on leave, secret-shaped strings in client JS (location and kind only: not one character of the value, 2026-10-14 KST) | rule + AI | a / b |
 | L10 parity | control on desktop missing on phone, fixed element covering content, primary action missing from phone first view | computed (§3.2) + AI | a / b |
 
 Severity: **blocker** (core task impossible, data loss, secret exposed) · **high** (broken, wrong or raw error
@@ -368,8 +436,10 @@ as such, only plain JSON values, length limits): `id`, `name`, `definition`, `ch
 question, scenes?}`), `examples` (`good`/`bad` text), `severityRubric` (blocker/high/medium/low → text), `method`
 (`ai`/`rule`/`computed`), `scenes` (`{states?, viewports?, persons?}`; `{}` = all), and `evidence` — the per-scene files
 the hunter reads (added to the list above because L1 needs images and L5 does not), plus an optional `source`
-(boolean: the unit also gets its route's source inventory slice, §4; added 2026-10-13 KST). Only `method: "ai"`
-lenses are hunted.
+(boolean: the unit also gets its route's source inventory slice, §4; added 2026-10-13 KST), and an optional
+`reference` (`"spread"`, the default: each unit's reference screen is picked by hash so references spread over the app;
+`"nearest"`: the route sharing the most leading path segments comes first, so `/bookings/:id` is compared with
+`/bookings`; built-in: L4, added 2026-10-14 KST after the held-out miss in §9.4). Only `method: "ai"` lenses are hunted.
 
 Built-in packs cover the AI parts: L1 (visual: overlap, unreadable text, collapsed layout, distorted media,
 unstyled), L2 (forced states only: what happened, next step, failure that looks normal, endless loading, no loading
@@ -485,7 +555,7 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   answered twice in one file is refused and left unanswered): every item
   must be answered `defect`/`none`/`cannot-judge`; a defect needs a scene under review, a claim, a severity and a
   ground — a selector found verbatim in that scene's controls/styles/links/measure JSON or an `aria=<node>` line of
-  aria.yml, and/or a `file:line` that exists under the app root (not `.nunchi/`, `node_modules/`, `.git/`; symlinks
+  aria.yml (a node with inline text also by its role and name alone), and/or a `file:line` that exists under the app root (not `.nunchi/`, `node_modules/`, `.git/`; symlinks
   must stay inside). Anything else is listed in `rejected` with a reason; an item whose only defects were rejected
   counts as unanswered, so the unit stays *not seen: incomplete*. Findings use the rule-finding shape plus
   `source: "ai"`, `status: "claimed"`; box comes from controls.json or measure.json when the selector has one.
@@ -501,22 +571,85 @@ unreadable one by one). Built in `src/ledger.mjs`:
   notes, the page's data in quoted text; numbers bucketed to powers of two). Person, viewport and state are not
   part of it: the same defect on the phone and the desktop, in normal and error state, is one. Every finding in a
   run's `findings.json` carries its `fp`.
+- **Fingerprint v2** (2026-10-14 KST, design 0.1-c §4.5): a version changes the recipe of named rules only, and
+  `inputs.v` says which recipe made a fingerprint. v2 changes `secret-in-client-bundle` alone: a build names a bundle
+  after its content, so a hash-like part of the bundle's file name becomes `[hash]` and a rebuild keeps the secret's
+  fingerprint. Only the file name, never a folder, and only these parts: a whole name of 13 characters of
+  `[0-9a-z_-]` with a digit (Turbopack, `1grrdrpshlkcw.js`); a `-<8 characters>` suffix with a digit, `_`, `-` or an
+  inner capital (Vite/Rollup, esbuild, `index-Boalzs1w.js`); a `-`/`.`-separated part of 8+ letters and digits that is
+  lower-case hex or has a digit between letters (webpack, CRA, Parcel). Words and words with a number
+  (`checkout2.js`, `facade.js`) stay, so two bundles never become one. Every other rule's fingerprint is the
+  v1 one (a contract test pins v1 values). The evidence of a secret is `{url, kind}`: v1's `masked` (four characters
+  of the value) is gone. **Migration:** a v1 `ledger.json` is migrated on read: secret items get their v2 fingerprint
+  and group from what they stored (rule, route, selector, evidence), items that now share one (two builds of one
+  bundle) merge without making the defect easier to call fixed (first seen is the earliest; the cells and
+  whole-app coverage of both; open if either was open; looked at when both were), `masked` is dropped, and
+  `aliases` (old → new) is kept in the state. A decision made under v1 follows its item: through `aliases`, or, for one from another machine, by the v1
+  fingerprint of what the state holds now. When a merged item's old decisions disagree (one dismissed, another to
+  fix, hold or reopen), the dismissal does not carry over: open beats dismissed. The decision file is never
+  rewritten; the view moves its target and keeps its id (`targetWas`), and its approval and first-seen time stay
+  those of the file as written. The migration runs inside the ledger's read (the same checks as any read: no
+  link, a parse error by position only), and the next ledger command writes the migrated state back under the
+  ledger lock.
 - **Group** = the fingerprint without the route: a shared component's defect on 17 screens is one group, the
   unit a person decides on and the fix loop fixes. Low contrast groups by its colour pair (the design token),
   not by element. Root-cause groups by source file + symbol come with the inventory (§2.4).
 - **Decisions** are append-only files, `.nunchi/decisions/<group-…|fp-…>/<id>.json` (committed; two people
   never edit the same file): `fix`, `keep` (reason `intended` | `out-of-scope`), `false-positive` (reason
   `not-a-problem` | `wrong-place`), `hold`, `reopen`; who and when (KST). The latest decision on the fingerprint
-  or its group wins; a group decision covers screens found later.
-- **Provenance (N1):** decisions made with `nunchi decide` on this machine are recorded in
-  `.nunchi/state/approved.json` (git-ignored). Anything else came through git: it is shown, but it cannot dismiss
-  a blocker or an L9 (safety/secret) finding, and the fix loop will not act on an unapproved `fix` until
-  `nunchi approve`.
+  or its group wins; a group decision covers screens found later. Written to a temp file, synced and renamed into
+  place; a file that is torn, is not a decision, is not a regular file (a link is never followed), is larger than
+  64 KB, or does not match its place (file name = id, folder = target) is an error naming the file (exit 2), never
+  skipped. Errors give the file and the parse position, never the file's text; `approved.json` and `ledger.json`
+  are read the same way.
+- **Order (0.1-c M1a, design §8.3):** a decision's time is the earlier of its date and when this machine first saw
+  it (kept in the ledger state, by id and content), so one that arrives late cannot outrank decisions made after
+  it arrived. A decision dated more than 5 minutes after it arrived never counts, not even once its date passes.
+- **Provenance (N1; hardened in 0.1-c M1a):** decisions made with `nunchi decide` on this machine are recorded in
+  `.nunchi/state/approved.json` (git-ignored) by id **and content** (`<id>:<SHA-256 of the record>`), before the
+  decision file is written, under a lock. A file that reuses an approved id with other content is not approved.
+  Approvals written before are carried over once and each one is said: a bare id binds to the one file with that
+  id, except when two files share it or the file is a keep or false-positive on a blocker or L9 finding (the file
+  may have been swapped since): those move to `legacy`, are never honoured, and need `nunchi approve` again.
+  Anything not approved came through git: it is shown, but it cannot dismiss a blocker or an L9 (safety/secret)
+  finding, and the fix loop will not act on an unapproved `fix` until `nunchi approve`. An `approved.json` that
+  cannot be read is an error and is never replaced by an empty one.
 - **Status is computed, never committed:** each complete run is folded into `.nunchi/state/ledger.json`:
-  `open` → `fixed` when a run that looked again (the route in scope, the same persons, the app reachable, the
-  login working) no longer finds it → `regressed` when it comes back. With decisions: `to-fix`, `kept`,
-  `dismissed`, `held`. `fingerprintVersion` and each fingerprint's inputs are stored so a future v2 can migrate
-  decisions instead of orphaning them.
+  `open` → `fixed` when a run that looked again no longer finds it → `regressed` when it comes back. With
+  decisions: `to-fix`, `kept`, `dismissed`, `held`. `fingerprintVersion` and each fingerprint's inputs are stored
+  so a new version migrates decisions instead of orphaning them (v2, above). Since 0.1-c M1a:
+  - *like for like:* each item keeps the cells it was seen in (`person.state.viewport` on its route); a sighting
+    by a narrower run keeps the cells that run did not look at. It is `fixed` only when a run at the same origin
+    captured every one of them (captured, not redirected, not an error page, not a canary copy), with the other
+    side of a comparison too (parity: the desktop; `error-looks-empty`: the empty state; `no-offline-notice`:
+    normal), and the app was reachable, the recording current and, for signed-in cells, the login working.
+    Whole-app findings (route-less secrets, `unreachable-route`, `link-to-missing-route`, L4 one-offs) keep what
+    the runs that saw them looked at (route × cell; routes the app no longer has drop out) and need a `wholeApp`
+    run that looked at all of it again; a route an earlier run looked at that this run did not (it failed, answered
+    an error or redirected this time) makes the run partial, while a route no run has looked at (always broken,
+    always redirected, unresolved) does not. `--states`, `--viewports`, `--routes`, `--changed-since` and a
+    skipped sample fix nothing they did not look at. A run that would fix ≥ 10 items and more than half of the open ones
+    while most of its screens show one and the same text (another app, or one error page) fixes nothing, and
+    `findings` says so.
+  - *looked at:* each item records the last run that looked at all its cells; `findings` says when an open item
+    has not been looked at for 3 runs (it cannot be marked fixed until a run covers it).
+  - *monotonic:* a run older than the newest folded one only adds what it saw: it never marks anything fixed,
+    never moves `lastSeen` back, and brings an item back only if it saw it after the last run that looked at it.
+  - *catch-up:* every ledger command (and `capture`, `gc`) first folds the complete runs not folded yet, in run
+    order, under a lock, so a crash between a run completing and its fold leaves nothing unfolded. `gc` removes
+    only runs the ledger holds and exits 2 when it cannot bring the ledger up to date. A ledger or run file that
+    cannot be read is an error (exit 2), never "empty". Temp files and lock folders a crash left are removed once
+    they are an hour old.
+  - *lock:* `<file>.lock.d`, a folder taken by renaming a folder that already holds its owner into place. A holder
+    on this machine is stale only when its process has ended, never by age (Linux: its pid and that process's start
+    time; Windows, where a freed pid goes to the next process at once: a file the holder keeps open with sharing
+    mode 0, which Windows closes when the process ends; elsewhere, or if that file cannot be made exclusive: the
+    pid alone, so a reused pid makes takers wait and end in LOCKED, never take a live lock); one on another
+    machine, after 30 s without a touch. One taker at a time removes a
+    stale lock, after checking again that it still holds the owner judged stale; a lock is never given back and is
+    released only by its owner. Waiting ends after 5 s with an error. Renames Windows refuses while another process
+    reads in the folder (EPERM, EACCES, EBUSY) are retried with backoff, for the lock, the ledger files, run folders
+    and `runs/latest` (last writer wins; a failed `latest` write never fails a capture).
 - **CLI:** `nunchi findings` (one row per kind; `--rule <rule>` lists its groups; `--status`, `--all`, `--json`),
   `nunchi decide <id…> <decision> [--reason] [--note]`, `nunchi approve <id…>|--all`, `nunchi trust`.
 
@@ -790,21 +923,29 @@ took 253 s.
   - L5 'cancel' vs 'Release slot' on `/help`. This is a real cross-screen wording difference seen from Help; a
     human should label it.
 
-*Engine issues found, not fixed here.* Fixing them would turn this app into a tuning set; the numbers above stay
-as the held-out result, and a later re-measure on pegroom is reported as not blind.
-1. `signed-in-bounced` must strip `?` and `#` before matching the sign-in pattern.
-2. aria.yml nodes of the form `role "name": text` must be addressable as `aria=role "name"`.
-3. React Router source map: route each config entry to its `element` component, not to the config file.
-   Otherwise source slices and `dead-end` see the whole app on every route.
-4. L4 references: pick a scene that shares components with the one under review.
-5. Canary scoring: a `fixed-cover` hit should also count claims on elements under the bar at any scroll
-   position; `blank-state` should not be planted where a rule reports the same thing.
-6. When an app throws on `!res.ok` without reading the body, Chromium never marks the request finished, so the
-   `networkidle` waits run to their timeouts. This only slows the capture.
+*Engine issues found, not fixed in the measuring PR.* Fixing them there would have turned this app into a tuning
+set; the numbers above stay as the held-out result, and a later re-measure on pegroom is reported as not blind.
+Status after the fix PR (2026-10-14 KST), each with a synthetic fixture that triggers it and one that does not:
+1. *Fixed.* `signed-in-bounced` matches the sign-in pattern on the path only (`isSignInPath`):
+   `/sign-in?next=%2Fbilling` is a sign-in page, `/designs?from=login` is not.
+2. *Fixed.* aria.yml nodes of the form `role "name": text` are also addressable as `aria=role "name"` (the
+   whole line still works); the hunter brief and the skill say so.
+3. *Fixed.* React Router routes map to the components their config names, not to the config file (§2.5).
+   Source slices and `dead-end` now see each route's own files.
+4. *Fixed.* Lens packs may set `reference: "nearest"` (§3.3); L4 does, so a detail page is compared with its list
+   page. Other lenses keep the hash spread, so their measured plans are unchanged.
+5. *Fixed.* A `fixed-cover` canary is hit by a claim of its item anywhere on the copy; the ambiguity check against
+   the original still applies. `blank-state` is no longer planted where the message is the main area's only text.
+6. *Does not reproduce.* In the pegroom capture, error-state scenes took a median of 1.09 s, normal ones 1.08 s,
+   and no scene took more than 2.1 s. The networkidle waits did not run to their timeouts. No change.
+
+*Re-check after the fixes (2026-10-14 KST, not blind):* Pebble unchanged (rule recall 34/34, identical, 100%);
+pegroom rule recall 38/38, 0 false positives on 20 clean scenes, identical (1,837 files), fingerprints 100% (43/43).
+The AI-lens re-measure waits for a fresh held-out app.
 
 *Verdict:* the held-out app fails two gates: rule recall (37/38, one engine bug) and L4 recall (67%). Seven of
 eight AI lenses pass. Determinism, fingerprint stability and clean-screen false positives hold. Release still
-needs the fixes above and a fresh held-out app for a blind re-measure, besides the precision gate and the Codex
+needs a fresh held-out app for a blind re-measure with the fixes above, besides the precision gate and the Codex
 comparison.
 
 ## 10. Open items
