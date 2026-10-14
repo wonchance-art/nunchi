@@ -104,6 +104,19 @@ export function shotGeometry(img, boxes = [], { crop = false } = {}) {
 // Percentages as the export writes them (two decimals).
 export const pct = n => `${Math.round(n * 10000) / 100}%`;
 
+// A decision's time as the person reads it while recent: whole minutes and hours, rounded down (59.5 minutes is
+// "59 min ago", never "60 min ago"); "just now" within a minute either way (clocks differ a little). → null when it
+// is a day or more away (the page shows the local time then) or no time at all.
+export function relativeTime(at, now) {
+  const t = Date.parse(at);
+  if (!Number.isFinite(t)) return null;
+  const s = Math.floor((now - t) / 1000);
+  if (s < -60 || s >= 86400) return null;
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  return `${Math.floor(s / 3600)} h ago`;
+}
+
 // ---- decision time (design §3.5) --------------------------------------------------------------------------------
 
 // The time from showing a group to its first key: paused while the tab is hidden and after IDLE_MS without input,

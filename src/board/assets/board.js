@@ -62,11 +62,7 @@ const whereText = g => {
 function when(at) {
   const t = Date.parse(at);
   if (!Number.isFinite(t)) return at || '';
-  const s = Math.round((Date.now() - t) / 1000);
-  if (s >= 0 && s < 60) return 'just now';
-  if (s >= 0 && s < 3600) return `${Math.round(s / 60)} min ago`;
-  if (s >= 0 && s < 86400) return `${Math.round(s / 3600)} h ago`;
-  return new Date(t).toLocaleString();
+  return W.relativeTime(at, Date.now()) ?? new Date(t).toLocaleString();
 }
 function announce(text) { const a = $('announce'); a.textContent = ''; setTimeout(() => { a.textContent = text; }, 30); }
 async function copy(text, btn) {

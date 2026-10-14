@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { startBoard } from '../src/board/server.mjs';
-import { DecisionClock, CAP_MS, IDLE_MS } from '../src/board/shared.mjs';
+import { DecisionClock, CAP_MS, IDLE_MS, relativeTime } from '../src/board/shared.mjs';
 import * as L from '../src/ledger.mjs';
 import * as P from '../src/project.mjs';
 import { readMetrics, decisionTimes, metricsPath } from '../src/metrics.mjs';
@@ -469,6 +469,16 @@ test('decision time (§3.5): kept per decision or batch, Later apart, once per i
   assert.match(out.stdout, /decision time \(board\): singles median 4\.2 s, p90 4\.2 s \(1\)/);
   assert.match(out.stdout, /batches median 9 s, p90 9 s \(1 batches, 2 groups\)/);
   assert.match(out.stdout, /later, apart: median 1\.5 s \(1\)/);
+});
+
+test('words: a decision\'s time reads in whole minutes and hours, rounded down (59.5 minutes is "59 min ago", never "60 min ago")', () => {
+  const now = Date.parse('2026-10-15T03:00:00+09:00');
+  const ago = s => new Date(now - s * 1000).toISOString();
+  for (const [s, text] of [[0, 'just now'], [59, 'just now'], [-30, 'just now'], [60, '1 min ago'], [119, '1 min ago'], [59.5 * 60, '59 min ago'], [3599, '59 min ago'], [3600, '1 h ago'],
+    [2.5 * 3600, '2 h ago'], [86399, '23 h ago'], [86400, null], [-120, null]]) assert.equal(relativeTime(ago(s), now), text, `${s} s`);
+  assert.equal(relativeTime('not a time', now), null);
+  const js = readFileSync(fileURLToPath(new URL('../src/board/assets/board.js', import.meta.url)), 'utf8');
+  assert.match(js, /W\.relativeTime\(at, Date\.now\(\)\)/, 'the page uses it');
 });
 
 test('decision clock (§3.5): paused while the tab is hidden and after 30 s without input; capped at 120 s', () => {
