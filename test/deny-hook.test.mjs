@@ -256,7 +256,11 @@ test('deny hook: the script answers exit 2 with the reason on stderr to deny, ex
   assert.equal(asked, 0, 'no git asked in a plain folder or a repository without nunchi');
   assert.equal(usesNunchi(r.root), true);
   assert.equal(usesNunchi(join(r.root, '.nunchi', 'runs')), true);
-  assert.equal(protectedOf(r.root, { env: r.env }).common, r.common, 'with nunchi, git\'s own answer, as before');
+  // the same folder by its native real path: on Windows git answers with the long name (runneradmin) where the test's
+  // temp path holds the 8.3 short one (RUNNER~1)
+  const gitSaid = protectedOf(r.root, { env: r.env }).common;
+  assert.ok(gitSaid, 'with nunchi, git is asked');
+  assert.equal(realpathSync.native(gitSaid), realpathSync.native(r.common), 'with nunchi, git\'s own answer, as before');
   // nunchi only in the common folder (no .nunchi): a folder repository, and a linked worktree's .git file
   const shared = tmp('nunchi-hook-shared-');
   execFileSync('git', ['init', '-q'], { cwd: shared });
