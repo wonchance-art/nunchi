@@ -13,7 +13,15 @@ const TOAST = $('toast');
 // and the dock's height keeps focus and scrolling clear of it (scroll-padding-bottom, WCAG 2.4.11).
 let dockObserver = null;
 function show(...nodes) {
+  // a redraw (a live update, an undo) never drops the focus to the page: the same control again, or the row, or the
+  // view's heading
+  const was = d.activeElement, inside = was instanceof Element && was !== main() && main().contains(was);
   main().replaceChildren(...nodes);
+  if (inside && !main().contains(d.activeElement)) {
+    const again = (was.id && $(was.id)) || (was.classList.contains('row') && S.focus && $(`row-${S.focus}`));
+    if (again && /^H[1-6]$/.test(again.tagName)) again.setAttribute('tabindex', '-1');      // a heading the focus was on
+    if (again) again.focus({ preventScroll: true }); else focusHeading();
+  }
   const dock = main().querySelector('.dock');
   if (dock) dock.prepend(TOAST); else if (TOAST.parentElement !== d.body) d.body.append(TOAST);
   dockObserver?.disconnect();
@@ -149,6 +157,10 @@ function lost(why) {
     h('p', { class: 'copyline' }, h('code', null, 'nunchi open'), copyButton('nunchi open')),
     h('p', { class: 'muted small' }, 'The key is never stored on disk or shown to your AI, so a reload needs a fresh link.')));
   $('nav').hidden = true;
+  TOAST.hidden = true;
+  // said, and the focus on the message (it replaced whatever had the focus)
+  focusHeading();
+  announce(text);
 }
 
 async function boot() {
@@ -516,7 +528,7 @@ function moveFocus(step, { extend = false } = {}) {
   const j = Math.min(ids.length - 1, Math.max(0, i + step));
   if (extend) { S.selection.add(ids[i]); S.selection.add(ids[j]); }
   setFocus(ids[j]);
-  if (extend) for (const r of main().querySelectorAll('.row[data-id]')) r.setAttribute('aria-selected', S.selection.has(r.getAttribute('data-id')) ? 'true' : 'false');
+  if (extend) { for (const r of main().querySelectorAll('.row[data-id]')) r.setAttribute('aria-selected', S.selection.has(r.getAttribute('data-id')) ? 'true' : 'false'); announce(W.plural(S.selection.size, 'group') + ' selected'); }
 }
 function toggleSelect(id) {
   if (S.selection.has(id)) S.selection.delete(id); else S.selection.add(id);
@@ -596,6 +608,7 @@ async function undo() {
   }
   for (const id of u.ids) { const g = S.list?.groups[id]; if (g) S.list.groups[id] = { ...g, status: 'open', statuses: { open: 1 }, decision: null }; }
   if (S.route.view === 'findings') { updateRowsInPlace(); setFocus(u.ids[0]); }
+  else if (S.route.view === 'detail') go('#/finding/' + u.ids[0]);       // back to the finding it reopened, its heading focused
   announce(`Undone: ${W.plural(u.ids.length, 'group')} back to open`);
   toast('Undone · back to open', null);
 }
@@ -835,7 +848,8 @@ function onKey(e) {
   const t = e.target;
   const typing = t instanceof Element && !!t.closest('input, textarea, select, [contenteditable=""], [contenteditable=true]');
   if (e.key === 'Escape') {
-    if (typing) { t.blur(); return; }
+    // out of a field: to the row (or the heading), never to the page
+    if (typing) { e.preventDefault(); const row = S.route.view === "findings" && S.focus ? $("row-" + S.focus) : null; if (row) row.focus(); else { t.blur(); focusHeading(); } return; }
     if (!TOAST.hidden) return hideToast();
     if (S.selection.size) { S.selection.clear(); return renderFindings(true); }
     if (S.route.view === 'detail') return go('#/findings');

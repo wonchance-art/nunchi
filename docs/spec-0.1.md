@@ -1241,7 +1241,10 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   focus), sections are headings, the status tabs a tablist with arrows, the decision bar a toolbar with arrows; after
   a decision the focus moves to the next row and a polite live region says "Kept (intended). Next: Raw error text,
   high, 4 screens"; the Now line is announced at most every 10 s; single-character shortcuts can be turned off in
-  the keys dialog (`?`), and keys are off in text fields (`/` searches); severity is a word beside its dot; every
+  the keys dialog (`?`), and keys are off in text fields (`/` searches; Esc goes back to the row); the focus never
+  falls to the page: a redraw (a live update, an undo) puts it back on the same control, the row or the heading, Z in
+  Detail goes back to the finding it reopened, and a tab that lost the board focuses and says its message; Shift+J and
+  Shift+K say how many groups are selected; severity is a word beside its dot; every
   control is at least 44 px; reduced motion stops all transitions; dark mode; no sideways scroll at 390 px. Tested
   with axe (no violation) on each view, light at 1280 px and dark at 390 px. Non-text contrast (WCAG 1.4.11): the
   edge of a field, button, decision button, tick box and screen card is `--control` (#7A7F88, 3.4:1 or more against

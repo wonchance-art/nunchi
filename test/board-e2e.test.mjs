@@ -338,6 +338,49 @@ test('board e2e: a long route without a break wraps in its row; no sideways scro
   } finally { await s.close(); }
 });
 
+test('board a11y: the focus never falls to the page — Z in Detail, Esc in Search, a live redraw, a board that stops; Shift+J says how many are selected', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = project();
+  const s = await open(p);
+  const { page } = s;
+  const focused = () => page.evaluate(() => { const a = document.activeElement; return !a || a === document.body ? 'body' : a.id || a.className; });
+  try {
+    await page.waitForSelector('#h-progress');
+    await page.click('a[data-nav=findings]');
+    await page.waitForSelector('#h-findings');
+    await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
+    // Shift+J extends the selection and says so
+    await page.keyboard.press('Shift+J');
+    assert.match(await until(async () => { const a = await page.textContent('#announce'); return /selected/.test(a) && a; }), /^2 groups selected$/);
+    await page.keyboard.press('Escape');
+    // Esc in the search box: back to the row
+    await page.focus('#search');
+    await page.keyboard.type('a');
+    await page.keyboard.press('Escape');
+    assert.match(await focused(), /\brow\b/, 'Esc in Search leaves the focus on a row');
+    await new Promise(r => setTimeout(r, 600));                  // the search's own redraw (250 ms later)
+    assert.notEqual(await focused(), 'body', 'and the redraw keeps it');
+    // Z in Detail: back on the finding it reopened, its heading focused
+    const g = gid(p, 'dead-href');
+    await page.evaluate(id => { location.hash = `#/finding/${id}`; }, g);
+    await page.waitForFunction(id => location.hash === `#/finding/${id}` && document.getElementById('h-detail'), g);
+    await page.keyboard.press('s');
+    await page.waitForFunction(id => location.hash !== `#/finding/${id}`, g);
+    await page.keyboard.press('z');
+    await page.waitForFunction(id => location.hash === `#/finding/${id}`, g);
+    await until(async () => (await focused()) === 'h-detail');
+    assert.equal(await focused(), 'h-detail');
+    // a live redraw (the undo bumped the version): the focus stays
+    await new Promise(r => setTimeout(r, 1500));
+    assert.notEqual(await focused(), 'body', 'a live update keeps the focus');
+    // the board stops: said, and the focus on the message
+    await s.b.close();
+    await page.waitForSelector('#lost-h');
+    assert.equal(await until(async () => (await focused()) === 'lost-h' && 'lost-h'), 'lost-h');
+    assert.equal(await until(async () => { const a = await page.textContent('#announce'); return a === 'The board stopped.' && a; }), 'The board stopped.');
+  } finally { await s.close(); }
+});
+
 test('board e2e: keys by their place — F on a Korean layout fixes, W with Caps Lock keeps as intended', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = project();
