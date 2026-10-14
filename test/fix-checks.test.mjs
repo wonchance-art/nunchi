@@ -219,8 +219,14 @@ test('a check that exits normally takes its detached grandchild with it (the tre
   const r = await X.runChecks({ root, profile: checkProfile(root), timeout: 15000 });
   assert.equal(r.results.test.status, 'pass', r.results.test.output);
   const pid = Number(readFileSync(join(root, 'gc.pid'), 'utf8'));
+  // killed is not reaped: an orphan's zombie waits for pid 1, which in some containers reaps only every ~2 s, and
+  // kill(pid, 0) still answers for a zombie; a zombie runs nothing, so it counts as gone (Linux: /proc state Z)
+  const running = () => {
+    try { process.kill(pid, 0); } catch { return false; }
+    try { return !/^\d+ \(.*\) Z /s.test(readFileSync(`/proc/${pid}/stat`, 'utf8')); } catch { return true; }
+  };
   let alive = true;
-  for (let i = 0; i < 40 && alive; i++) { try { process.kill(pid, 0); await new Promise(res => setTimeout(res, 50)); } catch { alive = false; } }
+  for (let i = 0; i < 40 && alive; i++) { alive = running(); if (alive) await new Promise(res => setTimeout(res, 50)); }
   assert.equal(alive, false, `the grandchild ${pid} still runs`);
 });
 
