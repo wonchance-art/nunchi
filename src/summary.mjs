@@ -132,10 +132,13 @@ export function summary({ state, rows, groups, stream = 'main', runsDir, git = n
   const open = r => !r.goneAt && (r.status === 'open' || r.status === 'regressed' || r.status === 'stale' || !!r.needsYou) && !(r.source === 'ai' && !r.checked);
   const toDecide = groups.filter(g => rows.some(r => r.group === g.group && open(r))).length;
   const toFix = groups.filter(g => g.statuses['to-fix']).length;
+  // the main button's "Decide N": the number the verdict says is to decide (blocker and high, worst first in the list)
+  // when it says one, so the two never disagree; otherwise every group to decide
+  const decideNow = seriousTotal && serious.decide ? serious.decide : toDecide;
   const handoff = !toDecide && toFix ? { toFix, text: `All decided. ${toFix} to fix. Go back to your AI chat and say “fix them”.`, say: 'fix them' } : null;
   return {
     run: latest, kind: meta.kind ?? 'sweep', fullCheck: full, previousFullCheck: previous, running,
-    verdict, bySeverity, byStatus, standing, toDecide, toFix, handoff, since, confirm,
+    verdict, bySeverity, byStatus, standing, toDecide, decideNow, toFix, handoff, since, confirm,
     health: { problems, blind: (latest && state.blind?.[latest]) || null, scenes: { total: scenes.length, checked: scenes.length - notSeen.length, notSeen: notSeen.length, reasons: [...new Set(notSeen.map(s => String(s.reason || s.status)))].sort() } },
     ai: { ran: aiRan, groups: new Set(ai.map(r => r.group)).size, doubleChecked: new Set(ai.filter(r => r.checked).map(r => r.group)).size,
       notDoubleChecked: new Set(ai.filter(r => !r.checked).map(r => r.group)).size, stale: groups.filter(g => g.status === 'stale').length,

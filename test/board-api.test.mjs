@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { startBoard } from '../src/board/server.mjs';
-import { DecisionClock, CAP_MS, IDLE_MS, relativeTime, keyOf, DECISION_KEYS } from '../src/board/shared.mjs';
+import { DecisionClock, CAP_MS, IDLE_MS, relativeTime, keyOf, DECISION_KEYS, WORDS } from '../src/board/shared.mjs';
 import * as L from '../src/ledger.mjs';
 import * as P from '../src/project.mjs';
 import { readMetrics, decisionTimes, metricsPath } from '../src/metrics.mjs';
@@ -482,6 +482,17 @@ test('keys: a shortcut is its place on the keyboard and Shift (any layout, Caps 
   for (const [e, k] of cases) assert.equal(keyOf(e), k, JSON.stringify(e));
   assert.deepEqual(DECISION_KEYS[keyOf({ key: 'ㄹ', code: 'KeyF' })], { decision: 'fix', reason: null }, 'F on a Korean layout fixes');
   assert.deepEqual(DECISION_KEYS[keyOf({ key: 'W', code: 'KeyW', shiftKey: false })], { decision: 'keep', reason: 'intended' }, 'Caps Lock W keeps as intended, not out of scope');
+});
+
+test('words: the tree-differs banner says one thing (no "Re-check" beside "capture again"); the plugin says the board is here', () => {
+  assert.equal(WORDS['tree-differs'], 'Screens are from before your latest edits: tell your AI “capture again”');
+  const js = readFileSync(fileURLToPath(new URL('../src/board/assets/board.js', import.meta.url)), 'utf8');
+  assert.match(js, /W\.WORDS\['tree-differs'\]\)/, 'shown as it is, nothing appended');
+  for (const f of ['plugin.json', 'marketplace.json']) {
+    const text = readFileSync(fileURLToPath(new URL(`../.claude-plugin/${f}`, import.meta.url)), 'utf8');
+    assert.doesNotMatch(text, /progress board are coming|board (is|are) coming/i, f);
+    assert.match(text, /live local board/, f);
+  }
 });
 
 test('words: a decision\'s time reads in whole minutes and hours, rounded down (59.5 minutes is "59 min ago", never "60 min ago")', () => {

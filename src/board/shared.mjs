@@ -23,7 +23,7 @@ export const CONTEXT_PX = 200;                            // design §3.4: the b
 export const WORDS = {
   fix: 'Fix', 'to-fix': 'To fix', keep: 'Keep', kept: 'Kept', 'false-positive': 'Not a problem', dismissed: 'Not a problem',
   hold: 'Later', held: 'Later', 'needs-human': 'Needs you', 'caused-regression': 'Broke something else — undone',
-  'not-seen-budget': 'Not checked: AI budget ran out', 'tree-differs': 'Screens are from before your latest edits · Re-check',
+  'not-seen-budget': 'Not checked: AI budget ran out', 'tree-differs': 'Screens are from before your latest edits: tell your AI “capture again”',
   reopen: 'Reopened',
 };
 export const REASON_LABEL = { intended: 'intended', 'out-of-scope': 'out of scope', 'not-a-problem': 'nothing wrong here', 'wrong-place': 'right issue, wrong spot' };

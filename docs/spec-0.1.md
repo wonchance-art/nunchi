@@ -1260,7 +1260,11 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   800 × 520 and 390 × 640.
 - *Views:* only Progress, Findings (and Detail) and Screens; "More views in 0.2" lists the commands that show the rest.
   It and "Keys (?)" are at the foot of the sidebar, and in the header on a phone (≤ 760 px), 44 px each.
-- *Words:* one table (`shared.mjs`), English. Decision times show as relative or local; files keep KST.
+- *Words:* one table (`shared.mjs`), English. Decision times show as relative or local; files keep KST. The main
+  button's "Decide N" is the number the verdict says is to decide when it says one (blocker and high; they come first
+  in the list), else every group to decide (`summary.decideNow`). "Screens are from before your latest edits: tell
+  your AI “capture again”" when the working tree differs. A request with no answer says "the board did not answer
+  (is it still running? nunchi open starts it)", never the browser's "Failed to fetch".
 
 **Decision time (§3.5).** The page's `DecisionClock` runs from showing a group (focusing its row, opening its detail)
 to the first decision key, paused while the tab is hidden and after 30 s without input, capped at 120 s. The board

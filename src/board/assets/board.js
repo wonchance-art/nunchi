@@ -101,9 +101,15 @@ const copyButton = (text, label = 'Copy') => { const b = h('button', { type: 'bu
 
 // ---- the server ------------------------------------------------------------------------------------------------------
 
+// No answer at all (the board stopped, the network, a laptop waking up) is said in words, never as the browser's
+// "Failed to fetch"; status 0.
+const NO_ANSWER = 'the board did not answer (is it still running? nunchi open starts it)';
 async function api(path, { method = 'GET', body } = {}) {
-  const res = await fetch(path, { method, cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer',
-    headers: { 'X-Nunchi-Token': S.token, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  let res;
+  try {
+    res = await fetch(path, { method, cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer',
+      headers: { 'X-Nunchi-Token': S.token, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  } catch { throw Object.assign(new Error(NO_ANSWER), { status: 0 }); }
   if (res.status === 401) { lost('expired'); throw Object.assign(new Error('no key'), { status: 401 }); }
   let data = null;
   try { data = await res.json(); } catch {}
@@ -316,11 +322,11 @@ function renderProgress(focus = false) {
   const s = S.summary;
   const tiles = W.SEVERITIES.map(sev => h('a', { class: `tile${s.bySeverity[sev] && W.SEV[sev] <= W.SEV.high ? ` tile-${sev}` : ''}`, href: '#/findings' },
     h('span', { class: 'tile-k' }, sevChip(sev)), h('span', { class: 'tile-n' }, String(s.bySeverity[sev] || 0))));
-  const decideBtn = s.toDecide ? h('a', { class: 'btn btn-primary', href: '#/findings' }, `Decide ${s.toDecide} →`) : h('a', { class: 'btn btn-primary', href: '#/findings' }, 'Review findings');
+  const decideBtn = s.decideNow ? h('a', { class: 'btn btn-primary', href: '#/findings' }, `Decide ${s.decideNow} →`) : h('a', { class: 'btn btn-primary', href: '#/findings' }, 'Review findings');
   const handoff = s.handoff ? h('p', { class: 'handoff' }, s.handoff.text, copyButton(s.handoff.say, 'Copy “fix them”')) : null;
   const hero = h('section', { class: 'panel-box hero', 'aria-labelledby': 'h-progress' },
     h('div', { class: 'hero-top' }, h('div', null, h('p', { class: 'eyebrow' }, 'Ready to ship?'), h('h1', { id: 'h-progress' }, s.verdict.text)), decideBtn),
-    handoff, s.treeChanged ? h('p', { class: 'banner banner-warn', role: 'note' }, W.WORDS['tree-differs'], ' — tell your AI “capture again”') : null, h('div', { class: 'tiles' }, tiles),
+    handoff, s.treeChanged ? h('p', { class: 'banner banner-warn', role: 'note' }, W.WORDS['tree-differs']) : null, h('div', { class: 'tiles' }, tiles),
     h('p', { class: 'muted small' }, 'Open findings by severity: groups still open, to fix, or held for later. A group is one defect, however many screens show it.'),
     s.now.length ? h('ul', { class: 'now', 'aria-label': 'Now' }, s.now.map(l => h('li', null, l))) : null);
   const confirm = s.confirm.length ? confirmPanel(s.confirm) : null;

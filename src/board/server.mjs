@@ -379,8 +379,8 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     } catch { return fail(res, 404, 'not found'); } finally { if (fd !== undefined) closeSync(fd); }
   }
 
-  // design §3.4 words: "Screens are from before your latest edits · Re-check" when the working tree is not the one the
-  // latest run captured (asked of git at most every 10 s; no git, no word)
+  // design §3.4: "Screens are from before your latest edits: tell your AI “capture again”" when the working tree is
+  // not the one the latest run captured (asked of git at most every 10 s; no git, no word)
   let treeMemo = { at: -Infinity, tree: null };
   const treeNow = () => { const t = Date.now(); if (t - treeMemo.at > 10e3) treeMemo = { at: t, tree: workTree(project).tree }; return treeMemo.tree; };
   function summaryOut() {
@@ -404,7 +404,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     const nowLines = [...running.map(r => `Capture running · run ${r}`), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)}${c.minutes !== null ? ` · ${c.minutes} min` : ''}`)];
     return {
       version: version(), mode, project: safe(basename(project), 80), run: s.run, kind: s.kind, commit: s.commit ? safe(String(s.commit).slice(0, 7), 7) : null, dirty: s.dirty,
-      verdict: s.verdict, bySeverity: s.bySeverity, byStatus: s.byStatus, toDecide: s.toDecide, toFix: s.toFix, handoff: s.handoff, since: s.since, running: s.running,
+      verdict: s.verdict, bySeverity: s.bySeverity, byStatus: s.byStatus, toDecide: s.toDecide, decideNow: s.decideNow, toFix: s.toFix, handoff: s.handoff, since: s.since, running: s.running,
       fullCheck: s.fullCheck, previousFullCheck: s.previousFullCheck,
       confirm: s.confirm.map(c => ({ key: c.key, id: safe(c.id, 60), decision: c.decision, reason: c.reason, channel: c.channel, by: c.by ? safe(c.by, 80) : null, at: c.at ? safe(c.at, 40) : null,
         note: c.note ? safe(c.note, 500) : null, group: c.group, title: safe(c.title, 160), severity: c.severity })),

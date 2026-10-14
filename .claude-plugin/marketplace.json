@@ -10,7 +10,7 @@
     {
       "name": "nunchi",
       "source": "./",
-      "description": "Preview: captures every screen and state of your web app (phone and desktop, empty, error, slow, offline) and finds UI defects with evidence. AI verification, the fix loop and the progress board are coming in 0.1."
+      "description": "Preview: captures every screen and state of your web app (phone and desktop, empty, error, slow, offline), finds UI defects with evidence, double-checks the AI findings, and shows them on a live local board where you decide. The fix loop is coming in 0.1."
     }
   ]
 }

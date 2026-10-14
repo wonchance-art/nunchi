@@ -122,6 +122,21 @@ test('channels: `nunchi decide` run by the agent (no terminal) is cli-agent, say
   assert.equal(L.reasonProblem('keep', 'intended'), null);
 });
 
+test('summary: the main button\'s "Decide N" is the number the verdict says is to decide, when it says one', () => {
+  const p = smallProject();
+  const led = P.loadLedger(p.nunchi, { root: p.root });
+  const s = sum(led);
+  assert.equal(s.verdict.text, 'Not yet · 1 blocker, 1 high: 2 to decide');
+  assert.deepEqual([s.decideNow, s.toDecide], [2, 4], 'the hero says 2, so the button says 2 (the list has 4, worst first)');
+  // once nothing serious is left to decide, the button counts every group to decide
+  const { groups } = P.ledgerView(led);
+  for (const rule of ['secret-in-client-bundle', 'raw-error-text']) P.recordDecisions(P.loadLedger(p.nunchi, { root: p.root }), { targets: [{ group: groups.find(g => g.rule === rule).group }], decision: 'fix', by: 'me', channel: 'board' });
+  const after = sum(P.loadLedger(p.nunchi, { root: p.root }));
+  assert.doesNotMatch(after.verdict.text, /to decide/);
+  assert.equal(after.decideNow, after.toDecide);
+  assert.equal(after.decideNow, 2);
+});
+
 test('summary: a redirected screen is not checked, for the verdict and the counts alike (checked + not seen = all)', () => {
   const p = smallProject();
   const mf = join(p.nunchi, 'runs', '0001', 'manifest.json');

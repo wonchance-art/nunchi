@@ -60,6 +60,9 @@ test('board e2e: the one-time link opens it, a key decides, Z undoes — the led
     await page.waitForSelector('#h-progress');
     assert.ok(!page.url().includes('t='), 'the link\'s code is gone from the address bar');
     assert.match(await page.textContent('#h-progress'), /^Not yet · 1 blocker, 2 high: /);
+    // the button says the number the verdict says is to decide
+    const toDecide = /(\d+) to decide/.exec(await page.textContent('#h-progress'))?.[1];
+    assert.equal(await page.textContent('.hero .btn-primary'), `Decide ${toDecide} →`);
     await page.click('a[data-nav=findings]');
     await page.waitForSelector('#h-findings');
     await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
@@ -96,6 +99,12 @@ test('board e2e: the one-time link opens it, a key decides, Z undoes — the led
     assert.equal(await until(async () => (await page.textContent('#announce')) === 'Nothing to undo' && 'Nothing to undo'), 'Nothing to undo');
     await new Promise(r => setTimeout(r, 400));
     assert.equal(decisions(p.nunchi).length, 3, 'nothing written');
+    // no answer from the board is said in words, not as the browser's "Failed to fetch"
+    await page.route('**/api/decide', r => r.abort('connectionrefused'));
+    await page.focus(`#row-${raw}`);
+    await page.keyboard.press('f');
+    assert.equal(await until(async () => { const a = await page.textContent('#announce'); return /^Not recorded/.test(a) && a; }), 'Not recorded: the board did not answer (is it still running? nunchi open starts it)');
+    await page.unroute('**/api/decide');
     // app text is data: the hostile claim is text, never markup
     await page.click('a[data-nav=findings]');
     await page.evaluate(() => { for (const d of document.querySelectorAll('details')) d.open = true; });
