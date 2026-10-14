@@ -1252,6 +1252,7 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   numbered markers have room inside the Screens panel (they sit half outside their box). Tested at 1280 × 560,
   800 × 520 and 390 × 640.
 - *Views:* only Progress, Findings (and Detail) and Screens; "More views in 0.2" lists the commands that show the rest.
+  It and "Keys (?)" are at the foot of the sidebar, and in the header on a phone (≤ 760 px), 44 px each.
 - *Words:* one table (`shared.mjs`), English. Decision times show as relative or local; files keep KST.
 
 **Decision time (§3.5).** The page's `DecisionClock` runs from showing a group (focusing its row, opening its detail)

@@ -214,7 +214,8 @@ dialog h2{font-size:17px;margin:0 0 10px}.dialog-actions{display:flex;flex-wrap:
 .board .panels .screen-panel{display:block}
 .empty-note{margin:0;padding:16px 20px;color:var(--muted)}
 .loading{padding:24px;color:var(--muted)}
-@media (max-width:760px){.field input{min-width:0;width:100%}.toolbar{gap:6px;padding:6px}.toolbar .tb-label{display:none}.dbtn{flex:1 1 40%;min-height:48px;padding:2px 10px}}
+@media (max-width:760px){.board .side-foot{display:flex;flex-wrap:wrap;align-items:center;padding:0}.board .side-foot p{margin:0}.board .side-foot p:first-child{display:none}
+.board .side-foot button{min-width:44px;font-size:14px}.field input{min-width:0;width:100%}.toolbar{gap:6px;padding:6px}.toolbar .tb-label{display:none}.dbtn{flex:1 1 40%;min-height:48px;padding:2px 10px}}
 @media (prefers-color-scheme:dark){.board .btn-primary,.board .btn-primary:hover,.b-primary,.b-primary:hover{color:#141518}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
 `;

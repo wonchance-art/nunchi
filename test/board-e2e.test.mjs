@@ -229,6 +229,26 @@ test('board e2e: the toast waits while the pointer is over it or the focus is in
   } finally { await context.close(); await b.close(); }
 });
 
+test('board e2e: on a phone the Keys dialog and "More views in 0.2" are in the header, 44 px, and open', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const s = await open(project(), { viewport: { width: 390, height: 844 } });
+  const { page } = s;
+  try {
+    await page.waitForSelector('#h-progress');
+    for (const [id, title] of [['help-open', 'Keys'], ['more-views', 'More views in 0.2']]) {
+      const r = await page.$eval(`#${id}`, e => (e.offsetParent === null ? null : { w: e.getBoundingClientRect().width, h: e.getBoundingClientRect().height, top: e.getBoundingClientRect().top }));
+      assert.ok(r, `#${id} is shown at 390 px`);
+      assert.ok(r.w >= 43.5 && r.h >= 43.5, `#${id} is ${Math.round(r.w)}×${Math.round(r.h)}`);
+      assert.ok(r.top < 300, `#${id} is in the header (top ${Math.round(r.top)})`);
+      await page.click(`#${id}`);
+      await page.waitForSelector('dialog[open]');
+      assert.equal(await page.textContent('#dialog-title'), title);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('dialog:not([open])', { state: 'attached' });
+    }
+  } finally { await s.close(); }
+});
+
 test('board e2e: keys by their place — F on a Korean layout fixes, W with Caps Lock keeps as intended', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = project();
