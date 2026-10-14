@@ -103,15 +103,24 @@ export function whoAmI() {
 
 // Ids to targets. `prefix`: an id may be the start of a group or fingerprint id (the CLI); the board sends whole ids.
 // An AI item with no component is its own group (group = fingerprint): one id, decided on the fingerprint.
+// A group holding an AI finding nobody double-checked is decided on each of its fingerprints: a group decision does not
+// cover such a finding (ledger view, design §2.2), so a decision on the group would be recorded and count for none of
+// them. Each target once, in the order asked.
 export function resolveTargets(rows, gs, ids, { prefix = true } = {}) {
-  return ids.map(id => {
+  const out = [], seen = new Set();
+  const push = t => { const k = t.group ? `g:${t.group}` : `f:${t.fp}`; if (!seen.has(k)) { seen.add(k); out.push(t); } };
+  for (const id of ids) {
     const match = (x) => (prefix ? x.startsWith(id) : x === id);
     let g = gs.filter(x => match(x.group));
     const f = rows.filter(x => match(x.fp));
     if (g.length === 1 && f.length === 1 && g[0].group === f[0].fp) g = [];
     if (g.length + f.length !== 1) throw fail('BAD_TARGET', prefix ? `"${id}" matches ${g.length + f.length} groups/fingerprints; give more characters` : `"${id}" is not a group or fingerprint of the ledger`);
-    return g.length ? { group: g[0].group } : { fp: f[0].fp };
-  });
+    if (!g.length) { push({ fp: f[0].fp }); continue; }
+    const mine = rows.filter(r => r.group === g[0].group);
+    if (mine.some(r => r.source === 'ai' && !r.checked)) for (const r of [...mine].sort((a, b) => (a.fp < b.fp ? -1 : 1))) push({ fp: r.fp });
+    else push({ group: g[0].group });
+  }
+  return out;
 }
 
 // Records one decision per target, as `nunchi decide` always has: the approval first (with the channel it was made

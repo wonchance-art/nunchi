@@ -1164,7 +1164,10 @@ the live endpoints answer (the others 404, so nothing unblinds).
 **Decisions (§3.4) and parity.** `POST /api/decide {targets, decision, reason, note?, ms?, confirmed?}` checks the ids
 against the ledger as it is now (stale → 409), requires the reason the decision takes and refuses one it does not,
 then writes through `project.mjs` `recordDecisions`, the function `nunchi decide` uses: the approval first (channel
-`board`), then one decision file per group (a shared `batch` id when there are several), then the generation.
+`board`), then one decision file per group (a shared `batch` id when there are several), then the generation. A
+group holding an AI finding nobody double-checked is decided on each of its fingerprints (`resolveTargets`, for the
+CLI and the board alike), because a group decision does not cover such a finding (§2.2) and would count for none of
+them; it stays one group for the questions and the decision time.
 Parity is tested: the same decision from the CLI and the board gives files that differ only in id, time, author,
 channel and batch, and the same status. The server asks for a confirmation (409 with the sentence; the page shows it
 with Cancel focused) before a dismissal that includes a blocker (by protected severity), an L9 finding or more than

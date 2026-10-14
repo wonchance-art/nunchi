@@ -432,7 +432,8 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     const { rows, groups } = P.ledgerView(led);
     let targets;
     try { targets = P.resolveTargets(rows, groups, ids, { prefix: false }); } catch (e) { if (e.code !== 'BAD_TARGET') throw e; return fail(res, 409, 'the list changed: one of these groups is gone', { stale: true }); }
-    const mine = targets.map(t => rows.filter(r => (t.group ? r.group === t.group : r.fp === t.fp)));
+    // what the person chose, one entry per id they sent (a group decided on its fingerprints is still one group)
+    const mine = ids.map(id => rows.filter(r => r.group === id || r.fp === id));
     if (confirmed !== true) {                                   // only a real true skips the questions
       const flat = mine.flat().filter(r => !r.goneAt);
       if (DISMISS[decision]) {
@@ -446,7 +447,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
       if (decision === 'fix' && flat.some(r => r.source === 'ai' && !r.checked)) return fail(res, 409, 'confirm', { confirm: { text: 'This hasn’t been double-checked. Fix anyway?', ok: 'Fix anyway' } });
       if (decision !== 'fix' && decision !== 'reopen') {
         const claims = model().claims;
-        const fixing = targets.map(t => claims.get(t.group || rows.find(r => r.fp === t.fp)?.group)).find(Boolean);
+        const fixing = mine.map(rs => claims.get(rs[0]?.group)).find(Boolean);
         if (fixing) return fail(res, 409, 'confirm', { confirm: { text: `${fixing.agent} is fixing this right now. Stop and mark ${decidedText(decision, null)}?`, ok: 'Stop and mark' } });
       }
     }
@@ -454,7 +455,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     const made = P.recordDecisions(led, { targets, decision, reason, note, by, channel: 'board', batch });
     cache = null;
     if (ms !== null && decision !== 'reopen') {
-      try { recordDecisionTime(metricsPath(stateDir), { id: batch || made[0].id, ms, size: made.length, later: decision === 'hold' }); } catch {}
+      try { recordDecisionTime(metricsPath(stateDir), { id: batch || made[0].id, ms, size: ids.length, later: decision === 'hold' }); } catch {}
     }
     return send(res, 200, { ok: true, batch, made: made.map(d => ({ id: d.id, target: d.target, decision: d.decision, reason: d.reason })), decided: decidedText(decision, reason) });
   }

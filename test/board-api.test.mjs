@@ -256,6 +256,42 @@ test('api: /api/decide validates everything it is sent, and refuses a group that
   } finally { await b.close(); }
 });
 
+test('decide parity: a group holding an AI finding nobody double-checked is decided on each of its fingerprints, from the CLI and the board, so the decision counts', async () => {
+  const project = () => {
+    const p = smallProject();
+    const ai = withAi(p, [
+      { lens: 'L6', rule: 'L6.vague-error', scene: p.scenes[3], selector: 'main p.err', box: [40, 300, 400, 24], claim: 'The error says nothing useful', status: 'claimed', file: 'app/garden/page.tsx', line: 12 },
+      { lens: 'L6', rule: 'L6.vague-error', scene: p.scenes[0], selector: 'main p.note', box: [40, 500, 400, 24], claim: 'This error says nothing either', status: 'claimed', file: 'app/garden/page.tsx', line: 30 },
+    ]);
+    return { ...p, ai };
+  };
+  const one = project(), two = project();
+  const group = one.ai[0].group;
+  assert.equal(one.ai[1].group, group, 'one group (one component)');
+  const fps = one.ai.map(i => i.fp).sort();
+  assert.notEqual(fps[0], fps[1], 'two fingerprints');
+  const rowsOf = p => P.ledgerView(P.loadLedger(p.nunchi, { root: p.root })).rows.filter(r => r.group === group);
+  // the CLI
+  assert.equal((await cli(one.root, 'decide', group, 'fix')).code, 0);
+  assert.deepEqual(decisions(one.nunchi).map(d => d.target.fp).sort(), fps, 'one decision per fingerprint');
+  assert.deepEqual(rowsOf(one).map(r => r.status), ['to-fix', 'to-fix'], 'and it counts for each (a group decision would not)');
+  // the board: the same, as one batch, and asked once as one group
+  const { b, call } = await board(two);
+  try {
+    const ask = await call('/api/decide', { targets: [group], decision: 'fix', reason: null });
+    assert.deepEqual([ask.status, ask.json.confirm?.text], [409, 'This hasn’t been double-checked. Fix anyway?']);
+    const r = await call('/api/decide', { targets: [group], decision: 'fix', reason: null, confirmed: true, ms: 1500 });
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json.made.map(m => m.target.fp).sort(), fps);
+    assert.ok(r.json.batch, 'one batch');
+    assert.deepEqual(rowsOf(two).map(r => r.status), ['to-fix', 'to-fix']);
+    const t = decisionTimes(readMetrics(metricsPath(b.stateDir)));
+    assert.equal(t.singles.n, 1, 'one group decided is a single for the decision time');
+  } finally { await b.close(); }
+  const strip = ({ id, at, channel, by, batch, ...rest }) => rest;
+  assert.deepEqual(decisions(one.nunchi).map(strip).sort((a, b) => (a.target.fp < b.target.fp ? -1 : 1)), decisions(two.nunchi).map(strip).sort((a, b) => (a.target.fp < b.target.fp ? -1 : 1)));
+});
+
 test('decide parity: the board and nunchi decide write the same decision through the same functions; only who-and-how differ', async () => {
   const one = smallProject(), two = smallProject();
   const g = gid(one, 'raw-error-text');
