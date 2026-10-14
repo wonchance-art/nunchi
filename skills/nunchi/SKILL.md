@@ -94,8 +94,10 @@ After step 5, when the user wants the deeper sweep. The engine cuts the work and
      "L6.unclear-confirm": {"answer": "cannot-judge", "reason": "no confirmation is visible"},
      "L6.raw-technical-text": {"answer": "none"}}}]}
    ```
-   It writes `ai-findings.json` and `coverage.json` into the run. A unit is *seen* only when every item has an
-   accepted answer; read `rejected` in ai-findings.json, re-check those against the evidence, and record again.
+   It writes `ai-findings.json` and `coverage.json` into the run and puts the hunt into the ledger (its claims as
+   *not double-checked*, and the screens it saw: a hunt that saw a finding's screen and did not claim it again counts
+   towards *stale*). A claim grounded in a source line only must name a line with code on it (a blank line is
+   refused). A unit is *seen* only when every item has an accepted answer; read `rejected` in ai-findings.json, re-check those against the evidence, and record again.
 5. Report AI findings as **claimed, not verified** until the verifier below has run, apart from rule findings, each with
    scene, selector or file:line and the claim. Say which cells are not seen and why (budget, incomplete, not
    answered, the scene was not captured).
@@ -108,7 +110,9 @@ When the AI lenses will run, capture with `--canaries 3`: it plants known defect
 unit tells a copy from a real screen. Give a hunter only its unit (lens, checklist, files). The answer keys
 (`hunt-key.json`, `verify-key.json`, `recheck-key.json`) are kept outside the project, in the user's state folder
 (`$XDG_STATE_HOME/nunchi`, `~/.local/state/nunchi`, or `%LOCALAPPDATA%\nunchi` on Windows). Never open them or
-`canaries.json` while hunting, verifying or re-checking, and never try to work out which aliases are copies.
+`canaries.json` while hunting, verifying or re-checking, and never try to work out which aliases are copies. The
+ledger takes verdicts only from those keys: editing `ai-findings.json`, `verify.json` or `recheck.json` changes
+nothing in it, so never do it to change a status — verify or re-check again instead.
 
 6. After the hunt has written `ai-findings.json`, run `canaries --score`. Report the hit rate per lens as an
    upper bound of recall ("≤ 67%"), never as recall; canaries it lists as *not hunted* (their unit was cut by the
@@ -126,7 +130,8 @@ unit tells a copy from a real screen. Give a hunter only its unit (lens, checkli
 9. `verify --record <that file>` (add `--root <dir>` when the app's source is not the current folder). Add
    `--vendor <name>` only when the verifier really was another vendor's model and the user opted into that;
    otherwise it is recorded as *same-model check*. It also puts the run's AI findings into the ledger, so
-   `findings` lists them beside the rule findings (`AI · <checklist item>`). If it prints `SUSPECT` (decoys passed
+   `findings` lists them beside the rule findings (`AI · <checklist item>`). Have the verifier answer every packet:
+   a decoy left unanswered counts as passed through. If it prints `SUSPECT` (decoys passed
    through above 10%, or the screens offered fewer decoys than planned), say so, run `verify --plan --again` and
    verify again in a new fresh context; do not present that run's confirmed findings as verified. `findings`
    collapses AI findings that were not double-checked into one line, and says when one is *stale* (two later hunts
@@ -138,16 +143,22 @@ A fresh hunt's silence does not show an AI finding is gone; only a re-check does
 code and captured again:
 
 10. `recheck --plan` (`--run <id>` for another run than the latest). It writes `recheck-packets.json`: one packet
-    per open AI finding × screen it was seen on whose screenshot or text changed — the old evidence (`old`: the
-    screen it was seen on, the element and its box) and the new screen (`new`) — with known still-present defects
-    mixed in as controls. Screens that did not change need no packet: the finding is still there. When nothing
-    changed it says so and records that at once.
+    per open AI finding × screen it was seen on whose screenshot, text or code changed — the old evidence (`old`:
+    the screen it was seen on, the element and its box) and the new screen (`new`) — with at least 3 known
+    still-present defects mixed in as controls. Screens whose pixels, text and route code did not change need no
+    packet: the finding is still there (never for L9: what a destructive action does never shows on a screenshot).
+    When nothing changed it says so and records that at once. A finding last seen in a run newer than this one is
+    left out, and said: re-check against the newest run. If it says only some of the planned controls could be
+    made, the batch will be suspect and cannot fix anything: controls need screens that changed since the run
+    before, so capture again after the change rather than asking the re-checker.
 11. Start a **fresh context** (a subagent that has seen neither the hunt nor the fix) as the re-checker. Give it
     only `recheck-packets.json` and the files each packet names (under `recheck/<alias>/` in the run folder). Never
     tell it what was changed, show it a diff or commit message, or say which finding you expect gone. For every
-    packet it answers `{ "packet", "verdict": "gone" | "still-there" | "insufficient", "reason": "<one line>" }`.
+    packet it answers `{ "packet", "verdict": "gone" | "still-there" | "insufficient", "reason": "<one line>" }`;
+    it must answer every packet (a control left unanswered counts as passed through).
 12. `recheck --record <that file>`. A finding is fixed only when every screen it was seen on says `gone` and the
-    batch is not suspect. If it prints `SUSPECT` (a control answered `gone`), say so and re-check again in a new
+    batch is not suspect. If it prints `SUSPECT` (controls answered `gone` or left unanswered above 10%, fewer
+    controls than planned, or none answered), say so and re-check again in a new
     fresh context; nothing it said is gone counts. Report as fixed only what `findings` shows fixed; a finding the
     re-check could not judge (`insufficient`) needs the user's eyes — say so.
 

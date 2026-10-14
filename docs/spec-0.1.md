@@ -196,7 +196,8 @@ redirected when its final path differs from the path it opened, query and fragme
 from `reason`, `path` and `finalPath` for manifests written before it existed, so older runs read the same; a
 redirected scene feeds no link edges, design-system screens or parity pairs, and counts as a redirect to its
 final route), `findings.json`, `timing.json`, `run.json`, `source-map.json`
-(§2.5), `inventory.json` (source strings and UI states, extracted with Babel/SWC; classified in 0.1-b),
+(§2.5), `source-hashes.json` (since M1: per route a hash of the contents of its files and the app config,
+§4.1), `inventory.json` (source strings and UI states, extracted with Babel/SWC; classified in 0.1-b),
 `canaries.json` (planted defects, an answer key), and after the AI hunt `hunt-plan.json` and
 `hunt/<alias>/` (runs with canaries: scene aliases and the evidence they point to), `ai-findings.json`,
 `coverage.json`, `canary-score.json`, `verify-packets.json`, `verify.json` (§4), after a re-check
@@ -529,6 +530,22 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
     folder) is recorded but not folded (said on stderr); a ledger that cannot be brought up to date at that moment
     only warns, and the next ledger command folds it.
   - **The answer key is kept outside the project** (§5.1), and so are `hunt-key.json` and `recheck-key.json`.
+  - **Verdicts count only from the key** (review of PR #28, 2026-10-14 KST). `ai-findings.json` and `verify.json` are
+    files in the project that anything can write. `verify --record` stores the verdicts in the key beside the
+    packets (`recorded: {verdicts, vendor}`); a new plan keeps the rounds recorded before whose claims still match
+    (`earlier`). The ledger takes a finding's status, corrected severity, verifier and `suspect` only from those
+    rounds (`verdictsFromKey`): a status the key does not back with a recorded verdict on a packet whose claim hash
+    still matches the finding is a claim, as severe as claimed; a claim reworded since its verdict is a claim again.
+    `ai-findings.json` and `verify.json` stay as copies for people and the review page. `verify --plan --again` asks
+    the key, not `verify.json`, whether the run is suspect. A status written into `ai-findings.json` by hand only
+    leaves that finding out of the next plan (so it stays a claim in the ledger).
+  - **An unanswered decoy passes through**: pass-through is (decoys confirmed + decoys left unanswered) ÷ all decoys,
+    so skipping the hard ones does not make a verifier look careful. "No decoy was answered" is still said first.
+  - **`hunt --record` folds too** (its claims, not double-checked yet, and the cells it saw), so a hunt that claims
+    nothing still counts towards staleness (§5.1). `verify --record` replaces that fold with the verdicts.
+  - *Choice (2026-10-14 KST):* the re-check plans at least 3 controls before anything can be fixed (§4.1). The
+    verify plan keeps ⌈n/4⌉ decoys: the 0.1-b verify contract pins that count, and a verify never fixes anything
+    (a verdict only says whether a group decision may cover an item). Raising it is left to the M2 review.
 - Not done yet: decoys come only from controls (no L2/L10 decoys); "stricter threshold for pages with a history of
   false positives" is not built; the verifier's re-capture is the skill's job.
 
@@ -551,8 +568,10 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   `batch`: its lens on its route (hash), the scope a missed canary voids.
 - *Canaries in the plan:* a canary copy is grouped on its own (never in a unit with the scene it copies) and is
   never a reference. In a run with canaries, every scene of the plan goes by an alias (`s` + 10 hex, salted with
-  the canary seed) and `files` point at `hunt/<alias>/…`, the scene's evidence files hard-linked (copied where links
-  fail) there; the alias → scene map is `hunt-key.json`, an answer key the hunter never reads. `--record` maps the
+  the canary seed) and `files` point at `hunt/<alias>/…`, the scene's evidence files copied there (since M1 copies
+  with one modification time, never hard links: a link shares the original's inode and date, and a canary copy,
+  captured after the scenes, would be told apart); the alias → scene map is `hunt-key.json`, an answer key the
+  hunter never reads. `--record` maps the
   answers back, so `ai-findings.json` and `coverage.json` name scenes. Runs without canaries keep scene ids and get
   no key or mirror.
 - *Source slices (2026-10-13 KST):* a lens pack with `"source": true` (built-in: L2, L5, L6, L7, L9) gets, when the
@@ -585,9 +604,11 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   `source: "ai"`, `status: "claimed"`; box comes from controls.json or measure.json when the selector has one.
   Answers naming another plan id are refused. Answers are parsed and compared as strings only.
   *Since M1 (2026-10-14 KST):* each finding also carries its `identity` (§5.1, design §2.3): the element (an
-  `aria=` selector canonicalised to the controls.json selector when exactly one control of the scene has that
-  accessible name), the grounded file, `anchor` (a hash of the trimmed source line, taken now, from the source the
-  hunter read), `fileHash` (of the whole file) and the component. The hunt key is read from outside the project; a
+  `aria=` selector canonicalised to the selector of the first control of the scene, in document order, with that
+  accessible name and role), its accessible name, the grounded file, `anchor` (a hash of the source line with its
+  whitespace removed, plus which occurrence it is when the same text stands on several lines; taken now, from the
+  source the hunter read), `fileHash` (of the whole file) and the component. A defect grounded in a `file:line` only
+  whose line is blank is refused (`source-not-found`, "a blank line"). The hunt key is read from outside the project; a
   plan of a run with canaries whose key is missing is refused (exit 2: "run hunt --plan again") instead of
   recording findings that name aliases.
 
@@ -597,37 +618,65 @@ A fresh hunt's silence is not evidence (hunts vary). An AI item becomes *fixed* 
 suspect and said `gone` in every cell it was seen in (`src/recheck.mjs`).
 - `nunchi recheck --plan [--run <id>] [--root <dir>] [--json]` on a newer run (default: the latest). Items re-checked:
   AI items standing in the ledger (open, came back, to fix, later; not kept, not a problem, fixed or stale unless
-  decided *fix*), except those a verifier that was not suspect rejected. Per item × cell it was seen in:
+  decided *fix*), also one whose latest verdict was a rejection (it stays open until a re-check says gone, so it is
+  asked about rather than left open forever). An item last seen in a run newer than this one is left out and said
+  (`newer` in the key; "seen in a run newer than …: re-check against the newest run"): comparing an older screen
+  would read as the defect coming and going. An item another worktree saw last is left out too, and said
+  (`otherWorktrees`): only that worktree can say it is gone (§5.1 *Streams*), and a "still there" from here would
+  only make this worktree's branch its owner. Per item × cell it was seen in:
   - the cell not captured in this run (failed, redirected, error page, not in scope) → `not-captured`: the item
     cannot be fixed by this run;
   - seen in this very run (a hunt claimed it here) → nothing to compare;
-  - the screen's `top`, `full` and `textHash` equal those of the screen it was last seen on, and its grounded source
-    file has the same hash → `unchanged`: still there, no packet, `lastSeen` moves. A file's hash can say
-    "unchanged" only when the working tree now is the one the run was captured from (`run.json` `tree`); otherwise
-    the item is asked about;
+  - **unchanged** → still there, no packet, `lastSeen` moves. It takes all of: the screen's `top`, `full` and
+    `textHash` equal those of the screen it was last seen on; the hash of the route's source files at both captures
+    equal (`source-hashes.json`, written by `capture` beside `source-map.json`: per route a hash of the contents of
+    every file the source map says the route renders, and of the app's config files at the root); a grounded file
+    outside those files with the same hash on the tree the run was captured from (`run.json` `tree`); and a lens
+    whose defects show on a screenshot. L9 (and L3) judge behaviour (what a delete does, what leaving loses): their
+    items are always asked. A run without `source-hashes.json` (`--routes`, an older capture) never says unchanged.
+    *Choice (2026-10-14 KST):* the route's file set is the source map's static over-approximation; what it misses
+    (data, CSS reached only through tooling) usually shows on the screen, which must be identical too.
   - else one packet: the claim (`lens` and the hunter's sentence), the **old** screen (where it was last seen: its
     files, the element's selector and box there) and the **new** screen. No diff, commit message or fix brief, no
     run or scene id: every screen goes by an alias (`s` + 10 hex; old and new sides never share one), its evidence
-    (`top.jpg`, `full.jpg`, `aria.yml`, `text.txt`, `controls.json`) linked under `recheck/<alias>/` in the run.
-  - **Controls** (⌈n/4⌉ for n packets, like decoys): known still-present defects, correct answer `still-there` —
-    rule findings present in both the previous complete run and this one on the same screen, phrased as a claim
-    ("Tap target smaller than 24px: “Home”."), and the run's canary copies (phrased as a hunter's claim, never as
-    the planting). Screens that changed come first: real packets always show a change, so an unchanged control
-    would be a tell. A canary control's old and new screen are one copy (identical pixels): a verifier comparing
-    image bytes could tell it apart; it still catches a re-checker that answers `gone` to everything.
+    (`top.jpg`, `full.jpg`, `aria.yml`, `text.txt`, `controls.json`) **copied** under `recheck/<alias>/` in the run,
+    every file and folder with one and the same modification time (2001-09-09 10:46:40 KST). A hard link would
+    share the original's inode and date, which tell an older run's screen or a canary copy apart; the hunt mirror
+    (`hunt/<alias>/`) is copied the same way.
+  - **Controls**: known still-present defects, correct answer `still-there`, **only on screens that changed** since
+    the previous complete run (`top` or `full` differ): a control on an unchanged screen would be a tell, so it is
+    not made and counts as missing. Real packets can show an unchanged screen (a run without source hashes, a
+    behaviour lens, code that changed under the same pixels): such a packet is real, and its right answer is
+    `still-there` anyway. Controls are:
+    - rule findings present on the same screen in the previous run and this one, one per finding × screen,
+      phrased as a hunter of an AI lens would claim them (`target-size-min` → L1 "“Home” is too small to tap
+      reliably.", `clipped-text` → L1 "The text “…” is cut off.", `placeholder-text` → L7, `raw-error-text` and
+      `missing-value` → L6, `blank-state` → L2, …), never under the rule's own lens or title (AI items are never
+      filed under a rule lens). A rule with no such phrasing, or whose defect does not show on a screen (page
+      errors, failed requests, the link graph), is never a control;
+    - canary copies: this run's copy of a screen and kind paired with the previous run's copy of the same screen
+      and kind (`of` + `kind` in `canaries.json`): the old side is the previous run's copy, the new side this
+      run's, so the two sides are two captures like a real packet's.
+    At least 3 controls are planned (`max(3, ⌈n/4⌉)` for n packets; with fewer, a re-checker answering at random
+    passes too often).
   - Order is a seeded shuffle; the answer key (`recheck-key.json`: per packet the item and cell or "control", the
-    unchanged and not-captured cells, the new screens' hashes) is kept outside the project. With no packet to ask
-    (everything unchanged or not captured), the plan records itself at once.
+    unchanged, not-captured and newer items, the new screens' hashes) is kept outside the project. With no packet to
+    ask (everything unchanged or not captured), the plan records itself at once.
 - `nunchi recheck --record <verdicts.json> [--run <id>] [--json]`: `{packet, verdict: gone | still-there |
   insufficient, reason}` per packet (one line, ≤ 300 characters; unknown packets, other verdicts, a packet answered
-  twice, or packets of another plan are refused and nothing is written). `recheck.json` holds the counts, the
-  controls (`planned`, `total`, `answered`, `passedThrough`, `rate`), `suspect` and per item its verdict per cell.
-  **Suspect** when a control was answered `gone` in more than 10% of answered controls, when fewer controls were
-  made than planned, or when none was answered; a `recheck.json` without `suspect` folds as suspect. It is folded
-  into the ledger as the run's `(run, "recheck")` fold (§5.1): every cell `gone` and the batch not suspect → fixed;
-  any `still-there` or `unchanged` → still there (`lastSeen` moves; the old evidence moves only on `unchanged`, when
-  the element and box still hold); `insufficient` (and nothing still there) → open and *needs you*. A later claim
-  of the item brings it back (*came back*). Recording again with other verdicts replaces that run's re-check.
+  twice, or packets of another plan are refused and nothing is written). The verdicts are stored **in the key**
+  (`recorded`), outside the project, and `recheck.json` in the run is a copy for people to read: counts, the controls
+  (`planned`, `total`, `answered`, `passedThrough`, `rate`), `suspect` and per item its verdict per cell. The CLI
+  prints the control counts ("controls 3 of 3 planned, passed through (answered gone or unanswered) 0/3").
+  **Suspect** when fewer controls were made than planned, when none was answered, or when more than 10% of the
+  controls passed through — answered `gone`, **or left unanswered** (skipping the hard ones must not make a batch
+  look careful). The ledger folds the run's `(run, "recheck")` fold (§5.1) **from the key only**: the results and
+  `suspect` are recomputed from the key's plan and its recorded verdicts; a `recheck.json` written by hand is never
+  read. Every cell `gone` and the batch not suspect → fixed; any `still-there` or `unchanged` → still there
+  (`lastSeen` moves; the old evidence moves only on `unchanged`, when the element and box still hold);
+  `insufficient` (and nothing still there) → open and *needs you*. A later claim of the item brings it back (*came
+  back*). Recording again with other verdicts replaces that run's re-check. A re-check whose run is older than a
+  sighting of the item already folded when the re-check was recorded can say "still there", never "gone".
 - The skill runs the re-checker in a fresh context with only the packets and their files (SKILL.md, re-check).
 - Not done yet: the fix loop's own re-check from a fresh context (`fix --verify --record`, M3); re-check validation
   sets (§9.4 of the design).
@@ -741,11 +790,28 @@ Field app 1 (§9.2) after this: 1,082 findings → 578 unique defects → 99 gro
   share a ledger (the design names `<common>/nunchi/`; the app key is added). git runs through the hardened runner
   (§2.4 *Safety*). Without git, or with a git nunchi cannot run safely (older than 2.31, a filter command still set),
   the state stays in `.nunchi/state`, per folder.
+- *A shared folder that cannot be written* (a read-only or foreign-owned `.git`, `nunchi` there being a file: the
+  probe meets `EACCES`, `EPERM`, `EROFS`, `ENOTDIR` or `EEXIST`): the worktree keeps its state in `.nunchi/state`
+  instead, says so in one line on stderr, and records the choice in `.nunchi/state/fallback.json`, so every later
+  command (the review page too) picks the same root without a word; deleting that file tries the shared folder
+  again. Another error is an error. In that fallback, state files committed to git are refused (exit 2, "committed
+  to git: state that came through git is never read"), as below.
 - *Moving an older `.nunchi/state` in.* The first ledger command in a repository moves `.nunchi/state/ledger.json`
   and `approved.json` into the shared folder and says so on stderr; the old files are kept beside, renamed
-  `<name>.moved`, never deleted. When the shared folder already has a ledger (another worktree moved its own first),
-  only the times this machine first saw each decision are merged (the earliest wins); approvals are added (both
-  lists are this machine's). That worktree's runs are folded again by its next ledger command (below).
+  `<name>.moved`, never deleted. Everything in that ledger came from this worktree's runs, so its folds and items are
+  tagged with this worktree's stream. When the shared folder already has a ledger (another worktree moved its own
+  first), the open items the shared ledger does not have (seen in runs since removed, say) are carried over as they
+  stand, tagged with this worktree's stream, with the coverage sets they name; the shared ledger's record of an item
+  wins; and what was not carried is said on stderr: items already fixed there (history only), which of its runs were
+  folded (this worktree's runs on disk are folded again by its next ledger command) and when decisions were first
+  seen. Approvals are added (both lists are this machine's).
+  - **Never taken from a moved file: `decisionsSeen`** (when this machine first saw each decision). A file can claim
+    any time, and an early one would let a decision outrank decisions made after it; the decisions are noted again,
+    from the next command on.
+  - **A file committed to git is never adopted.** The candidates are listed with `git ls-files -z -- .nunchi/state`
+    (through the hardened runner); a committed `ledger.json` or `approved.json` stays where it is, unread, and is
+    said ("committed to git, so it was not moved … git rm --cached"): anyone with push access could have written it,
+    approvals of blockers included.
 - *Writes* (`updateDoc`): read the document and its `rev`, change it, then under the file's lock commit only if
   `rev` on disk is still the one read; otherwise read again and redo the change (no lost update; a holder whose lock
   was taken over as stale finds the `rev` the new holder wrote and reads again, unless both write in the same
@@ -755,6 +821,10 @@ Field app 1 (§9.2) after this: 1,082 findings → 578 unique defects → 99 gro
   `writeAtomic`), and bumps the state's `generation` file (a counter under its own lock, taken after the
   document's, so locks are always taken in one order). Nothing to write: nothing is written, no generation. Every
   CLI write of the ledger and the approvals bumps the generation; the library functions bump it when given its path.
+  *Order (2026-10-14 KST):* the generation is bumped **after** the document is written. A reader that sees a new
+  generation finds the new document; one that read the document between the two sees the new document with the old
+  generation, and catches up at the next bump. So a reader (the M2 board) caches by each document's `rev` and reads
+  again whenever the generation changes; it never takes an unchanged generation to mean an unchanged document.
 - *Reads* (`readDoc`): a file that cannot be read or parsed is read once more after 20 ms (a Windows reader can meet
   a rename), then it is an error (exit 2) naming `ledger.json.prev` as the way back, never "empty". A link, a folder
   or a file over the size cap is not read again. A ledger of a newer schema is refused, never half understood.
@@ -766,8 +836,17 @@ Field app 1 (§9.2) after this: 1,082 findings → 578 unique defects → 99 gro
   `%LOCALAPPDATA%\nunchi\…` on Windows; else `~/.local/state/nunchi/…`), files 0600 in 0700 folders. `<hash>` is the
   first 16 hex of the SHA-256 of the real path of the folder holding the run (one worktree's `.nunchi/runs`, or the
   parent of an `--out` folder): run ids are numbered per worktree, so the design's per-repository folder is made per
-  runs folder. A key an older nunchi left inside the run is read once, written outside and removed from the run.
-  `gc` removes the keys of the runs it removes. The deny hook that covers them comes with M2.
+  runs folder. A hunt or verify key an older nunchi left inside the run is read once, written outside and removed
+  from the run, **without** any verdicts it holds (`recorded`, `earlier`): a file in the project can say anything. A
+  re-check key came after keys moved out, so one inside the project is never read. Every folder from the state base
+  (`…/nunchi`) down to the key is nunchi's own: a symbolic link among them is refused (`UNSAFE_PATH`), never written
+  through. `gc` removes the keys of the runs it removes. The fold reads keys without moving anything (`peekKey`).
+- *M2 deny hook (notes, 2026-10-14 KST).* What an agent in the project must not read or write once M2 adds the hook:
+  the answer keys' folder (`$XDG_STATE_HOME/nunchi/**`, or its Windows and home fallbacks), whose path the CLI
+  prints to the agent ("the answer key is kept outside the project (…)") — the hook must deny that folder by path,
+  since printing it tells the agent where it is; and the shared state, `<git-common-dir>/nunchi/**` (ledger,
+  approvals, run-id counter, generation), not only `.nunchi/state`. Until then the keys are kept out of the
+  project, not out of reach.
 - *Run files* written after a capture (hunt, verify, canaries, re-check) take the run's own lock (§2.4).
 
 **Schema 2** (`ledger.json`, migrated on read; the next ledger command writes it back with `rev`).
@@ -775,9 +854,21 @@ Field app 1 (§9.2) after this: 1,082 findings → 578 unique defects → 99 gro
   `source` is `rule` (a capture's findings), `ai` (its verified AI findings) or `recheck` (a re-check's verdicts);
   `fix` comes with M3. `key` is a hash of the fold's inputs. `stream` is the worktree whose run it was (`main` or
   `wt:<name>`): run ids are per worktree, so a run of another worktree with the same id is folded, never mistaken
-  for one already folded (a run older than the newest folded one is presence-only, §5). `runs` stays the sorted list
-  of runs folded as captures, for ordering and *not looked at*. A schema-1 ledger becomes schema 2 with one `rule`
-  fold per run (`key: null`, its stream) and `source: "rule"` on every item; nothing else changes.
+  for one already folded. `runs` stays the sorted list of runs folded as captures, every worktree's. A schema-1
+  ledger becomes schema 2 with one `rule` fold per run (`key: null`, its stream) and `source: "rule"` on every item;
+  nothing else changes.
+- *Streams* (review of PR #28, 2026-10-14 KST). Every item says the stream (worktree) that last saw it (`stream`; an
+  item without one is `main`'s), and each stream's capture runs are its own (`captureRuns`; a run in `runs` that no
+  fold records is `main`'s):
+  - the watermark is per stream: a run older than its own stream's newest folded run is presence-only (§5); another
+    worktree's newer run does not make this one's runs old;
+  - only the stream that last saw an item can say it is gone (rule items in the sweep, AI items in the re-check):
+    worktrees on two branches would otherwise fix and bring back each other's items in turn. A sighting from another
+    stream still counts (it moves `lastSeen`, makes a fixed item come back, and makes that stream the item's);
+  - *not looked at for 3 runs* counts the runs of the item's own stream;
+  - `findings` names this worktree's latest run in its header ("run 0001 · …"), and the review page's "latest run"
+    is this worktree's: a page of this worktree's latest run reads AI rows from the ledger even when another
+    worktree captured since.
 - *Kinds* (`run.json` `kind`): only a `sweep` folds as one. A `quick` run is presence-only (adds and brings back,
   never fixes). A `fix-probe`, or a kind this nunchi does not know, is recorded in `folds` and not folded: the fix
   loop folds a probe for its own group (M3). A run without `kind` is a sweep. In M1 every worktree's capture is a
@@ -787,26 +878,44 @@ Field app 1 (§9.2) after this: 1,082 findings → 578 unique defects → 99 gro
   never redone: a complete run's findings do not change, and a different key would mean the run folder was edited;
   the first fold stands.
 - *Catch-up.* Every ledger command folds, for this worktree's runs: the complete runs not folded yet (rule), then
-  every run whose verdicts were recorded (`verify.json`) and are not folded or changed since (`ai`), then every
-  recorded re-check (`recheck`). `verify --record` and `recheck --record` fold through the same path.
+  every run that was hunted (`ai-findings.json` or `coverage.json`) and is not folded or changed since (`ai`; its
+  key hashes `ai-findings.json`, `coverage.json`, `source-hashes.json` and the verify key), then every re-check whose
+  verdicts the re-check key records (`recheck`; keyed by the key file). `hunt --record`, `verify --record` and
+  `recheck --record` fold through the same path.
 
 **AI items** (`source: "ai"`). They keep what each fold contributed, `hunts` (per hunt: the verdict its verifier gave,
 the claimed and corrected severities, the cells and the screens' hashes, element and box; or `silent`: the hunt saw a
 cell of the item, same lens, and did not claim it) and `rechecks` (per re-check, its verdict per cell); everything
 else is derived from those, the same whatever order the folds come in:
-- *What enters.* Only an `(run, "ai")` fold of a run with an id and of kind sweep, from its `ai-findings.json`,
-  `verify.json` and `coverage.json`. Canary copies are left out. Grounding is checked again against the run (a
-  hand-written `ai-findings.json` cannot skip `hunt --record`): the scene is a captured screen of the run (not
-  redirected, not an error page), route and viewport are that scene's, the lens and checklist item agree, the
-  severity is one of the four, the selector is in the scene's evidence (or an `aria.yml` node), and a `file:line` is
-  a file the run's source map or inventory knows (a run without them: a file under the app root with that line).
-  At least one ground. AI findings claimed but never put to the verifier do not enter (the verifier is the gate).
+- *What enters.* Only an `(run, "ai")` fold of a run with an id and of kind sweep, from its `ai-findings.json` and
+  `coverage.json`, with statuses, severities, verifier and `suspect` **from the verify key's recorded verdicts only**
+  (§4 M1; a status the key does not back is `claimed`; `verify.json` is never read). Canary copies are left out.
+  Grounding is checked again against the run (a hand-written `ai-findings.json` cannot skip `hunt --record`): the
+  scene is a captured screen of the run (not redirected, not an error page), route and viewport are that scene's,
+  the lens and checklist item agree, the severity is one of the four, the selector is in the scene's evidence (or an
+  `aria.yml` node), and a `file:line` passes the check `hunt --record` makes (`checkSource`: a file of the app under
+  the root, not `.nunchi`, dependencies or git, the line inside the file; a name the source map knows is not
+  enough). A claim grounded in a file line only must name a line that is not blank (`source-line-blank`; `hunt
+  --record` refuses it as `source-not-found`): a blank line cannot tell two defects of the file apart. At least one
+  ground. *Since the review (2026-10-14 KST):* `hunt --record` folds the hunt at once — its claims as `claimed`
+  (shown collapsed, not double-checked, until `verify --record` replaces the fold) and the cells it saw — so a hunt
+  that claims nothing still makes the items it saw and did not claim older (staleness), and a sighting is never
+  taken for silence.
 - *Fingerprint* (design §2.3; recipe `AI_RECIPE` 1, gated on `source: "ai"`, so no rule fingerprint moves and
-  `fingerprintVersion` stays 2): lens + checklist item + route + `{element, file, anchor}` — the canonical element,
-  the grounded file and the grounded line's hash. The claim's words, the hunt unit, the reference screen, the line
-  number and the severity are not in it: two hunts with a different reference scene, other words and the line moved
-  by 3 give one fingerprint (contract test). The identity is computed from the run again at the fold; only the
-  anchor is taken from the hunt (it hashed the source the hunter read, and a later edit must not re-key the item).
+  `fingerprintVersion` stays 2): lens + checklist item + route + `{element, file, anchor, name}` — the canonical
+  element, the grounded file, the grounded line's hash and the element's accessible name (digits and spaces
+  normalised). The claim's words, the hunt unit, the reference screen, the line number and the severity are not in
+  it: two hunts with a different reference scene, other words and the line moved by 3 give one fingerprint (contract
+  test). The identity is computed from the run again at the fold; the anchor is taken from the hunt (it hashed the
+  source the hunter read, and a later edit must not re-key the item), and so is the canonical element when it still
+  fits (the cited selector itself, or for an `aria=` node one of the scene's controls of that name), so the
+  fingerprint does not move with how the fold canonicalises.
+  - *Neither merging nor splitting* (review of PR #28, 2026-10-14 KST): `name` keeps two controls apart whose
+    selectors normalise alike (`li:nth-of-type(1) > button` "Delete" and `li:nth-of-type(2) > button` "Archive");
+    the anchor hashes the line with all whitespace removed (a reformat keeps it) plus, when the same text stands on
+    several lines of the file (`return (`), which occurrence it is; an `aria=` node is the first control in document
+    order with that name (and role, when that narrows it), so a second control of the name added further down does
+    not move it — the design's "exactly one control" made one item two whenever a second appeared.
 - *Group:* lens + checklist item + component: the grounded file, else the one inventory file of the route whose
   strings hold the element's accessible name exactly, plus that name (digits and spaces normalised). The inventory
   records no symbols, so the design's "file and symbol" is file and name. When neither is known the group is the
@@ -901,9 +1010,10 @@ puts the images in `index.html` as data URIs instead (one file; pegroom: 8 MB ag
   read through its own functions: the CLI brings it up to date first as `findings` does (`syncLedger`: runs not
   folded yet, decisions not noted yet; approvals bound to content), and statuses come from `view()`. The run's
   findings are named through the ledger's fingerprint aliases (a run captured before fingerprint v2 still meets its
-  items). A run the ledger has not folded is folded in memory only, with current fingerprints. AI findings of the
-  ledger's latest run come from the ledger once `verify --record` folded them (M1, §5.1); otherwise, and for an older
-  run, they are folded in memory the same way (`foldAi`). `view()` gets its `now` from the data (the latest decision
+  items). A run the ledger has not folded is folded in memory only, with current fingerprints. AI findings of this
+  worktree's latest run come from the ledger once it folded the run's hunt or re-check (an `ai` or a `recheck` fold,
+  M1, §5.1): a run that was only re-checked shows what the re-check fixed and what it found still there; otherwise,
+  and for an older run, they are folded in memory the same way (`foldAi`). `view()` gets its `now` from the data (the latest decision
   date or first-seen time), never the clock. The page also says when an open group has not been looked at since run N
   (the ledger's `notLookedAt`), when the run could not tell what was fixed (`state.blind`), and when a screen left
   the app (`redirected-off-origin`: "Left the app", the other origin as text). A finding without a box takes its
