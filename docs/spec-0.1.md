@@ -504,8 +504,10 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   voids nothing — nobody looked, so it measures nothing.
 - `src/verify.mjs`, `nunchi verify --plan`: one packet per AI claim (`source: 'ai'`, `status: 'claimed'`, not on a
   canary copy): lens, rule, severity, scene, route, viewport, selector, box, evidence minus reasoning-like
-  keys, and the scene's evidence files. Decoys = ⌈n/4⌉ (20% of packets): false claims on visible, unclaimed
-  controls of the claimed scenes, from `controls.json` (a clear label claimed unclear `L6.unclear-label`,
+  keys, and the scene's evidence files. Decoys = max(3, ⌈n/4⌉) (20% of packets, at least `MIN_CONTROLS` = 3, the
+  re-check's minimum too): false claims on visible, unclaimed controls of the claimed scenes first, then of the run's
+  other captured scenes (never a canary copy; the scene's own route and viewport), in a seeded order, from
+  `controls.json` (a clear label claimed unclear `L6.unclear-label`,
   ordinary copy claimed as scaffold `L7.template-copy`, a non-destructive control claimed destructive without
   confirm `L9.destructive-without-confirm`, two identically named controls claimed as different verbs
   `L5.same-action-different-verb`), the claim's own lens first. A decoy has the evidence shape `hunt --record`
@@ -519,9 +521,9 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   The verifier is recorded as *same-model check* unless `--vendor` names another vendor; nothing is sent
   anywhere. A plan refuses verdicts once the claims it was built from changed.
 - *M1 (2026-10-14 KST, design 0.1-c §2.2):*
-  - **Suspect also when fewer decoys than planned.** The key records `decoysPlanned` (⌈n/4⌉ for n claims) and
-    `verify.json` says it too; a run whose screens offered fewer decoy targets is suspect ("fewer decoys than
-    planned (0 of 2)"), so a run with no decoy target can no longer pass unchecked.
+  - **Suspect also when fewer decoys than planned.** The key records `decoysPlanned` (max(3, ⌈n/4⌉) for n claims)
+    and `verify.json` says it too; a run whose screens offered fewer decoy targets is suspect ("fewer decoys than
+    planned (0 of 3)"), so a run with no decoy target can no longer pass unchecked.
   - **`verify --plan --again`** verifies a suspect run once more: findings whose verdict came from a suspect
     verification are claims again (packets show the severity as claimed, never the earlier verifier's correction),
     and the new verdicts replace them. On a run that is not suspect it is refused (exit 1).
@@ -544,8 +546,11 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   - **`hunt --record` folds too** (its claims, not double-checked yet, and the cells it saw), so a hunt that claims
     nothing still counts towards staleness (§5.1). `verify --record` replaces that fold with the verdicts.
   - *Choice (2026-10-14 KST):* the re-check plans at least 3 controls before anything can be fixed (§4.1). The
-    verify plan keeps ⌈n/4⌉ decoys: the 0.1-b verify contract pins that count, and a verify never fixes anything
-    (a verdict only says whether a group decision may cover an item). Raising it is left to the M2 review.
+    verify plan kept ⌈n/4⌉ decoys, raising it left to the M2 review. *Raised (review of PR #29, 2026-10-15 KST):*
+    the verify plan has at least 3 decoys as well (`decoysWanted`, the same function as the re-check's
+    `controlsWanted`): with one decoy, a verifier that confirms at random passes half the time. So that small runs
+    can offer 3, decoys come from any captured scene of the run once the claimed scenes run out. The 0.1-b verify
+    contract test pins the new counts (8 claims → 3 decoys, 1 → 3, 40 → 10).
 - Not done yet: decoys come only from controls (no L2/L10 decoys); "stricter threshold for pages with a history of
   false positives" is not built; the verifier's re-capture is the skill's job.
 

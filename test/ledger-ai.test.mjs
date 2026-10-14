@@ -582,10 +582,10 @@ test('a capture never fixes an AI item: a sweep that looked at its screen and fo
 test('verify: a run with fewer decoys than planned is suspect (its screens offered no decoy target)', () => {
   const claims = Array.from({ length: 4 }, (_, i) => ({ source: 'ai', status: 'claimed', lens: 'L6', rule: 'L6.vague-error', severity: 'medium', scene: 's', route: '/', viewport: 'm', selector: `p:nth-of-type(${i + 1})`, box: [0, 0, 1, 1], evidence: { claim: `c${i}` } }));
   const { key } = V.planVerify({ findings: claims });
-  assert.deepEqual([key.decoys, key.decoysPlanned], [0, 1]);
+  assert.deepEqual([key.decoys, key.decoysPlanned], [0, 3], 'at least 3 decoys are planned for any claim');
   const r = V.recordVerdicts({ findings: claims, key, verdicts: Object.keys(key.packets).map(packet => ({ packet, verdict: 'confirmed', reason: 'ok' })) });
   assert.equal(r.verify.suspect, true);
-  assert.match(r.verify.suspectReason, /fewer decoys than planned \(0 of 1\)/);
+  assert.match(r.verify.suspectReason, /fewer decoys than planned \(0 of 3\)/);
   assert.ok(r.findings.every(f => f.verification.suspect));
 });
 

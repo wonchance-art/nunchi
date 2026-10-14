@@ -63,28 +63,43 @@ export const DECOY_TEMPLATES = [
 
 const byHash = (seed, salt) => (a, b) => { const ha = sha(`${seed}:${salt}:${a}`), hb = sha(`${seed}:${salt}:${b}`); return ha < hb ? -1 : ha > hb ? 1 : a < b ? -1 : a > b ? 1 : 0; };
 export const decoyCount = n => (n > 0 ? Math.ceil((n * DECOY_SHARE) / (1 - DECOY_SHARE) - 1e-9) : 0);
+// At least this many decoys (and re-check controls, recheck.mjs) for any claim at all: with fewer, a verifier that
+// confirms at random passes the decoy check too often (1 decoy: half the time).
+export const MIN_CONTROLS = 3;
+export const decoysWanted = n => (n > 0 ? Math.max(MIN_CONTROLS, decoyCount(n)) : 0);
 
 // findings: the whole ai-findings list (indices are kept in the key). controlsOf(scene) → controls.json
 // rows of that scene or null. filesOf(scene) → the scene's evidence files (paths relative to the run).
-export function planVerify({ findings, canaryScenes = new Set(), controlsOf = () => null, filesOf = () => [], again = false }) {
+// scenes: the run's captured scenes ({id, route, viewport}; canary copies are left out), where decoys are also built
+// once the claimed scenes run out of fine elements.
+export function planVerify({ findings, canaryScenes = new Set(), controlsOf = () => null, filesOf = () => [], scenes = [], again = false }) {
   const real = [];
   findings.forEach((f, i) => { if (eligible(f, canaryScenes, { again })) real.push({ index: i, claim: claimOf(f), hash: claimHash(f) }); });
   const seed = sha(stableJson(real.map(r => r.claim)));
-  const want = decoyCount(real.length);
+  const want = decoysWanted(real.length);
   const decoys = [];
   if (want) {
     const claimed = new Set(real.map(r => `${r.claim.scene}|${r.claim.selector}`));
     const used = new Set();
     const order = real.map((r, i) => i).sort(byHash(seed, 'claim'));
+    // the other captured scenes of the run, in a seeded order: never a canary copy, never a claimed element
+    const claimScenes = new Set(real.map(r => r.claim.scene));
+    const seen = new Set();
+    const others = scenes.filter(s => s && typeof s.id === 'string' && !canaryScenes.has(s.id) && !claimScenes.has(s.id) && !seen.has(s.id) && seen.add(s.id))
+      .map(s => ({ scene: s.id, route: s.route ?? null, viewport: s.viewport ?? null, lens: null })).sort((x, y) => byHash(seed, 'scene')(x.scene, y.scene));
     for (let j = 0; j < want; j++) {
       let made = null;
-      for (let a = 0; a < order.length && !made; a++) {
-        const base = real[order[(j + a) % order.length]].claim;
+      const lensNow = real[order[j % order.length]].claim.lens;
+      const bases = [...order.map((_, a) => real[order[(j + a) % order.length]].claim), ...others];
+      for (let a = 0; a < bases.length && !made; a++) {
+        const base = bases[a];
         const controls = (controlsOf(base.scene) || []).filter(c => c && c.selector && !claimed.has(`${base.scene}|${c.selector}`) && !used.has(`${base.scene}|${c.selector}`));
         if (!controls.length) continue;
-        // decoys of the claim's own lens first, so decoys follow the claims' mix of lenses
+        // decoys of the claim's own lens first (on another scene, the lens of the claim this decoy follows), so decoys
+        // follow the claims' mix of lenses
+        const lens = base.lens ?? lensNow;
         const rank = byHash(seed, `t${j}`);
-        const templates = [...DECOY_TEMPLATES].sort((x, y) => ((y.lens === base.lens) - (x.lens === base.lens)) || rank(x.id, y.id));
+        const templates = [...DECOY_TEMPLATES].sort((x, y) => ((y.lens === lens) - (x.lens === lens)) || rank(x.id, y.id));
         for (const t of templates) {
           const pool = [...controls].sort((x, y) => byHash(seed, `e${j}${t.id}`)(x.selector, y.selector));
           let c = null, d = null;

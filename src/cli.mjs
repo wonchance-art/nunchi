@@ -701,7 +701,8 @@ if (cmd === 'setup') {
       // which findings to ask about follows ai-findings.json (a status written there by hand only leaves a finding
       // out, so it stays a claim in the ledger: the ledger counts only verdicts the key holds)
       const oldKey = readKey(dir, 'verify-key.json');
-      const { packets, key } = V.planVerify({ findings, canaryScenes, controlsOf, filesOf, again: !!args.again });
+      const scenes = manifest.scenes.filter(s => s && s.canary === undefined).map(s => ({ id: s.id, route: s.route ?? null, viewport: s.viewport ?? null }));
+      const { packets, key } = V.planVerify({ findings, canaryScenes, controlsOf, filesOf, scenes, again: !!args.again });
       if (!key.claims) return null;
       // the rounds recorded before keep counting, as long as their claims still match the findings
       const earlier = oldKey ? V.roundsStillValid(findings, oldKey) : [];

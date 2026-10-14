@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { planVerify, recordVerdicts, claimOf, decoyCount, DECOY_TEMPLATES, SAME_MODEL } from '../src/verify.mjs';
+import { planVerify, recordVerdicts, claimOf, decoyCount, decoysWanted, MIN_CONTROLS, DECOY_TEMPLATES, SAME_MODEL } from '../src/verify.mjs';
 import { keyPath } from '../src/state.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -42,9 +42,11 @@ const plan = (findings = FINDINGS) => planVerify({ findings, canaryScenes: new S
 test('packets: claimed AI findings only, the claim and its evidence without the hunter\'s reasoning', () => {
   const { packets, key } = plan();
   assert.equal(key.claims, 8, 'rule findings, canary scenes and already verified findings are not packets');
-  assert.equal(key.decoys, decoyCount(8));
+  assert.equal(key.decoys, decoysWanted(8));
   assert.equal(decoyCount(8), 2); assert.equal(decoyCount(1), 1); assert.equal(decoyCount(0), 0);
-  assert.equal(packets.packets.length, 10);
+  // at least MIN_CONTROLS decoys for any claim (review of PR #29): one decoy passes a verifier that confirms at random half the time
+  assert.deepEqual([MIN_CONTROLS, decoysWanted(8), decoysWanted(1), decoysWanted(0), decoysWanted(40)], [3, 3, 3, 0, 10]);
+  assert.equal(packets.packets.length, 11);
   const text = JSON.stringify(packets);
   assert.ok(!/reasoning|rationale|hunter thought|hunter-only|decoy|canary/i.test(text), 'packets carry no reasoning and do not say which are decoys');
   for (const p of packets.packets) {
@@ -61,7 +63,7 @@ test('decoys: false claims about fine elements of the same scenes, never on a cl
   const a = plan(), b = plan();
   assert.deepEqual(a, b, 'same claims, same packets and key');
   const decoyIds = Object.entries(a.key.packets).filter(([, k]) => k.decoy).map(([id]) => id);
-  assert.equal(decoyIds.length, 2);
+  assert.equal(decoyIds.length, 3);
   const claimed = new Set(FINDINGS.map(f => `${f.scene}|${f.selector}`));
   for (const id of decoyIds) {
     const c = a.packets.packets.find(p => p.packet === id).claim;
@@ -85,6 +87,32 @@ test('decoys: false claims about fine elements of the same scenes, never on a cl
   // no scene evidence → no decoys can be built, and none are made up
   const bare = planVerify({ findings: FINDINGS });
   assert.equal(bare.key.decoys, 0);
+});
+
+test('decoys: when the claimed scenes run out of fine elements, any other captured scene of the run gives them (never a canary copy, never a claimed element); deterministic', () => {
+  // one claim, on a scene whose only control is the claimed one
+  const one = [claim(0, { scene: 'login.guest.normal.d', route: '/login', viewport: 'd', selector: 'main > button' })];
+  const controls = {
+    'login.guest.normal.d': [ctl('main > button', 'Sign in')],
+    ...CONTROLS,
+    'app~tasks.signed-in.normal.m.canary-1': [ctl('main > a', 'Open the planted copy', { tag: 'a' })],
+  };
+  const scenes = [{ id: 'login.guest.normal.d', route: '/login', viewport: 'd' }, { id: 'app~tasks.signed-in.normal.m', route: '/app/tasks', viewport: 'm' },
+    { id: 'pricing.guest.normal.d', route: '/pricing', viewport: 'd' }, { id: 'app~tasks.signed-in.normal.m.canary-1', route: '/app/tasks', viewport: 'm' }];
+  const args = { findings: one, controlsOf: s => controls[s] || null, scenes, canaryScenes: new Set(['app~tasks.signed-in.normal.m.canary-1']) };
+  const a = planVerify(args);
+  assert.deepEqual([a.key.decoys, a.key.decoysPlanned], [3, 3], 'three decoys for one claim');
+  const made = Object.entries(a.key.packets).filter(([, k]) => k.decoy).map(([id]) => a.packets.packets.find(p => p.packet === id).claim);
+  for (const c of made) {
+    assert.notEqual(c.scene, 'app~tasks.signed-in.normal.m.canary-1', 'never on a canary copy');
+    assert.ok(!(c.scene === 'login.guest.normal.d' && c.selector === 'main > button'), 'never on the claimed element');
+    const s = scenes.find(x => x.id === c.scene);
+    assert.deepEqual([c.route, c.viewport], [s.route, s.viewport], 'the route and viewport of the scene it is on');
+    assert.ok(controls[c.scene].some(x => x.selector === c.selector), 'built from that scene\'s own evidence');
+  }
+  assert.deepEqual(planVerify(args), a, 'deterministic');
+  // without the run's other scenes (the old pool), the claimed scene alone offers none: fewer than planned, suspect
+  assert.deepEqual([planVerify({ ...args, scenes: [] }).key.decoys, planVerify({ ...args, scenes: [] }).key.decoysPlanned], [0, 3]);
 });
 
 const verdictsFor = (key, decoyVerdict, n = Infinity) => {
@@ -111,7 +139,7 @@ test('verdicts: written back to the findings; corrected severity; same-model che
   assert.equal(FINDINGS[0].status, 'claimed', 'input untouched');
   assert.deepEqual(r.verify.verifier, { label: SAME_MODEL });
   assert.equal(r.verify.suspect, false);
-  assert.deepEqual(r.verify.decoys, { total: 2, answered: 2, passedThrough: 0, rate: 0 });
+  assert.deepEqual(r.verify.decoys, { total: 3, answered: 3, passedThrough: 0, rate: 0 });
   assert.equal(r.verify.complete, true);
   const x = recordVerdicts({ findings: FINDINGS, key, verdicts: { verdicts: verdictsFor(key, 'rejected') }, vendor: 'other-vendor' });
   assert.deepEqual(x.verify.verifier, { label: 'cross-vendor', vendor: 'other-vendor' });
