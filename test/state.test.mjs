@@ -89,14 +89,25 @@ test('state root: the CLI keeps the ledger in the shared folder; a worktree sees
   assert.equal(two.code, 0, two.stderr);
   const seen = JSON.parse(two.stdout).groups.map(g => [g.example.evidence.name, g.status]).sort();
   // one ledger: both worktrees' findings. The worktree's run looked at the same screen like for like and did not see
-  // the main worktree's finding: in M1 every worktree's capture is a sweep, as a branch switch in one folder is
-  assert.deepEqual(seen, [['in-main', 'fixed'], ['in-worktree', 'open']]);
+  // the main worktree's finding, but only the worktree that last saw an item can say it is gone: another branch's
+  // capture does not fix it (else the two would fix and bring back each other's items in turn)
+  assert.deepEqual(seen, [['in-main', 'open'], ['in-worktree', 'open']]);
   const state = JSON.parse(readFileSync(join(shared.dir, 'ledger.json'), 'utf8'));
   assert.deepEqual(state.folds.filter(f => f.source === 'rule').map(f => [f.run, f.stream]), [['0001', 'main'], ['0001', 'wt:two']]);
   // and the run-id counter the two share gives the next capture of either an id neither used
   const ids = join(shared.dir, 'run-ids.json');
   const a = R.startRun(join(root, '.nunchi', 'runs'), { ids }), b = R.startRun(join(wt, '.nunchi', 'runs'), { ids });
   assert.deepEqual([a.id, b.id], ['0002', '0003']);
+  // the main worktree's newer run: the worktree's page still says its own latest run, and its next run does not make
+  // main's run old (the watermark is per worktree)
+  fakeRun(root, '0004', [fnd('/tasks', 'guest.normal.m', 'in-main')]);
+  assert.equal((await cli(root, 'findings')).code, 0);
+  assert.match((await cli(wt, 'findings')).stdout, /^run 0001 · /);
+  assert.match((await cli(root, 'findings')).stdout, /^run 0004 · /);
+  // main's own next run that does not see its item does fix it; the worktree's item stays the worktree's
+  fakeRun(root, '0005', []);
+  const after = JSON.parse((await cli(root, 'findings', '--all', '--json')).stdout).groups.map(g => [g.example.evidence.name, g.status]).sort();
+  assert.deepEqual(after, [['in-main', 'fixed'], ['in-worktree', 'open']]);
 });
 
 test('state root: a .nunchi/state an older nunchi wrote is moved into the shared folder once, and said; a second worktree\'s is merged', async () => {
@@ -117,22 +128,113 @@ test('state root: a .nunchi/state an older nunchi wrote is moved into the shared
   const state = JSON.parse(readFileSync(join(dir, 'ledger.json'), 'utf8'));
   assert.equal(state.schema, 2);
   assert.deepEqual(state.folds, [{ run: '0001', source: 'rule', key: null, stream: 'main' }], 'its runs are not folded again');
-  assert.deepEqual(state.decisionsSeen, { 'd1:aa': 1000 });
+  assert.equal(state.decisionsSeen, undefined, 'when decisions were first seen is never taken from a moved file');
+  assert.ok(Object.values(state.items).every(i => i.stream === 'main'), 'its items are this worktree\'s');
   assert.deepEqual(JSON.parse(readFileSync(join(dir, 'approved.json'), 'utf8')).approved, ['d1:aa']);
   assert.ok(existsSync(join(legacy, 'ledger.json.moved')) && !existsSync(join(legacy, 'ledger.json')), 'kept beside, never deleted');
   const again = await cli(root, 'findings');
   assert.doesNotMatch(again.stderr, /moved/, 'once');
-  // another worktree with a ledger of its own: the earliest first-seen time of each decision wins, approvals are added
+  // another worktree with a ledger of its own, holding an open item of a run since removed: carried over as that
+  // worktree's (only it can say the item is gone); a fixed one is history and is not; the times it says decisions
+  // were first seen are not taken; approvals are added
   const wt = join(tmp('nunchi-wt3-'), 'three');
   git(root, 'worktree', 'add', '-q', wt);
   mkdirSync(join(wt, '.nunchi', 'state'), { recursive: true });
-  writeFileSync(join(wt, '.nunchi', 'state', 'ledger.json'), JSON.stringify({ ...old, decisionsSeen: { 'd1:aa': 500, 'd2:bb': 2000 } }));
+  const there = L.foldRun({ schema: 1, runs: [], items: {} }, { id: '0007', scope: { routes: ['/notes'] }, scenes: [sc('/notes', 'guest.normal.m')], findings: L.annotate([fnd('/notes', 'guest.normal.m', 'only-there')]) });
+  const fixedThere = L.foldRun(L.foldRun({ schema: 1, runs: [], items: {} }, { id: '0005', scope: { routes: ['/old'] }, wholeApp: true, scenes: [sc('/old', 'guest.normal.m')], findings: L.annotate([fnd('/old', 'guest.normal.m', 'fixed-there')]) }),
+    { id: '0006', scope: { routes: ['/old'] }, wholeApp: true, scenes: [sc('/old', 'guest.normal.m')], findings: [] });
+  assert.equal(Object.values(fixedThere.items)[0].goneAt, '0006');
+  const strip = items => Object.fromEntries(Object.entries(items).map(([k, { source, stream, ...i }]) => [k, i]));
+  const wtLedger = { ...old, runs: [...old.runs, '0005', '0006', '0007'], items: { ...old.items, ...strip(there.items), ...strip(fixedThere.items) }, decisionsSeen: { 'd1:aa': 500, 'd2:bb': 2000 } };
+  writeFileSync(join(wt, '.nunchi', 'state', 'ledger.json'), JSON.stringify(wtLedger));
   writeFileSync(join(wt, '.nunchi', 'state', 'approved.json'), JSON.stringify({ schema: 2, approved: ['d2:bb'] }));
   fakeRun(wt, '0001');
-  assert.equal((await cli(wt, 'findings')).code, 0);
+  const w = await cli(wt, 'findings');
+  assert.equal(w.code, 0, w.stderr);
+  assert.match(w.stderr, /1 open item\(s\) of \.nunchi\/state\/ledger\.json it did not have were carried over; not carried over: 1 item\(s\) already fixed there \(history only\); which of its runs were folded/);
   const merged = JSON.parse(readFileSync(join(dir, 'ledger.json'), 'utf8'));
-  assert.deepEqual(merged.decisionsSeen, { 'd1:aa': 500, 'd2:bb': 2000 });
+  const carried = Object.values(merged.items).find(i => i.evidence?.name === 'only-there');
+  assert.deepEqual([carried.stream, carried.goneAt], ['wt:three', null]);
+  assert.ok(!Object.values(merged.items).some(i => i.evidence?.name === 'fixed-there'), 'a fixed item is history, not carried');
+  assert.equal(merged.decisionsSeen, undefined, 'never taken from a moved file');
   assert.deepEqual(JSON.parse(readFileSync(join(dir, 'approved.json'), 'utf8')).approved, ['d1:aa', 'd2:bb']);
+});
+
+test('adoption never takes when decisions were first seen: neither the move (state.mjs) nor the ledger it becomes (ledger.mjs)', () => {
+  const base = tmp('nunchi-adopt-seen-');
+  const root = { dir: join(base, 'shared', 'state'), shared: true, stream: 'wt:a', legacy: join(base, 'project', '.nunchi', 'state') };
+  mkdirSync(root.legacy, { recursive: true });
+  const ledger = { schema: 2, runs: ['0001'], folds: [{ run: '0001', source: 'rule', key: null, stream: 'main' }], items: {}, decisionsSeen: { 'd1:aa': 1 } };
+  writeFileSync(join(root.legacy, 'ledger.json'), JSON.stringify(ledger));
+  const r = St.adoptLegacy(root);                                            // the move alone: no migration given
+  assert.deepEqual(r.moved, ['ledger.json']);
+  assert.equal(JSON.parse(readFileSync(join(root.dir, 'ledger.json'), 'utf8')).decisionsSeen, undefined);
+  const adopted = L.adoptLedger(ledger, 'wt:a');                             // the migration alone
+  assert.equal(adopted.decisionsSeen, undefined);
+  assert.deepEqual(adopted.folds.map(f => f.stream), ['wt:a'], 'its folds are the adopting worktree\'s');
+  const cur = { ...L.emptyState(), decisionsSeen: { 'd2:bb': 5 } };
+  assert.deepEqual(L.carryLedger(cur, ledger, 'wt:a').doc.decisionsSeen, { 'd2:bb': 5 }, 'carrying over leaves the shared ledger\'s own times alone');
+});
+
+test('state root: a .nunchi/state file committed to git is never adopted (said instead), and a fallback state folder that is committed is refused', async () => {
+  const root = repo();
+  fakeRun(root, '0001', [fnd('/tasks', 'guest.normal.m', 'x')]);
+  const legacy = join(root, '.nunchi', 'state');
+  mkdirSync(legacy, { recursive: true });
+  // a ledger and approvals that came through git: anyone with push access could have written them
+  const planted = L.foldRun({ schema: 1, runs: [], items: {} }, { id: '0009', scope: { routes: ['/a'] }, scenes: [sc('/a', 'guest.normal.m')], findings: L.annotate([fnd('/a', 'guest.normal.m', 'planted')]) });
+  writeFileSync(join(legacy, 'ledger.json'), JSON.stringify({ ...planted, decisionsSeen: { 'd9:99': 1 } }));
+  writeFileSync(join(legacy, 'approved.json'), JSON.stringify({ schema: 2, approved: ['d9:99'] }));
+  git(root, 'add', '-f', '.nunchi/state/ledger.json', '.nunchi/state/approved.json');
+  git(root, 'commit', '-qm', 'state');
+  const r = await cli(root, 'findings', '--all', '--json');
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stderr, /\.nunchi\/state\/approved\.json is committed to git, so it was not moved/);
+  assert.match(r.stderr, /\.nunchi\/state\/ledger\.json is committed to git, so it was not moved/);
+  assert.deepEqual(JSON.parse(r.stdout).groups.map(g => g.example.evidence.name), ['x'], 'nothing of the committed ledger');
+  assert.ok(existsSync(join(legacy, 'ledger.json')) && !existsSync(join(legacy, 'ledger.json.moved')), 'left where it is');
+  const dir = St.stateRoot(root).dir;
+  assert.ok(!existsSync(join(dir, 'approved.json')) || !JSON.parse(readFileSync(join(dir, 'approved.json'), 'utf8')).approved.includes('d9:99'));
+  // the same files where the state falls back to .nunchi/state: refused, never read
+  writeFileSync(join(legacy, St.FALLBACK), JSON.stringify({ schema: 1 }));
+  const f = await cli(root, 'findings');
+  assert.equal(f.code, 2, f.stdout + f.stderr);
+  assert.match(f.stderr, /\.nunchi\/state\/approved\.json, \.nunchi\/state\/ledger\.json committed to git: state that came through git is never read/);
+});
+
+test('state root: a shared folder that cannot be written falls back to .nunchi/state, says so once and keeps to it', async () => {
+  const root = repo();
+  fakeRun(root, '0001', [fnd('/tasks', 'guest.normal.m', 'x')]);
+  // `nunchi` in the git folder is a file: the shared state folder cannot be made (ENOTDIR)
+  writeFileSync(join(root, '.git', 'nunchi'), 'not a folder\n');
+  const r = await cli(root, 'findings', '--json');
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.stderr.trim().split('\n').length, 1, r.stderr);
+  assert.match(r.stderr, /cannot be written \((ENOTDIR|EEXIST)\); this worktree keeps its state in \.nunchi\/state instead \(recorded in \.nunchi\/state\/fallback\.json/);
+  assert.ok(existsSync(join(root, '.nunchi', 'state', 'ledger.json')), 'the ledger is in .nunchi/state');
+  assert.ok(existsSync(join(root, '.nunchi', 'state', St.FALLBACK)));
+  // the next command picks the same root, silently, also once the shared folder could be written again
+  rmSync(join(root, '.git', 'nunchi'));
+  const again = await cli(root, 'findings', '--json');
+  assert.equal(again.code, 0, again.stderr);
+  assert.equal(again.stderr, '');
+  assert.deepEqual(St.stateRoot(root).fallback, true);
+  assert.ok(!existsSync(join(root, '.git', 'nunchi', 'root', 'state', 'ledger.json')), 'the shared folder is not used');
+  // a probe that is refused (a read-only or foreign-owned git folder) falls back the same way; another error does not
+  const other = repo();
+  const probe = St.stateIo.probe;
+  try {
+    for (const code of ['EACCES', 'EPERM', 'EROFS']) {
+      St.stateIo.probe = () => { throw Object.assign(new Error('no'), { code }); };
+      const plain = repo();
+      const fb = St.resolveStateRoot(plain);
+      assert.deepEqual([fb.shared, fb.fallback, fb.dir], [false, true, join(plain, '.nunchi', 'state')], code);
+      assert.match(fb.warning, new RegExp(`cannot be written \\(${code}\\)`));
+      assert.equal(St.resolveStateRoot(plain).warning, undefined, 'said once');
+    }
+    St.stateIo.probe = () => { throw Object.assign(new Error('boom'), { code: 'EIO' }); };
+    assert.throws(() => St.resolveStateRoot(other), /boom/);
+  } finally { St.stateIo.probe = probe; }
 });
 
 // ---- revision-checked writes ----------------------------------------------------------------------------------
@@ -283,6 +385,47 @@ test('answer keys: one an older nunchi left inside the run is read once and move
   assert.ok(existsSync(St.keyPath(runDir, 'hunt-key.json', env)));
   assert.deepEqual(St.readKey(runDir, 'hunt-key.json', env).plan, 'abc', 'read from its new place');
   assert.equal(St.readKey(runDir, 'recheck-key.json', env), null, 'no key: null, never an empty one');
+  // a key in the project could have been written by anything: its plan is taken, never recorded verdicts
+  writeFileSync(join(runDir, 'verify-key.json'), JSON.stringify({ seed: 's', packets: { p001: { decoy: true } }, recorded: { verdicts: [{ packet: 'p001', verdict: 'rejected', reason: 'x' }] }, earlier: [{ seed: 'e' }] }));
+  assert.deepEqual(St.readKey(runDir, 'verify-key.json', env), { seed: 's', packets: { p001: { decoy: true } } });
+  assert.deepEqual(JSON.parse(readFileSync(St.keyPath(runDir, 'verify-key.json', env), 'utf8')), { seed: 's', packets: { p001: { decoy: true } } });
+  // re-check keys were never kept in the project: one there is not read
+  writeFileSync(join(runDir, 'recheck-key.json'), JSON.stringify({ plan: 'x', run: '0001', packets: {}, recorded: { verdicts: [] } }));
+  assert.equal(St.readKey(runDir, 'recheck-key.json', env), null);
+  assert.equal(St.peekKey(runDir, 'hunt-key.json', env).plan, 'abc', 'peek: a pure read of the key outside the project');
+});
+
+test('answer keys: a symbolic link among nunchi\'s key folders, from the state base down, is refused', { skip: !POSIX && 'symbolic links need privileges on Windows' }, () => {
+  const env = { XDG_STATE_HOME: tmp('nunchi-keys-link-') };
+  const runDir = join(tmp('nunchi-keys-linkrun-'), '.nunchi', 'runs', '0001');
+  mkdirSync(runDir, { recursive: true });
+  const elsewhere = tmp('nunchi-keys-elsewhere-');
+  const keys = St.keysDir(runDir, env);
+  // <base>/<project hash> → a folder elsewhere: writing through it would put the key where the link points
+  mkdirSync(join(env.XDG_STATE_HOME, 'nunchi'), { recursive: true });
+  symlinkSync(elsewhere, dirname(dirname(keys)));
+  assert.throws(() => St.writeKey(runDir, 'verify-key.json', { packets: {} }, env), e => e.code === 'UNSAFE_PATH');
+  assert.deepEqual(readdirSync(elsewhere), [], 'nothing written through the link');
+  rmSync(dirname(dirname(keys)));
+  // the base itself as a link: refused too
+  rmSync(join(env.XDG_STATE_HOME, 'nunchi'), { recursive: true });
+  symlinkSync(elsewhere, join(env.XDG_STATE_HOME, 'nunchi'));
+  assert.throws(() => St.writeKey(runDir, 'verify-key.json', { packets: {} }, env), e => e.code === 'UNSAFE_PATH');
+  assert.deepEqual(readdirSync(elsewhere), []);
+});
+
+test('streams: "not looked at for 3 runs" counts the item\'s own worktree\'s runs; another worktree\'s runs neither age nor fix it', () => {
+  const base = (id, route) => ({ id, scope: { routes: [route] }, wholeApp: false, scenes: [sc(route, 'guest.normal.m')] });
+  let st = L.foldRun(L.emptyState(), { ...base('0001', '/a'), findings: L.annotate([fnd('/a', 'guest.normal.m', 'in-wt')]), stream: 'wt:x' });
+  for (const id of ['0002', '0003', '0004', '0005']) st = L.foldRun(st, { ...base(id, '/b'), findings: [], stream: 'main' });
+  const row = () => L.view(st, []).find(r => r.evidence.name === 'in-wt');
+  assert.equal(row().notLookedAt, null, 'four runs of the main worktree: not this item\'s runs');
+  // main looks at the same screen and does not see it: still open (only the worktree that saw it can fix it)
+  st = L.foldRun(st, { ...base('0006', '/a'), findings: [], stream: 'main' });
+  assert.equal(row().status, 'open');
+  for (const id of ['0007', '0008', '0009']) st = L.foldRun(st, { ...base(id, '/b'), findings: [], stream: 'wt:x' });
+  assert.equal(row().notLookedAt, '0001', 'three runs of its own worktree that did not look at it');
+  assert.deepEqual([L.latestRunOf(st, 'main'), L.latestRunOf(st, 'wt:x')], ['0006', '0009']);
 });
 
 test('gc: a removed run takes its answer keys with it; a run an open item still names is kept', async () => {

@@ -159,7 +159,8 @@ export function recordVerdicts({ findings, key, verdicts, vendor = null }) {
     const v = byPacket.get(id);
     if (k.decoy) {
       decoys.total++;
-      if (v) { decoys.answered++; if (v.verdict === 'confirmed') decoys.passedThrough++; }
+      // a decoy left unanswered counts as passed through: skipping the hard ones must not make a verifier look careful
+      if (v) { decoys.answered++; if (v.verdict === 'confirmed') decoys.passedThrough++; } else decoys.passedThrough++;
       continue;
     }
     if (!v) { counts.unanswered++; continue; }
@@ -174,13 +175,13 @@ export function recordVerdicts({ findings, key, verdicts, vendor = null }) {
     };
     touched.push(k.finding);
   }
-  decoys.rate = decoys.answered ? decoys.passedThrough / decoys.answered : null;
+  decoys.rate = decoys.total ? decoys.passedThrough / decoys.total : null;
   // suspect (design §2.2): no decoy answered; fewer decoys than the claims called for (a run whose screens offer no
-  // decoy target cannot show its verifier is careful); or pass-through above the threshold
+  // decoy target cannot show its verifier is careful); or pass-through (confirmed or unanswered) above the threshold
   const planned = Number.isInteger(key.decoysPlanned) ? key.decoysPlanned : decoys.total;
   const suspectReason = decoys.total && !decoys.answered ? 'no decoy was answered'
     : decoys.total < planned ? `fewer decoys than planned (${decoys.total} of ${planned}): the screens offered too few decoy targets`
-    : decoys.rate !== null && decoys.rate > SUSPECT_PASS_THROUGH ? `decoy pass-through ${decoys.passedThrough}/${decoys.answered} > ${SUSPECT_PASS_THROUGH * 100}%` : null;
+    : decoys.rate !== null && decoys.rate > SUSPECT_PASS_THROUGH ? `decoy pass-through ${decoys.passedThrough}/${decoys.total} > ${SUSPECT_PASS_THROUGH * 100}%` : null;
   if (suspectReason) for (const i of touched) out[i] = { ...out[i], verification: { ...out[i].verification, suspect: true } };
   const verify = {
     schema: 1, verifier, threshold: SUSPECT_PASS_THROUGH, packets: Object.keys(key.packets).length,
@@ -189,3 +190,31 @@ export function recordVerdicts({ findings, key, verdicts, vendor = null }) {
   };
   return { problems: [], findings: out, verify };
 }
+
+// ---- what the ledger trusts (design §2.2) ----------------------------------------------------------------------
+// ai-findings.json and verify.json are files in the project: anything can write them. The verdicts the ledger folds
+// come from the answer key, kept outside the project, where `verify --record` stores each plan's verdicts beside
+// its packets (`recorded`; earlier plans of the run under `earlier`). A status the key does not back is a claim.
+
+// A finding as it was claimed: no verdict, the severity the hunter gave.
+export function asClaim(f) {
+  if (!f || typeof f !== 'object' || f.source !== 'ai') return f;
+  const { verification, ...rest } = f;
+  const sev = verification && typeof verification === 'object' && SEVERITIES.includes(verification.claimedSeverity) ? verification.claimedSeverity : f.severity;
+  return { ...rest, status: 'claimed', severity: sev };
+}
+// The recorded plans of a key, oldest first.
+export const keyRounds = key => [...(Array.isArray(key?.earlier) ? key.earlier : []), ...(key?.recorded ? [{ seed: key.seed, decoysPlanned: key.decoysPlanned, packets: key.packets, recorded: key.recorded }] : [])]
+  .filter(r => r && r.packets && typeof r.packets === 'object' && r.recorded && Array.isArray(r.recorded.verdicts));
+// → the findings with statuses, severities and verifications recomputed from the key's recorded verdicts, round by
+// round (a round whose claims no longer match the findings is skipped: its findings stay claimed).
+export function verdictsFromKey(findings, key) {
+  let cur = findings.map(asClaim);
+  for (const r of keyRounds(key)) {
+    const res = recordVerdicts({ findings: cur, key: r, verdicts: r.recorded.verdicts, vendor: typeof r.recorded.vendor === 'string' ? r.recorded.vendor : null });
+    if (!res.problems.length) cur = res.findings;
+  }
+  return cur;
+}
+// The rounds of an old key that still apply to these findings (kept when a new plan replaces the key).
+export const roundsStillValid = (findings, key) => keyRounds(key).filter(r => !recordVerdicts({ findings: findings.map(asClaim), key: r, verdicts: r.recorded.verdicts }).problems.length);

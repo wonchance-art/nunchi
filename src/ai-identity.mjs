@@ -2,10 +2,13 @@
 // the ledger's AI fingerprint survives what changes from hunt to hunt: the claim's words, the hunt unit, the
 // reference screen, the line number, the severity.
 // - element: the selector, normalised (ledger.mjs normalizeSelector). An `aria=role "name"` selector becomes the
-//   controls.json selector when exactly one control of the scene has that accessible name, so a hunter citing the
-//   aria node and one citing the control give one item.
-// - file and anchor: the grounded file, and a hash of the trimmed source line (not its number: a line that moved
-//   keeps its anchor). fileHash: a hash of the whole file, so a re-check can tell the code changed (§2.4).
+//   controls.json selector of the first control of the scene with that accessible name (and role), so a hunter
+//   citing the aria node and one citing the control give one item, and a second control of the name further down
+//   does not move it. name: the element's accessible name (normalised), so two controls whose selectors normalise
+//   alike stay two items.
+// - file and anchor: the grounded file, and a hash of the source line with its whitespace removed (not its number:
+//   a line that moved or was reformatted keeps its anchor), plus which occurrence of that text in the file it is when
+//   there are several. fileHash: a hash of the whole file, so a re-check can tell the code changed (§2.4).
 // - component: what the AI group is made of (§2.3): the grounded file, else the one inventory file whose strings
 //   render the element's accessible name, plus that name. null when neither is known (the group is then the
 //   fingerprint, so a dismissal never covers every similar element).
@@ -63,6 +66,33 @@ function renderedBy(inventory, route, name) {
   return hits.length === 1 ? hits[0].file : null;
 }
 
+// The role a controls.json row plays, as aria.yml names it.
+const roleOf = c => (typeof c.role === 'string' && c.role ? c.role
+  : c.tag === 'a' ? 'link' : c.tag === 'button' ? 'button' : c.tag === 'select' ? 'combobox' : c.tag === 'textarea' ? 'textbox'
+  : c.tag === 'input' ? (/^(submit|button|reset)$/.test(c.type || '') ? 'button' : c.type === 'checkbox' ? 'checkbox' : c.type === 'radio' ? 'radio' : 'textbox') : null);
+// The control an aria node names: the controls with that accessible name (and its role, when that narrows them), the
+// first in document order. A second control of the same name appearing later on the page does not move it.
+export function ariaControl(selector, controls) {
+  const aria = ariaRoleName(selector);
+  if (!aria || !str(aria.name)) return null;
+  const named = (Array.isArray(controls) ? controls : []).filter(c => c && typeof c.selector === 'string' && typeof c.name === 'string' && c.name.trim() === aria.name.trim());
+  const sameRole = named.filter(c => roleOf(c) === aria.role);
+  return (sameRole.length ? sameRole : named)[0] ?? null;
+}
+
+// The grounded line as the anchor hashes it: whitespace removed (a reformat leaves it), and, when the same text
+// stands on several lines of the file (`return (`), which occurrence it is.
+export function lineAnchor(text, line) {
+  const lines = text.split('\n');
+  if (!Number.isInteger(line) || line < 1 || line > lines.length) return null;
+  const squash = s => s.replace(/\s+/g, '');
+  const want = squash(lines[line - 1]);
+  if (!want) return null;                                        // a blank line names nothing
+  let total = 0, nth = 0;
+  lines.forEach((l, i) => { if (squash(l) === want) { total++; if (i < line) nth = total; } });
+  return sha(total > 1 ? `${want}\0#${nth}` : want, 16);
+}
+
 // finding: an AI finding (selector, evidence.file, evidence.line, route); controls: the scene's controls.json rows;
 // inventory: the run's inventory.json or null; root: the app source root (for the anchor and fileHash).
 export function aiIdentity({ finding, controls = [], inventory = null, root = null, cache }) {
@@ -72,8 +102,8 @@ export function aiIdentity({ finding, controls = [], inventory = null, root = nu
   const aria = ariaRoleName(sel);
   if (aria) {
     name = str(aria.name);
-    const hits = name ? rows.filter(c => typeof c.selector === 'string' && typeof c.name === 'string' && c.name.trim() === name.trim()) : [];
-    if (hits.length === 1) element = normalizeSelector(hits[0].selector);
+    const hit = ariaControl(sel, rows);
+    if (hit) element = normalizeSelector(hit.selector);
   } else if (sel) {
     const row = rows.find(c => c.selector === sel);
     if (row && str(row.name)) name = row.name.trim();
@@ -85,10 +115,9 @@ export function aiIdentity({ finding, controls = [], inventory = null, root = nu
     const text = readSource(root, file, cache);
     if (text !== null) {
       fileHash = sha(text, 16);
-      const lines = text.split('\n');
-      if (Number.isInteger(line) && line >= 1 && line <= lines.length) anchor = sha(lines[line - 1].trim(), 16);
+      anchor = lineAnchor(text, line);
     }
   }
   const owner = file || renderedBy(inventory, finding.route, name);
-  return { element, file, anchor, component: owner ? { file: owner, name: nameKey(name) } : null, fileHash };
+  return { element, file, anchor, name: nameKey(name), component: owner ? { file: owner, name: nameKey(name) } : null, fileHash };
 }

@@ -106,15 +106,18 @@ export function aiIdentityOf(f) {
   const element = Object.hasOwn(id, 'element') ? str(id.element) : normalizeSelector(f.selector);
   const file = Object.hasOwn(id, 'file') ? str(id.file) : str(f.evidence?.file);
   const anchor = typeof id.anchor === 'string' && HEX16.test(id.anchor) ? id.anchor : null;
+  // the element's accessible name (normalised): two rows' "Delete" and "Archive" buttons are two defects even when
+  // their selectors normalise alike
+  const name = Object.hasOwn(id, 'name') ? str(id.name) : null;
   const c = id.component && typeof id.component === 'object' && str(id.component.file) ? { file: id.component.file, name: str(id.component.name) } : null;
-  return { element, file, anchor, component: c ?? (file ? { file, name: null } : null) };
+  return { element, file, anchor, name, component: c ?? (file ? { file, name } : null) };
 }
 
 // `version` computes an older version's fingerprint (migration); new findings always get the current one.
 export function fingerprintOf(f, version = FINGERPRINT_VERSION) {
   if (f.source === 'ai') {
-    const { element, file, anchor, component } = aiIdentityOf(f);
-    const inputs = { v: AI_RECIPE, source: 'ai', lens: f.lens, rule: f.rule, route: f.route ?? null, evidence: { anchor, element, file } };
+    const { element, file, anchor, name, component } = aiIdentityOf(f);
+    const inputs = { v: AI_RECIPE, source: 'ai', lens: f.lens, rule: f.rule, route: f.route ?? null, evidence: { anchor, element, file, name } };
     const fp = sha(stableJson(inputs), 12);
     // Group = lens + checklist item + component identity (the grounded file, or the inventory file that renders the
     // element, plus the accessible name). When neither is known, the group is the fingerprint.
@@ -268,6 +271,41 @@ export function upgrade(state, stream = 'main') {
 // Both migrations on read: the schema, then the fingerprint version.
 const migrateAll = (s, stream) => migrateState(upgrade(s, stream));
 
+// A ledger one folder kept (`.nunchi/state`, state.mjs adoptLegacy), taken into the repository's shared state: all it
+// holds came from this worktree's runs, so its folds and items are this worktree's stream (an item another
+// worktree's run never saw is not that worktree's to fix). `decisionsSeen` is never taken (adoptLegacy).
+export function adoptLedger(legacy, stream = 'main') {
+  const { decisionsSeen: _ignored, ...s } = upgrade(legacy, stream);
+  const items = {};
+  for (const [fp, it] of Object.entries(s.items || {})) {
+    if (!isAi(it)) { items[fp] = { ...it, stream }; continue; }
+    const retagged = { ...it, hunts: (it.hunts || []).map(h => ({ ...h, stream })), rechecks: (it.rechecks || []).map(r => ({ ...r, stream })) };
+    items[fp] = deriveAi(retagged) || retagged;
+  }
+  return { ...s, folds: (s.folds || []).map(f => ({ ...f, stream })).sort(byFold), items };
+}
+// A second worktree's `.nunchi/state` ledger, when the shared ledger exists already: the open items the shared
+// ledger does not have (seen in runs since removed, say) are carried over as they stand, tagged with this worktree's
+// stream, with the coverage sets they name. The shared ledger's own record of an item wins. Not carried, and said:
+// items that were fixed already (history only), the record of which runs were folded (this worktree's runs on disk
+// are folded again by the next ledger command) and when decisions were first seen. → { doc, carried, notCarried }.
+export function carryLedger(cur, legacy, stream = 'main') {
+  const from = adoptLedger(legacy, stream);
+  const items = { ...cur.items }, coverage = { ...(cur.coverage || {}) };
+  let carried = 0, fixed = 0;
+  for (const fp of Object.keys(from.items).sort()) {
+    const it = from.items[fp];
+    if (Object.hasOwn(cur.items, fp)) continue;
+    if (it.goneAt) { fixed++; continue; }
+    items[fp] = it;
+    if (it.coverage && from.coverage?.[it.coverage] && !coverage[it.coverage]) coverage[it.coverage] = from.coverage[it.coverage];
+    carried++;
+  }
+  const notCarried = [...(fixed ? [`${fixed} item(s) already fixed there (history only)`] : []), 'which of its runs were folded (this worktree\'s runs on disk are folded again)', 'when each decision was first seen (noted again from now)'];
+  if (!carried) return { doc: cur, carried, notCarried };
+  return { doc: { ...cur, items, coverage }, carried, notCarried };
+}
+
 // A state written by an older schema or fingerprint version is migrated as it is read; syncLedger writes the
 // migrated state back. A file that cannot be read, or is not a ledger, is an error (exit 2), never "empty".
 const MIGRATED = new WeakSet();
@@ -291,6 +329,19 @@ const sameFold = (f, run, source, stream) => f.run === run && f.source === sourc
 // The fold entry of (run, source) for a worktree's stream, or null.
 export const foldOf = (state, run, source, stream = 'main') => (Array.isArray(state.folds) ? state.folds.find(f => sameFold(f, run, source, stream)) ?? null : (source === 'rule' && state.runs?.includes(run) ? { run, source, key: null, stream } : null));
 const withFold = (folds, entry) => [...folds.filter(f => !sameFold(f, entry.run, entry.source, entry.stream)), entry].sort(byFold);
+export const streamOf = x => x?.stream ?? 'main';
+// The capture runs (sweeps and quick runs) one stream folded, oldest first. A schema-1 state has one stream.
+// A run the run list names that no fold records (a ledger written before folds) is the main worktree's.
+export function captureRuns(state, stream = 'main') {
+  if (!Array.isArray(state.folds)) return stream === 'main' ? state.runs.slice().sort(byRun) : [];
+  const rule = state.folds.filter(f => f.source === 'rule');
+  const recorded = new Set(rule.map(f => f.run));
+  const mine = rule.filter(f => streamOf(f) === stream && (f.kind === undefined || f.kind === 'quick')).map(f => f.run);
+  const orphans = stream === 'main' ? (state.runs || []).filter(r => !recorded.has(r)) : [];
+  return [...new Set([...mine, ...orphans])].sort(byRun);
+}
+// The latest capture run of a stream (what `findings` and the review page call "this run"), else the latest of any.
+export const latestRunOf = (state, stream = 'main') => captureRuns(state, stream).pop() ?? state.runs[state.runs.length - 1] ?? null;
 
 // A cell is where a finding was seen on its route: person.state.viewport (the end of the scene id). A key is
 // route|cell, what a run looked at.
@@ -370,7 +421,9 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
   const st = upgrade(state, stream);
   const entry = { run: id, source: 'rule', key, stream, ...(kind !== 'sweep' ? { kind } : {}) };
   if (kind !== 'sweep' && kind !== 'quick') return { ...st, folds: withFold(st.folds, entry) };
-  const newest = kind === 'sweep' && !st.runs.some(r => byRun(r, id) > 0);
+  // the watermark is per stream (worktree): another worktree's newer run does not make this one's runs old, and
+  // only this stream's newest run may say what is gone (below)
+  const newest = kind === 'sweep' && !captureRuns(st, stream).some(r => byRun(r, id) > 0);
   const sets = { ...(st.coverage || {}) };
   const next = { ...st, runs: [...new Set([...st.runs, id])].sort(byRun), folds: withFold(st.folds, entry), items: { ...st.items } };
   const covered = [...new Set(scenes.filter(looked).map(s => keyOf(s.route, `${s.person}.${s.state}.${s.viewport}`)))].sort();
@@ -411,7 +464,7 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
     const old = next.items[fp];
     if (old && isAi(old)) continue;
     const route = p.f.route ?? null;
-    const base = { fp, group: p.f.group, source: 'rule', lens: p.f.lens, rule: p.f.rule, severity: p.f.severity, route, origin,
+    const base = { fp, group: p.f.group, source: 'rule', stream, lens: p.f.lens, rule: p.f.rule, severity: p.f.severity, route, origin,
       persons: [...p.persons].sort(), viewports: [...p.viewports].sort(), states: [...p.states].sort(), places: p.scenes.length, examples: p.scenes.slice(0, 5),
       selector: p.f.selector ?? null, evidence: p.f.evidence, inputs: fingerprintOf(p.f).inputs };
     const cellsNow = [...p.cells].sort();
@@ -437,7 +490,9 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
     const run = { scope, wholeApp: whole, appRoutes, origin, covered: coveredSet, loginExpired: (health.problems || []).some(p => p.status === 'login-expired') };
     const lookedAt = [], gone = [];
     for (const [fp, item] of Object.entries(next.items)) {
-      if (isAi(item) || seen.has(fp) || !lookedAgain(item, run, sets)) continue;
+      // only the worktree that last saw an item can say it is gone: worktrees on other branches would otherwise
+      // fix and bring back each other's items in turn (until M6 makes other branches' captures probes)
+      if (isAi(item) || seen.has(fp) || streamOf(item) !== stream || !lookedAgain(item, run, sets)) continue;
       lookedAt.push(fp);
       if (!item.goneAt) gone.push(fp);
     }
@@ -503,19 +558,26 @@ export function deriveAi(item) {
   for (const r of rechecks) {
     const v = r.cells || {};
     const verdicts = Object.values(v).map(x => x?.verdict);
+    // a re-check of a run older than a sighting already folded when it was recorded compared the wrong screens: it
+    // can say "still there", never "gone" (else the later sighting would read as the defect coming back)
+    const stale = present.some(h => byRun(String(h.run), String(r.run)) > 0 && Number.isFinite(h.at) && Number.isFinite(r.at) && h.at <= r.at);
     if (verdicts.some(x => x === 'still-there' || x === 'unchanged')) events.push({ run: r.run, stream: r.stream, t: 2, r });
-    else if (!r.suspect && cells.length && cells.every(c => v[c]?.verdict === 'gone')) events.push({ run: r.run, stream: r.stream, t: 0, r });
+    else if (!r.suspect && !stale && cells.length && cells.every(c => v[c]?.verdict === 'gone')) events.push({ run: r.run, stream: r.stream, t: 0, r });
     else if (verdicts.includes('insufficient')) events.push({ run: r.run, stream: r.stream, t: 1, r });
   }
   events.sort((a, b) => byEvent(a, b) || a.t - b.t);
-  let goneAt = null, regressedAt = null, lastSeen = null, needsYou = null;
+  let goneAt = null, regressedAt = null, lastSeen = null, needsYou = null, lastStream = null;
   for (const e of events) {
     if (e.t === 2) {
       if (goneAt && byRun(e.run, goneAt) > 0) regressedAt = e.run;
       goneAt = null; needsYou = null;
+      if (!lastSeen || byRun(e.run, lastSeen) >= 0) lastStream = streamOf(e);
       lastSeen = maxRun(lastSeen, e.run);
-    } else if (e.t === 0) { if (!goneAt) goneAt = e.run; needsYou = null; }
-    else if (!goneAt) needsYou = { reason: 'recheck-insufficient', run: e.run };
+    } else if (e.t === 0) {
+      // as for rule items: only the worktree that last saw it can say it is gone
+      if (!goneAt && (!lastStream || streamOf(e) === lastStream)) goneAt = e.run;
+      if (goneAt) needsYou = null;
+    } else if (!goneAt) needsYou = { reason: 'recheck-insufficient', run: e.run };
   }
   const lastHunted = hunts.reduce((m, h) => maxRun(m, h.run), null);
   const silent = new Set(hunts.filter(h => h.silent && lastSeen && byRun(h.run, lastSeen) > 0).map(h => `${h.run}|${h.stream ?? 'main'}`));
@@ -534,11 +596,11 @@ export function deriveAi(item) {
   const marks = [...present.map(h => ({ run: h.run, stream: h.stream, h })), ...rechecks.map(r => ({ run: r.run, stream: r.stream, r }))].sort(byEvent);
   for (const m of marks) {
     if (m.h) for (const [c, s] of Object.entries(m.h.scenes || {})) note(c, s, m.h.run);
-    else for (const [c, s] of Object.entries(m.r.cells || {})) if (s?.verdict === 'unchanged' && seen[c]) note(c, { ...seen[c], scene: s.scene ?? seen[c].scene, top: s.top ?? null, full: s.full ?? null, textHash: s.textHash ?? null }, m.r.run);
+    else for (const [c, s] of Object.entries(m.r.cells || {})) if (s?.verdict === 'unchanged' && seen[c]) note(c, { ...seen[c], scene: s.scene ?? seen[c].scene, top: s.top ?? null, full: s.full ?? null, textHash: s.textHash ?? null, src: s.src ?? null }, m.r.run);
   }
   const parts = cells.map(c => c.split('.'));
   const out = {
-    fp: item.fp, group: latest.group || item.group, source: 'ai', lens: item.lens, rule: item.rule, route: item.route ?? null, inputs: item.inputs, addedAt: item.addedAt ?? null,
+    fp: item.fp, group: latest.group || item.group, source: 'ai', stream: lastStream || streamOf(latest), lens: item.lens, rule: item.rule, route: item.route ?? null, inputs: item.inputs, addedAt: item.addedAt ?? null,
     // displayed: the severity a verifier that confirmed it gave; rejected and insufficient keep the claimed one
     severity: (chosen.status === 'confirmed' ? chosen.verdictSeverity : null) || latest.claimedSeverity,
     claimedSeverity: latest.claimedSeverity, protect: worst(present.flatMap(h => [h.claimedSeverity, h.verdictSeverity])) || latest.claimedSeverity,
@@ -841,7 +903,10 @@ export function view(state, decisions, approved = new Set(), { now = Date.now() 
     if (!on.has(k)) on.set(k, []);
     on.get(k).push(d);
   }
-  const position = new Map(state.runs.map((r, i) => [r, i]));
+  // "not looked at for 3 runs" counts the runs of the item's own stream (worktree): another worktree's captures do
+  // not look at it (only the stream that last saw an item can fix it)
+  const streams = new Map();
+  const runsOf = s => { if (!streams.has(s)) { const list = captureRuns(state, s); streams.set(s, { list, at: new Map(list.map((r, i) => [r, i])) }); } return streams.get(s); };
   const rows = [];
   for (const item of Object.values(state.items)) {
     const ai = isAi(item);
@@ -872,7 +937,8 @@ export function view(state, decisions, approved = new Set(), { now = Date.now() 
     const stale = ai && !item.goneAt && (item.silentHunts || 0) >= STALE_HUNTS;
     if (stale && (status === 'open' || status === 'regressed')) status = 'stale';
     const last = item.lookedAt || item.lastSeen;
-    const notLookedAt = !item.goneAt && position.has(last) && state.runs.length - 1 - position.get(last) >= NOT_LOOKED_RUNS ? last : null;
+    const own = runsOf(streamOf(item));
+    const notLookedAt = !item.goneAt && own.at.has(last) && own.list.length - 1 - own.at.get(last) >= NOT_LOOKED_RUNS ? last : null;
     rows.push({ ...item, source: item.source || 'rule', status, decision: d ? { id: d.id, decision: d.decision, reason: d.reason, by: d.by, at: d.at, verified } : null, note, notLookedAt,
       ...(ai ? { stale, needsYou: item.needsYou ?? null, checked: checkedAi(item) } : {}) });
   }

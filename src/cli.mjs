@@ -4,13 +4,13 @@
 import { resolve, join, relative, isAbsolute, dirname } from 'node:path';
 import { readFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
 import { discover } from './discover.mjs';
-import { buildSourceMap, affectedRoutes } from './sourcemap.mjs';
+import { buildSourceMap, affectedRoutes, sourceHashes } from './sourcemap.mjs';
 import { startRun, finishRun, gcRuns, latestRun, workTree, ensureGitignore, ensurePrivate, readConfig, gitRunner, DIFF_SAFE } from './runs.mjs';
 import { baseUrlRefusal } from './network.mjs';
 import { codeNavigations } from './flow.mjs';
-import { syncLedger, readDecisions, buildDecision, saveDecision, readApproved, bindApproved, addApproved, approvalKey, seriousTarget, view, groups as groupRows, titleOf, DECISIONS, NOT_LOOKED_RUNS, STALE_HUNTS, upgrade, isLedger, isApprovedDoc, mergeApprovedDocs } from './ledger.mjs';
-import { stateRoot, stateFiles, ensureStateDir, adoptLegacy, writeKey, readKey, removeKey, removeKeys, keyPath } from './state.mjs';
-import { aiLoader, recheckLoader, runIdentity } from './ai-fold.mjs';
+import { syncLedger, readDecisions, buildDecision, saveDecision, readApproved, bindApproved, addApproved, approvalKey, seriousTarget, view, groups as groupRows, titleOf, DECISIONS, NOT_LOOKED_RUNS, STALE_HUNTS, adoptLedger, carryLedger, latestRunOf, isLedger, isApprovedDoc, mergeApprovedDocs } from './ledger.mjs';
+import { resolveStateRoot, trackedState, stateFiles, ensureStateDir, adoptLegacy, writeKey, readKey, removeKey, removeKeys, keyPath, present } from './state.mjs';
+import { aiLoader, recheckLoader, runIdentity, routeHashes } from './ai-fold.mjs';
 import { sweepLeftovers, withLock } from './stable.mjs';
 import { execFileSync } from 'node:child_process';
 
@@ -69,18 +69,21 @@ Usage:
                                             does not look. --again verifies a suspect run once more
   nunchi verify --record <verdicts.json> [--run <id>] [--vendor <name>] [--root <dir>]
                                             Record verdicts (confirmed | rejected | insufficient, severity, one-line
-                                            reason) into ai-findings.json and verify.json, and fold the run's AI
-                                            findings into the ledger; decoy pass-through > 10%, or fewer decoys
-                                            than planned, marks the run's verifications suspect. --vendor only when
-                                            the user opted into a different vendor's model (default: same-model check)
+                                            reason) in the answer key (what the ledger trusts; copies in
+                                            ai-findings.json and verify.json), and fold the run's AI findings into
+                                            the ledger; decoy pass-through (confirmed or unanswered) > 10%, or fewer
+                                            decoys than planned, marks the run's verifications suspect. --vendor only
+                                            when the user opted into a different vendor's model (default: same-model)
   nunchi recheck --plan [--run <id>] [--root <dir>] [--json]
                                             Are open AI findings still there on this (newer) run? One packet per
-                                            finding × screen that changed (old evidence + new screen), with known
-                                            still-present defects mixed in as controls → recheck-packets.json
+                                            finding × screen whose screen or code changed (old evidence + new
+                                            screen), with at least 3 still-present defects on changed screens mixed
+                                            in as controls → recheck-packets.json
   nunchi recheck --record <verdicts.json> [--run <id>] [--json]
-                                            Record gone | still-there | insufficient per packet into recheck.json
-                                            and fold it into the ledger: a finding is fixed only when every screen
-                                            it was seen on says gone and the batch is not suspect
+                                            Record gone | still-there | insufficient per packet in the answer key
+                                            (a copy in recheck.json) and fold it into the ledger: a finding is fixed
+                                            only when every screen it was seen on says gone and the batch is not
+                                            suspect (a control answered gone or left unanswered counts against it)
   nunchi inventory [--root <dir>] [--json]  Source strings, UI states (loading/empty/error) and destructive actions
                                             with file:line, plus copy candidates for the AI lenses (not findings)
   nunchi login --url <base> [--path /login] [--out .nunchi/auth.json]
@@ -93,8 +96,9 @@ Usage:
                                             first; all = no cap) are listed as not seen: budget
   nunchi hunt --record <answers.json|dir> [--run <id>] [--root <dir>] [--json]
                                             Check the hunter's answers (every item answered, every defect
-                                            grounded in a selector of the scene or a file:line under --root)
-                                            and write ai-findings.json and coverage.json into the run
+                                            grounded in a selector of the scene or a file:line under --root),
+                                            write ai-findings.json and coverage.json into the run, and fold the
+                                            hunt into the ledger (claims not double-checked yet; screens it saw)
   nunchi export --html <dir> [--run <id>] [--inline] [--json]
                                             A static review page of one run and the ledger: <dir>/index.html plus
                                             <dir>/img/ (screenshots, copied). --inline puts the images inside
@@ -189,8 +193,17 @@ const ledgerGuard = fn => {
 };
 // The state store of this project (state.mjs, design §8.1): in a repository, the folder every worktree shares under
 // the common git folder; otherwise .nunchi/state. Its files, and this worktree's stream (whose runs it folds).
+// A shared folder that cannot be written falls back to .nunchi/state, said once and recorded (state.mjs
+// resolveStateRoot); state files committed to git are never read there.
 function stateOf(nunchiDir) {
-  const root = stateRoot(dirname(nunchiDir));
+  const project = dirname(nunchiDir);
+  let root;
+  try { root = resolveStateRoot(project); } catch (e) { if (!LEDGER_ERRORS.includes(e.code)) throw e; console.error('nunchi: ' + e.message); process.exit(2); }
+  if (root.warning) console.error('nunchi: ' + root.warning);
+  if (root.fallback) {
+    const committed = trackedState(project).filter(n => n !== 'fallback.json');
+    if (committed.length) { console.error(`nunchi: ${committed.map(n => `.nunchi/state/${n}`).join(', ')} committed to git: state that came through git is never read (anyone with push access could have written it). Remove it from git (git rm --cached) and run again.`); process.exit(2); }
+  }
   return { root, files: stateFiles(root.dir), runsDir: join(nunchiDir, 'runs'), nunchiDir };
 }
 // The state folder is private before anything writes its first file (D12). A `.nunchi/state` written before the
@@ -203,8 +216,11 @@ function openState(nunchiDir, { create = existsSync(nunchiDir) } = {}) {
 }
 function adopt(st) {
   ensureStateDir(st.root);
-  const moved = adoptLegacy(st.root, { migrateLedger: upgrade, validateLedger: isLedger, validateApproved: isApprovedDoc, mergeApproved: mergeApprovedDocs });
-  for (const m of moved) console.error(`nunchi: moved .nunchi/state/${m} into the repository's shared state (${st.root.dir}), which every worktree of this repository reads; the old file is kept as ${m}.moved`);
+  const tracked = st.root.legacy && present(st.root.legacy) ? trackedState(dirname(st.nunchiDir)) : [];
+  const r = adoptLegacy(st.root, { tracked, migrateLedger: adoptLedger, carryLedger, validateLedger: isLedger, validateApproved: isApprovedDoc, mergeApproved: mergeApprovedDocs });
+  for (const m of r.moved) console.error(`nunchi: moved .nunchi/state/${m} into the repository's shared state (${st.root.dir}), which every worktree of this repository reads; the old file is kept as ${m}.moved`);
+  for (const t of r.tracked) console.error(`nunchi: .nunchi/state/${t} is committed to git, so it was not moved into the shared state: state that came through git is never read. If it was committed by mistake: git rm --cached .nunchi/state/${t}`);
+  if (r.moved.includes('ledger.json') && r.notCarried.length) console.error(`nunchi: the shared ledger had its own record already: ${r.carried} open item(s) of .nunchi/state/ledger.json it did not have were carried over; not carried over: ${r.notCarried.join('; ')}`);
 }
 // Brings the ledger up to date: runs not folded yet (their rule findings), verified AI findings and re-check
 // verdicts not folded yet or changed since (design §2.1, §2.2, §2.4), and decisions not noted yet.
@@ -248,11 +264,12 @@ function loadLedger(nunchiDir, { root } = {}) {
 const runLock = (runDir, fn) => withLock(join(runDir, 'run-files'), fn, { timeoutMs: 15000 });
 // Folding a run's AI findings or re-check verdicts after they were recorded: a ledger that cannot be brought up to
 // date only warns (the verdicts are in the run; the next ledger command folds them).
-function foldAfterRecord(runDir, what, root) {
+// `quiet`: a run that may not fold is not said (the hunt: an --out folder is hunted and verified before it would be).
+function foldAfterRecord(runDir, what, root, { quiet = false } = {}) {
   const who = runIdentity(runDir);
   const nunchiDir = resolve('.nunchi');
-  if (who.why) { console.error(`nunchi: ${what} not folded into the ledger: ${who.why}`); return false; }
-  if (resolve(dirname(runDir)) !== join(nunchiDir, 'runs')) { console.error(`nunchi: ${what} not folded into the ledger: run ${who.id} is not in this project's .nunchi/runs`); return false; }
+  if (who.why) { if (!quiet) console.error(`nunchi: ${what} not folded into the ledger: ${who.why}`); return false; }
+  if (resolve(dirname(runDir)) !== join(nunchiDir, 'runs')) { if (!quiet) console.error(`nunchi: ${what} not folded into the ledger: run ${who.id} is not in this project's .nunchi/runs`); return false; }
   try {
     const st = openState(nunchiDir);
     sweep(nunchiDir, st);
@@ -411,7 +428,10 @@ if (cmd === 'setup') {
     if (!args.routes) {
       const { writeStable } = await import('./stable.mjs');
       const routes = discover(root).routes;
-      writeStable(join(out, 'source-map.json'), buildSourceMap(root, routes));
+      const map = buildSourceMap(root, routes);
+      writeStable(join(out, 'source-map.json'), map);
+      // what each route's code was at this capture: how a re-check tells a route's code did not change (§2.4)
+      writeStable(join(out, 'source-hashes.json'), sourceHashes(root, map));
       // The source inventory (§2.4) feeds the AI hunt's source slices (§4). It is extra: it never fails a capture.
       const invPath = join(out, 'inventory.json');
       try {
@@ -480,7 +500,8 @@ if (cmd === 'setup') {
       if (SEV[g.severity] < SEV[k.severity]) k.severity = g.severity;
     }
     kinds.sort((a, b) => SEV[a.severity] - SEV[b.severity] || b.routes.size - a.routes.size || (a.rule < b.rule ? -1 : 1));
-    const latest = state.runs[state.runs.length - 1];
+    // this worktree's latest run (another worktree's newer run is not what this one sees, §7)
+    const latest = latestRunOf(state, st.root.stream);
     // what a run could not tell, and what no run has looked at again: said, so "open" is not read as "checked"
     const blind = state.blind?.[latest] ?? null;
     const unlooked = new Map();
@@ -616,6 +637,9 @@ if (cmd === 'setup') {
         writeRecord(runDir, r);
         return r;
       });
+      // the hunt into the ledger as (run, "ai"): its claims (not double-checked yet) and the cells it saw, so a hunt
+      // that claims nothing counts towards staleness too (design §2.2, §2.4)
+      foldAfterRecord(runDir, 'the AI hunt', args.root || process.cwd(), { quiet: true });
       console.log(args.json ? JSON.stringify({ plan: plan.id, run: runId, summary: result.coverage.summary, findings: result.findings.length, rejected: result.rejected }, null, 2) : formatRecord(result, runDir));
     }
   } catch (e) {
@@ -661,17 +685,25 @@ if (cmd === 'setup') {
   if (args.plan) {
     const controlsOf = scene => (known.has(scene) && existsSync(join(dir, scene, 'controls.json')) ? readJson(join(dir, scene, 'controls.json')) : null);
     const filesOf = scene => (known.has(scene) ? ['top.jpg', 'full.jpg', 'aria.yml', 'text.txt', 'controls.json', 'styles.json', 'links.json', 'measure.json'].filter(f => existsSync(join(dir, scene, f))).map(f => `${scene}/${f}`) : []);
-    // --again (design §2.4): a run whose verification was suspect is verified once more, its verdicts replaced
+    // --again (design §2.4): a run whose verification was suspect is verified once more, its verdicts replaced. What
+    // was verified, and whether it was suspect, comes from the answer key's recorded verdicts (§2.2), never from the
+    // files in the run.
     if (args.again) {
-      const v = existsSync(join(dir, 'verify.json')) ? readJson(join(dir, 'verify.json')) : null;
-      if (!v?.suspect) { console.error(`nunchi verify: --again verifies a suspect run once more; ${v ? 'this run\'s verification is not suspect' : 'this run has not been verified yet (verify --plan)'}`); process.exit(1); }
+      const oldKey = guard(() => readKey(dir, 'verify-key.json'));
+      const judged = V.keyRounds(oldKey).length ? V.verdictsFromKey(aiFindingsOf(dir, 'verify').findings, oldKey) : null;
+      if (!judged?.some(f => f && f.source === 'ai' && f.verification?.suspect === true)) { console.error(`nunchi verify: --again verifies a suspect run once more; ${judged ? 'this run\'s verification is not suspect' : 'this run has not been verified yet (verify --plan)'}`); process.exit(1); }
     }
     const made = guard(() => {
       const { findings } = aiFindingsOf(dir, 'verify');
+      // which findings to ask about follows ai-findings.json (a status written there by hand only leaves a finding
+      // out, so it stays a claim in the ledger: the ledger counts only verdicts the key holds)
+      const oldKey = readKey(dir, 'verify-key.json');
       const { packets, key } = V.planVerify({ findings, canaryScenes, controlsOf, filesOf, again: !!args.again });
       if (!key.claims) return null;
+      // the rounds recorded before keep counting, as long as their claims still match the findings
+      const earlier = oldKey ? V.roundsStillValid(findings, oldKey) : [];
       writeStable(join(dir, 'verify-packets.json'), packets);
-      writeKey(dir, 'verify-key.json', key);
+      writeKey(dir, 'verify-key.json', earlier.length ? { ...key, earlier } : key);
       return packets;
     });
     if (!made) { console.log(`no ${args.again ? 'suspect or claimed' : 'claimed'} AI findings to verify (rule- and computed-lens findings skip the verifier)`); process.exit(0); }
@@ -685,8 +717,15 @@ if (cmd === 'setup') {
       const { path: aiPath, doc, findings } = aiFindingsOf(dir, 'verify');
       const key = readKey(dir, 'verify-key.json');
       if (!key) return { problems: ['this run has no answer key (verify-key.json); run verify --plan first'] };
-      const res = V.recordVerdicts({ findings, key, verdicts: readJson(resolve(args.record)), vendor: args.vendor || null });
+      const given = readJson(resolve(args.record));
+      const list = Array.isArray(given) ? given : given?.verdicts;
+      const { recorded: _replaced, ...plan } = key;
+      const res = V.recordVerdicts({ findings, key, verdicts: given, vendor: args.vendor || null });
       if (res.problems.length) return res;
+      // the verdicts go into the key first (outside the project): what the ledger folds; ai-findings.json and
+      // verify.json are copies for people and the review page
+      const kept = list.map(v => ({ packet: v.packet, verdict: v.verdict, ...(v.severity != null ? { severity: v.severity } : {}), reason: v.reason.trim() }));
+      writeKey(dir, 'verify-key.json', { ...plan, recorded: { verdicts: kept, vendor: args.vendor || null } });
       writeStable(aiPath, Array.isArray(doc) ? res.findings : { ...doc, findings: res.findings });
       writeStable(join(dir, 'verify.json'), res.verify);
       return res;
@@ -719,14 +758,20 @@ if (cmd === 'setup') {
   if (who.why) fail(`run ${dir} cannot be re-checked: ${who.why}`);
   if (resolve(dirname(dir)) !== runsDir) fail(`run ${who.id} is not in this project's .nunchi/runs`);
   const guard = fn => { try { return runLock(dir, fn); } catch (e) { if (!['CORRUPT', 'LOCKED', 'UNSAFE_PATH'].includes(e.code)) throw e; fail(e.message, 2); } };
-  const summary = rc => `re-check of run ${rc.run}: gone ${rc.verdicts.gone} · still there ${rc.verdicts['still-there']} · insufficient ${rc.verdicts.insufficient}${rc.verdicts.unanswered ? ` · unanswered ${rc.verdicts.unanswered}` : ''} · controls answered gone ${rc.controls.passedThrough}/${rc.controls.answered}${rc.controls.answered < rc.controls.total ? ` (${rc.controls.total - rc.controls.answered} unanswered)` : ''}`;
+  const summary = rc => `re-check of run ${rc.run}: gone ${rc.verdicts.gone} · still there ${rc.verdicts['still-there']} · insufficient ${rc.verdicts.insufficient}${rc.verdicts.unanswered ? ` · unanswered ${rc.verdicts.unanswered}` : ''} · controls ${rc.controls.total} of ${rc.controls.planned} planned, passed through (answered gone or unanswered) ${rc.controls.passedThrough}/${rc.controls.total}${rc.controls.answered < rc.controls.total ? ` (${rc.controls.total - rc.controls.answered} unanswered)` : ''}`;
   const record = verdicts => {
     const res = guard(() => {
       const key = readKey(dir, 'recheck-key.json');
       if (!key) return { problems: ['this run has no answer key (recheck-key.json); run recheck --plan first'] };
       const packets = existsSync(join(dir, 'recheck-packets.json')) ? readJson(join(dir, 'recheck-packets.json')) : null;
       const r = R.recordRecheck({ key, packets, verdicts });
-      if (!r.problems.length) writeStable(join(dir, 'recheck.json'), r.recheck);
+      if (r.problems.length) return r;
+      // the verdicts go into the key first (outside the project): the ledger folds them from there (design §2.2);
+      // recheck.json is a copy for people to read
+      const list = Array.isArray(verdicts) ? verdicts : verdicts.verdicts;
+      const { recorded: _replaced, ...plan } = key;
+      writeKey(dir, 'recheck-key.json', { ...plan, recorded: { verdicts: list.map(v => ({ packet: v.packet, verdict: v.verdict, reason: v.reason.trim() })) } });
+      writeStable(join(dir, 'recheck.json'), r.recheck);
       return r;
     });
     if (res.problems.length) { for (const p of res.problems) console.error('nunchi recheck: ' + p); process.exit(1); }
@@ -734,15 +779,26 @@ if (cmd === 'setup') {
     return res;
   };
   if (args.plan) {
-    const { state, decisions, approved } = loadLedger(nunchiDir, { root: args.root });
+    const { state, decisions, approved, st } = loadLedger(nunchiDir, { root: args.root });
     const rows = view(state, decisions, approved);
     const manifest = readJson(join(dir, 'manifest.json'));
     const canaries = existsSync(join(dir, 'canaries.json')) ? readJson(join(dir, 'canaries.json')) : null;
-    // the run before this one, for the rule-finding controls (present then and now)
+    // the run before this one, for the controls: rule findings present then and now, its canary copies against this
+    // run's (screens that changed between the two)
     const prevId = listRuns(runsDir).complete.filter(id => byRun(id, who.id) < 0).sort(byRun).pop() ?? null;
     let previous = null;
-    if (prevId) { try { previous = { runId: prevId, manifest: readJson(join(runsDir, prevId, 'manifest.json')), findings: readJson(join(runsDir, prevId, 'findings.json')).findings || [] }; } catch { previous = null; } }
+    if (prevId) {
+      try {
+        const pc = join(runsDir, prevId, 'canaries.json');
+        previous = { runId: prevId, manifest: readJson(join(runsDir, prevId, 'manifest.json')), findings: readJson(join(runsDir, prevId, 'findings.json')).findings || [], canaries: existsSync(pc) ? readJson(pc) : null };
+      } catch { previous = null; }
+    }
     const runFindings = readJson(join(dir, 'findings.json')).findings || [];
+    // each route's source at this run's capture (source-hashes.json) and the files it renders (source-map.json)
+    const srcNow = routeHashes(dir);
+    let routeFiles = {};
+    try { routeFiles = readJson(join(dir, 'source-map.json')).routes || {}; } catch {}
+    const routeSource = route => (srcNow[route] ? { hash: srcNow[route], files: Array.isArray(routeFiles[route]) ? routeFiles[route] : [] } : null);
     // a source file's hash can say "unchanged" only on the tree the run was captured from
     const appRoot = resolve(args.root || process.cwd());
     const meta = readJson(join(dir, 'run.json'));
@@ -752,9 +808,14 @@ if (cmd === 'setup') {
     const sceneFolder = (run, scene) => (/^\d{4,}$/.test(run) ? sceneDir(join(runsDir, run), scene) : null);
     const hasScene = (run, scene) => { const d = sceneFolder(run, scene); return !!d && existsSync(d); };
     const filesOf = (run, scene) => { const d = sceneFolder(run, scene); return d ? R.RECHECK_FILES.filter(n => existsSync(join(d, n))) : []; };
-    const plan = R.planRecheck({ runId: who.id, manifest, rows, canaries, previous, runFindings, hasScene, sameTree, fileHashOf, filesOf });
+    const plan = R.planRecheck({ runId: who.id, manifest, rows, canaries, previous, runFindings, hasScene, sameTree, fileHashOf, filesOf, routeSource, stream: st.root.stream });
     const k = plan.key;
-    if (!Object.keys(k.items).length) { console.log(`no open AI findings to re-check against run ${who.id}`); process.exit(0); }
+    // an item seen in a newer run than this one is left out: re-check it against the newest run
+    // and one another worktree saw last is that worktree's to re-check (only it can say it is gone)
+    const newer = [k.newer.length ? `${k.newer.length} open AI finding(s) were seen in a run newer than ${who.id}: re-check against the newest run` : null,
+      k.otherWorktrees?.length ? `${k.otherWorktrees.length} open AI finding(s) were last seen by another worktree: that worktree re-checks them` : null].filter(Boolean).map(x => ` (${x})`).join('');
+    if (!Object.keys(k.items).length) { console.log(`no open AI findings to re-check against run ${who.id}${newer}`); process.exit(0); }
+    if (newer && !args.json) console.error(`nunchi recheck: left out${newer}`);
     guard(() => {
       R.writeRecheckMirror(dir, runsDir, plan.mirror);
       writeStable(join(dir, 'recheck-packets.json'), plan.packets);

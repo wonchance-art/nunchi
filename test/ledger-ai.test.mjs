@@ -191,7 +191,7 @@ test('§2.3 contract: two hunts with a different reference scene, other claim wo
   const moved = { ...first, evidence: { ...first.evidence, line: 1 } };
   assert.notEqual(L.annotate([{ ...moved, identity: aiIdentity({ finding: moved, controls: TASKS_CONTROLS, root: cwd }) }])[0].fp, a.fp);
   // rule fingerprints are untouched (pinned in fingerprint-v2.test.mjs); the AI recipe is its own
-  assert.deepEqual(a.inputs ?? L.fingerprintOf(first).inputs, { v: L.AI_RECIPE, source: 'ai', lens: 'L9', rule: 'L9.destructive-without-confirm', route: '/tasks', evidence: { anchor: first.identity.anchor, element: 'button#delete-all', file: 'app/tasks.tsx' } });
+  assert.deepEqual(a.inputs ?? L.fingerprintOf(first).inputs, { v: L.AI_RECIPE, source: 'ai', lens: 'L9', rule: 'L9.destructive-without-confirm', route: '/tasks', evidence: { anchor: first.identity.anchor, element: 'button#delete-all', file: 'app/tasks.tsx', name: 'Delete all' } });
 });
 
 test('§2.3: an aria= selector is the controls.json selector when exactly one control has that name; the group is the component, never every similar button', () => {
@@ -200,7 +200,9 @@ test('§2.3: an aria= selector is the controls.json selector when exactly one co
   assert.equal(byAria.element, 'button#delete-all');
   assert.deepEqual(byAria, byCss);
   const twice = [...TASKS_CONTROLS, ctl('div > button#delete-all-2', 'Delete all', [1, 1, 50, 20])];
-  assert.equal(aiIdentity({ finding: { selector: 'aria=button "Delete all"', route: '/tasks', evidence: {} }, controls: twice }).element, 'aria=button "Delete all"', 'two controls share the name: not canonicalised');
+  // two controls share the name: the first in document order, so a second one added further down does not move it
+  assert.equal(aiIdentity({ finding: { selector: 'aria=button "Delete all"', route: '/tasks', evidence: {} }, controls: twice }).element, 'button#delete-all');
+  assert.equal(aiIdentity({ finding: { selector: 'aria=button "Delete all"', route: '/tasks', evidence: {} }, controls: [twice[3], ...TASKS_CONTROLS] }).element, 'div > button#delete-all-#', 'the first in document order');
   const f = (route, selector, extra = {}) => ({ source: 'ai', lens: 'L6', rule: 'L6.unclear-label', route, selector, evidence: {}, ...extra });
   // no file, no inventory: the group is the fingerprint, so two similar buttons are two groups
   const g1 = L.fingerprintOf(f('/a', 'main > button.save')), g2 = L.fingerprintOf(f('/b', 'main > button.save'));
@@ -346,16 +348,130 @@ test('AI fold: re-verifying replaces the run\'s contribution; rejected and insuf
   const r = await huntAndVerify(cwd, '0001', { verdict: 'rejected' });
   assert.equal(r.code, 0, r.stderr);
   assert.deepEqual(await aiGroups(cwd), [], 'a rejected claim is no item');
-  // a second hunt on a new run, confirmed: an item; re-verifying that run as insufficient takes it away again
+  // a second hunt on a new run, confirmed by a verifier that also confirmed the decoy (suspect): an item; verifying
+  // that run again (--again) as insufficient takes it away again
   makeRun(cwd, '0002');
-  assert.equal((await huntAndVerify(cwd, '0002', { verdict: 'confirmed' })).code, 0);
+  assert.equal((await huntAndVerify(cwd, '0002', { verdict: 'confirmed', decoys: 'confirmed' })).code, 0);
   assert.equal((await aiGroups(cwd)).length, 1);
-  const dir = join(cwd, '.nunchi', 'runs', '0002');
-  const doc = JSON.parse(readFileSync(join(dir, 'ai-findings.json'), 'utf8'));
-  writeFileSync(join(dir, 'ai-findings.json'), JSON.stringify({ ...doc, findings: doc.findings.map(f => ({ ...f, status: 'insufficient', verification: { ...f.verification, verdict: 'insufficient' } })) }));
+  assert.equal((await cli(cwd, 'verify', '--plan', '--again', '--run', '0002')).code, 0);
+  const key = St.readKey(join(cwd, '.nunchi', 'runs', '0002'), 'verify-key.json');
+  assert.equal(key.earlier.length, 1, 'the first round is kept in the key');
+  writeFileSync(join(cwd, 'v-again.json'), JSON.stringify(Object.entries(key.packets).map(([packet, k]) => ({ packet, verdict: k.decoy ? 'rejected' : 'insufficient', reason: 'cannot tell from the evidence' }))));
+  const rec = await cli(cwd, 'verify', '--record', 'v-again.json', '--run', '0002');
+  assert.equal(rec.code, 0, rec.stderr);
   assert.deepEqual(await aiGroups(cwd), [], 'replaced: the run now says insufficient');
   const state = JSON.parse(readFileSync(join(cwd, '.nunchi', 'state', 'ledger.json'), 'utf8'));
   assert.equal(state.folds.filter(f => f.source === 'ai').length, 2, 'one AI fold per run');
+});
+
+// ---- #1: verdicts come from the answer key, never from files in the project ----------------------------------------
+
+test('AI fold: statuses and "suspect" written by hand into ai-findings.json or verify.json never reach the ledger; only the key\'s recorded verdicts do', async () => {
+  const cwd = project();
+  const dir = makeRun(cwd, '0001');
+  // the verifier confirmed the decoy too: the run is suspect
+  assert.equal((await huntAndVerify(cwd, '0001', { decoys: 'confirmed' })).code, 0);
+  let [g] = await aiGroups(cwd);
+  assert.deepEqual([g.example.verification.status, g.example.verification.suspect, g.checked], ['confirmed', true, false]);
+  // an agent rewrites the run's files: not suspect, confirmed by a cross-vendor verifier
+  const doc = JSON.parse(readFileSync(join(dir, 'ai-findings.json'), 'utf8'));
+  writeFileSync(join(dir, 'ai-findings.json'), JSON.stringify({ ...doc, findings: doc.findings.map(f => ({ ...f, status: 'confirmed', verification: { ...f.verification, suspect: false, verifier: 'cross-vendor', vendor: 'other' } })) }));
+  const v = JSON.parse(readFileSync(join(dir, 'verify.json'), 'utf8'));
+  writeFileSync(join(dir, 'verify.json'), JSON.stringify({ ...v, suspect: false, suspectReason: undefined, decoys: { ...v.decoys, passedThrough: 0, rate: 0 } }));
+  [g] = await aiGroups(cwd);
+  assert.deepEqual([g.example.verification.status, g.example.verification.suspect, g.example.verification.by, g.checked], ['confirmed', true, 'same-model check', false], 'the key still says suspect');
+  // a claim the key does not back (a hunt never verified, a status written by hand) is a claim
+  const dir2 = makeRun(cwd, '0002', { salts: { tasksM: 33, tasksD: 44 } });
+  await huntAndVerify(cwd, '0002', { cells: [] });
+  const base = doc.findings[0];
+  writeFileSync(join(dir2, 'ai-findings.json'), JSON.stringify({ schema: 1, findings: [{ ...base, rule: 'L9.input-lost-on-leave', status: 'confirmed', identity: undefined, verification: { packet: 'p001', verdict: 'confirmed', severity: 'blocker', claimedSeverity: 'high', reason: 'forged', verifier: 'same-model check' } }] }));
+  const forged = (await aiGroups(cwd)).find(x => x.rule === 'L9.input-lost-on-leave');
+  assert.deepEqual([forged.example.verification.status, forged.severity, forged.checked], ['claimed', 'high', false], 'no key backs it: claimed, as severe as the claim');
+  // and a key whose recorded verdicts were for other claims backs nothing: the round no longer matches
+  writeFileSync(join(dir, 'ai-findings.json'), JSON.stringify({ ...doc, findings: doc.findings.map(f => ({ ...f, evidence: { ...f.evidence, claim: 'reworded after the verdicts' } })) }));
+  [g] = (await aiGroups(cwd)).filter(x => x.rule === 'L9.destructive-without-confirm');
+  assert.equal(g.example.verification.status, 'claimed', 'the claim changed since it was verified');
+});
+
+test('AI fold: a hunt that claimed nothing folds from its coverage, so two silent hunts make an item stale', async () => {
+  const cwd = project();
+  makeRun(cwd, '0001');
+  assert.equal((await huntAndVerify(cwd, '0001')).code, 0);
+  for (const id of ['0002', '0003']) {
+    makeRun(cwd, id);
+    assert.equal(await huntAndVerify(cwd, id, { cells: [] }), null);
+  }
+  const state = JSON.parse(readFileSync(join(cwd, '.nunchi', 'state', 'ledger.json'), 'utf8'));
+  assert.deepEqual(state.folds.filter(f => f.source === 'ai').map(f => f.run), ['0001', '0002', '0003'], 'each hunt folded, also with no claim');
+  const [g] = await aiGroups(cwd);
+  assert.equal(g.status, 'stale');
+  assert.match((await cli(cwd, 'findings')).stdout, /1 AI group\(s\) stale: 2 later hunts saw their screens/);
+});
+
+test('AI fold: the grounding check is hunt --record\'s — a scene not in the run, a file not under the root, a line past its end, a blank line for a file-only claim are refused', async () => {
+  const cwd = project();
+  const dir = makeRun(cwd, '0001');
+  // the run's source map names a file that is not under the app root: knowing its name is not enough
+  writeFileSync(join(dir, 'source-map.json'), JSON.stringify({ routes: { '/tasks': ['app/tasks.tsx', 'app/gone.tsx'] }, files: { 'app/tasks.tsx': ['/tasks'], 'app/gone.tsx': ['/tasks'] } }));
+  writeFileSync(join(cwd, 'app', 'blank.tsx'), 'export const a = 1;\n\nexport const b = 2;\n');
+  const f = (over = {}) => ({ source: 'ai', status: 'claimed', lens: 'L9', rule: 'L9.destructive-without-confirm', severity: 'high', scene: 'tasks.guest.normal.m', route: '/tasks', viewport: 'm', selector: null, box: null, evidence: { claim: 'c', file: 'app/tasks.tsx', line: 2 }, ...over });
+  writeFileSync(join(dir, 'ai-findings.json'), JSON.stringify({ schema: 1, findings: [
+    f(),
+    f({ scene: 'nowhere.guest.normal.m' }),
+    f({ scene: '../tasks.guest.normal.m' }),
+    f({ evidence: { claim: 'c', file: 'app/gone.tsx', line: 1 } }),
+    f({ evidence: { claim: 'c', file: 'app/tasks.tsx', line: 3 } }),
+    f({ evidence: { claim: 'c', file: 'app/tasks.tsx', line: 5 } }),
+    f({ evidence: { claim: 'c', file: 'app/blank.tsx', line: 2 } }),
+    f({ selector: 'button#delete-all', evidence: { claim: 'c', file: 'app/blank.tsx', line: 2 } }),
+  ] }));
+  const input = aiFoldInput(dir, { root: cwd });
+  assert.deepEqual(input.rejected.map(x => [x.finding, x.reason]), [[1, 'scene-not-in-run'], [2, 'scene-not-in-run'], [3, 'source-not-found'], [5, 'source-not-found'], [6, 'source-line-blank']]);
+  assert.deepEqual(input.findings.length, 3, 'line 3 is inside the file (5 is one past its end); a blank line beside a selector is fine');
+  // hunt --record refuses a file-only claim on a blank line too
+  const lenses = loadLenses({ root: cwd }).lenses;
+  const plan = planHunt({ runDir: dir, lenses, lensIds: ['L9'], runId: '0001' });
+  const unit = plan.units.find(u => u.scenes[0].route === '/tasks');
+  const r = recordHunt({ runDir: dir, plan, root: cwd, answers: { units: [answerAll(unit, 'none', { 'L9.destructive-without-confirm': { answer: 'defect', defects: [{ scene: 'tasks.guest.normal.m', source: 'app/blank.tsx:2', claim: 'c', severity: 'high' }] } })] } });
+  assert.deepEqual(r.rejected.map(x => [x.reason, /blank line/.test(x.detail)]), [['source-not-found', true]]);
+});
+
+// ---- #5: the AI fingerprint neither merges two defects nor splits one ------------------------------------------
+
+test('§2.3: two controls whose selectors normalise alike but whose names differ are two items; one name with a count in it is one', () => {
+  const rows = [ctl('ul > li:nth-of-type(1) > button', 'Delete', [0, 0, 40, 20]), ctl('ul > li:nth-of-type(2) > button', 'Archive', [0, 30, 40, 20]), ctl('ul > li:nth-of-type(3) > button', 'Archive 3 items', [0, 60, 40, 20])];
+  const fpOf = sel => { const finding = { source: 'ai', lens: 'L6', rule: 'L6.unclear-label', route: '/tasks', selector: sel, evidence: {} }; return L.fingerprintOf({ ...finding, identity: aiIdentity({ finding, controls: rows }) }).fp; };
+  assert.equal(L.normalizeSelector(rows[0].selector), L.normalizeSelector(rows[1].selector));
+  assert.notEqual(fpOf(rows[0].selector), fpOf(rows[1].selector), 'Delete and Archive: two defects');
+  const counted = n => aiIdentity({ finding: { route: '/tasks', selector: 'b', evidence: {} }, controls: [ctl('b', `Archive ${n} items`, [0, 0, 1, 1])] }).name;
+  assert.equal(counted(3), counted(12), 'data in the name does not split it');
+});
+
+test('§2.3: the line anchor survives a reformat, and tells apart the same text on two lines of a file', async () => {
+  const { lineAnchor } = await import('../src/ai-identity.mjs');
+  const a = 'function A() {\n  return (\n    <button>Delete</button>\n  );\n}\nfunction B() {\n  return (\n    <p>x</p>\n  );\n}\n';
+  const reformatted = 'function A() {\n    return  (\n\t<button>Delete</button>\n  );\n}\nfunction B() {\n  return (\n    <p>x</p>\n  );\n}\n';
+  assert.equal(lineAnchor(a, 3), lineAnchor(reformatted, 3), 'whitespace does not move it');
+  assert.equal(lineAnchor(a, 2), lineAnchor(reformatted, 2));
+  assert.notEqual(lineAnchor(a, 2), lineAnchor(a, 7), 'the first `return (` and the second are two lines');
+  assert.equal(lineAnchor(a, 7), lineAnchor(`// header\n${a}`, 8), 'the second stays the second when the file moves down');
+  assert.equal(lineAnchor('a\n\nb\n', 2), null, 'a blank line names nothing');
+  assert.equal(lineAnchor('a\n', 9), null);
+});
+
+test('§2.3: the fold keeps the element the hunt canonicalised when it still fits; one that does not fit is recomputed', async () => {
+  const cwd = project();
+  const dir = makeRun(cwd, '0001');
+  const f = (identity, selector = 'aria=button "Delete all"') => ({ source: 'ai', status: 'claimed', lens: 'L6', rule: 'L6.unclear-label', severity: 'medium', scene: 'tasks.guest.normal.m', route: '/tasks', viewport: 'm', selector, box: null, evidence: { claim: 'c' }, identity });
+  // a second "Delete all" control on the screen since: the hunt's choice stays (one of the controls of that name)
+  const controls = JSON.parse(readFileSync(join(dir, 'tasks.guest.normal.m', 'controls.json'), 'utf8'));
+  writeFileSync(join(dir, 'tasks.guest.normal.m', 'controls.json'), JSON.stringify([ctl('header > button.delete', 'Delete all', [0, 0, 10, 10]), ...controls]));
+  const hunted = { element: 'button#delete-all', file: null, anchor: null, name: 'Delete all', component: null, fileHash: null };
+  writeFileSync(join(dir, 'ai-findings.json'), JSON.stringify({ schema: 1, findings: [f(hunted), f({ ...hunted, element: 'main > a.invented' })] }));
+  const [kept, recomputed] = aiFoldInput(dir, { root: cwd }).findings;
+  assert.equal(kept.identity.element, 'button#delete-all', 'the hunt\'s element: the fingerprint does not move');
+  assert.equal(recomputed.identity.element, 'header > button.delete', 'an element that is no control of that name is not taken');
+  assert.notEqual(kept.fp, recomputed.fp);
 });
 
 // fold-level fixtures: an AI finding of a run, as aiFoldInput gives it

@@ -138,6 +138,14 @@ test('decoy pass-through above 10% marks the run\'s verifications suspect', () =
   assert.ok(two.findings.every(f => f.verification.suspect === true));
   const insufficient = recordVerdicts({ findings, key, verdicts: verdictsFor(key, 'insufficient', 10) });
   assert.equal(insufficient.verify.suspect, false, '"insufficient" on a decoy is not a pass-through');
+  // a decoy left unanswered counts as passed through: skipping the hard ones does not make a verifier look careful
+  const decoyIds = Object.keys(key.packets).filter(id => key.packets[id].decoy);
+  const skip = n => verdictsFor(key, 'rejected').filter(v => !decoyIds.slice(0, n).includes(v.packet));
+  const oneLeft = recordVerdicts({ findings, key, verdicts: skip(1) });
+  assert.deepEqual([oneLeft.verify.decoys.answered, oneLeft.verify.decoys.passedThrough, oneLeft.verify.suspect], [9, 1, false]);
+  const twoLeft = recordVerdicts({ findings, key, verdicts: skip(2) });
+  assert.deepEqual([twoLeft.verify.decoys.passedThrough, twoLeft.verify.suspect], [2, true]);
+  assert.match(twoLeft.verify.suspectReason, /decoy pass-through 2\/10 > 10%/);
 });
 
 test('bad verdicts are refused and nothing is recorded', () => {

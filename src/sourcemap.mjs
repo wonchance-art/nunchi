@@ -4,6 +4,7 @@
 // inside a comment still counts), because a missed edge would hide a stale screen.
 import { readFileSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { join, dirname, relative, sep, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 
 const posix = p => p.split(sep).join('/');
 const EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts'];
@@ -181,6 +182,26 @@ export function buildSourceMap(root, routes) {
   for (const f of Object.keys(byFile)) byFile[f] = [...new Set(byFile[f])].sort();
   const sortedFiles = Object.fromEntries(Object.keys(byFile).sort().map(k => [k, byFile[k]]));
   return { routes: byRoute, files: sortedFiles };
+}
+
+// What each route's code was at capture (written into a run as source-hashes.json): a hash of the contents of the
+// files the route renders, and of the app's config files at the root, which reach every route. A re-check can then
+// tell a route's code did not change between two captures (recheck.mjs). Contents only, never times: the same source
+// gives the same bytes.
+const CONFIG_FILE = /^(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|(next|vite|tailwind|postcss)\.config\.[cm]?[jt]s|tsconfig[^/]*\.json)$/;
+export function sourceHashes(root, map) {
+  root = resolve(root);
+  const h = data => createHash('sha256').update(data).digest('hex').slice(0, 16);
+  const files = new Map();
+  const hashOf = f => { if (!files.has(f)) { let v = null; try { v = h(readFileSync(join(root, f))); } catch {} files.set(f, v); } return files.get(f); };
+  let config = [];
+  try { config = readdirSync(root).filter(n => CONFIG_FILE.test(n)).sort(); } catch {}
+  const routes = {};
+  for (const route of Object.keys(map.routes || {}).sort()) {
+    const list = [...new Set([...(map.routes[route] || []), ...config])].sort();
+    routes[route] = h(JSON.stringify(list.map(f => [f, hashOf(f)])));
+  }
+  return { schema: 1, note: 'per route: a hash of the contents of the files it renders and of the app config files, at capture', routes };
 }
 
 // Routes whose rendered files intersect the changed files. A change to a file the map does not

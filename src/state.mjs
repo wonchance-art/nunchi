@@ -4,17 +4,22 @@
 //   `$(git rev-parse --git-common-dir)/nunchi/<app>/state`, so every worktree of the repository sees one ledger and
 //   one set of approvals (design §7). `<app>` is `root` for an app at the top of the repository and `app-<hash of
 //   its path in the repository>` for one in a subfolder, so two apps of a monorepo never share a ledger. Without
-//   git (or with a git nunchi cannot run safely, runs.mjs gitRunner) the state stays in `.nunchi/state`, per folder.
-//   A `.nunchi/state` written before the shared root existed is moved there once (adoptLegacy).
+//   git (or with a git nunchi cannot run safely, runs.mjs gitRunner) the state stays in `.nunchi/state`, per folder,
+//   and so it does when the shared folder cannot be written (resolveStateRoot, recorded in `.nunchi/state/fallback.json`).
+//   A `.nunchi/state` written before the shared root existed is moved there once (adoptLegacy); files of it that are
+//   committed to git never are.
 // - Writes. A document is read with its `rev`, changed, and committed under the file's lock only if its `rev` is
 //   still the one read; otherwise the writer reads again and retries (no lost updates, also when a lock was taken
 //   over from a holder judged stale). The file it replaces is kept as `<file>.prev`, the write is atomic and synced
-//   (stable.mjs writeAtomic), and the state's `generation` file is bumped so readers (the board) see a change.
+//   (stable.mjs writeAtomic), and the state's `generation` file is bumped so readers (the board) see a change. The
+//   bump comes after the document's write: a reader that sees a new generation finds the new document, but one that
+//   read the document between the two sees the old generation with the new document. A reader caches by the
+//   documents' `rev`, never by the generation alone (the generation says only "look again").
 // - Reads. A file that cannot be read or parsed is read once more (a Windows reader can meet a rename), then it is an
 //   error, never "empty".
 // - Answer keys (hunt, verify, re-check) live outside the project, under the user's state folder, so an agent
 //   working in the project does not read them by accident (design §2.2).
-import { readFileSync, lstatSync, openSync, fstatSync, closeSync, realpathSync, renameSync, rmSync, existsSync, readdirSync, constants } from 'node:fs';
+import { readFileSync, lstatSync, openSync, fstatSync, closeSync, realpathSync, renameSync, rmSync, existsSync, readdirSync, accessSync, constants } from 'node:fs';
 import { join, dirname, basename, resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { sha, stableJson, writeAtomic, writeStable, withLock, privateDir, refuseLink, retryBusy } from './stable.mjs';
@@ -137,7 +142,10 @@ export function updateDoc(file, fn, { read = {}, timeoutMs, prev = true, generat
 // ---- the state root ------------------------------------------------------------------------------------------
 
 const LEGACY = (projectDir) => join(projectDir, '.nunchi', 'state');
-// → { dir, shared, stream, legacy, gitCommonDir, prefix }
+// The record that this worktree keeps its state in `.nunchi/state` because the repository's shared folder could not
+// be written (resolveStateRoot): later commands read it and pick the same root.
+export const FALLBACK = 'fallback.json';
+// → { dir, shared, stream, legacy, gitCommonDir, prefix } (and `fallback: true` when a fallback was recorded)
 // - dir: the state folder; shared: true when it is the repository's (every worktree's);
 // - stream: which worktree's runs fold into it: `main` for the main worktree (and without git), `wt:<name>` for a
 //   linked one. Run ids are numbered per worktree, so a fold is keyed by its stream too (ledger.mjs);
@@ -154,6 +162,7 @@ export function stateRoot(projectDir, { git = true } = {}) {
     if (out && out.length >= 3 && isAbsolute(out[0]) && isAbsolute(out[1])) {
       // resolve(): git writes `C:/…` on Windows; the state folder is named the platform's way
       const common = resolve(out[0].trim()), gitDir = resolve(out[1].trim()), prefix = out[2].replace(/\r$/, '');
+      if (present(join(legacy, FALLBACK))) return { dir: legacy, shared: false, stream: 'main', legacy: null, gitCommonDir: common, prefix, fallback: true };
       const app = prefix ? `app-${sha(prefix, 12)}` : 'root';
       const same = common === gitDir;
       const stream = same ? 'main' : `wt:${basename(gitDir)}`;
@@ -161,6 +170,38 @@ export function stateRoot(projectDir, { git = true } = {}) {
     }
   }
   return { dir: legacy, shared: false, stream: 'main', legacy: null, gitCommonDir: null, prefix: null };
+}
+
+// The files under `.nunchi/state` that are committed to git (`git ls-files`, through gitRunner like every git call
+// of the engine). State that came through git is never read: anyone with push access could have written it.
+export function trackedState(projectDir) {
+  try {
+    const run = gitRunner(resolve(projectDir), { timeout: 15_000 });
+    return run(['ls-files', '-z', '--', '.nunchi/state'], { encoding: 'utf8' }).split('\0').filter(Boolean).map(p => basename(p)).sort();
+  } catch { return []; }
+}
+
+// The probe of a state folder nunchi is about to write: created owner-only, then checked writable. Through here so a
+// test can make it fail as a read-only or foreign-owned git folder does (tests may run as root, where modes do not).
+export const stateIo = { probe: root => { ensureStateDir(root); accessSync(root.dir, constants.W_OK); } };
+const UNWRITABLE = new Set(['EACCES', 'EPERM', 'EROFS', 'ENOTDIR', 'EEXIST']);
+// stateRoot, for a command that writes: when the repository's shared folder cannot be written (a read-only or
+// foreign-owned `.git`, or `nunchi` there being a file), this worktree keeps its state in `.nunchi/state` instead,
+// says so in one line (`warning`), and records the choice (`.nunchi/state/fallback.json`) so later commands pick the
+// same root. Deleting that file tries the shared folder again. → stateRoot's result, plus `warning` when it fell back.
+export function resolveStateRoot(projectDir) {
+  const root = stateRoot(projectDir);
+  if (!root.shared) return root;
+  try { stateIo.probe(root); return root; }
+  catch (e) {
+    if (!UNWRITABLE.has(e.code)) throw e;
+    const legacy = root.legacy, marker = join(legacy, FALLBACK);
+    privateDir(legacy);
+    refuseLink(legacy);
+    writeStable(marker, { schema: 1, note: 'this worktree keeps its nunchi state here: the repository\'s shared state folder could not be written; delete this file to try it again', shared: root.dir, code: e.code });
+    const fallback = { dir: legacy, shared: false, stream: 'main', legacy: null, gitCommonDir: root.gitCommonDir, prefix: root.prefix, fallback: true };
+    return { ...fallback, warning: `the repository's shared state folder ${root.dir} cannot be written (${e.code}); this worktree keeps its state in .nunchi/state instead (recorded in .nunchi/state/${FALLBACK}; delete it to try the shared folder again)` };
+  }
 }
 
 export const stateFiles = dir => ({
@@ -176,38 +217,47 @@ export function ensureStateDir(root) {
 }
 
 // A `.nunchi/state` written before the state was shared is moved into the shared folder once:
-// - the ledger, when the shared folder has none yet (it becomes the shared ledger, its folds tagged with this
-//   worktree's stream). When the shared folder already has a ledger (another worktree's), only the times this
-//   machine first saw each decision are merged (the earliest wins); this worktree's runs are folded again by the
-//   next ledger command, presence-only where another worktree's newer runs were folded first.
+// - the ledger, when the shared folder has none yet: it becomes the shared ledger (`migrateLedger`: its folds and
+//   items tagged with this worktree's stream). When the shared folder already has a ledger (another worktree's), the
+//   open items it does not have are carried over, tagged with this worktree's stream (`carryLedger`), and what was
+//   not carried is said; this worktree's runs are folded again by the next ledger command.
 // - approvals: added to the shared list (both are approvals made on this machine).
-// The moved files are left beside, renamed `<name>.moved`, never deleted. → what was moved.
-export function adoptLegacy(root, { migrateLedger = d => d, validateLedger = () => true, validateApproved = () => true, mergeApproved = (a, b) => b } = {}) {
-  if (!root.shared || !root.legacy || !present(root.legacy)) return [];
-  const moved = [];
+// - Never taken: when this machine first saw each decision (`decisionsSeen`). A file can claim any time, and an early
+//   one would let a decision outrank later ones; the decisions are noted again, from now.
+// - A file committed to git (`tracked`, from trackedState) is never adopted: it stays where it is, and is said.
+// The moved files are left beside, renamed `<name>.moved`, never deleted.
+// → { moved, tracked, carried, notCarried }: file names, and what carryLedger reported.
+export function adoptLegacy(root, { tracked = [], migrateLedger = d => d, carryLedger = cur => ({ doc: cur, carried: 0, notCarried: [] }), validateLedger = () => true, validateApproved = () => true, mergeApproved = (a, b) => b } = {}) {
+  const out = { moved: [], tracked: [], carried: 0, notCarried: [] };
+  if (!root.shared || !root.legacy || !present(root.legacy)) return out;
   const files = stateFiles(root.dir), old = stateFiles(root.legacy);
+  const skip = new Set(tracked);
   // another nunchi process may be moving the same file right now: one that is gone was moved, not lost
   const read = (file, opts) => { try { return readDoc(file, opts).doc; } catch (e) { if (!present(file)) return null; throw e; } };
   const putAside = file => { try { retryBusy(() => renameSync(file, `${file}.moved`)); return true; } catch (e) { if (e.code === 'ENOENT') return false; throw e; } };
-  const legacyLedger = present(old.ledger) ? read(old.ledger, { fix: 'it is the ledger an older nunchi wrote; delete it and the runs on disk rebuild it', validate: validateLedger, why: 'is not a nunchi ledger' }) : null;
+  const committed = file => { if (!present(file) || !skip.has(basename(file))) return false; out.tracked.push(basename(file)); return true; };
+  const legacyLedger = present(old.ledger) && !committed(old.ledger) ? read(old.ledger, { fix: 'it is the ledger an older nunchi wrote; delete it and the runs on disk rebuild it', validate: validateLedger, why: 'is not a nunchi ledger' }) : null;
   if (legacyLedger) {
     ensureStateDir(root);
+    const { decisionsSeen: _ignored, ...rest } = legacyLedger;
+    let carried = 0, notCarried = [];
     updateDoc(files.ledger, cur => {
-      if (cur === null) return { ...migrateLedger(legacyLedger, root.stream), rev: undefined };
-      const seen = { ...(cur.decisionsSeen || {}) };
-      for (const [k, t] of Object.entries(legacyLedger.decisionsSeen || {})) if (!Object.hasOwn(seen, k) || t < seen[k]) seen[k] = t;
-      if (stableJson(seen) === stableJson(cur.decisionsSeen || {})) return cur;
-      return { ...cur, decisionsSeen: seen };
+      if (cur === null) { carried = 0; notCarried = []; return { ...migrateLedger(rest, root.stream), rev: undefined }; }
+      const r = carryLedger(cur, rest, root.stream);
+      carried = r.carried; notCarried = r.notCarried;
+      return r.doc;
     }, { read: { validate: validateLedger, why: 'is not a nunchi ledger' }, generation: files.generation });
-    if (putAside(old.ledger)) moved.push('ledger.json');
+    out.carried = carried; out.notCarried = notCarried;
+    if (putAside(old.ledger)) out.moved.push('ledger.json');
   }
-  const legacyApproved = present(old.approved) ? read(old.approved, { fix: 'nothing was written; fix it by hand or delete it', validate: validateApproved, why: 'has no "approved" list' }) : null;
+  const legacyApproved = present(old.approved) && !committed(old.approved) ? read(old.approved, { fix: 'nothing was written; fix it by hand or delete it', validate: validateApproved, why: 'has no "approved" list' }) : null;
   if (legacyApproved) {
     ensureStateDir(root);
     updateDoc(files.approved, cur => mergeApproved(cur, legacyApproved), { read: { validate: validateApproved, why: 'has no "approved" list' }, prev: false, generation: files.generation });
-    if (putAside(old.approved)) moved.push('approved.json');
+    if (putAside(old.approved)) out.moved.push('approved.json');
   }
-  return moved;
+  out.tracked.sort();
+  return out;
 }
 
 // ---- answer keys outside the project ---------------------------------------------------------------------------
@@ -234,23 +284,39 @@ const checkName = name => { if (!KEY_NAMES.has(name)) throw new Error(`not an an
 export function writeKey(runDir, name, value, env) {
   checkName(name);
   const p = keyPath(runDir, name, env);
+  // every folder from the user's state base down is nunchi's own: a link among them is refused, never followed
+  // (the folders above the base are the user's)
+  const base = userStateBase(env);
+  for (let d = dirname(p); ; d = dirname(d)) { refuseLink(d); if (d === base || dirname(d) === d) break; }
   privateDir(dirname(p));
+  for (let d = dirname(p); ; d = dirname(d)) { refuseLink(d); if (d === base || dirname(d) === d) break; }
   writeStable(p, value);                                     // 0600, atomic, never through a link
   const old = join(runDir, name);
   if (present(old)) rmSync(old, { force: true });            // an older nunchi's copy inside the project goes
   return p;
 }
-// The key, from outside the project; a key an older nunchi left inside the run is read once and moved out.
-export function readKey(runDir, name, env) {
+const KEY_FIX = 'it is an answer key nunchi wrote; plan again to make a new one';
+const KEY_MAX = 64 * 1024 * 1024;
+// The key as it is, from outside the project, or null: a pure read (the ledger's fold reads keys this way).
+export function peekKey(runDir, name, env) {
   checkName(name);
   const p = keyPath(runDir, name, env);
-  const fix = 'it is an answer key nunchi wrote; plan again to make a new one';
-  if (present(p)) return readJsonFile(p, fix, { max: 64 * 1024 * 1024, retry: true });
+  return present(p) ? readJsonFile(p, KEY_FIX, { max: KEY_MAX, retry: true }) : null;
+}
+// What a key an older nunchi left inside the project may carry: its plan, never recorded verdicts (a file in the
+// project can say anything, design §2.2). Re-check keys came after keys moved out: none is read from the project.
+const LEGACY_KEYS = new Set(['hunt-key.json', 'verify-key.json']);
+// The key, from outside the project; a hunt or verify key an older nunchi left inside the run is read once and moved
+// out, without any verdicts it holds.
+export function readKey(runDir, name, env) {
+  const value = peekKey(runDir, name, env);
+  if (value !== null) return value;
   const old = join(runDir, name);
-  if (!present(old)) return null;
-  const value = readJsonFile(old, fix, { max: 64 * 1024 * 1024 });
-  writeKey(runDir, name, value, env);
-  return value;
+  if (!LEGACY_KEYS.has(name) || !present(old)) return null;
+  const doc = readJsonFile(old, KEY_FIX, { max: KEY_MAX });
+  const { recorded: _r, earlier: _e, ...plan } = doc && typeof doc === 'object' && !Array.isArray(doc) ? doc : {};
+  writeKey(runDir, name, plan, env);
+  return plan;
 }
 export function removeKey(runDir, name, env) {
   checkName(name);
