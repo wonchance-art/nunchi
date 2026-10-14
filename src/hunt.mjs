@@ -288,7 +288,27 @@ export function writeHuntMirror(runDir, key) {
 const ANSWERS = ['defect', 'none', 'cannot-judge'];
 const UNIT_KEYS = ['unit', 'items'];
 const ITEM_KEYS = ['answer', 'reason', 'defects'];
-const DEFECT_KEYS = ['scene', 'selector', 'source', 'claim', 'severity'];
+// `evidence: {file, line}` grounds a defect in the app's source (design §2.5: `evidence.file` replaces the overloaded
+// word "source", which on a finding means rule or ai). Answers written before it say `source: "path:line"`: still read
+// (answerGround), and one defect never carries both.
+const DEFECT_KEYS = ['scene', 'selector', 'evidence', 'source', 'claim', 'severity'];
+const EVIDENCE_KEYS = ['file', 'line'];
+// A defect's source ground, as `path:line` for checkSource: from `evidence: {file, line}`, or an older answer's `source`.
+// → { none: true } when it has none, { ground } when it has one, { error, shape? } when it cannot be read (`shape`: the
+// defect's form is wrong, not the file or line it names).
+export function answerGround(d) {
+  const hasEv = d.evidence !== undefined && d.evidence !== null, hasOld = d.source !== undefined && d.source !== null;
+  if (hasEv && hasOld) return { shape: true, error: 'give the file and line once, as "evidence": {"file", "line"} (the older "source" is not read beside it)' };
+  if (hasOld) return typeof d.source === 'string' ? { ground: d.source.trim() } : { error: 'source must be text ("path/to/file.tsx:42"; new answers say "evidence": {"file", "line"})' };
+  if (!hasEv) return { none: true };
+  const ev = d.evidence;
+  if (!isObj(ev)) return { shape: true, error: 'evidence is {"file": "path/to/file.tsx", "line": 42}' };
+  const extra = Object.keys(ev).filter(k => !EVIDENCE_KEYS.includes(k));
+  if (extra.length) return { shape: true, error: `evidence takes "file" and "line" only (unknown key(s) ${extra.sort().join(', ')})` };
+  if (typeof ev.file !== 'string' || !ev.file.trim()) return { error: 'evidence.file must be a path under the app root, e.g. "app/tasks.tsx"' };
+  if (!Number.isInteger(ev.line)) return { error: 'evidence.line must be a whole number (the line of evidence.file)' };
+  return { ground: `${ev.file.trim()}:${ev.line}` };
+}
 const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const clip = (v, n = 200) => (typeof v === 'string' ? (v.length > n ? v.slice(0, n) + '…' : v) : undefined);
 
@@ -338,14 +358,14 @@ export function sceneIndex(runDir, sceneId) {
 // A file:line under the app root. Not nunchi's own folder, not dependencies; symlinks must stay inside.
 export function checkSource(root, source, cache) {
   const m = /^(.+):(\d+)$/.exec(source);
-  if (!m) return { error: 'source must look like path/to/file.tsx:42' };
+  if (!m) return { error: 'evidence.file and line must name a file and a line, e.g. path/to/file.tsx:42' };
   const rel = m[1].replace(/\\/g, '/'); const line = Number(m[2]);
-  if (isAbsolute(rel) || /^[a-zA-Z]:/.test(rel)) return { error: 'source path must be relative to the app root' };
+  if (isAbsolute(rel) || /^[a-zA-Z]:/.test(rel)) return { error: 'evidence.file must be relative to the app root' };
   const abs = resolve(root, rel);
   const r = relative(root, abs);
-  if (!r || r.startsWith('..') || isAbsolute(r)) return { error: 'source path is outside the app root' };
+  if (!r || r.startsWith('..') || isAbsolute(r)) return { error: 'evidence.file is outside the app root' };
   const parts = r.split(sep);
-  if (parts.includes('.nunchi') || parts.includes('node_modules') || parts.includes('.git')) return { error: 'source must be the app\'s own source (not .nunchi, node_modules or .git)' };
+  if (parts.includes('.nunchi') || parts.includes('node_modules') || parts.includes('.git')) return { error: 'evidence.file must be the app\'s own source (not .nunchi, node_modules or .git)' };
   if (!cache.has(abs)) {
     let lines = null;
     try {
@@ -355,7 +375,7 @@ export function checkSource(root, source, cache) {
     cache.set(abs, lines);
   }
   const lines = cache.get(abs);
-  if (lines == null) return { error: 'source file not found under the app root' };
+  if (lines == null) return { error: 'evidence.file not found under the app root' };
   if (line < 1 || line > lines) return { error: `line ${line} is outside the file (1–${lines})` };
   return { file: r.split(sep).join('/'), line };
 }
@@ -433,7 +453,7 @@ export function recordHunt({ runDir, plan, answers, root, key = null }) {
         const kept = new Map();
         for (const d of ans.defects) {
           const r = { unit: unit.id, item: item.id, scene: isObj(d) && typeof d.scene === 'string' ? d.scene : undefined, claim: isObj(d) ? clip(d.claim) : undefined };
-          if (!isObj(d)) { reject({ ...r, reason: 'bad-shape', detail: 'a defect is {"scene", "selector" and/or "source", "claim", "severity"}' }); continue; }
+          if (!isObj(d)) { reject({ ...r, reason: 'bad-shape', detail: 'a defect is {"scene", "selector" and/or "evidence": {"file", "line"}, "claim", "severity"}' }); continue; }
           const extraD = Object.keys(d).filter(k => !DEFECT_KEYS.includes(k));
           if (extraD.length) { reject({ ...r, reason: 'bad-shape', detail: `unknown key(s) ${extraD.sort().join(', ')}` }); continue; }
           const scene = unit.scenes.find(s => s.scene === d.scene);
@@ -441,7 +461,9 @@ export function recordHunt({ runDir, plan, answers, root, key = null }) {
           if (!applies.includes(scene.scene)) { reject({ ...r, reason: 'item-not-for-scene' }); continue; }
           if (typeof d.claim !== 'string' || !d.claim.trim() || d.claim.length > 500) { reject({ ...r, reason: 'bad-claim', detail: 'a short claim (1–500 characters) is required' }); continue; }
           if (!SEVERITIES.includes(d.severity)) { reject({ ...r, reason: 'bad-severity', detail: `one of ${SEVERITIES.join(', ')}` }); continue; }
-          const hasSel = d.selector !== undefined && d.selector !== null; const hasSrc = d.source !== undefined && d.source !== null;
+          const ground = answerGround(d);
+          if (ground.shape) { reject({ ...r, reason: 'bad-shape', detail: ground.error }); continue; }
+          const hasSel = d.selector !== undefined && d.selector !== null; const hasSrc = !ground.none;
           if (!hasSel && !hasSrc) { reject({ ...r, reason: 'ungrounded', detail: 'no selector and no file:line: image-only claims are not findings' }); continue; }
           let where = null; let box = null; let inside = null; let selector = null;
           if (hasSel) {
@@ -460,7 +482,7 @@ export function recordHunt({ runDir, plan, answers, root, key = null }) {
           }
           let src = null;
           if (hasSrc) {
-            src = typeof d.source === 'string' ? checkSource(root, d.source.trim(), srcCache) : { error: 'source must be text' };
+            src = ground.error ? { error: ground.error } : checkSource(root, ground.ground, srcCache);
             if (src.error) { reject({ ...r, reason: 'source-not-found', detail: src.error }); continue; }
           }
           const f = {

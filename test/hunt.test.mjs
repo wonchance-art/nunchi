@@ -222,7 +222,7 @@ test('record: grounded claims accepted, image-only and invented selectors reject
   const answers = { schema: 1, plan: plan.id, units: [
     answerAll(l6, 'none', { 'L6.vague-error': { answer: 'defect', defects: [{ scene: 'tasks.guest.error.m', selector: 'aria=paragraph: Oops! Something went wrong.', claim: 'The error says nothing about what failed or what to do.', severity: 'medium' }] } }),
     answerAll(l5, 'none', { 'L5.mixed-capitalisation': { answer: 'defect', defects: [{ scene: 'tasks.guest.normal.d', selector: 'button#add-task', claim: '"Add Task" is Title Case; "Delete all" is Sentence case.', severity: 'low' }] } }),
-    answerAll(l9, 'none', { 'L9.destructive-without-confirm': { answer: 'defect', defects: [{ scene: 'tasks.guest.normal.m', selector: 'button#delete-all', source: 'app/tasks.tsx:2', claim: '"Delete all" clears the store on click, no confirmation or undo.', severity: 'high' }] } }),
+    answerAll(l9, 'none', { 'L9.destructive-without-confirm': { answer: 'defect', defects: [{ scene: 'tasks.guest.normal.m', selector: 'button#delete-all', evidence: { file: 'app/tasks.tsx', line: 2 }, claim: '"Delete all" clears the store on click, no confirmation or undo.', severity: 'high' }] } }),
     // image-only claim: the only defect of its item is rejected, so the unit is not seen
     answerAll(l1, 'none', { 'L1.overlap': { answer: 'defect', defects: [{ scene: 'tasks.guest.normal.m', claim: 'The header overlaps the list in the screenshot.', severity: 'medium' }] } }),
     // a selector that is not in the evidence, and one checklist item left out
@@ -262,9 +262,9 @@ test('record: answers are data — bad shapes, path escapes and stale plans are 
   const d = over => ({ scene: 'tasks.guest.normal.m', claim: 'x', severity: 'high', ...over });
   const r = recordHunt({ runDir, plan, root: cwd, answers: { units: [
     answerAll(unit, 'none', { 'L9.destructive-without-confirm': { answer: 'defect', defects: [
-      d({ source: '../../etc/passwd:1' }),
-      d({ source: 'app/tasks.tsx:99' }),
-      d({ source: '.nunchi/runs/0001/manifest.json:1' }),
+      d({ evidence: { file: '../../etc/passwd', line: 1 } }),
+      d({ evidence: { file: 'app/tasks.tsx', line: 99 } }),
+      d({ evidence: { file: '.nunchi/runs/0001/manifest.json', line: 1 } }),
       d({ selector: 'button#delete-all', scene: '~.guest.normal.m' }),
       d({ selector: 'button#delete-all', severity: 'critical' }),
       d({ selector: 'button#delete-all', exec: 'process.exit(1)' }),
@@ -286,6 +286,26 @@ test('record: answers are data — bad shapes, path escapes and stale plans are 
   // a unit cut by the budget and not answered keeps that reason
   assert.ok(r.coverage.cells.some(c => c.unit !== unit.id && c.reason === 'budget'));
   assert.throws(() => recordHunt({ runDir, plan, root: cwd, answers: { plan: '000000000000', units: [] } }), e => e.code === 'STALE_ANSWERS');
+});
+
+test('record: a source ground is evidence: {file, line} (design §2.5); an older answer\'s "source": "path:line" is still read the same way, and never both', () => {
+  const { cwd, runDir, lenses } = setup();
+  const plan = planHunt({ runDir, lenses, lensIds: ['L9'], budget: 1 });
+  const unit = plan.units.find(u => u.scenes[0].route === '/tasks');
+  const d = over => ({ scene: 'tasks.guest.normal.m', claim: '"Delete all" clears the store at once.', severity: 'high', ...over });
+  const one = def => recordHunt({ runDir, plan, root: cwd, answers: { units: [answerAll(unit, 'none', { 'L9.destructive-without-confirm': { answer: 'defect', defects: [def] } })] } });
+  const now = one(d({ evidence: { file: 'app/tasks.tsx', line: 2 } }));
+  const old = one(d({ source: 'app/tasks.tsx:2' }));
+  assert.equal(now.findings.length, 1);
+  assert.equal(stableJson(old), stableJson(now), 'the old answer form gives the same record');
+  assert.deepEqual([now.findings[0].evidence.file, now.findings[0].evidence.line, now.findings[0].source], ['app/tasks.tsx', 2, 'ai']);
+  const why = def => { const r = one(def); return r.findings.length ? 'accepted' : r.rejected.map(x => `${x.reason}: ${x.detail}`).join(' | '); };
+  assert.match(why(d({ evidence: { file: 'app/tasks.tsx', line: 2 }, source: 'app/tasks.tsx:2' })), /^bad-shape: give the file and line once/);
+  assert.match(why(d({ evidence: { file: 'app/tasks.tsx', line: 2, run: 'x' } })), /^bad-shape: evidence takes "file" and "line" only/);
+  assert.match(why(d({ evidence: 'app/tasks.tsx:2' })), /^bad-shape: evidence is \{"file"/);
+  assert.match(why(d({ evidence: { file: 'app/tasks.tsx', line: '2' } })), /^source-not-found: evidence.line must be a whole number/);
+  assert.match(why(d({ evidence: { file: 'app/tasks.tsx' } })), /^source-not-found: evidence.line must be a whole number/);
+  assert.match(why(d({ source: 42 })), /^source-not-found: source must be text/);
 });
 
 test('record: a later answers file re-hunts a unit and replaces its answer; twice in one file is refused', () => {

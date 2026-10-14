@@ -93,8 +93,9 @@ After step 6, when the user wants the deeper sweep. The engine cuts the work and
    - `selector`: copied exactly from that scene's controls.json, styles.json, links.json or measure.json, or
      `aria=<node>` with an aria.yml line minus its leading `- ` (e.g. `aria=button "Delete garden"`; a node with text
      after its name, `group "Week 3": Mon Tue …`, may be cited by role and name: `aria=group "Week 3"`), and/or
-   - `source`: `path/to/file.tsx:42` under the app root, when you read the code that causes it (the source
-     slice's file:line is a good ground when the defect on screen comes from that line),
+   - `evidence`: `{"file": "path/to/file.tsx", "line": 42}` under the app root, when you read the code that causes
+     it (the source slice's file:line is a good ground when the defect on screen comes from that line; answers written
+     before this said `"source": "path:line"`, which is still read, never beside `evidence`),
    - `claim`: one short sentence, and `severity` (blocker, high, medium, low) from the lens's rubric.
    A claim backed only by the screenshot is rejected: find the element first. Never invent a selector.
 4. Write the answers (one file, or a folder of files read in name order) and run `hunt --record <file|folder>`:

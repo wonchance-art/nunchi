@@ -46,7 +46,7 @@ export function score(answers, manifest, findings) {
 
 // AI-lens seeds (rule: null, with an `ai` hint): a seed is found when an AI claim (claimed or confirmed, not
 // rejected by the verifier) has its lens and route, a state in `ai.states` when given, and either a checklist id
-// in `ai.rules` or one of `ai.match` in its claim, selector or source (case-insensitive). Coarse on purpose:
+// in `ai.rules` or one of `ai.match` in its claim, selector or grounded file:line (case-insensitive). Coarse on purpose:
 // the answer key names a defect, not an element, and every hit is listed for a human to check. `ai.viewports`
 // limits a seed to the widths it exists on.
 export function scoreAi(answers, manifest, findings) {

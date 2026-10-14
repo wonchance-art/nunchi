@@ -68,7 +68,7 @@ const answerAll = (unit, answer, over = {}) => ({ unit: unit.id, items: Object.f
 // hunt (L9) and verify a run through the CLI, as the skill does
 async function huntAndVerify(cwd, id, { cells = ['m', 'd'], verdict = 'confirmed', severity = 'high', claimed = 'high', decoys = 'rejected', source = true, claim = 'Delete all clears the store at once.' } = {}) {
   const plan = await json(cwd, 'hunt', '--plan', '--run', id, '--lens', 'L9');
-  const units = plan.units.map(u => (u.scenes[0].route !== '/tasks' ? answerAll(u, 'none') : answerAll(u, 'none', cells.length ? { 'L9.destructive-without-confirm': { answer: 'defect', defects: cells.map(vp => ({ scene: `tasks.guest.normal.${vp}`, selector: 'button#delete-all', ...(source ? { source: 'app/tasks.tsx:2' } : {}), claim, severity: claimed })) } } : {})));
+  const units = plan.units.map(u => (u.scenes[0].route !== '/tasks' ? answerAll(u, 'none') : answerAll(u, 'none', cells.length ? { 'L9.destructive-without-confirm': { answer: 'defect', defects: cells.map(vp => ({ scene: `tasks.guest.normal.${vp}`, selector: 'button#delete-all', ...(source ? { evidence: { file: 'app/tasks.tsx', line: 2 } } : {}), claim, severity: claimed })) } } : {})));
   writeFileSync(join(cwd, `answers-${id}.json`), JSON.stringify({ plan: plan.id, units }));
   assert.equal((await cli(cwd, 'hunt', '--record', `answers-${id}.json`, '--run', id)).code, 0);
   if (!cells.length) return null;
@@ -432,7 +432,7 @@ test('AI fold: the grounding check is hunt --record\'s — a scene not in the ru
   const lenses = loadLenses({ root: cwd }).lenses;
   const plan = planHunt({ runDir: dir, lenses, lensIds: ['L9'], runId: '0001' });
   const unit = plan.units.find(u => u.scenes[0].route === '/tasks');
-  const r = recordHunt({ runDir: dir, plan, root: cwd, answers: { units: [answerAll(unit, 'none', { 'L9.destructive-without-confirm': { answer: 'defect', defects: [{ scene: 'tasks.guest.normal.m', source: 'app/blank.tsx:2', claim: 'c', severity: 'high' }] } })] } });
+  const r = recordHunt({ runDir: dir, plan, root: cwd, answers: { units: [answerAll(unit, 'none', { 'L9.destructive-without-confirm': { answer: 'defect', defects: [{ scene: 'tasks.guest.normal.m', evidence: { file: 'app/blank.tsx', line: 2 }, claim: 'c', severity: 'high' }] } })] } });
   assert.deepEqual(r.rejected.map(x => [x.reason, /blank line/.test(x.detail)]), [['source-not-found', true]]);
 });
 

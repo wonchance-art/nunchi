@@ -600,7 +600,7 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   it), candidates (every candidate touching those files)}`, written on first use. It is listed after the reference
   scene's files and before the scenes under review, and counted in the estimate. A route no inventory file renders,
   or a run without `inventory.json`, gets no slice. Candidates are hints; a defect the code causes is grounded with
-  `source: file:line`.
+  `evidence: {file, line}` (an older answer's `source: "file:line"` is read the same way, M3).
 - *Estimate:* text files bytes/4; JPEGs width × height / 750 after scaling to ≤1568 px long edge and ≤1.15 MP (max
   1,600; read from the JPEG header); per unit, the lens text (bytes/4) + 80 tokens per checklist item per scene for
   the answer. An estimate, not a measurement. Units are spent in a fixed order — lens by lens, worst defects first
@@ -618,7 +618,7 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   answered twice in one file is refused and left unanswered): every item
   must be answered `defect`/`none`/`cannot-judge`; a defect needs a scene under review, a claim, a severity and a
   ground — a selector found verbatim in that scene's controls/styles/links/measure JSON or an `aria=<node>` line of
-  aria.yml (a node with inline text also by its role and name alone), and/or a `file:line` that exists under the app root (not `.nunchi/`, `node_modules/`, `.git/`; symlinks
+  aria.yml (a node with inline text also by its role and name alone), and/or `evidence: {file, line}` naming a line that exists under the app root (not `.nunchi/`, `node_modules/`, `.git/`; symlinks
   must stay inside). Anything else is listed in `rejected` with a reason; an item whose only defects were rejected
   counts as unanswered, so the unit stays *not seen: incomplete*. Findings use the rule-finding shape plus
   `source: "ai"`, `status: "claimed"`; box comes from controls.json or measure.json when the selector has one.
@@ -966,11 +966,15 @@ else is derived from those, the same whatever order the folds come in:
   makes it open again. `lastHunted` and `silentHunts` are on the item.
 - *Needs you:* a re-check that said `insufficient` and nothing still there (`needsYou: {reason, run}`).
 - *Not done yet:* a different vendor's verifier labelled `cross-vendor` on items (recorded as `by`, M6 for several
-  agents); `fix --plan` leaving stale items out (M3); the board's live view of `generation` (M2); a lock per person
-  for recordings (their saves are atomic since M1a). Hunter answers still name a grounded `file:line` as `source`
-  (design §2.5 renames it to `evidence.file` in answers and fix records; recorded findings already carry
-  `evidence.file`, and `source` on a finding now means `rule` or `ai`): renaming it changes the hunter protocol, the
-  skill and the recorded benchmark answers, so it is left for M3 with the fix records.
+  agents); a lock per person for recordings (their saves are atomic since M1a). (`fix --plan` leaves stale items out
+  since M3, §6; the board's live view of `generation` came with M2.)
+- *Answers name `evidence.file` (M3, 2026-10-15 KST, design §2.5).* A hunter grounds a defect in the source with
+  `"evidence": {"file": "app/tasks.tsx", "line": 2}`, the shape recorded findings and fix records already carry
+  (`source` on a finding means `rule` or `ai`). An answer written before says `"source": "app/tasks.tsx:2"`: it is read
+  the same way and gives the same record (a test pins it); a defect that gives both, an `evidence` that is not
+  `{file, line}`, or an unknown key in it is refused (`bad-shape`), and a file or line that does not check out is
+  `source-not-found` as before. The skill, the gate's hunter brief (bench/ai-gate.mjs) and the tests use the new
+  shape.
 - *Measured (2026-10-14 21:24 KST, after M1):* Pebble `node bench/run.mjs --twice` is unchanged: rule recall 34/34,
   0 false positives on 8 clean scenes, determinism identical (1,140 files), fingerprints 100% (52/52), 152 s per
   capture. Rule fingerprints do not move (the AI recipe is gated on `source: "ai"`).
