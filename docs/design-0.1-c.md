@@ -15,6 +15,8 @@ Status: **draft v2 for owner approval**, 2026-10-14 KST.
 >   사전 등록, 블라인드 라벨, 표본 확대, 심어 둔 회귀로 바꾼다. 비용과 사람 손이 드는 결정은 §11에서 오너가 정한다.
 > - **순서**: 기존 결함 수정(M1a) → 상태 저장소 · AI 지적 장부화(M1) → 보드(M2) → 수리 루프(M3) → 방지 · `check` · 내보내기(M4)
 >   → 빠른 첫 실행(M5) → 여러 에이전트(M6) → 나머지 화면(M7). 관문 측정은 각 단계 사이에 끼운다.
+> - **추가(2026-10-14)**: 디자인 서포터(§6a) — 정리(T0) → 컨셉 고르기(T1, 사용자 자기 화면으로 미리보기) → 적용 · 방지(T2).
+>   보드를 어디서나 여는 정적 내보내기와 캔버스 · Figma 연동(§6b).
 
 ## 0. Where we are, and defects found in the existing code
 
@@ -496,6 +498,86 @@ strings in fixtures prove it.
   min left)". The verdict is "Too early to say" until the full check lands, then "Full check done: 16 new groups".
 - Spec §7 ("fills the board live") is amended to this.
 
+## 6a. Design supporter — tidy, concept, guard (T0–T2)
+
+Added 2026-10-14 KST after a precedent survey. The owner asked for a way to settle a look in a click, so vibe coders do
+not stall on design. Opt-in, off by default, never part of the "Ready to ship?" verdict. The engine still never edits
+user code (§4.1).
+
+**Why it fits nunchi.** The board already asks "is the design system converging?" (L4). nunchi already has every
+screen of the user's own app captured, so concepts are previewed on *their* screens, not on generic sample cards. No
+surveyed tool does this for an arbitrary app (Radix `ThemePanel` does it only for Radix apps).
+
+**Prerequisite (T0).** `styles.json` today records only elements with own text or interactive elements
+(`collect.mjs` ~L144): page and card backgrounds, borders and SVG fills are missing, so palette counts are undercounts.
+T0 adds `surfaces` / `borders` / `svg` records in their own sections, leaving the existing records (and L4
+fingerprints) unchanged.
+
+**T0 — Tidy (`nunchi tokens`).**
+- Clusters the measured colours (OKLab, documented ΔE, deterministic tie-breaks), radii and font sizes across all
+  scenes into a proposed token set with roles (background, surface, border, text, muted, accent, accent-foreground,
+  danger …), each with members, counts and example evidence.
+- Writes `tokens.json` and a CSS custom-property proposal into nunchi's own run output. Contrast of proposed text and
+  background pairs is checked (WCAG 2.2 AA).
+- Board: Design system view shows "23 greys → 6 tokens · 7 radii → 3"; zero visual change.
+
+**T1 — Concept (picker).**
+- Knobs: accent (OKLCH hue, 8 named + custom), neutrals (pure / cool / warm), corners (0 / 4 / 8 / 16 px base,
+  sm–xl derived by 0.6 / 0.8 / 1 / 1.4), density (only where one spacing variable exists), mode (light / dark preview).
+  Fonts are out of 0.1 (web fonts need network or bundled licences).
+- Seven cards: **Keep mine (tidied)** first and default, then six generic invented concepts (Calm, Crisp, Warm, Bold,
+  Quiet, Night). No preset is named after or copied from a product or a named community theme.
+- Preview runs (`kind: preview`, never folded, first to go in `gc`) inject a `:root` variable override, then a
+  computed-value remap for hard-coded colours. Preview is indicative (gradients, pseudo-elements, SVG, images and
+  hover states are imperfect); only the re-capture after the real change proves the result.
+- Contrast is enforced by construction and then verified: WCAG 2.2 AA is the gate; APCA is advisory only.
+- **Choosing saves a plan only** (`concept.json`). In the claude.ai canvas the viewer's selected artboard is a signal
+  the agent can read; it is a *choice*, not an approval of code changes, so §1 is unchanged: the code changes still go
+  through the fix loop.
+- Gated on L4 trust: T1 waits until L4 passes its held-out gate (67% on pegroom, §9.4).
+
+**T2 — Apply and guard.**
+- The engine generates the token CSS deterministically and hands its exact content to the AI, which writes it; the
+  engine verifies the hash (keeps §4.1). `*.config.*` edits (Tailwind v3) hit the diff policy's "needs you" (§4.6).
+- Each literal becomes a "move to token X" finding (file:line, ΔE), fixed one root cause per commit. Token migration
+  changes many pixels by design, so it is judged by the measured computed colour, not by pixel diff (new judge rule
+  next to §4.5 outcome 4).
+- The §5 "colour literals outside the measured tokens" guard uses the token file as its allowed set, with a baseline.
+- Targets for 0.1: shadcn and Tailwind v4 first (CSS variables); Tailwind v3 and plain CSS get T0 and the remap
+  preview, migration later.
+
+**Precedents.**
+
+| Precedent | Verdict and why |
+|---|---|
+| shadcn/ui theming (semantic CSS-variable pairs, OKLCH, `--radius` base) | adopt as the output format for shadcn apps (MIT; the stack v0 and Lovable emit) |
+| shadcn presets (short code, 10 knobs, `apply --only theme`) | partly: the short shareable code and knob list; not called by nunchi (needs network, rewrites components) |
+| Radix Themes (6 knobs, 12-step scales, `ThemePanel`) | adopt the knob model; not the library |
+| tweakcn | partly: accept a pasted CSS block as a concept source; presets not bundled (some are named after products) |
+| daisyUI 5 themes | partly: vocabulary only; values rejected (18 of 35 themes have a pair under 4.5:1, measured) |
+| Material Color Utilities (HCT tone gaps) | partly: contrast by construction, but verify (a tone gap of 50 measured a minimum of 4.46:1) |
+| Realtime Colors | reject reuse (CC BY-NC-ND); adopt the "realistic preview" idea, done better on the user's own screens |
+| Tailwind Plus, Untitled UI PRO, Geist | reject (commercial or a real product's design) |
+| Huemint, Coolors | reject (hosted, network) |
+| DTCG tokens 2025.10 | partly: optional JSON export; CSS stays the source of truth |
+| Style Dictionary, jscodeshift | reject the dependencies; the engine lists exact edits and the AI applies them |
+| Dark Reader | adopt the lesson: generic recolour needs per-site fixes, so preview is indicative only |
+
+## 6b. Opening the board elsewhere — static export, canvas, Figma
+
+Added 2026-10-14 KST. The owner asked whether nunchi can open in a Claude canvas or Figma the way Claude Code does.
+
+- **`nunchi export --html <dir>`** (pulled forward from M4, no dependency on M3): an offline, self-contained,
+  deterministic static page (Progress, Findings, detail, Screens) plus `img/`. Every app string is escaped as data, a
+  CSP meta forbids external loads, HAR and network bodies are never included and secrets show location and kind only.
+  Decision buttons show the equivalent CLI command instead of acting. Works for every agent, Codex included.
+- **Claude canvas / Artifact** (agent side, not the engine): the skill may publish the export as a private claude.ai
+  artifact, only after the user says yes each time, because screenshots leave the machine. Blocked until D7 and D8 are
+  fixed (M1a).
+- **Figma** (agent side, optional): via the Figma MCP server (`use_figma` writes frames; `generate_figma_design`
+  captures live UI). It needs a paid seat for real use (the free plan is reported at about 6 calls a month), so it is
+  never required. Not tested yet: the connector failed to connect from this environment.
+
 ## 7. Several agents at once (M3 minimal, M6 full)
 
 - **One shared state root.** `state/`, `claims/`, the ledger, approvals and fix records live under
@@ -713,6 +795,15 @@ apart; AI tokens and latency reported.
 | 8 | Decision-time study | **≥ 5 non-builder participants**; or drop the gate to "reported, not gated" for 0.1 |
 | 9 | Codex CLI access | **Yes, early (M1)**: needed for §9.7 and to test §7 |
 | 10 | Fix existing defects D1–D12 first (M1a) | **Yes**; D1 and D4 make today's ledger say things that are not true |
+| 11 | Design supporter staging (§6a) | **T0 Tidy first**, picker (T1) after L4 earns trust |
+| 12 | Extend palette measurement (backgrounds, borders, SVG) | **Yes**, in new sections so existing fingerprints hold |
+| 13 | Presets | **Keep mine + six invented concepts**, Keep mine the default |
+| 14 | First targets | **shadcn and Tailwind v4**; v3 and plain CSS get T0 and preview |
+| 15 | Contrast gate | **WCAG 2.2 AA** only; APCA advisory |
+
+**Owner response, 2026-10-14 KST:** 「적용 ㄱㄱ」. Work proceeds on the recommendations for #1–#3, #10 and #11–#15
+(M1a, T0 and E1 are being built). #4–#9 still need the owner (costs, people, Codex access); the owner can override any
+of the others before merge.
 
 ## 12. Milestones (one PR each)
 
@@ -727,6 +818,10 @@ apart; AI tokens and latency reported.
 | M5 | `--quick` + HAR merge | M1 | ranking deterministic; presence-only fold; no recording-stale after a quick run |
 | M6 | Multi-agent answers + board activity + per-worktree URL rules | M2, M3 | concurrency stress tests (2 × 50 folds), claim conflicts |
 | M7 | Coverage and Screens views; the 0.2 views if time allows | M2 | — |
+| E1 | `export --html` static board (§6b) | M0 | determinism, escaping and redaction tests; real-data export reviewed |
+| T0 | palette measurement (`surfaces` / `borders` / `svg`) + `nunchi tokens` (§6a) | M0 | fixtures that merge and do not merge; Pebble bench unchanged |
+| T1 | concept picker with previews on the user's screens | T0, L4 held-out gate | contrast of every preset verified; preview runs never folded |
+| T2 | token file via the AI with hash check, "move to token" findings, colour-literal guard on tokens | T1, M3, M4 | computed-colour judge tests; guard fixture pair |
 | G | Gates per §9, each with a pre-registration: held-out 2+3 (after M1), precision (after M2), Codex (from M1), fix-loop and detector sensitivity (after M3), time (after M5), decision time (after M2), field 2–3 (after M2) | — | spec §9 updated per gate |
 
 ## 13. Review log
