@@ -1059,7 +1059,8 @@ puts the images in `index.html` as data URIs instead (one file; pegroom: 8 MB ag
   value, `cookie`), headers named like a key or token (`x-api-key`, `api_key`, `apiKey`, `X-Auth-Token`,
   `x-csrf-token`, `private-token`, `client_secret` …: a value with a digit or of 20+ characters, `api-key`), a URL path
   segment of 24+ characters mixing lower case, upper case and digits or of 32+ hex digits (`url-path-token`; review of
-  PR #29, 2026-10-15 KST), any JWT (also
+  PR #29, 2026-10-15 KST; *known limit:* redaction is by pattern, so a token that is only a path segment and does not
+  have that shape, shorter, one case, or words joined by `-`, is shown as it is), any JWT (also
   split across lines), each after no letter or digit; `selector-secrets.mjs` runs it first and then the same kinds
   with no boundary at all, plus `long-token`. It is wider than the L9 bundle scan, which it does not change. Objects
   and arrays are redacted leaf by leaf before they are serialised. URLs are never links; secret findings show
@@ -1364,8 +1365,10 @@ guesses a command). They are **not a security boundary** against code that runs 
 such code can read the same files, start the same processes and drive the same browser. A text hook in particular
 cannot see a script that imports `board/launch.mjs`, or a copy of the board's script edited to print its link: it
 sees the `--link-to-parent` flag (checked in the words as the shell joins them, whatever the script is called) and
-the script's own names, nothing a file does once it runs. For a repository you do not trust, run the agent in a
-container or as a separate user.
+the script's own names, nothing a file does once it runs. Nor does it judge archives and recursive copies of the
+whole project or of `.git` (`tar`, `zip`, `cp -r`, `rsync`): they take the state and the canaries along, and the copy
+lies outside the paths it guards; nor `find -path` patterns (`find . -path '*nunchi*state*'` lists the state's
+files). For a repository you do not trust, run the agent in a container or as a separate user.
 
 **Deviations from design §3, and why (the safer option each time).**
 - One-time code in the link, traded for a per-tab key, instead of the key itself in the fragment: a link that leaks
