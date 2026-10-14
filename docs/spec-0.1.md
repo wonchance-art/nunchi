@@ -1315,7 +1315,10 @@ inline code that names nunchi's places in pieces (`join('.git', 'nunchi')`) is d
 the keys, `auth.json` or a run's canaries, unless their filters leave those out (`--exclude-dir=.git
 --exclude-dir=.nunchi`, `--include`, `-g '!.git'`, `-t`, `-name`, `-path … -prune`); rg's own skipping of dot folders
 counts unless `--hidden`, `-.` or `-uu`. Process lists with command lines (`ps aux`, `ps -ef`, `ps -o args`, `pgrep -a`,
-`top -c`, `/proc/*/cmdline`) are denied. Grep and Glob are denied with a base in `.git`, `.nunchi` itself, `.nunchi/runs`
+`top -c`, `/proc/*/cmdline`, and Grep or Read of `/proc`) are denied only while a board record of this project is in the
+state (the one-time link is in a browser's command line only then; `ps aux | grep vite` is an everyday command
+otherwise), and the message says so; a record a crashed board left keeps the rule on until the next `nunchi open` or
+`--stop` removes it. Grep and Glob are denied with a base in `.git`, `.nunchi` itself, `.nunchi/runs`
 or `/proc`. Links are followed before deciding. A pure data hook: no network, nothing written. Limits: it reads paths and
 words in the call; a command that builds a path at run time is not seen. Codex CLI has no such hook. The skill
 states the same rules for other agents.

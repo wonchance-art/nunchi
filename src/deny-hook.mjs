@@ -24,8 +24,9 @@
 // as paths (inline code), `sh -c` judged as a command. Recursive reads (grep -r, rg, find -exec / -delete, find or
 // rg --files into xargs) are denied when they reach the state, keys, auth or a run's canaries unless their filters
 // (--include / --exclude-dir, -g, -name, -path -prune) leave those out; rg's own skipping of dot folders counts.
-// Process lists with command lines (ps aux / -ef / -o args, pgrep -a, top -c, /proc/*/cmdline) are denied. Grep and
-// Glob are denied with a base in .git, .nunchi itself, .nunchi/runs or /proc.
+// Process lists with command lines (ps aux / -ef / -o args, pgrep -a, top -c, /proc/*/cmdline) are denied while a
+// board of this project runs (its record is in the state). Grep and Glob are denied with a base in .git, .nunchi
+// itself or .nunchi/runs, and /proc while a board runs.
 //
 // Honest limits (design §8.3): this matches paths and words in the tool call. A command that builds a path at run
 // time (variables, base64, a script file) is not seen. Neither this hook nor the board's channels are a security
@@ -110,7 +111,9 @@ const READ_DENY = [
   [/(^|\/)\.nunchi\/state(\/|$)/, 'nunchi\'s state is the engine\'s: use nunchi findings / nunchi decide'],
   [/(^|\/)\.nunchi\/auth\.json$/, 'the saved login holds session cookies; only the engine reads it'],
   [/(^|\/)\.nunchi\/runs\/[^/]+\/(canaries\.json|hunt-key\.json|verify-key\.json|recheck-key\.json)$/, 'the canaries and answer keys must stay unseen by the hunter, verifier and re-checker'],
-  [/^\/proc\/[^/]+\/(cmdline|environ|mem|maps|fd)(\/|$)/, 'process memory and command lines can hold the board\'s one-time link or key'],
+  // only while a board of this project runs: the one-time link is in a browser's command line only then
+  [/^\/proc\/[^/]+\/(cmdline|environ|mem|maps|fd)(\/|$)/,
+    'a board is running for this project, and process memory and command lines can hold its one-time link or key (nunchi open --stop stops it)', 'board'],
 ];
 const WRITE_DENY = [
   [/(^|\/)\.nunchi\/decisions(\/|$)/, 'decisions are recorded with nunchi decide (or in the board), never written by hand'],
@@ -128,7 +131,7 @@ export function pathRule(p, prot, { write = false } = {}) {
       if (b.socket && within(cand, b.socket)) return 'the board\'s control socket is for nunchi open only';
       if (b.pid && isProc(cand, String(b.pid))) return 'the board\'s process holds its key';
     }
-    for (const [re, why] of READ_DENY) if (re.test(n)) return why;
+    for (const [re, why, when] of READ_DENY) if ((when !== 'board' || prot.boards.length) && re.test(n)) return why;
     if (write) for (const [re, why] of WRITE_DENY) if (re.test(n)) return why;
   }
   return null;
@@ -429,7 +432,9 @@ function findRule(args, cwd, prot, { piped = false } = {}) {
 }
 
 // Command lines of other processes: a browser's holds the board's one-time link for a moment.
-const PS_WHY = 'other processes\' command lines can hold the board\'s one-time link';
+// Denied only while a board of this project runs (its record is in the state): the link is in a browser's command
+// line only then. `ps aux | grep vite` is an everyday command otherwise.
+const PS_WHY = 'a board is running for this project, and other processes\' command lines can hold its one-time link (nunchi open --stop stops it)';
 const CMDLINE = /args|cmd|command/i;
 function psRule(name, args) {
   if (name === 'ps') {
@@ -483,7 +488,7 @@ export function bashRule(command, prot, { depth = 0, cwd: start = prot.cwd } = {
     if (inline?.shell && depth < 3) { const inner = bashRule(inline.code, prot, { depth: depth + 1, cwd: start }); if (inner) return inner; }
     if (inline && !inline.shell) {
       const c = inline.code.replace(/\\/g, '/');
-      if ((/\.git\b/.test(c) && /nunchi/.test(c)) || (/\.nunchi\b/.test(c) && /\b(state|canaries|auth|key)/.test(c)) || (/\/proc\b/.test(c) && /cmdline|environ/.test(c))) return PIECES_WHY;
+      if ((/\.git\b/.test(c) && /nunchi/.test(c)) || (/\.nunchi\b/.test(c) && /\b(state|canaries|auth|key)/.test(c)) || (prot.boards.length && /\/proc\b/.test(c) && /cmdline|environ/.test(c))) return PIECES_WHY;
     }
   }
   if (NUNCHI.test(flat)) {
@@ -495,7 +500,7 @@ export function bashRule(command, prot, { depth = 0, cwd: start = prot.cwd } = {
   }
   // the key folder moved for the rest of the session
   if (/(^|[\s;&|(`])(export|setx?|declare\s+-x|typeset\s+-x)\s+(XDG_STATE_HOME|LOCALAPPDATA)\b|\$env:(XDG_STATE_HOME|LOCALAPPDATA)\s*=/i.test(flat)) return 'nunchi keeps its answer keys under the state folder: it is not moved from the AI\'s commands';
-  if (/\/proc\/[^\s/'"]+\/(cmdline|environ|mem|maps|fd)\b/.test(flat)) return READ_DENY[4][1];
+  if (prot.boards.length && /\/proc\/[^\s/'"]+\/(cmdline|environ|mem|maps|fd)\b/.test(flat)) return READ_DENY[4][1];
   const home = homedir().replace(/\\/g, '/');
   const segs = segments(cmd);
   let cwd = start;
@@ -530,7 +535,7 @@ export function bashRule(command, prot, { depth = 0, cwd: start = prot.cwd } = {
     const why = ['grep', 'egrep', 'fgrep', 'zgrep'].includes(name) ? grepRule(args, cwd, prot)
       : name === 'rg' ? rgRule(args, cwd, prot, { piped })
       : name === 'find' ? findRule(args, cwd, prot, { piped })
-      : psRule(name, args);
+      : prot.boards.length ? psRule(name, args) : null;            // command lines matter only while a board runs
     if (why) return why;
     if ((name === 'cd' || name === 'pushd') && args[0] !== '-') cwd = args[0] ? resolve(cwd, args[0].replace(/^~(?=\/|$)/, home)) : homedir();
   }
@@ -556,7 +561,7 @@ function searchBaseRule(base, prot) {
   const why = 'a search there reaches nunchi\'s state, answer keys or a run\'s canaries: read the files you need by name';
   for (const b of [base, realish(base)]) {
     for (const d of [join(prot.cwd, '.git'), prot.common, join(prot.cwd, '.nunchi', 'runs')]) if (d && within(b, d)) return why;
-    if (norm(b) === norm(join(prot.cwd, '.nunchi')) || isProc(b)) return why;
+    if (norm(b) === norm(join(prot.cwd, '.nunchi')) || (prot.boards.length && isProc(b))) return why;
   }
   return null;
 }

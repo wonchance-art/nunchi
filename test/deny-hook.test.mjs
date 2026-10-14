@@ -2,7 +2,7 @@
 // synthetic git repository with a nunchi state, answer keys and a running board record. No network.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, symlinkSync, readFileSync, existsSync, realpathSync } from 'node:fs';
+import { mkdirSync, writeFileSync, symlinkSync, readFileSync, existsSync, realpathSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync, execFileSync } from 'node:child_process';
@@ -148,6 +148,23 @@ test('deny hook: the bypasses of review B4 — recursive searches, globs, cd, qu
   for (const [tool, input] of [['Grep', { pattern: 'x', path: join(r.root, '.git') }], ['Grep', { pattern: 'x', path: '.nunchi/runs' }], ['Grep', { pattern: 'x', path: join(r.root, '.nunchi') }],
     ['Glob', { pattern: '.git/**/*.json' }], ['Glob', { pattern: '**/*', path: join(r.root, '.nunchi', 'runs', '0001') }], ['Grep', { pattern: 'x', path: '/proc' }]]) assert.ok(call(r, tool, input), `${tool} ${JSON.stringify(input)}`);
   for (const [tool, input] of [['Grep', { pattern: 'x', path: join(r.root, 'src') }], ['Grep', { pattern: 'keep', path: join(r.root, '.nunchi', 'decisions') }], ['Glob', { pattern: 'src/**/*.tsx' }]]) assert.equal(call(r, tool, input), null, `${tool} ${JSON.stringify(input)}`);
+});
+
+test('deny hook: process lists and /proc command lines are denied only while a board of this project runs', () => {
+  const r = repo();
+  const everyday = ['ps aux | grep vite', 'ps -ef', 'pgrep -af node', 'top -b -n1 -c', 'cat /proc/123/cmdline', 'ps -eo pid,args'];
+  for (const command of everyday) {
+    const why = call(r, 'Bash', { command });
+    assert.match(String(why), /a board is running for this project/, `${command}: denied while the board record is there, and says why`);
+  }
+  assert.ok(call(r, 'Grep', { pattern: 'x', path: '/proc' }));
+  unlinkSync(join(r.state, 'boards', '4242.json'));                         // no board running
+  for (const command of everyday) assert.equal(call(r, 'Bash', { command }), null, `${command}: allowed with no board`);
+  assert.equal(call(r, 'Grep', { pattern: 'x', path: '/proc' }), null);
+  if (POSIX) assert.equal(call(r, 'Read', { file_path: '/proc/123/cmdline' }), null);
+  // outside any project at all
+  const plain = tmp('nunchi-hook-plain-');
+  assert.equal(judge({ tool_name: 'Bash', tool_input: { command: 'ps aux | grep vite' }, cwd: plain }, { env: r.env }), null);
 });
 
 test('deny hook: /proc as Windows resolves it (onto the current drive) is still /proc, where Git Bash has command lines', () => {
