@@ -8,7 +8,7 @@
 //   `Nunchi-Revert: <group> attempt <n>` trailer, hooks off, 60 s; any failure → `git revert --abort`, and the caller
 //   says *needs you*. A signing the repository requires and that fails is never retried unsigned;
 // - attempts are counted from the trailers of every branch (`--all`), so they survive lost state and other worktrees.
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { gitRunner, DIFF_SAFE } from '../runs.mjs';
@@ -64,6 +64,11 @@ export function fixGit(root) {
     // a revert, cherry-pick, merge or rebase left in the middle
     inProgress: () => ['REVERT_HEAD', 'CHERRY_PICK_HEAD', 'MERGE_HEAD', 'rebase-merge', 'rebase-apply'].filter(n => existsSync(api.gitPath(n))),
     clean: () => !api.status().length && !api.inProgress().length,
+    // what a commit made now would take besides the fix's own undo: changes in the working tree (nunchi's folder aside)
+    // and anything staged at all (a staged .nunchi file would be committed too)
+    uncommitted: () => [...new Set([...api.status(), ...git(['diff', ...DIFF_SAFE, '--cached', '--name-only', '-z']).split('\0').filter(Boolean)])].sort(),
+    // the commit a revert in progress is undoing (REVERT_HEAD), or null
+    revertHead: () => { try { return readFileSync(api.gitPath('REVERT_HEAD'), 'utf8').trim() || null; } catch { return null; } },
     // The tree a commit of the working tree as it is would get (nunchi's folder as HEAD has it): hashed in a temporary
     // index outside the repository, so the real index is never touched. --checks records it, --verify compares it with
     // the commit's tree.
@@ -95,12 +100,18 @@ export function fixGit(root) {
     switchNew: name => git(['switch', '--quiet', '--no-guess', '-c', name]),
     switchTo: name => git(['switch', '--quiet', '--no-guess', name]),
     // Undo the fix commit (design §4.7). → { ok: true, sha } or { ok: false, reason: 'not-head' | 'in-progress' |
-    // 'signing' | 'failed', message }. Never resets: a failure is aborted and left for the person.
-    revert: ({ fixCommit, group, attempt, why = '' }) => {
+    // 'dirty' | 'signing' | 'failed', message, files? }. Never resets: a failure is aborted and left for the person.
+    // Only on a clean working tree and index: `revert --no-commit` starts from the index, so staged work would be
+    // committed inside the undo, and `revert --abort` (a reset --merge) would throw it away. `onStart` runs right before
+    // git revert (the caller records that this revert is nunchi's, so only nunchi's is ever aborted).
+    revert: ({ fixCommit, group, attempt, why = '', onStart = () => {} }) => {
       if (!HEX.test(String(fixCommit))) return { ok: false, reason: 'failed', message: 'no fix commit to undo' };
       if (api.head() !== fixCommit) return { ok: false, reason: 'not-head', message: `the fix commit ${fixCommit.slice(0, 7)} is no longer the last commit (HEAD is ${String(api.head()).slice(0, 7)})` };
       if (api.inProgress().length) return { ok: false, reason: 'in-progress', message: `a ${api.inProgress()[0]} is in progress` };
+      const dirty = api.uncommitted();
+      if (dirty.length) return { ok: false, reason: 'dirty', files: dirty, message: `your working tree has changes that are not committed (${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? ` +${dirty.length - 5} more` : ''})` };
       const abort = () => { tryGit(['revert', '--abort'], { timeout: REVERT_TIMEOUT }); };
+      onStart();
       try {
         git(['revert', '--no-commit', '--no-edit', '--end-of-options', fixCommit], { timeout: REVERT_TIMEOUT });
         git(['commit', '--no-verify', '-m', `nunchi: undo fix attempt ${Number(attempt)} of ${group}`, ...(why ? ['-m', why] : []), '-m', `${TRAILERS.revert}: ${group} attempt ${Number(attempt)}`], { timeout: REVERT_TIMEOUT });

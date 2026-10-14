@@ -140,7 +140,8 @@ export function reconcile(ctx, group) {
   if (rec.phase === 'reverting' || rec.phase === 'undoing') {
     const t = ctx.git.trailers(ctx.git.head() || 'HEAD');
     if ((t[TRAILERS.revert] || []).includes(`${group} attempt ${rec.attempt}`)) { finishRevert(ctx, rec, ctx.git.head(), said); return { rec: latestRecord(ctx.stateDir, group), said }; }
-    if (ctx.git.inProgress().includes('REVERT_HEAD')) ctx.git.abortRevert();
+    // a revert left half done is aborted only when it is nunchi's own: started by this attempt, undoing its commit
+    if (ctx.git.inProgress().includes('REVERT_HEAD') && rec.revertStarted && ctx.git.revertHead() === rec.commit) ctx.git.abortRevert();
     if (ctx.git.head() === rec.commit && !ctx.git.inProgress().length) { const r = doRevert(ctx, rec, rec.revertWhy || 'resumed'); said.push(...r.lines); return { rec: latestRecord(ctx.stateDir, group), said }; }
     close('needs-you', { outcome: { kind: 'needs-you', needsYou: 'revert-failed', commit: rec.commit, line: `Couldn't undo the fix of this finding (commit ${short(rec.commit)}): HEAD moved on or a revert was left half done. It needs you.` } });
     return { rec, said: [rec.outcome.line] };
@@ -266,7 +267,9 @@ export async function startFix(ctx, id, opts = {}) {
         if (k === 'a') return refuse([...said, `The last fix of '${title}' waits for you in the board: it also changed other parts of the screen. Look there ("Looks fine", "Undo this fix" or "Try again with a note…").`]);
         if (k === 'b') return refuse([...said, `The AI couldn't fix '${title}' in ${MAX_ATTEMPTS} tries: it waits for you in the board ("Try again with a note…", Keep or Later).`]);
         if (last.commit && head === last.commit) return refuse([...said, `The last fix of '${title}' (commit ${short(last.commit)}) was not re-checked: start your app, then resume with nunchi fix --verify ${g.group} (retry), or undo it with nunchi fix --undo ${g.group}.`]);
-      } else if (last.commit && head === last.commit && (k === 'a' || k === 'c' || k === 'diff' || k === 'unbaselined' || k === 'interrupted')) {
+      } else if (last.commit && head === last.commit && (k === 'a' || k === 'c' || k === 'diff' || k === 'unbaselined' || k === 'interrupted' || k === 'dirty')) {
+        const dirty = ctx.git.uncommitted();
+        if (dirty.length) return refuse([...said, dirtyLine(title, last.commit, dirty, { refusal: true })], { dirty });
         const rv = doRevert(ctx, setPhase(ctx.stateDir, last, 'reverting', { tryAgain: true, revertWhy: 'the person asked to try again with a note' }, gen(ctx)), 'the person asked to try again with a note', { quiet: true });
         if (rv.code) return rv;
         said.push(`Undid the kept fix (commit ${short(last.commit)}) to try again with your note.`);
@@ -653,13 +656,21 @@ function applyFold(ctx, rec) {
   return done;
 }
 
+// The line when a fix must be undone and the person has work that is not committed: what to commit or stash.
+function dirtyLine(title, commit, files, { refusal = false } = {}) {
+  const list = `${files.slice(0, 5).join(', ')}${files.length > 5 ? ` and ${files.length - 5} more` : ''}`;
+  return `${refusal ? 'Not undone' : `Couldn't undo the fix of '${title}' (commit ${short(commit)})`}: you have changes that are not committed (${list}), and undoing now would mix them into the undo. Commit them (git commit) or stash them (git stash push --include-untracked), then tell your AI “undo it”${refusal ? '' : ' — it needs you'}.`;
+}
+
 // Undo the fix commit (only while it is HEAD; design §4.7). `rec` is in phase reverting/undoing already.
 function doRevert(ctx, rec, why, { cancelWord = null, quiet = false, title = rec.title || 'this finding' } = {}) {
-  const r = ctx.git.revert({ fixCommit: rec.commit, group: rec.group, attempt: rec.attempt, why: String(why).slice(0, 300) });
+  const r = ctx.git.revert({ fixCommit: rec.commit, group: rec.group, attempt: rec.attempt, why: String(why).slice(0, 300),
+    onStart: () => { rec = update(ctx.stateDir, rec, { revertStarted: kst(ctx.deps.now()) }, gen(ctx)); } });
   if (!r.ok) {
-    const kind = r.reason === 'signing' ? 'signing' : 'revert-failed';
+    const kind = r.reason === 'signing' ? 'signing' : r.reason === 'dirty' ? 'dirty' : 'revert-failed';
     const line = r.reason === 'signing'
       ? `Couldn't undo the fix of '${title}' (commit ${short(rec.commit)}): your repository requires signed commits and signing failed. nunchi never commits unsigned: it needs you.`
+      : r.reason === 'dirty' ? dirtyLine(title, rec.commit, r.files)
       : `Couldn't undo the fix of '${title}' (commit ${short(rec.commit)}): ${r.message}. Nothing was reset; it needs you.`;
     closeWith(ctx, rec, 'needs-you', { kind: 'needs-you', needsYou: kind, commit: rec.commit, line });
     return out(quiet ? 1 : 0, line, { outcome: 'needs-you', needsYou: kind });
@@ -709,6 +720,8 @@ export function undoFix(ctx, id) {
   let { rec, said } = reconcile(ctx, found.g.group);
   if (!rec || !rec.commit || !['fixed', 'needs-you'].includes(rec.phase)) return refuse([...said, `No fix of '${found.title}' to undo (nunchi fix --status ${found.g.group}).`]);
   if (ctx.git.head() !== rec.commit) return refuse([...said, `The fix of '${found.title}' (commit ${short(rec.commit)}) is no longer the last commit: nunchi undoes only its own last commit. Undo it by hand with git revert ${short(rec.commit)}.`]);
+  const dirty = ctx.git.uncommitted();
+  if (dirty.length) return refuse([...said, dirtyLine(found.title, rec.commit, dirty, { refusal: true })], { dirty });
   rec = setPhase(ctx.stateDir, rec, 'undoing', { folded: rec.phase === 'fixed' }, gen(ctx));
   const r = doRevert(ctx, rec, 'the person asked to undo this fix', { title: found.title });
   return { ...r, lines: [...said, ...r.lines] };

@@ -713,3 +713,50 @@ test('verify: the attempt\'s recording snapshot changed since P0 → needs you (
   assert.match(v.lines.join('\n'), /the attempt's recording snapshot changed or is missing/);
   assert.equal(p.cap.calls.length, before);
 });
+
+// ---- the person's own work is never mixed into an undo, or thrown away (M3 review, blocker 1) ---------------------------
+
+test('revert: staged or unstaged work of the person → nothing reverted, nothing reset; needs you with what to commit or stash', async () => {
+  const p = await fixProject();
+  await attempt(p, { change: ['TINY', 'WRAP'], verify: false });           // a fix that will be judged not fixed
+  const fixCommit = git(p.root, 'rev-parse', 'HEAD');
+  writeFileSync(join(p.root, 'notes.md'), 'my own work\n');               // new file, staged
+  git(p.root, 'add', 'notes.md');
+  edit(p.root, 'app/help/page.jsx', 'Panel', 'Panel ');                   // and an unstaged edit
+  const v = await F.verifyFix(ctxOf(p), p.group);
+  assert.match(v.lines.join('\n'), /Not verified: the working tree is not clean/, 'verify itself refuses a dirty tree');
+  // the edits came after verify's clean check (P1 takes minutes): the revert must still refuse
+  git(p.root, 'reset', '-q', 'notes.md'); rmSync(join(p.root, 'notes.md')); git(p.root, 'checkout', '-q', '--', 'app/help/page.jsx');
+  const late = { capture: async a => { const r = await p.cap.capture(a); if (a.runMeta?.fix?.probe === 'P1') { writeFileSync(join(p.root, 'notes.md'), 'my own work\n'); git(p.root, 'add', 'notes.md'); } return r; } };
+  const w = await F.verifyFix(ctxOf(p, late), p.group);
+  assert.match(w.lines.at(-1), /^Couldn't undo the fix of 'Tap target smaller than 24px' \(commit [0-9a-f]{7}\): you have changes that are not committed \(notes\.md\), and undoing now would mix them into the undo\. Commit them \(git commit\) or stash them \(git stash push --include-untracked\), then tell your AI “undo it” — it needs you\.$/);
+  assert.equal(git(p.root, 'rev-parse', 'HEAD'), fixCommit, 'nothing committed');
+  assert.equal(git(p.root, 'diff', '--cached', '--name-only'), 'notes.md', 'still staged');
+  assert.equal(readFileSync(join(p.root, 'notes.md'), 'utf8'), 'my own work\n');
+  assert.deepEqual([latest(p).phase, latest(p).outcome.needsYou], ['needs-you', 'dirty']);
+  // fix --undo refuses the same way, and touches no record; once committed elsewhere... stashed, it undoes
+  const u = F.undoFix(ctxOf(p), p.group);
+  assert.equal(u.code, 1);
+  assert.match(u.lines.at(-1), /^Not undone: you have changes that are not committed \(notes\.md\)/);
+  assert.deepEqual([latest(p).phase, latest(p).outcome.needsYou], ['needs-you', 'dirty']);
+  git(p.root, 'stash', 'push', '-q', '--include-untracked', '-m', 'mine');
+  const ok = F.undoFix(ctxOf(p), p.group);
+  assert.match(ok.lines.at(-1), /^Undid the fix of /);
+  assert.equal(latest(p).phase, 'undone');
+});
+
+test('revert: a revert the person started (their REVERT_HEAD) is never aborted by nunchi', async () => {
+  const p = await fixProject();
+  await attempt(p, { change: ['TINY', 'WRAP'], verify: false });
+  const fixCommit = git(p.root, 'rev-parse', 'HEAD');
+  // a record left in phase reverting by a command that died before its git revert ran; then the person starts a
+  // revert of their own (of that very commit: only the record says whose it is)
+  const rec = latest(p);
+  R.setPhase(stateDir(p), { ...rec, commit: fixCommit }, 'reverting', { commit: fixCommit, revertWhy: 'not-fixed' });
+  git(p.root, 'revert', '--no-commit', '--no-edit', fixCommit);
+  assert.ok(existsSync(join(p.root, '.git', 'REVERT_HEAD')));
+  const s = F.statusFix(ctxOf(p), p.group);
+  assert.ok(existsSync(join(p.root, '.git', 'REVERT_HEAD')), 'their revert is still in progress');
+  assert.deepEqual([latest(p).phase, latest(p).outcome.needsYou], ['needs-you', 'revert-failed']);
+  assert.match(s.lines.join('\n'), /Couldn't undo the fix/);
+});
