@@ -7,7 +7,7 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { judge, keyBases, protectedOf, answer, plausibleGit, MAX_INPUT, isProc } from '../src/deny-hook.mjs';
+import { judge, keyBases, protectedOf, answer, usesNunchi, MAX_INPUT, isProc } from '../src/deny-hook.mjs';
 import { tmp } from './fixtures/board-project.mjs';
 
 const HOOK = fileURLToPath(new URL('../src/deny-hook.mjs', import.meta.url));
@@ -243,14 +243,50 @@ test('deny hook: the script answers exit 2 with the reason on stderr to deny, ex
   assert.match(big.stderr, /over 4 MB/);
   const broken = answer(JSON.stringify({ tool_name: 'Read' }), { judgeFn: () => { throw new Error('boom'); } });
   assert.deepEqual([broken.status, /could not judge this call \(boom\)/.test(broken.stderr)], [2, true], 'an error while judging: denied');
-  // git is asked only where a .git can be: none here, a folder, a worktree's file, a folder below one
+  // git is asked only where nunchi is used (a .nunchi, or nunchi in the common git folder), found with file checks
+  let asked = 0;
+  const askGit = cwd => { asked++; return realpathSync(join(cwd, '.git')); };
   const plain = tmp('nunchi-hook-plain-');
-  assert.equal(plausibleGit(plain), false);
-  assert.equal(protectedOf(plain, { env: r.env }).common, null);
-  assert.equal(plausibleGit(r.root), true);
-  assert.equal(plausibleGit(join(r.root, '.nunchi', 'runs')), true);
-  writeFileSync(join(plain, '.git'), 'gitdir: /elsewhere\n');
-  assert.equal(plausibleGit(plain), true, 'a worktree');
+  assert.equal(usesNunchi(plain), false);
+  assert.equal(protectedOf(plain, { env: r.env, askGit }).common, null);
+  const bare = tmp('nunchi-hook-repo-');                         // a repository that never used nunchi
+  execFileSync('git', ['init', '-q'], { cwd: bare });
+  assert.equal(usesNunchi(bare), false);
+  assert.equal(protectedOf(bare, { env: r.env, askGit }).common, null);
+  assert.equal(asked, 0, 'no git asked in a plain folder or a repository without nunchi');
+  assert.equal(usesNunchi(r.root), true);
+  assert.equal(usesNunchi(join(r.root, '.nunchi', 'runs')), true);
+  assert.equal(protectedOf(r.root, { env: r.env }).common, r.common, 'with nunchi, git\'s own answer, as before');
+  // nunchi only in the common folder (no .nunchi): a folder repository, and a linked worktree's .git file
+  const shared = tmp('nunchi-hook-shared-');
+  execFileSync('git', ['init', '-q'], { cwd: shared });
+  mkdirSync(join(shared, '.git', 'nunchi'));
+  assert.equal(usesNunchi(join(shared)), true);
+  const wtGit = join(shared, '.git', 'worktrees', 'wt');
+  mkdirSync(wtGit, { recursive: true });
+  writeFileSync(join(wtGit, 'commondir'), '../..\n');
+  const wt = tmp('nunchi-hook-wt-');
+  writeFileSync(join(wt, '.git'), `gitdir: ${wtGit}\n`);
+  assert.equal(usesNunchi(wt), true, 'a linked worktree whose common folder has nunchi');
+  writeFileSync(join(wt, '.git'), 'gitdir: /elsewhere\n');
+  assert.equal(usesNunchi(wt), false, 'a .git file pointing nowhere');
+  // the rules on paths hold without git's answer: the shared state and .nunchi/state in any path, and the keys
+  for (const [tool, input] of [['Read', { file_path: join(bare, '.git', 'nunchi', 'root', 'state', 'ledger.json') }], ['Read', { file_path: join(bare, '.nunchi', 'state', 'approved.json') }],
+    ['Read', { file_path: join(r.xdg, 'nunchi', 'abc', 'keys', '0001', 'verify-key.json') }]]) {
+    assert.ok(judge({ tool_name: tool, tool_input: input, cwd: bare }, { env: r.env }), `${tool} ${input.file_path} is denied`);
+  }
+  assert.equal(asked, 0);
+  // the hook as Claude Code runs it, in a repository without nunchi: no git process (a git that would leave a mark)
+  if (POSIX) {
+    const bin = tmp('nunchi-hook-bin-'), mark = join(bin, 'ran');
+    writeFileSync(join(bin, 'git'), `#!/bin/sh\necho x >> '${mark}'\nexit 1\n`, { mode: 0o755 });
+    const env = { ...r.env, PATH: `${bin}:${process.env.PATH}` };
+    const one = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: join(bare, 'README.md') }, cwd: bare }), env, encoding: 'utf8' });
+    assert.equal(one.status, 0, one.stderr);
+    assert.equal(existsSync(mark), false, 'no git was run');
+    spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: join(r.root, 'README.md') }, cwd: r.root }), env, encoding: 'utf8' });
+    assert.equal(existsSync(mark), true, 'with nunchi, git is asked (the fake one, here)');
+  }
   assert.equal(run({ tool_name: 'Bash', tool_input: { command: 'nunchi approve --all' }, cwd: r.root }).status, 2);
 });
 

@@ -86,21 +86,44 @@ function stateDirsOf(cwd, common) {
   return out;
 }
 
-// What a project protects, computed once per call. `env` and `cwd` come from the hook's input.
-// Is there a `.git` (a folder, or a worktree's file) here or in a folder above? Git is asked only then, so a call in
-// a folder that is no repository spawns nothing.
-export function plausibleGit(cwd) {
+// Does this project use nunchi: a `.nunchi` here or in a folder above, or a `nunchi` folder in the repository's common
+// git folder? Found with file checks only, up to the nearest `.git`: a folder, or a linked worktree's or submodule's
+// `.git` file, followed through its `gitdir:` line and `commondir` file (as git reads them). Git is asked for the
+// common folder only when this says yes, so a call in a project that never used nunchi (or no repository at all)
+// spawns nothing; the path rules hold everywhere anyway (`.git/nunchi` and `.nunchi/state` in any path, the keys).
+const exists = p => { try { lstatSync(p); return true; } catch { return false; } };
+function commonOfGitFile(file) {
+  try {
+    const m = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(file, 'utf8'));
+    if (!m) return null;
+    const gitdir = resolve(dirname(file), m[1]);
+    let common = gitdir;
+    try { const c = readFileSync(join(gitdir, 'commondir'), 'utf8').trim(); if (c) common = resolve(gitdir, c); } catch {}
+    return common;
+  } catch { return null; }
+}
+export function usesNunchi(cwd) {
   let cur = resolve(cwd);
   for (let i = 0; i < 128; i++) {
-    try { lstatSync(join(cur, '.git')); return true; } catch {}
+    if (exists(join(cur, '.nunchi'))) return true;
+    const g = join(cur, '.git');
+    let st = null;
+    try { st = lstatSync(g); } catch {}
+    if (st) {
+      if (st.isDirectory()) return exists(join(g, 'nunchi'));
+      const common = st.isFile() ? commonOfGitFile(g) : null;
+      return !!common && exists(join(common, 'nunchi'));
+    }
     const up = dirname(cur);
     if (up === cur) return false;
     cur = up;
   }
   return false;
 }
-export function protectedOf(cwd, { env = process.env, common = undefined } = {}) {
-  const gc = common === undefined ? (plausibleGit(cwd) ? gitCommonDir(cwd) : null) : common;
+// What a project protects, computed once per call. `env` and `cwd` come from the hook's input. `askGit`: how git is
+// asked for the common folder (a test counts the calls).
+export function protectedOf(cwd, { env = process.env, common = undefined, askGit = gitCommonDir } = {}) {
+  const gc = common === undefined ? (usesNunchi(cwd) ? askGit(cwd) : null) : common;
   const stateDirs = stateDirsOf(cwd, gc);
   return { cwd, common: gc, keys: keyBases(env), boards: boards(stateDirs) };
 }

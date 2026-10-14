@@ -1324,8 +1324,11 @@ channel: board, at}`, written atomically, and its content is noted in `state/lab
 NotebookRead, Write, Edit, MultiEdit, NotebookEdit, Bash, Grep, Glob and WebFetch; exit 2 with the reason denies.
 It fails closed: input it cannot read (not JSON, over 4 MB) and an error while judging deny the call. The command is
 `command -v node >/dev/null 2>&1 || exit 0; node …/deny-hook.mjs` (a POSIX shell, as Claude Code runs hooks; Git Bash
-on Windows): without node there is no hook, the documented limit. Git is asked for the common folder only when a
-`.git` is in the folder or one above, so a call outside a repository spawns nothing. It
+on Windows): without node there is no hook, the documented limit. Git is asked for the common folder only when the
+project uses nunchi: a `.nunchi` in the folder or one above, or a `nunchi` folder in the repository's common git
+folder (found with file checks up to the nearest `.git`, a linked worktree's `.git` file followed through its
+`gitdir:` line and `commondir`), so a call in a project that never used nunchi, or outside a repository, spawns
+nothing (85 → 69 ms a call measured here, most of it node's start); the path rules hold there all the same. It
 denies every tool the shared state (`<git-common-dir>/nunchi/**`, by git's own answer and by any `.git/nunchi` in a
 path) and `.nunchi/state/**`; the answer keys (`$XDG_STATE_HOME/nunchi`, `%LOCALAPPDATA%\nunchi`,
 `~/.local/state/nunchi`, all three); `.nunchi/auth.json`; a run's `canaries.json` and older keys; a running board's
