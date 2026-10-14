@@ -102,3 +102,30 @@ test('capture: inventory.json with discovered routes (same bytes twice), none wi
   assert.ok(existsSync(join(out, 'manifest.json')) && existsSync(join(out, 'source-map.json')));
   assert.equal(r.stderr.split('\n').filter(l => l.startsWith('warning: no inventory.json')).length, 1, r.stderr);
 });
+
+test('capture: run.json says wholeApp only when every route of the app was captured (not with --routes, not with a route skipped)', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  // an invented Next.js app: '/' and a dynamic route that needs a sample
+  const app = realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-whole-')));
+  writeFileSync(join(app, 'package.json'), JSON.stringify({ dependencies: { next: '15.0.0', react: '19.0.0' } }));
+  mkdirSync(join(app, 'app', 'posts', '[id]'), { recursive: true });
+  writeFileSync(join(app, 'app', 'page.tsx'), 'export default function Home() { return <main><h1>Home</h1></main>; }\n');
+  writeFileSync(join(app, 'app', 'posts', '[id]', 'page.tsx'), 'export default function Post() { return <main><h1>Post</h1></main>; }\n');
+  writeFileSync(join(app, 'samples.json'), JSON.stringify({ '/posts/[id]': '/index.html' }));
+  const args = ['capture', '--url', base, '--root', app, '--viewports', 'm', '--states', 'normal', '--network', 'live'];
+  const whole = r => JSON.parse(readFileSync(join(r.out, 'run.json'), 'utf8')).wholeApp;
+  assert.equal(whole(await cli(app, ...args)), false, 'a dynamic route without a sample was skipped');
+  assert.equal(whole(await cli(app, ...args, '--samples', 'samples.json')), true, 'every route captured');
+  assert.equal(whole(await cli(app, ...args, '--samples', 'samples.json', '--routes', '/')), false, '--routes');
+});
+
+test('capture: a ledger that cannot be brought up to date warns and never fails the capture', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-fold-fail-')));
+  mkdirSync(join(cwd, '.nunchi', 'state'), { recursive: true });
+  writeFileSync(join(cwd, '.nunchi', 'state', 'ledger.json'), '{"runs": [');
+  const r = await promisify(execFile)('node', [CLI, 'capture', '--url', base, '--routes', '/', '--viewports', 'm', '--states', 'normal', '--network', 'live', '--json'], { cwd, encoding: 'utf8' });
+  assert.equal(JSON.parse(r.stdout).run, '0001');
+  assert.ok(existsSync(join(cwd, '.nunchi', 'runs', '0001', 'manifest.json')), 'the run is complete');
+  assert.match(r.stderr, /warning: run 0001 is complete but not in the ledger yet/);
+});

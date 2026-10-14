@@ -27,7 +27,8 @@ export function latestRun(dir) {
 }
 
 // Reserves the next id. mkdir without `recursive` fails if the folder exists, so two captures started
-// at the same moment get different ids.
+// at the same moment get different ids. A capture that finished between the listing and the mkdir has already
+// renamed its `<id>.partial` to `<id>`: the id is taken, so the folder just made is removed and the next id tried.
 export function startRun(dir) {
   mkdirSync(dir, { recursive: true });
   const { complete, partial } = listRuns(dir);
@@ -35,8 +36,10 @@ export function startRun(dir) {
   for (;;) {
     const id = String(++n).padStart(4, '0');
     if (existsSync(join(dir, id))) continue;
-    try { mkdirSync(join(dir, `${id}.partial`)); return { id, path: join(dir, `${id}.partial`), parent: latestRun(dir) }; }
-    catch (e) { if (e.code !== 'EEXIST') throw e; }
+    const path = join(dir, `${id}.partial`);
+    try { mkdirSync(path); } catch (e) { if (e.code !== 'EEXIST') throw e; continue; }
+    if (existsSync(join(dir, id))) { rmSync(path, { recursive: true, force: true }); continue; }
+    return { id, path, parent: latestRun(dir) };
   }
 }
 
@@ -50,12 +53,14 @@ export function finishRun(dir, id) {
 }
 
 // Keeps the newest `keep` complete runs (and `latest`); removes older runs and partial folders that
-// nothing has written to for `staleMs`. Runs referenced by open reviews will be kept too (0.1-c).
-export function gcRuns(dir, { keep = 5, staleMs = 3600e3, now = Date.now() } = {}) {
+// nothing has written to for `staleMs`. Runs referenced by open reviews will be kept too (0.1-c). With
+// `folded` (the runs the ledger holds), a complete run the ledger has not folded is never removed.
+export function gcRuns(dir, { keep = 5, staleMs = 3600e3, now = Date.now(), folded = null } = {}) {
   const { complete, partial } = listRuns(dir);
   const latest = latestRun(dir);
   const keepSet = new Set(complete.slice(-keep));
   if (latest) keepSet.add(latest);
+  if (folded) for (const id of complete) if (!folded.has(id)) keepSet.add(id);
   const removed = [];
   for (const id of complete) if (!keepSet.has(id)) { rmSync(join(dir, id), { recursive: true, force: true }); removed.push(id); }
   for (const p of partial) {

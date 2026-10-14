@@ -9,10 +9,11 @@
 // - decisions are append-only event files under .nunchi/decisions/ (committed; never conflict on merge),
 //   each with who made it. A decision that arrived through git and was not made or approved on this
 //   machine is "unverified": it cannot silence a blocker or a secret, and the fix loop does not act on it.
-//   Approval is bound to the decision's content, not to its id.
+//   Approval is bound to the decision's content (SHA-256), not to its id; decisions are ordered by the earlier
+//   of their date and when this machine first saw them.
 // - status (open, fixed, regressed, …) is computed from runs into .nunchi/state/ledger.json (git-ignored),
 //   never hand-edited and never committed. Every complete run is folded, in run order, like for like.
-import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, lstatSync, openSync, fstatSync, closeSync, constants } from 'node:fs';
 import { join, basename } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { sha, stableJson, writeAtomic, withLock } from './stable.mjs';
@@ -83,20 +84,39 @@ export const titleOf = rule => TITLES[rule] || (rule.startsWith('axe-') ? `Acces
 
 const SEVERITY = { blocker: 0, high: 1, medium: 2, low: 3 };
 
-// ---- state (local, computed) ------------------------------------------------------------------------
+// ---- reading nunchi's own files -----------------------------------------------------------------------
 
 // A file nunchi wrote and can no longer read is an error, never "empty": an empty ledger or approval list
-// written back over it would lose what it held.
+// written back over it would lose what it held. A checkout can put anything at these paths: a link (to a
+// secret, or to a device that never ends) is refused, not followed; a decision has a size cap; and a parse error
+// is reported by its position only, never with the file's text.
 const corrupt = (file, why) => Object.assign(new Error(`${file} ${why}`), { code: 'CORRUPT', file });
-const readJsonStrict = (file, fix) => {
-  try { return JSON.parse(readFileSync(file, 'utf8')); }
-  catch (e) { throw corrupt(file, `cannot be read (${String(e.message).split('\n')[0]}): ${fix}`); }
-};
+const NOFOLLOW = (constants.O_NOFOLLOW || 0) | (constants.O_NONBLOCK || 0);
+const present = p => { try { lstatSync(p); return true; } catch { return false; } };
+export function readJsonFile(file, fix, { max = Infinity } = {}) {
+  let st;
+  try { st = lstatSync(file); } catch (e) { throw corrupt(file, `cannot be read (${e.code}): ${fix}`); }
+  if (!st.isFile()) throw corrupt(file, `is not a regular file (a link, a folder or a device): ${fix}`);
+  let fd, buf;
+  try { fd = openSync(file, constants.O_RDONLY | NOFOLLOW); } catch (e) { throw corrupt(file, `cannot be read (${e.code}): ${fix}`); }
+  try {
+    const s = fstatSync(fd);
+    if (!s.isFile()) throw corrupt(file, `is not a regular file (a link, a folder or a device): ${fix}`);
+    if (s.size > max) throw corrupt(file, `is larger than ${max} bytes: ${fix}`);
+    buf = readFileSync(fd);
+  } finally { closeSync(fd); }
+  if (buf.length > max) throw corrupt(file, `is larger than ${max} bytes: ${fix}`);
+  try { return JSON.parse(buf.toString('utf8')); }
+  catch (e) { const at = /position (\d+)/.exec(String(e.message)); throw corrupt(file, `is not valid JSON${at ? ` (at character ${at[1]})` : ''}: ${fix}`); }
+}
+
+// ---- state (local, computed) ------------------------------------------------------------------------
+
 const REBUILD = 'delete it and the next nunchi command rebuilds it from the runs on disk';
 
 export function readState(file) {
-  if (!existsSync(file)) return { schema: 1, fingerprintVersion: FINGERPRINT_VERSION, runs: [], items: {} };
-  const s = readJsonStrict(file, REBUILD);
+  if (!present(file)) return { schema: 1, fingerprintVersion: FINGERPRINT_VERSION, runs: [], items: {} };
+  const s = readJsonFile(file, REBUILD);
   if (!s || !Array.isArray(s.runs) || !s.items || typeof s.items !== 'object') throw corrupt(file, `is not a nunchi ledger: ${REBUILD}`);
   return s;
 }
@@ -104,14 +124,18 @@ export function readState(file) {
 // Run ids are digits, zero-padded to 4 and longer past 9999: shorter is older.
 export const byRun = (a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
 const minRun = (a, b) => (byRun(a, b) <= 0 ? a : b);
+const maxRun = (a, b) => (!a ? b : byRun(a, b) >= 0 ? a : b);
 
-// A cell is where a finding was seen on its route: person.state.viewport (the end of the scene id).
+// A cell is where a finding was seen on its route: person.state.viewport (the end of the scene id). A key is
+// route|cell, what a run looked at.
 const cellOfScene = id => { const [person, state, vp] = String(id).split('.').slice(-3); return person && state && vp ? { person, state, vp, cell: `${person}.${state}.${vp}` } : null; };
+const keyOf = (route, cell) => `${route}|${cell}`;
+const routeOfKey = k => k.slice(0, k.lastIndexOf('|'));
 // Scenes that show their own route: captured, not redirected, not an error page, not a canary copy.
 const looked = s => s.status === 'captured' && s.canary === undefined && !s.redirected && !/^redirected/.test(s.reason || '') && !(s.httpStatus >= 400);
 // Whole-app detectors judge every route at once (secrets in any bundle, the link graph, the design system's
-// one-offs): only a run over the whole app, with at least the persons, states and viewports of the run that
-// last saw the finding, can say it is gone.
+// one-offs): an item of theirs keeps what the runs that saw it looked at (`coverage`), and only a whole-app run
+// that looked at all of it again can say it is gone.
 const WHOLE_APP = new Set(['secret-in-client-bundle', 'unreachable-route', 'link-to-missing-route', 'one-off-button-shape', 'one-off-heading-size', 'one-off-heading-color']);
 const wholeAppItem = item => item.route === null || WHOLE_APP.has(item.rule);
 // A comparison needs its other side seen again too: parity compares the phone with the desktop, the state
@@ -123,67 +147,125 @@ const PARTNER = {
 };
 // Items folded before cells were stored: every combination of what they were seen with (asks for more, never less).
 const cellsOf = item => item.cells || (item.persons || []).flatMap(p => (item.states || []).flatMap(s => (item.viewports || []).map(v => `${p}.${s}.${v}`)));
+export const originOf = url => { try { return new URL(url).origin; } catch { return null; } };
+// A run whose screens mostly show one and the same text (another app, or one error page, at that address)
+// fixes nothing when it would fix many items at once.
+const ONE_PAGE = { items: 10, share: 0.5 };
+function onePage(scenes) {
+  const hashes = scenes.filter(looked).map(s => s.textHash).filter(Boolean);
+  if (hashes.length < 4) return false;
+  const count = new Map();
+  for (const h of hashes) count.set(h, (count.get(h) || 0) + 1);
+  return Math.max(...count.values()) > ONE_PAGE.share * hashes.length;
+}
 
 // Did this run look again, like for like, everywhere the item was last seen?
-function lookedAgain(item, run) {
+function lookedAgain(item, run, sets) {
+  if ('origin' in item && item.origin !== run.origin) return false;           // another app, or another address
   const cells = cellsOf(item);
+  const need = new Set(cells.map(c => keyOf(item.route, c)));
+  if (PARTNER[item.rule]) for (const c of cells) need.add(keyOf(item.route, PARTNER[item.rule](c.split('.'))));
   if (wholeAppItem(item)) {
     if (!run.wholeApp) return false;
-    const was = item.runScope || {};
-    for (const k of ['persons', 'states', 'viewports']) if ((was[k] || []).some(x => !(run.scope[k] || []).includes(x))) return false;
+    if (item.coverage && !sets[item.coverage]) return false;
+    // routes the app no longer has are not asked for
+    for (const k of item.coverage ? sets[item.coverage] : []) if (run.appRoutes.has(routeOfKey(k))) need.add(k);
   } else if (!cells.length) return false;
-  const need = new Set(cells);
-  if (PARTNER[item.rule]) for (const c of cells) need.add(PARTNER[item.rule](c.split('.')));
-  for (const c of need) {
-    if (run.loginExpired && c.startsWith('signed-in.')) return false;
-    if (!run.covered.has(`${item.route}|${c}`)) return false;
+  for (const k of need) {
+    if (run.loginExpired && k.slice(k.lastIndexOf('|') + 1).startsWith('signed-in.')) return false;
+    if (!run.covered.has(k)) return false;
   }
   return true;
 }
 
+const setId = keys => sha(JSON.stringify(keys), 16);
+
 // Fold one complete run into the state (design 0.1-c §2.1).
-// - Gone only like for like: an item gets `goneAt` only when this run captured every cell it was last seen in
-//   (captured and showing its own route), ran its detector over the same scope (whole-app detectors need a
-//   whole-app run; parity and state comparisons need both sides), and the app was reachable, the recording
-//   current and the login working. A partial run (--states, --viewports, --routes, --changed-since) fixes
-//   nothing it did not look at.
+// - Gone only like for like: an item gets `goneAt` only when this run, at the same origin, captured every cell it
+//   was seen in (captured and showing its own route), ran its detector over the same scope (whole-app detectors:
+//   a whole-app run that looked at everything the runs that saw the item looked at; parity and state comparisons:
+//   both sides), and the app was reachable and the recording current; signed-in cells also need the login working.
+//   A partial run (--states, --viewports, --routes, --changed-since, a skipped route) fixes nothing it did not
+//   look at, and a sighting by a narrower run keeps the cells it did not look at.
 // - Monotonic: a run older than the newest folded run only adds what it saw. It never sets `goneAt`, never moves
-//   `lastSeen` back, and brings an item back only when it saw it after the run that found it gone.
+//   `lastSeen` back, and brings an item back only when it saw it after the last run that looked at it.
+// - `lookedAt`: the last run that looked at every cell of the item (or saw it).
+// - A run that would fix many items at once while most of its screens show the same text fixes nothing.
 // - Folding the same run twice changes nothing.
-export function foldRun(state, { id, scope = {}, wholeApp = false, health = { problems: [] }, scenes = [], findings }) {
+export function foldRun(state, { id, scope = {}, wholeApp = false, health = { problems: [] }, scenes = [], findings, origin = null }) {
   if (state.runs.includes(id)) return state;
   const newest = !state.runs.some(r => byRun(r, id) > 0);
+  const sets = { ...(state.coverage || {}) };
   const next = { ...state, runs: [...state.runs, id].sort(byRun), items: { ...state.items } };
-  const present = new Map();
+  const covered = [...new Set(scenes.filter(looked).map(s => keyOf(s.route, `${s.person}.${s.state}.${s.viewport}`)))].sort();
+  const coveredSet = new Set(covered);
+  const whole = wholeApp === true;
+  const appRoutes = new Set(scope.routes || []);
+  const here = setId(covered);
+  // what a whole-app item asks for after this sighting: what this run looked at, plus what earlier sightings
+  // looked at that this run did not (minus routes the app no longer has, which only a whole-app run can tell)
+  const merged = new Map();
+  const coverageAfter = old => {
+    if (!old || !sets[old]) return (sets[here] = covered, here);
+    if (!merged.has(old)) {
+      const keys = [...new Set([...covered, ...sets[old].filter(k => !coveredSet.has(k) && (!whole || appRoutes.has(routeOfKey(k))))])].sort();
+      const h = setId(keys);
+      sets[h] = keys;
+      merged.set(old, h);
+    }
+    return merged.get(old);
+  };
+  const seen = new Map();
   for (const f of findings) {
-    if (!present.has(f.fp)) present.set(f.fp, { f, persons: new Set(), viewports: new Set(), states: new Set(), cells: new Set(), scenes: [] });
-    const p = present.get(f.fp);
+    if (!seen.has(f.fp)) seen.set(f.fp, { f, persons: new Set(), viewports: new Set(), states: new Set(), cells: new Set(), scenes: [] });
+    const p = seen.get(f.fp);
     const c = f.scene ? cellOfScene(f.scene) : null;
     if (c) { p.persons.add(c.person); p.states.add(c.state); p.viewports.add(c.vp); p.cells.add(c.cell); }
     if (f.scene && p.scenes.length < 20) p.scenes.push(f.scene);
   }
-  const runScope = { persons: [...(scope.persons || [])].sort(), states: [...(scope.states || [])].sort(), viewports: [...(scope.viewports || [])].sort() };
-  for (const [fp, p] of present) {
+  for (const [fp, p] of seen) {
     const old = next.items[fp];
-    const base = { fp, group: p.f.group, lens: p.f.lens, rule: p.f.rule, severity: p.f.severity, route: p.f.route ?? null,
-      persons: [...p.persons].sort(), viewports: [...p.viewports].sort(), states: [...p.states].sort(), cells: [...p.cells].sort(), places: p.scenes.length, examples: p.scenes.slice(0, 5),
+    const route = p.f.route ?? null;
+    const base = { fp, group: p.f.group, lens: p.f.lens, rule: p.f.rule, severity: p.f.severity, route, origin,
+      persons: [...p.persons].sort(), viewports: [...p.viewports].sort(), states: [...p.states].sort(), places: p.scenes.length, examples: p.scenes.slice(0, 5),
       selector: p.f.selector ?? null, evidence: p.f.evidence, inputs: fingerprintOf(p.f).inputs };
-    if (wholeAppItem(base)) base.runScope = runScope;
-    if (!old) { next.items[fp] = { ...base, firstSeen: id, lastSeen: id, goneAt: null, regressedAt: null }; continue; }
-    const later = byRun(id, old.lastSeen) > 0;                         // a newer sighting than the one on record
-    const back = !!old.goneAt && byRun(id, old.goneAt) > 0;             // seen after the run that found it gone
-    next.items[fp] = { ...old, ...(later ? base : {}), firstSeen: minRun(old.firstSeen, id), lastSeen: later ? id : old.lastSeen,
+    const cellsNow = [...p.cells].sort();
+    if (!old) {
+      next.items[fp] = { ...base, cells: cellsNow, ...(wholeAppItem(base) ? { coverage: coverageAfter(null) } : {}), firstSeen: id, lastSeen: id, lookedAt: id, goneAt: null, regressedAt: null };
+      continue;
+    }
+    const later = byRun(id, old.lastSeen) > 0;                                    // a newer sighting than the one on record
+    const back = !!old.goneAt && byRun(id, old.lookedAt || old.goneAt) > 0;        // seen after the last run that looked
+    const item = { ...old, firstSeen: minRun(old.firstSeen, id), lastSeen: later ? id : old.lastSeen, lookedAt: maxRun(old.lookedAt, id),
       goneAt: back ? null : old.goneAt, regressedAt: back ? id : old.regressedAt };
+    if (later) {
+      Object.assign(item, base);
+      // cells this run did not look at stay: the item may still be there
+      item.cells = back ? cellsNow : [...new Set([...cellsNow, ...cellsOf(old).filter(c => !coveredSet.has(keyOf(route, c)))])].sort();
+      if (wholeAppItem(base)) item.coverage = coverageAfter(back ? null : old.coverage);
+    }
+    next.items[fp] = item;
   }
-  if (!newest) return next;
-  const blind = new Set((health.problems || []).map(p => p.status));
-  if (blind.has('app-unreachable') || blind.has('recording-stale')) return next;
-  const run = { scope, wholeApp: wholeApp === true, loginExpired: blind.has('login-expired'),
-    covered: new Set(scenes.filter(looked).map(s => `${s.route}|${s.person}.${s.state}.${s.viewport}`)) };
-  for (const [fp, item] of Object.entries(next.items)) {
-    if (present.has(fp) || item.goneAt) continue;
-    if (lookedAgain(item, run)) next.items[fp] = { ...item, goneAt: id };
+  const blind = (health.problems || []).map(p => p.status).filter(s => s === 'app-unreachable' || s === 'recording-stale');
+  if (newest && blind.length) next.blind = { ...(state.blind || {}), [id]: blind[0] };
+  else if (newest) {
+    const run = { scope, wholeApp: whole, appRoutes, origin, covered: coveredSet, loginExpired: (health.problems || []).some(p => p.status === 'login-expired') };
+    const lookedAt = [], gone = [];
+    for (const [fp, item] of Object.entries(next.items)) {
+      if (seen.has(fp) || !lookedAgain(item, run, sets)) continue;
+      lookedAt.push(fp);
+      if (!item.goneAt) gone.push(fp);
+    }
+    const open = Object.values(state.items).filter(i => !i.goneAt).length;
+    if (gone.length >= ONE_PAGE.items && gone.length > ONE_PAGE.share * open && onePage(scenes)) next.blind = { ...(state.blind || {}), [id]: 'one-page' };
+    else {
+      for (const fp of lookedAt) next.items[fp] = { ...next.items[fp], lookedAt: id };
+      for (const fp of gone) next.items[fp] = { ...next.items[fp], goneAt: id };
+    }
   }
+  // keep only the coverage sets an item still names
+  const used = new Set(Object.values(next.items).map(i => i.coverage).filter(Boolean));
+  next.coverage = Object.fromEntries(Object.entries(sets).filter(([h]) => used.has(h)));
   return next;
 }
 
@@ -191,27 +273,40 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
 // skipped quietly, or the ledger would say nothing about what it saw.
 export function runForFold(runDir) {
   const fix = `fix or remove the run folder ${runDir}`;
-  const meta = readJsonStrict(join(runDir, 'run.json'), fix);
-  const manifest = readJsonStrict(join(runDir, 'manifest.json'), fix);
-  const doc = readJsonStrict(join(runDir, 'findings.json'), fix);
+  const meta = readJsonFile(join(runDir, 'run.json'), fix);
+  const manifest = readJsonFile(join(runDir, 'manifest.json'), fix);
+  const doc = readJsonFile(join(runDir, 'findings.json'), fix);
   if (!Array.isArray(manifest?.scenes) || !Array.isArray(doc?.findings)) throw corrupt(runDir, `is not a complete capture run (no scenes in manifest.json or no findings in findings.json): ${fix}`);
   return { id: basename(runDir), scope: meta?.scope || {}, wholeApp: meta?.wholeApp === true, health: manifest.health || { problems: [] }, scenes: manifest.scenes,
-    findings: doc.findings.map(f => (f.fp ? f : { ...f, fp: fingerprintOf(f).fp, group: fingerprintOf(f).group })) };
+    origin: originOf(manifest.baseUrl), findings: doc.findings.map(f => (f.fp ? f : { ...f, fp: fingerprintOf(f).fp, group: fingerprintOf(f).group })) };
 }
 
-// Brings the ledger up to date with the runs on disk: every complete run not folded yet is folded, oldest
-// first, under the ledger lock. A crash after a run is complete and before its fold leaves nothing behind:
-// the next command folds it. Nothing to fold: nothing is written.
-export function syncLedger(stateFile, runsDir) {
+// When this machine first saw each decision, by id and content (design §8.3 first-seen ordering). Never
+// forgotten, so a decision that leaves and comes back keeps its first arrival.
+export function noteDecisions(state, decisions, now = Date.now()) {
+  const seen = state.decisionsSeen || {};
+  const fresh = decisions.map(approvalKey).filter(k => !Object.hasOwn(seen, k));
+  if (!fresh.length) return state;
+  const out = { ...seen };
+  for (const k of fresh) out[k] = now;
+  return { ...state, decisionsSeen: out };
+}
+
+// Brings the ledger up to date, under the ledger lock: every complete run not folded yet is folded, oldest
+// first, and (with `decisions`) every decision not seen before is noted. A crash after a run is complete and
+// before its fold leaves nothing behind: the next command folds it. Nothing to do: nothing is written.
+export function syncLedger(stateFile, runsDir, { decisions = null, now = Date.now(), timeoutMs } = {}) {
   const pending = s => listRuns(runsDir).complete.filter(id => !s.runs.includes(id)).sort(byRun);
+  const unseen = s => !!decisions && decisions.some(d => !Object.hasOwn(s.decisionsSeen || {}, approvalKey(d)));
   const state = readState(stateFile);
-  if (!pending(state).length) return state;
+  if (!pending(state).length && !unseen(state)) return state;
   return withLock(stateFile, lock => {
     let s = readState(stateFile);
     for (const id of pending(s)) { s = foldRun(s, runForFold(join(runsDir, id))); lock.touch(); }
+    if (decisions) s = noteDecisions(s, decisions, now);
     writeAtomic(stateFile, stableJson(s), { durable: true });
     return s;
-  });
+  }, { timeoutMs });
 }
 
 // ---- decisions (committed, append-only) ------------------------------------------------------------
@@ -227,28 +322,32 @@ export const DECISIONS = {
 const folderOf = target => (target.fp ? `fp-${target.fp}` : `group-${target.group}`);
 const isDecision = d => !!d && typeof d === 'object' && typeof d.id === 'string' && /^[\w-]+$/.test(d.id) && !!d.target && typeof d.target === 'object'
   && (typeof d.target.fp === 'string' || typeof d.target.group === 'string') && Object.hasOwn(DECISIONS, d.decision) && typeof d.at === 'string';
-// Decisions are ordered by their time (an unreadable time sorts last and never counts, see view), then id.
-const timeOf = d => { const t = Date.parse(d.at); return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t; };
-const byTime = (a, b) => timeOf(a) - timeOf(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const dateOf = d => Date.parse(d.at);
+// For listing: by date (an unreadable date last), then id.
+const byDate = (a, b) => { const x = dateOf(a), y = dateOf(b); return (Number.isNaN(x) ? Infinity : x) - (Number.isNaN(y) ? Infinity : y) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0); };
+export const DECISION_MAX_BYTES = 64 * 1024;
 
 // Every decision file, oldest first. A file that is not valid JSON (a torn write, a bad merge), is not a
-// decision, or does not match its place (file name = id, folder = target) is an error naming the file, never
-// skipped: a decision that silently drops out changes what the ledger says.
+// decision, is not a regular file, or does not match its place (file name = id, folder = target) is an error
+// naming the file, never skipped: a decision that silently drops out changes what the ledger says.
 export function readDecisions(dir) {
   const out = [];
-  if (!existsSync(dir)) return out;
+  if (!present(dir)) return out;
+  const fix = 'restore it from git or delete it';
   for (const folder of readdirSync(dir).sort()) {
     const sub = join(dir, folder);
-    if (!statSync(sub).isDirectory()) continue;
+    const st = lstatSync(sub);
+    if (st.isSymbolicLink()) throw corrupt(sub, `is a link, not a folder (decision folders are never followed): ${fix}`);
+    if (!st.isDirectory()) continue;
     for (const f of readdirSync(sub).filter(f => f.endsWith('.json')).sort()) {
       const file = join(sub, f);
-      const d = readJsonStrict(file, 'a torn write or a bad merge; restore it from git or delete it');
-      if (!isDecision(d)) throw corrupt(file, 'is not a nunchi decision; restore it from git or delete it');
-      if (`${d.id}.json` !== f || folderOf(d.target) !== folder) throw corrupt(file, `does not match its place (decision ${d.id} belongs in ${folderOf(d.target)}/${d.id}.json): moved, copied or edited by hand; restore it from git or delete it`);
+      const d = readJsonFile(file, `a torn write or a bad merge; ${fix}`, { max: DECISION_MAX_BYTES });
+      if (!isDecision(d)) throw corrupt(file, `is not a nunchi decision: ${fix}`);
+      if (`${d.id}.json` !== f || folderOf(d.target) !== folder) throw corrupt(file, `does not match its place (decision ${d.id} belongs in ${folderOf(d.target)}/${d.id}.json): moved, copied or edited by hand; ${fix}`);
       out.push(d);
     }
   }
-  return out.sort(byTime);
+  return out.sort(byDate);
 }
 
 const kst = (d = new Date()) => new Date(d.getTime() + 9 * 3600e3).toISOString().replace('Z', '+09:00');
@@ -270,72 +369,115 @@ export function saveDecision(dir, d) {
 export const writeDecision = (dir, input) => saveDecision(dir, buildDecision(input));
 
 // ---- provenance --------------------------------------------------------------------------------------
-// An approval names a decision's content, not only its id: `<id>:<hash of the record>`. A decision file that
+// An approval names a decision's content, not only its id: `<id>:<SHA-256 of the record>`. A decision file that
 // reuses an approved id with other content (copied, edited or forged) is not approved.
-export const decisionHash = d => sha(stableJson(d), 16);
+export const decisionHash = d => sha(stableJson(d), 64);
 export const approvalKey = d => `${d.id}:${decisionHash(d)}`;
+const APPROVED_FIX = 'nothing was written; fix it by hand, or delete it (decisions made here then need nunchi approve again)';
 
-export function readApproved(file) {
-  if (!existsSync(file)) return new Set();
-  const fix = 'nothing was written; fix it by hand, or delete it (decisions made here then need nunchi approve again)';
-  const doc = readJsonStrict(file, fix);
-  if (!doc || !Array.isArray(doc.approved) || !doc.approved.every(x => typeof x === 'string')) throw corrupt(file, `has no "approved" list: ${fix}`);
-  return new Set(doc.approved);
+function readApprovedDoc(file) {
+  if (!present(file)) return { approved: new Set(), legacy: [] };
+  const doc = readJsonFile(file, APPROVED_FIX);
+  const strings = x => Array.isArray(x) && x.every(y => typeof y === 'string');
+  if (!doc || !strings(doc.approved) || (doc.legacy !== undefined && !strings(doc.legacy))) throw corrupt(file, `has no "approved" list: ${APPROVED_FIX}`);
+  return { approved: new Set(doc.approved), legacy: doc.legacy || [] };
+}
+export const readApproved = file => readApprovedDoc(file).approved;
+
+// Is a decision on this target one that could hide something serious (a blocker or an L9 finding)? A target the
+// ledger does not know counts as serious.
+export function seriousTarget(state) {
+  const fps = new Map(), groups = new Map();
+  for (const i of Object.values(state.items)) {
+    const s = i.severity === 'blocker' || i.lens === 'L9';
+    fps.set(i.fp, s);
+    groups.set(i.group, groups.get(i.group) || s);
+  }
+  return t => (t.fp ? fps.get(t.fp) ?? true : groups.get(t.group) ?? true);
 }
 
-// Approvals written before content binding name a bare id. Each binds to the one decision file that has that
-// id now; an id that two files share (one copied or forged) binds to neither and stays as it was.
-export function bindApproved(approved, decisions) {
+// Approvals written by older versions, carried over to `<id>:<SHA-256>`:
+// - `<id>:<16 hex>`: to the one file with that id whose content still has that hash;
+// - a bare id (before content binding): to the one file with that id, unless two files share the id, or it is a
+//   keep or false-positive on a blocker or L9 finding (the file holding that id may have been swapped since it
+//   was approved). Those are not carried over (`left`); `nunchi approve` approves them again. A bare id with no
+//   file stays as it is.
+// → { approved, bound: [{ id, decision, target }], left: [{ id, why }] }
+export function bindApproved(approved, decisions, { serious = () => true } = {}) {
   const byId = new Map();
   for (const d of decisions) byId.set(d.id, [...(byId.get(d.id) || []), d]);
-  const out = new Set();
-  for (const k of approved) {
-    const same = k.includes(':') ? null : byId.get(k);
-    out.add(same && same.length === 1 ? approvalKey(same[0]) : k);
+  const out = new Set(), bound = [], left = [];
+  for (const k of [...approved].sort()) {
+    const short = /^([\w-]+):([0-9a-f]{16})$/.exec(k);
+    if (short) {
+      const d = (byId.get(short[1]) || []).find(x => decisionHash(x).slice(0, 16) === short[2]);
+      out.add(d ? approvalKey(d) : k);
+      continue;
+    }
+    if (k.includes(':')) { out.add(k); continue; }
+    const same = byId.get(k) || [];
+    if (!same.length) { out.add(k); continue; }
+    const d = same[0];
+    if (same.length > 1) left.push({ id: k, why: `${same.length} decision files have this id` });
+    else if ((d.decision === 'keep' || d.decision === 'false-positive') && serious(d.target)) left.push({ id: k, why: `it is a ${d.decision} on a blocker or L9 finding, which is approved by content only` });
+    else { out.add(approvalKey(d)); bound.push({ id: k, decision: d.decision, target: folderOf(d.target) }); }
   }
-  return out;
+  return { approved: out, bound, left };
 }
 
-// Under a lock, so two decides at once both count; a file that cannot be read stops the write.
-export function addApproved(file, keys, decisions = []) {
-  withLock(file, () => {
-    const set = bindApproved(readApproved(file), decisions);
-    for (const k of keys) set.add(k);
-    writeAtomic(file, stableJson({ schema: 2, note: 'decisions made or approved on this machine, by id and content; anything else came through git', approved: [...set].sort() }), { durable: true });
+// Under a lock, so two decides at once both count; a file that cannot be read stops the write. Older approvals
+// are carried over on the way (bindApproved); those not carried over are kept under `legacy`, never honoured.
+export function addApproved(file, keys, { decisions = [], serious } = {}) {
+  return withLock(file, () => {
+    const doc = readApprovedDoc(file);
+    const r = bindApproved(doc.approved, decisions, { serious });
+    for (const k of keys) r.approved.add(k);
+    const legacy = [...new Set([...doc.legacy, ...r.left.map(x => x.id)])].sort();
+    writeAtomic(file, stableJson({ schema: 2, note: 'decisions made or approved on this machine, by id and content; anything else came through git', approved: [...r.approved].sort(), ...(legacy.length ? { legacy } : {}) }), { durable: true });
+    return r;
   });
 }
 
 // ---- view ------------------------------------------------------------------------------------------
 
-// A decision dated more than this ahead of the clock does not count: it would outrank every later decision.
+// A decision dated more than this after it arrived on this machine was dated ahead: it never counts.
 export const FUTURE_SLACK_MS = 5 * 60e3;
+// An open item no run has looked at again for this many runs is said to be so: it cannot be marked fixed.
+export const NOT_LOOKED_RUNS = 3;
 
 // Status of every fingerprint, from the state and the decisions. The latest decision on the fingerprint or on
-// its group that may count wins (at the same instant, the fingerprint's). Shown in `note` and not counted: a
-// decision dated in the future, and a keep or false-positive on a blocker or an L9 finding that was not made or
-// approved on this machine (came through git).
+// its group that may count wins (at the same time, the fingerprint's). A decision's time is the earlier of its
+// date and when this machine first saw it (state.decisionsSeen; now, if not noted yet), so one that arrived
+// late cannot outrank decisions made after it arrived. Shown in `note` and not counted: a decision dated ahead
+// of its arrival (or with no readable date), and a keep or false-positive on a blocker or an L9 finding that
+// was not made or approved on this machine (came through git).
 export function view(state, decisions, approved = new Set(), { now = Date.now() } = {}) {
+  const seenAt = state.decisionsSeen || {};
+  const keys = new Map();
+  const keyOfDecision = d => { if (!keys.has(d)) keys.set(d, approvalKey(d)); return keys.get(d); };
+  const arrived = d => seenAt[keyOfDecision(d)] ?? now;
+  const dated = d => !Number.isNaN(dateOf(d)) && dateOf(d) <= arrived(d) + FUTURE_SLACK_MS;
+  const timeOf = d => (dated(d) ? Math.min(dateOf(d), arrived(d)) : arrived(d));
   const on = new Map();
   for (const d of decisions) {
     const k = d.target.fp ? `fp:${d.target.fp}` : `group:${d.target.group}`;
     if (!on.has(k)) on.set(k, []);
     on.get(k).push(d);
   }
-  const known = new Map();
-  const verifiedOf = d => { if (!known.has(d)) known.set(d, approved.has(approvalKey(d))); return known.get(d); };
+  const position = new Map(state.runs.map((r, i) => [r, i]));
   const rows = [];
   for (const item of Object.values(state.items)) {
     const mine = [...(on.get(`group:${item.group}`) || []).map(d => [d, 0]), ...(on.get(`fp:${item.fp}`) || []).map(d => [d, 1])]
-      .sort((a, b) => timeOf(a[0]) - timeOf(b[0]) || a[1] - b[1] || byTime(a[0], b[0])).map(x => x[0]);
+      .sort((a, b) => timeOf(a[0]) - timeOf(b[0]) || a[1] - b[1] || (a[0].id < b[0].id ? -1 : a[0].id > b[0].id ? 1 : 0)).map(x => x[0]);
     const serious = item.severity === 'blocker' || item.lens === 'L9';
     let d = null, note = null;
     for (let i = mine.length - 1; i >= 0 && !d; i--) {
       const x = mine[i];
-      if (!(timeOf(x) <= now + FUTURE_SLACK_MS)) { note ||= `a ${x.decision} decision dated ${x.at} (in the future, or no readable time) does not count`; continue; }
-      if (serious && !verifiedOf(x) && (x.decision === 'keep' || x.decision === 'false-positive')) { note ||= `a ${x.decision} decision came through git and needs approval on this machine`; continue; }
+      if (!dated(x)) { note ||= `a ${x.decision} decision dated ${x.at}, ahead of when it arrived here (or with no readable date), does not count`; continue; }
+      if (serious && !approved.has(keyOfDecision(x)) && (x.decision === 'keep' || x.decision === 'false-positive')) { note ||= `a ${x.decision} decision came through git and needs approval on this machine`; continue; }
       d = x;
     }
-    const verified = d ? verifiedOf(d) : true;
+    const verified = d ? approved.has(keyOfDecision(d)) : true;
     if (d && d.decision === 'reopen') d = null;
     let status;
     if (item.goneAt) status = 'fixed';
@@ -344,7 +486,9 @@ export function view(state, decisions, approved = new Set(), { now = Date.now() 
     else if (d?.decision === 'hold') status = 'held';
     else if (d?.decision === 'fix') status = 'to-fix';
     else status = item.regressedAt ? 'regressed' : 'open';
-    rows.push({ ...item, status, decision: d ? { id: d.id, decision: d.decision, reason: d.reason, by: d.by, at: d.at, verified } : null, note });
+    const last = item.lookedAt || item.lastSeen;
+    const notLookedAt = !item.goneAt && position.has(last) && state.runs.length - 1 - position.get(last) >= NOT_LOOKED_RUNS ? last : null;
+    rows.push({ ...item, status, decision: d ? { id: d.id, decision: d.decision, reason: d.reason, by: d.by, at: d.at, verified } : null, note, notLookedAt });
   }
   return rows.sort((x, y) => SEVERITY[x.severity] - SEVERITY[y.severity] || (x.group < y.group ? -1 : x.group > y.group ? 1 : x.fp < y.fp ? -1 : 1));
 }

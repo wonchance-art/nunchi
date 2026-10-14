@@ -206,30 +206,31 @@ test('D4: a decision dated in the future does not outrank later decisions, and c
   assert.equal(ok.code, 0, ok.stderr);
   assert.equal(await statusOf(cwd, secret.group), 'open');
   const rows = JSON.parse((await cli(cwd, 'findings', '--all', '--json')).stdout).groups.find(g => g.group === secret.group);
-  assert.match(rows.example.note, /in the future/);
+  assert.match(rows.example.note, /ahead of when it arrived/);
 });
 
-test('D4: approvals from before content binding are kept, bound to the one decision with that id; an id two files share binds to neither', async () => {
+test('D4: approvals from before content binding are carried over to the one decision with that id; an id two files share binds to neither', async () => {
   const SECRET2 = { ...SECRET, evidence: { url: '/vendor.js', kind: 'jwt-service-role' } };
   const legacy = (cwd, secret) => {
-    plant(cwd, { schema: 1, id: 'lr-legacy1', target: { fp: secret.fp }, decision: 'false-positive', reason: 'not-a-problem', note: null, by: 'me', at: '2026-10-13T10:00:00.000+09:00', fingerprintVersion: 1 });
+    plant(cwd, { schema: 1, id: 'lr-legacy1', target: { fp: secret.fp }, decision: 'fix', reason: null, note: null, by: 'me', at: '2026-10-13T10:00:00.000+09:00', fingerprintVersion: 1 });
     writeFileSync(join(cwd, '.nunchi', 'state', 'approved.json'), JSON.stringify({ schema: 1, approved: ['lr-legacy1'] }));
   };
   const copy = (cwd, secret) => plant(cwd, { schema: 1, id: 'lr-legacy1', target: { fp: secret.fp }, decision: 'false-positive', reason: 'not-a-problem', note: null, by: 'someone else', at: '2026-10-14T10:00:00.000+09:00', fingerprintVersion: 1 });
+  const verified = async (cwd, group) => JSON.parse((await cli(cwd, 'findings', '--all', '--json')).stdout).groups.find(g => g.group === group).example.decision?.verified;
   // bound on first read; a copy that turns up later is not approved
   let cwd = tmp('nunchi-legacy-');
   const st = ledgerWith(cwd, [SECRET, SECRET2]);
   const one = Object.values(st.items).find(i => i.evidence.kind === 'stripe-live-secret-key'), two = Object.values(st.items).find(i => i.evidence.kind === 'jwt-service-role');
   legacy(cwd, one);
-  assert.equal(await statusOf(cwd, one.group), 'dismissed', 'the approval made before the upgrade still counts');
-  assert.match(readFileSync(join(cwd, '.nunchi', 'state', 'approved.json'), 'utf8'), /"lr-legacy1:[0-9a-f]{16}"/);
+  assert.equal(await verified(cwd, one.group), true, 'the approval made before the upgrade still counts');
+  assert.match(readFileSync(join(cwd, '.nunchi', 'state', 'approved.json'), 'utf8'), /"lr-legacy1:[0-9a-f]{64}"/);
   copy(cwd, two);
   assert.equal(await statusOf(cwd, two.group), 'open', 'the approval names the first file\'s content, not the id');
   // both files there before the first read: neither is approved, and approve asks which one
   cwd = tmp('nunchi-legacy2-');
   ledgerWith(cwd, [SECRET, SECRET2]);
   legacy(cwd, one); copy(cwd, two);
-  assert.deepEqual([await statusOf(cwd, one.group), await statusOf(cwd, two.group)], ['open', 'open']);
+  assert.deepEqual([await verified(cwd, one.group), await statusOf(cwd, two.group)], [false, 'open']);
   const r = await cli(cwd, 'approve', 'lr-legacy1');
   assert.equal(r.code, 1);
   assert.match(r.stderr, /2 decision files share the id lr-legacy1/);
