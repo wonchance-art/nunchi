@@ -93,6 +93,25 @@ const READS = new Set(['GET', 'HEAD', 'OPTIONS']);
 // empty recording.
 export const derivedMode = personMode => (personMode === 'live' ? 'live' : 'replay');
 
+// Installed in every frame before any app script, in every mode: what a page sends while it unloads is dropped.
+// A keepalive fetch or a beacon sent on beforeunload/pagehide/unload (a navigation inside the scene, an iframe
+// moving on) outlives its document, and Chromium sends it from the browser process, where request routing and
+// offline emulation do not reach (measured on Chromium 141 and 153), so strict replay could not stop it otherwise.
+// fetchLater() is sent by the browser when the document goes away: it never sends. Nothing on screen changes; what
+// a page sends while it is torn down is not part of the capture.
+export function exitGuard() {
+  let leaving = false;
+  for (const type of ['beforeunload', 'pagehide', 'unload']) addEventListener(type, () => { leaving = true; }, { capture: true });
+  const dropped = () => Promise.reject(new TypeError('Failed to fetch'));
+  const fetch0 = globalThis.fetch;
+  if (typeof fetch0 === 'function') globalThis.fetch = function fetch(...args) { return leaving ? dropped() : fetch0.apply(this, args); };
+  const beacon = globalThis.Navigator && Navigator.prototype.sendBeacon;
+  if (typeof beacon === 'function') Navigator.prototype.sendBeacon = function sendBeacon(...args) { return leaving ? false : beacon.apply(this, args); };
+  const send = globalThis.XMLHttpRequest && XMLHttpRequest.prototype.send;
+  if (typeof send === 'function') XMLHttpRequest.prototype.send = function send_(...args) { if (leaving) { this.abort(); return undefined; } return send.apply(this, args); };
+  if ('fetchLater' in globalThis) globalThis.fetchLater = function fetchLater() { return { activated: false }; };
+}
+
 // Network policy for the whole browser, not just the page: the app under test and local hosts go
 // direct, font hosts go direct or through the user's proxy, and everything else (including the
 // browser's own update/telemetry traffic) is sent to a closed port. Expressed as a PAC script so it
@@ -147,6 +166,7 @@ async function captureOne(browser, base, scene, opts) {
     ...(opts.storageState ? { storageState: opts.storageState } : {}),
   });
   await ctx.addInitScript(initScript, { frozen: opts.clock, seed: 42 });
+  await ctx.addInitScript(exitGuard);
   const origin = new URL(base).origin;
   const blocked = new Set();
   const requests = [];
@@ -199,12 +219,9 @@ async function captureOne(browser, base, scene, opts) {
   // WebSockets bypass request routing: in replay each one is closed before it reaches a server.
   if (replay) await ctx.routeWebSocket(/.*/, ws => { streams.push(requestKey('WS', ws.url().replace(/^ws/, 'http'), null, origin)); ws.close().catch(() => {}); });
   const page = await ctx.newPage();
-  // Leaving the page: in replay the browser goes offline and the page unloads while routing still holds, so a
-  // write sent on the way out (a keepalive fetch on pagehide, a beacon) cannot reach a server.
-  const leave = async () => {
-    if (replay) { await ctx.setOffline(true).catch(() => {}); await page.goto('about:blank', { timeout: 5000 }).catch(() => {}); }
-    await ctx.close();
-  };
+  // A scene ends by disposing its context, never by navigating or closing the page: that runs no unload handler
+  // (exitGuard covers the case where one runs anyway).
+  const leave = () => ctx.close();
   const pageErrors = [];
   const nativeDialogs = [];
   page.on('pageerror', e => pageErrors.push(scrubSecrets(redactText(String(e.message || e).split('\n')[0].slice(0, 200)))));

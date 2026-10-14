@@ -70,8 +70,12 @@ scene = route × person × state × viewport.
   miss when it is asked for (a slow scene's too); a write that is not a data request (a beacon, a form post, a
   server action) is aborted and counted the same way. An EventSource stream is aborted and a WebSocket closed before
   it reaches a server; both are listed as `streams` in `network.json`, apart from the misses (a stream is never
-  recorded, so re-recording would not help). Leaving a page, replay goes offline and unloads it while routing still
-  holds, so a write sent on the way out (a keepalive fetch on pagehide) is stopped too. Forced states and canary
+  recorded, so re-recording would not help). What a page sends while it unloads never leaves the browser, in every
+  mode: a keepalive fetch or a beacon sent on beforeunload/pagehide/unload (a navigation inside the scene, an iframe
+  moving on) is sent by Chromium from the browser process, where request routing and offline emulation do not reach
+  (measured on Chromium 141 and 153), so an init script in every frame drops fetch, XHR and `sendBeacon` once the
+  page starts to unload, and `fetchLater()` never sends. A scene ends by disposing its context, which runs no unload
+  handler. Forced states and canary
   copies replay whenever their person does not capture live, even from an empty recording. Recording still goes
   live: the app's server must be an allowed base URL (§2.4), and a backend the app calls from the browser is reached
   as the app would reach it; a held slow request that outlives its page is dropped, not a crash.

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Pebble Tasks — widget</title></head>
+<body>
+<p>Widget</p>
+<script>
+  // Everything a page can send while it goes away, and a deferred write the browser sends at unload.
+  addEventListener('pagehide', () => {
+    navigator.sendBeacon('/api/frame-beacon', 'left');
+    fetch('/api/frame-bye', { method: 'POST', keepalive: true, body: 'left' }).catch(() => {});
+    try { fetch(new Request('/api/frame-request', { method: 'POST', keepalive: true, body: 'left' })).catch(() => {}); } catch (e) {}
+  });
+  try { if (typeof fetchLater === 'function') fetchLater('/api/frame-later', { method: 'POST', body: 'later' }); } catch (e) {}
+  // the widget moves on by itself, so it unloads while the scene is open
+  setTimeout(() => location.replace('/landing.html'), 50);
+</script>
+</body>
+</html>

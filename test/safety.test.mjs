@@ -36,7 +36,7 @@ const SECRET_PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <h1>API keys</h1><input placeholder="${STRIPE}"><p>Your access key: ${AWS}</p><pre>session ${SESSION_JWT}</pre></main></body></html>`;
 
 let server, base, other, otherServer, browserOk = true;
-const hits = [];
+const hits = [], pages = [];
 before(async () => {
   server = createServer((req, res) => {
     const path = new URL(req.url, 'http://x').pathname;
@@ -46,6 +46,7 @@ before(async () => {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify(path === '/api/list' ? { items: ['Water the fern', 'Return the library book'] } : { ok: true }));
     }
+    if (path === '/landing.html') pages.push(path);               // proof that a frame unloaded during the scene
     if (path === '/away') { res.writeHead(302, { location: `${other}/landed` }); return res.end(); }
     if (path === '/secret.html') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(SECRET_PAGE); }
     const file = join(FIX, path);
@@ -300,10 +301,13 @@ test('D11: in replay, WebSockets are closed, EventSource is stopped, and a keepa
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const har = tmp('stream-har');
   writeFileSync(join(har, 'guest.json'), JSON.stringify({ schema: 1, entries: {} }));
-  hits.splice(0);
+  hits.splice(0); pages.splice(0);
   const out = tmp('stream-replay');
   await capture({ baseUrl: base, scenes: [{ route: '/stream.html', path: '/stream.html' }], viewports: ['m'], out, network: 'replay', recordingDir: har });
-  await new Promise(r => setTimeout(r, 300));                     // a write sent while the page closed would land by now
+  await new Promise(r => setTimeout(r, 500));                     // a write sent while a page went away would land by now
+  // the widget frame did unload during the scene (its pagehide sent a beacon, keepalive fetches and a fetchLater),
+  // and the scene itself ended: none of it, nor the socket or the stream, reached the server
+  assert.ok(pages.includes('/landing.html'), 'the frame moved on, so its unload handlers ran');
   assert.deepEqual(hits.splice(0), [], 'no socket, stream or write reached the server');
   const net = JSON.parse(readFileSync(join(out, 'stream.html.guest.normal.m', 'network.json'), 'utf8'));
   assert.deepEqual(net.streams, ['SSE app:/api/events', 'WS app:/ws'], 'listed apart from replay misses: a stream is never recorded');
