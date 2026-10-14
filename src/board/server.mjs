@@ -29,7 +29,7 @@ import { buildBoardModel, groupList, groupDetail, screenWall, safe, readClaims, 
 import { BASE_CSS, BOARD_CSS } from './look.mjs';
 import { decidedText, CAP_MS } from './shared.mjs';
 import * as P from '../project.mjs';
-import { DECISIONS, protectOf, newId, approvalKey } from '../ledger.mjs';
+import { DECISIONS, protectOf, newId, approvalKey, reasonProblem } from '../ledger.mjs';
 import { listRuns, workTree } from '../runs.mjs';
 import { readGeneration } from '../state.mjs';
 import { readManifest, sceneDir } from '../hunt.mjs';
@@ -424,8 +424,8 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     const { targets: ids, decision, reason = null, note = null, ms = null, confirmed = false } = body;
     if (!Array.isArray(ids) || !ids.length || ids.length > 1000 || !ids.every(x => typeof x === 'string' && HEX12.test(x)) || new Set(ids).size !== ids.length) return fail(res, 400, 'targets: a list of group ids');
     if (typeof decision !== 'string' || !Object.hasOwn(DECISIONS, decision)) return fail(res, 400, 'unknown decision');
-    const reasons = DECISIONS[decision];
-    if (reasons.length ? !reasons.includes(reason) : reason !== null) return fail(res, 400, reasons.length ? `"${decision}" needs a reason: ${reasons.join(' | ')}` : `"${decision}" takes no reason`);
+    const badReason = reasonProblem(decision, reason, { asked: 'a reason: ' });   // the check buildDecision makes
+    if (badReason) return fail(res, 400, badReason);
     if (note !== null && (typeof note !== 'string' || note.length > 500)) return fail(res, 400, 'a note is up to 500 characters');
     if (ms !== null && !(Number.isFinite(ms) && ms >= 0 && ms <= CAP_MS)) return fail(res, 400, 'ms: 0 to 120000');
     // checked against the ledger as it is now (the same functions as nunchi decide)

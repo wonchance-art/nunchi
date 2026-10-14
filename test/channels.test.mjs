@@ -110,6 +110,16 @@ test('channels: `nunchi decide` run by the agent (no terminal) is cli-agent, say
   const bad = await cli(p.root, 'decide', med.group, 'keep');
   assert.equal(bad.code, 1);
   assert.match(bad.stderr, /needs --reason intended \| out-of-scope/);
+  // and a reason the decision does not take, as the board refuses it (one check, in buildDecision)
+  const before = readdirSync(join(p.nunchi, 'decisions'), { recursive: true }).length;
+  for (const words of [['fix', '--reason', 'intended'], ['later', '--reason', 'intended'], ['reopen', '--reason', 'not-a-problem']]) {
+    const r = await cli(p.root, 'decide', med.group, ...words);
+    assert.equal(r.code, 1, words.join(' '));
+    assert.match(r.stderr, /takes no reason/, words.join(' '));
+  }
+  assert.equal(readdirSync(join(p.nunchi, 'decisions'), { recursive: true }).length, before, 'nothing written');
+  assert.throws(() => L.buildDecision({ target: { group: med.group }, decision: 'fix', reason: 'intended', by: 'x' }), /"fix" takes no reason/);
+  assert.equal(L.reasonProblem('keep', 'intended'), null);
 });
 
 test('summary: the verdict names what stands in the way, then the AI review, then screens not checked; a running capture is too early', () => {

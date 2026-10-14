@@ -786,10 +786,18 @@ export const HUMAN_CHANNELS = new Set(['board', 'cli-tty']);
 const BATCH_ID = /^[\w-]{1,40}$/;
 export const newId = () => `${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
 
+// The reason a decision takes: one of its reasons when it has some, none at all otherwise (`fix --reason intended` is
+// refused, not recorded). One check for `nunchi decide` and the board (`asked`: how the reason is given there).
+// → null, or what is wrong.
+export function reasonProblem(decision, reason, { asked = '--reason ' } = {}) {
+  const reasons = Object.hasOwn(DECISIONS, decision) ? DECISIONS[decision] : null;
+  if (!reasons) return `unknown decision "${decision}" (${Object.keys(DECISIONS).join(', ')})`;
+  if (reasons.length) return reasons.includes(reason) ? null : `"${decision}" needs ${asked}${reasons.join(' | ')}`;
+  return reason === null || reason === undefined ? null : `"${decision}" takes no reason`;
+}
 export function buildDecision({ target, decision, reason = null, note = null, by, channel = null, batch = null }) {
-  if (!DECISIONS[decision]) throw Object.assign(new Error(`unknown decision "${decision}" (${Object.keys(DECISIONS).join(', ')})`), { code: 'BAD_ARGS' });
-  const reasons = DECISIONS[decision];
-  if (reasons.length && !reasons.includes(reason)) throw Object.assign(new Error(`"${decision}" needs --reason ${reasons.join(' | ')}`), { code: 'BAD_ARGS' });
+  const bad = reasonProblem(decision, reason);
+  if (bad) throw Object.assign(new Error(bad), { code: 'BAD_ARGS' });
   if (channel !== null && !CHANNELS.includes(channel)) throw Object.assign(new Error(`unknown channel "${channel}"`), { code: 'BAD_ARGS' });
   if (batch !== null && !BATCH_ID.test(String(batch))) throw Object.assign(new Error('a batch id is up to 40 letters, digits, _ or -'), { code: 'BAD_ARGS' });
   return { schema: 1, id: newId(), target, decision, reason, note: note ? String(note).slice(0, 500) : null, by, at: kst(), fingerprintVersion: FINGERPRINT_VERSION,
