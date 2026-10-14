@@ -42,6 +42,21 @@ const short = s => String(s || '').slice(0, 7);
 const readJson = (p, fallback = null) => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return fallback; } };
 const SEV = { blocker: 0, high: 1, medium: 2, low: 3 };
 
+// ---- a record that changed under a command ------------------------------------------------------------------------------
+
+// A command whose record write found the attempt changed by another (records.mjs RECORD_CHANGED: an --abort from another
+// terminal, a decision in the board) stops there and says what the attempt is now, and any revert commit it had made
+// just before (named, so nobody looks for it). Never a stack trace.
+export function changedLines(e) {
+  const cur = e.current || {};
+  const now = cur.phase === 'aborted' && cur.outcome?.reason === 'abort' ? 'Someone stopped this attempt (fix --abort) while this command ran'
+    : `This fix attempt changed while this command ran: it is ${cur.phase || 'gone'} now${cur.outcome?.line ? ` (${cur.outcome.line})` : ''}`;
+  const rv = e.revert ? ` The fix had just been undone by commit ${String(e.revert).slice(0, 7)}: that commit stays; look at it with git show ${String(e.revert).slice(0, 7)}.` : '';
+  return [`${now}. Nothing more was done.${rv}`];
+}
+const guarded = fn => async (...a) => { try { return await fn(...a); } catch (e) { if (e.code !== 'RECORD_CHANGED') throw e; return out(1, changedLines(e), { changed: true, phase: e.current?.phase ?? null, revert: e.revert ?? null }); } };
+const guardedSync = fn => (...a) => { try { return fn(...a); } catch (e) { if (e.code !== 'RECORD_CHANGED') throw e; return out(1, changedLines(e), { changed: true, phase: e.current?.phase ?? null, revert: e.revert ?? null }); } };
+
 // ---- context ---------------------------------------------------------------------------------------------------------
 
 // The project as the fix loop sees it: the ledger (through project.mjs, as every ledger command reads it), the state
@@ -260,7 +275,7 @@ function planBranch(ctx, group = null) {
 // ---- start (design §4.2–§4.4) -----------------------------------------------------------------------------------------
 
 const RESUME_START = new Set(['starting', 'branching', 'claiming', 'snapshot', 'baseline', 'p0']);
-export async function startFix(ctx, id, opts = {}) {
+async function startFixInner(ctx, id, opts = {}) {
   if (!ctx.git) return refuse(`The fix loop needs git (${ctx.gitError?.message || 'no repository here'}): nunchi fixes on a branch it makes, and undoes a fix with git revert.`);
   const found = findGroup(ctx, id);
   if (found.error) return refuse(found.error);
@@ -423,7 +438,7 @@ function briefFor(ctx, g, rows, rec) {
     allowedNote: `the other files these screens render (${(rec.allowed || []).length} file${(rec.allowed || []).length === 1 ? '' : 's'}, from the source map)`, trailers: trailersOf(rec), attempt: rec.try || rec.attempt, of: MAX_ATTEMPTS,
     branch: rec.branch, note: rec.decision?.note || null, checks: profile ? CHECK_SCRIPTS.filter(n => profile.scripts[n] !== undefined) : [] }).trimEnd();
 }
-export function briefFix(ctx, id) {
+function briefFixInner(ctx, id) {
   const found = findGroup(ctx, id);
   if (found.error) return refuse(found.error);
   const { rec } = reconcile(ctx, found.g.group);
@@ -475,7 +490,7 @@ async function probe(ctx, rec, which, { url, serve, scope, harDir, profile, keep
 
 // ---- checks (design §4.3) -------------------------------------------------------------------------------------------
 
-export async function checkFix(ctx, id) {
+async function checkFixInner(ctx, id) {
   if (!ctx.git) return refuse('The fix loop needs git.');
   const found = findGroup(ctx, id);
   if (found.error) return refuse(found.error);
@@ -581,7 +596,7 @@ export async function verifyFix(ctx, id, opts = {}) {
     return await judgeAttempt(ctx, rec, { g, title, said, p, harDir, base: p.base });
   } catch (e) {
     if (e.code !== 'RECORD_CHANGED') throw e;
-    return out(0, [...said, `'${title}' changed while it was being re-checked (it is ${e.current?.phase ?? 'closed'} now): nothing more was done.`], { outcome: e.current?.phase ?? null });
+    return out(e.revert ? 1 : 0, [...said, ...(e.revert ? changedLines(e) : [`'${title}' changed while it was being re-checked (it is ${e.current?.phase ?? 'closed'} now): nothing more was done.`])], { outcome: e.current?.phase ?? null, revert: e.revert ?? null });
   } finally { if (p.stop) p.stop(); }
 }
 
@@ -639,7 +654,7 @@ async function judgeAttempt(ctx, rec, { g, title, said, p, harDir, base }) {
   writeStable(join(p1Dir, 'recheck-packets.json'), plan.packets);
   writeKey(p1Dir, 'recheck-key.json', plan.key);
   rec = setPhase(ctx.stateDir, rec, 'recheck', { recheck: { run: p.runId, plan: plan.key.plan, controls: plan.key.controls } }, gen(ctx));
-  if (!plan.packets.packets.length) return recordFix(ctx, g.group, []);
+  if (!plan.packets.packets.length) return recordFixInner(ctx, g.group, []);
   const lines = [...said, `The rule checks of '${title}' are clean; its AI finding${rec.fps.ai.length === 1 ? '' : 's'} need${rec.fps.ai.length === 1 ? 's' : ''} a re-check from a fresh context:`,
     `${plan.packets.packets.length} packets → ${join(p1Dir, 'recheck-packets.json')}`,
     `Give a fresh re-checker (one that has seen neither the hunt nor this fix) only recheck-packets.json and the files it names; never the diff, the commit message or this brief. Then: nunchi fix --verify ${g.group} --record <verdicts.json>.`];
@@ -648,7 +663,7 @@ async function judgeAttempt(ctx, rec, { g, title, said, p, harDir, base }) {
 }
 
 // The re-check's verdicts (`fix --verify <group> --record <file>`).
-export async function recordFix(ctx, id, verdicts) {
+async function recordFixInner(ctx, id, verdicts) {
   const found = findGroup(ctx, id);
   if (found.error) return refuse(found.error);
   const { g, title } = found;
@@ -765,7 +780,8 @@ function doRevert(ctx, rec, why, { cancelWord = null, quiet = false, title = rec
     return out(quiet ? 1 : 0, line, { outcome: 'needs-you', needsYou: kind });
   }
   const lines = [];
-  finishRevert(ctx, rec, r.sha, lines, { cancelWord, title });
+  try { finishRevert(ctx, rec, r.sha, lines, { cancelWord, title }); }
+  catch (e) { if (e.code === 'RECORD_CHANGED') e.revert = r.sha; throw e; }
   return out(0, lines, { outcome: latestRecord(ctx.stateDir, rec.group)?.phase, revert: r.sha });
 }
 function finishRevert(ctx, rec, revertSha, lines, { cancelWord = null, title = rec.title || 'this finding' } = {}) {
@@ -802,7 +818,7 @@ function finishRevert(ctx, rec, revertSha, lines, { cancelWord = null, title = r
 
 // `fix --undo <group>`: a fix that landed (fixed, or kept for the person) is reverted while it is HEAD, and its fold
 // undone (design §3.4 "Undo and reopen").
-export function undoFix(ctx, id) {
+function undoFixInner(ctx, id) {
   if (!ctx.git) return refuse('The fix loop needs git.');
   const found = findGroup(ctx, id);
   if (found.error) return refuse(found.error);
@@ -821,7 +837,7 @@ export function undoFix(ctx, id) {
 }
 
 // `fix --abort <group>`: before the commit → to fix again; after → needs you, the commit shown (design §4.9).
-export function abortFix(ctx, id) {
+function abortFixInner(ctx, id) {
   const found = findGroup(ctx, id);
   if (found.error) return refuse(found.error);
   let { rec, said } = reconcile(ctx, found.g.group);
@@ -854,7 +870,7 @@ export function acceptDrift(ctx, group, { attempt, by }) {
 
 // ---- status and the batch summary (design §4.10) ----------------------------------------------------------------------
 
-export function statusFix(ctx, id = null) {
+function statusFixInner(ctx, id = null) {
   const recs = id ? (() => { const f = findGroup(ctx, id); if (f.error) return null; reconcile(ctx, f.g.group); return new Map([[f.g.group, latestRecord(ctx.stateDir, f.g.group)]].filter(([, r]) => r)); })() : latestRecords(ctx.stateDir);
   if (!recs) return refuse(findGroup(ctx, id).error);
   const lines = [], json = [];
@@ -887,3 +903,10 @@ export function summaryFix(ctx) {
   const line = `${head}${needs.length ? ` ${needs.length} need${needs.length === 1 ? 's' : ''} you: ${needs.map(t => `'${t}'`).join(', ')} → the board (nunchi open).` : ''}${other.length ? ` ${other.length} not finished yet.` : ''}`;
   return out(0, line, { fixed, of: n, screens, needsYou: needs, broke, open: other });
 }
+export const startFix = guarded(startFixInner);
+export const checkFix = guarded(checkFixInner);
+export const recordFix = guarded(recordFixInner);
+export const undoFix = guardedSync(undoFixInner);
+export const abortFix = guardedSync(abortFixInner);
+export const statusFix = guardedSync(statusFixInner);
+export const briefFix = guardedSync(briefFixInner);

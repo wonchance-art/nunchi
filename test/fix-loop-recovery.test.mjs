@@ -101,3 +101,27 @@ test('a sweep folded while the fix waits (rows gone, the decision still Fix) doe
   assert.equal(git(p.root, 'rev-parse', 'HEAD'), head, 'the good fix stays');
   assert.equal(latest(p).phase, 'fixed');
 });
+
+test('a record changed under a command: said in words (what it is now), never a stack trace; a revert commit made just before is named', async () => {
+  const p = await fixProject({ files: { 'package.json': JSON.stringify({ name: 'x', private: true, scripts: { test: 'node -e 0' }, dependencies: { next: '0.0.0-test' } }) } });
+  const { checkProfile, approveProfile, scriptsApprovedPath } = await import('../src/checks.mjs');
+  approveProfile(scriptsApprovedPath(stateDir(p)), p.root, { seen: checkProfile(p.root).hash, channel: 'cli-tty', by: 'Tester' });
+  let calls = 0;
+  // the second run of the checks (fix --checks): someone aborts the attempt from another terminal meanwhile
+  const runChecks = async () => { if (calls++ === 1) F.abortFix(ctxOf(p), p.group); return { pm: { name: 'npm' }, results: { test: { status: 'pass', exit: 0, count: null, output: '' } } }; };
+  assert.equal((await F.startFix(ctxOf(p, { runChecks }), p.group)).code, 0);
+  edit(p.root, 'app/settings/page.jsx', 'TINY', 'ROOMY');
+  const c = await F.checkFix(ctxOf(p, { runChecks }), p.group);
+  assert.equal(c.code, 1);
+  assert.deepEqual(c.lines, ['Someone stopped this attempt (fix --abort) while this command ran. Nothing more was done.']);
+  // a revert commit landed, then the record was written by someone else before this command could close it
+  const q = await fixProject();
+  await attempt(q, { change: ['TINY', 'WRAP'], verify: false });
+  const ctx = ctxOf(q);
+  const orig = ctx.git.revert;
+  ctx.git.revert = o => { const r = orig(o); const rec = latest(q); R.update(stateDir(q), rec, { note: 'written by another command' }); return r; };
+  const v = await F.verifyFix(ctx, q.group);
+  const head = git(q.root, 'rev-parse', '--short=7', 'HEAD');
+  assert.match(v.lines.at(-1), new RegExp(`Nothing more was done\\. The fix had just been undone by commit ${head}: that commit stays; look at it with git show ${head}\\.$`));
+  assert.equal(v.code, 1);
+});
