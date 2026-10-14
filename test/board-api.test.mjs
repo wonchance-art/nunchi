@@ -63,6 +63,27 @@ test('api: Copy path copies the whole path, never the clipped one shown; a path 
   assert.match(js, /copyButton\(codeCopy, 'Copy path'\)/, 'the page copies code.copy');
 });
 
+test('api: a decision that lands while the model is being built is shown on the next request (the cache keeps the version read before the build)', async () => {
+  const p = smallProject();
+  let once = true;
+  const g = gid(p, 'dead-href');
+  const afterBuild = () => {
+    if (!once) return;
+    once = false;
+    // a decision from the terminal, written between the board's read of the ledger and its caching the model
+    const led = P.loadLedger(p.nunchi, { root: p.root });
+    const { rows, groups } = P.ledgerView(led);
+    P.recordDecisions(led, { targets: P.resolveTargets(rows, groups, [g], { prefix: false }), decision: 'fix', by: 'fixture', channel: 'cli-agent' });
+  };
+  const { b, call } = await board(p, { testHooks: { afterBuild } });
+  try {
+    const first = (await call(`/api/groups/${g}`)).json;
+    assert.equal(first.decision, null, 'built before the decision');
+    const next = (await call(`/api/groups/${g}`)).json;
+    assert.equal(next.decision?.decision, 'fix', 'the next request builds again and shows it');
+  } finally { await b.close(); }
+});
+
 test('api: /api/summary is the summary findings --json carries (one function)', async () => {
   const p = smallProject();
   const { b, call } = await board(p);

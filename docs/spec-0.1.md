@@ -1156,7 +1156,8 @@ the live endpoints answer (the others 404, so nothing unblinds).
 - The model (`src/board/model.mjs`) is ledger-wide, as `findings` sees it (`view()` through `project.mjs`), not one
   run: a partial latest run does not hide open items. Evidence comes from the run that last saw each item: a rule
   item's findings in that run (box from the finding or the scene's evidence index), an AI item's own record per cell.
-  It is cached by version and rebuilt on a change.
+  It is cached by version (the one read before the build, so a change that lands during a build makes the next
+  request build again) and rebuilt on a change.
 
 **Decisions (§3.4) and parity.** `POST /api/decide {targets, decision, reason, note?, ms?, confirmed?}` checks the ids
 against the ledger as it is now (stale → 409), requires the reason the decision takes and refuses one it does not,

@@ -132,7 +132,8 @@ class HttpError extends Error { constructor(status, message, extra = {}) { super
 
 // Starts a board for `projectDir` (the folder holding `.nunchi`). → { port, url, newLink(), close(), server }.
 // `mode`: 'board' or 'label' (design §9.2: label mode serves only the label endpoints and evidence).
-export async function startBoard({ projectDir, mode = 'board', port = 0, labeller = null, idleMs = IDLE_MS, onExit = null, now = () => Date.now() } = {}) {
+// `testHooks.afterBuild`: called right after a model is built (tests only: a change landing mid-build).
+export async function startBoard({ projectDir, mode = 'board', port = 0, labeller = null, idleMs = IDLE_MS, onExit = null, now = () => Date.now(), testHooks = {} } = {}) {
   const project = resolve(projectDir);
   const nunchiDir = join(project, '.nunchi');
   const warnings = new Set();
@@ -158,13 +159,16 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   };
   const version = () => `${readGeneration(genFile)}.${decisionsSig()}`;
   let cache = null;
+  // The cache is tagged with the version read before the build: a change that lands while the model is being built
+  // makes the next request build again, instead of serving the older model under the newer version.
   const model = () => {
     const v = version();
     if (cache && cache.v === v) return cache.m;
     warnings.clear();
     const m = buildBoardModel({ nunchiDir, projectDir: project, warn: w => warnings.add(w) });
     m.lenses = lensTable(project);
-    cache = { v: version(), m };
+    testHooks.afterBuild?.();
+    cache = { v, m };
     return m;
   };
 
