@@ -134,7 +134,7 @@ test('a claim no open attempt owns (a start killed while claiming, before its to
   F.abortFix(ctxOf(p), p.group);
   const { attempt: _a, phase: _p, phases: _ps, rev: _r, claim: _c, outcome: _o, p0: _p0, ...fields } = real;
   R.setPhase(sd, R.allocate(sd, p.group, fields), 'claiming');                 // no token recorded
-  C.acquireClaim(sd, { group: p.group, worktree: p.root, branch: real.branch, url: real.url, files: real.rootFiles, mine: null });
+  C.acquireClaim(sd, { group: p.group, worktree: real.worktree, branch: real.branch, url: real.url, files: real.rootFiles, mine: null });
   const s = await F.startFix(ctxOf(p), p.group);
   assert.equal(s.code, 1);
   assert.doesNotMatch(s.lines.join('\n'), /--verify/);
