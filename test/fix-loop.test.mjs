@@ -760,3 +760,43 @@ test('revert: a revert the person started (their REVERT_HEAD) is never aborted b
   assert.deepEqual([latest(p).phase, latest(p).outcome.needsYou], ['needs-you', 'revert-failed']);
   assert.match(s.lines.join('\n'), /Couldn't undo the fix/);
 });
+
+// ---- flaky re-captures see the app P1 saw (M3 review, blocker 2) -------------------------------------------------------
+
+async function servedProject() {
+  const p = await fixProject({ files: { 'package.json': JSON.stringify({ name: 'x', private: true, scripts: { start: 'next start' }, dependencies: { next: '0.0.0-test' } }) } });
+  const { checkProfile, approveProfile, scriptsApprovedPath } = await import('../src/checks.mjs');
+  approveProfile(scriptsApprovedPath(stateDir(p)), p.root, { seen: checkProfile(p.root).hash, channel: 'cli-tty', by: 'Tester' });
+  const events = [];
+  let up = false;
+  const serve = async () => { up = true; events.push('serve'); return { ok: true, url: 'http://127.0.0.1:4999', stop: () => { up = false; events.push('stop'); } }; };
+  const capture = async a => { events.push(`capture:${up ? 'up' : 'down'}`); if (!up) return { manifest: { scenes: a.scenes.map(s => ({ id: `${s.route.slice(1) || '~'}.${s.person}.normal.${a.viewports[0]}`, route: s.route, person: s.person, status: 'capture-failed', reason: 'app-unreachable' })), health: { problems: [] } }, findings: [] }; return p.cap.capture(a); };
+  return { p, events, deps: { serve, capture } };
+}
+
+test('--serve: the flaky re-capture runs while the server P1 used is still up; a page error that keeps coming back is a regression', async () => {
+  const { p, events, deps } = await servedProject();
+  assert.equal((await F.startFix(ctxOf(p, deps), p.group, { serve: 'start' })).code, 0);
+  edit(p.root, 'app/settings/page.jsx', 'TINY', 'ROOMY');
+  commitWith(p.root, trailers(await F.checkFix(ctxOf(p, deps), p.group)));
+  p.world.flakyOnce = 99;
+  events.length = 0;
+  const v = await F.verifyFix(ctxOf(p, deps), p.group, { serve: 'start' });
+  assert.deepEqual(events.slice(0, 1), ['serve']);
+  assert.ok(events.filter(e => e.startsWith('capture')).every(e => e === 'capture:up'), events.join(' '));
+  assert.equal(events.at(-1), 'stop', 'stopped once judging was done');
+  assert.match(v.lines[0], /^That fix broke 'JavaScript error on the page' on \/settings, so I undid it/);
+});
+
+test('a second look that does not see the screen says nothing: inconclusive (needs you c), never "it did not come back"', async () => {
+  const p = await fixProject();
+  assert.equal((await F.startFix(ctxOf(p), p.group)).code, 0);
+  edit(p.root, 'app/settings/page.jsx', 'TINY', 'ROOMY');
+  commitWith(p.root, trailers(await F.checkFix(ctxOf(p), p.group)));
+  p.world.flakyOnce = 99;
+  // the second look (a capture outside any probe run) fails to load the screen
+  const capture = async a => (a.runMeta?.fix ? p.cap.capture(a) : { manifest: { scenes: [{ id: 'settings.guest.normal.d', route: '/settings', person: 'guest', status: 'capture-failed', reason: 'no-dom' }, { id: 'settings.guest.normal.m', route: '/settings', person: 'guest', status: 'capture-failed', reason: 'no-dom' }], health: { problems: [] } }, findings: [] });
+  const v = await F.verifyFix(ctxOf(p, { capture }), p.group);
+  assert.match(v.lines[0], /^Couldn't re-check 'Tap target smaller than 24px'/);
+  assert.deepEqual([latest(p).phase, latest(p).outcome.needsYou, latest(p).verdict.reasons[0].why], ['needs-you', 'c', 'recapture-failed']);
+});

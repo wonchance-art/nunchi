@@ -32,7 +32,7 @@ import { probeView, probeProblems, judgeRules, judgeAi, MAX_ATTEMPTS, FLAKY } fr
 import { diffPolicy, depsOf, rootCauseFiles } from './policy.mjs';
 import { fixBrief } from './brief.mjs';
 import { runChecks as runChecksReal, compareChecks } from './run.mjs';
-import { snapshotRecordings, snapshotIntact, proveByFile, serveApp, captureProbe, recaptureFlaky, measureDrift, readProbe, controlsReader, sweepProbeFiles } from './probe.mjs';
+import { snapshotRecordings, snapshotIntact, proveByFile, serveApp, captureProbe, recaptureScenes, cameBack, measureDrift, readProbe, controlsReader, sweepProbeFiles } from './probe.mjs';
 
 const out = (code, lines, json = {}) => ({ code, lines: [].concat(lines).filter(x => x !== null && x !== undefined), json });
 const refuse = (lines, json = {}) => out(1, lines, { refused: true, ...json });
@@ -396,8 +396,10 @@ export function briefFix(ctx, id) {
 }
 
 // A probe with its proof (design §4.4). → { runId, runDir, proof } or { error }.
-async function probe(ctx, rec, which, { url, serve, scope, harDir, profile }) {
-  let stop = null, base = url, proof;
+// `keep`: the server --serve started stays up (its `stop` is returned) until the caller is done judging, so the
+// re-captures of flaky rules see the same app.
+async function probe(ctx, rec, which, { url, serve, scope, harDir, profile, keep = false }) {
+  let stop = null, base = url, proof, kept = false;
   if (!snapshotIntact(harDir, rec.har?.shas)) return { error: 'the attempt\'s recording snapshot changed or is missing' };
   if (serve) {
     const s = await ctx.deps.serve({ root: ctx.root, profile, script: serve, url });
@@ -418,11 +420,12 @@ async function probe(ctx, rec, which, { url, serve, scope, harDir, profile }) {
       fix: { group: rec.group, attempt: rec.attempt, probe: which, har: rec.har?.shas || {} }, canaries: 3, canarySeed: sha(`${rec.group}:${rec.attempt}:canaries`, 16), canaryRoutes: rec.routes,
       onStart: runId => { rec = update(ctx.stateDir, rec, { [which === 'P0' ? 'p0' : 'p1']: { run: runId, partial: true } }); },
     }));
-    return { runId: r.runId, runDir: r.runDir, proof, base };
+    kept = keep;
+    return { runId: r.runId, runDir: r.runDir, proof, base, stop: kept ? stop : null };
   } catch (e) {
     if (['NO_BROWSER', 'NO_AUTH', 'NO_RECORDING', 'BAD_RECORDING', 'URL_NOT_ALLOWED', 'BAD_ARGS'].includes(e.code)) return { error: e.message, code: 2 };
     throw e;
-  } finally { if (stop) stop(); }
+  } finally { if (stop && !kept) stop(); }
 }
 
 // ---- checks (design §4.3) -------------------------------------------------------------------------------------------
@@ -519,12 +522,14 @@ export async function verifyFix(ctx, id, opts = {}) {
   if (rec.scope.personsOf) scope1.personsOf = { ...rec.scope.personsOf, ...Object.fromEntries(extra.map(r => [r, rec.personsOf?.[r] || rec.scope.persons])) };
   const profile = checkProfile(ctx.root);
   rec = setPhase(ctx.stateDir, rec, 'p1', { p1: { scope: scope1 } }, gen(ctx));
-  const p = await probe(ctx, rec, 'P1', { url: opts.url || rec.url, serve: opts.serve || rec.serve, scope: scope1, harDir, profile });
-  rec = latestRecord(ctx.stateDir, g.group);
-  if (p.noProof) return finish(ctx, rec, { outcome: 'inconclusive', needsYou: 'c', reasons: [{ why: 'no-proof', text: p.noProof }] }, { title, said });
-  if (p.error) return finish(ctx, rec, { outcome: 'inconclusive', needsYou: 'c', reasons: [{ why: 'p1', text: p.error }] }, { title, said });
-  rec = update(ctx.stateDir, rec, { p1: { run: p.runId, proof: p.proof, scope: scope1 } }, gen(ctx));
-  return judgeAttempt(ctx, rec, { g, title, said, p, harDir, base: p.base });
+  const p = await probe(ctx, rec, 'P1', { url: opts.url || rec.url, serve: opts.serve || rec.serve, scope: scope1, harDir, profile, keep: true });
+  try {
+    rec = latestRecord(ctx.stateDir, g.group);
+    if (p.noProof) return finish(ctx, rec, { outcome: 'inconclusive', needsYou: 'c', reasons: [{ why: 'no-proof', text: p.noProof }] }, { title, said });
+    if (p.error) return finish(ctx, rec, { outcome: 'inconclusive', needsYou: 'c', reasons: [{ why: 'p1', text: p.error }] }, { title, said });
+    rec = update(ctx.stateDir, rec, { p1: { run: p.runId, proof: p.proof, scope: scope1 } }, gen(ctx));
+    return await judgeAttempt(ctx, rec, { g, title, said, p, harDir, base: p.base });
+  } finally { if (p.stop) p.stop(); }
 }
 
 // P0 against P1 → the verdict (the rule part now; the AI part after the re-check's verdicts).
@@ -540,7 +545,9 @@ async function judgeAttempt(ctx, rec, { g, title, said, p, harDir, base }) {
   let flakyConfirmed = () => true;
   if (flakyCands.length && ctx.deps.capture) {
     let allowBaseHosts = []; try { allowBaseHosts = readConfig(ctx.nunchiDir).allowHosts; } catch {}
-    flakyConfirmed = await recaptureFlaky({ capture: ctx.deps.capture, findings: flakyCands, url: base || rec.url, scope: rec.p1.scope, samplePaths: rec.samplePaths || {}, harDir, storageState: join(ctx.nunchiDir, 'auth.json'), allowHosts: rec.allowHosts || [], allowBaseHosts, browserPath: ctx.deps.browserPath, scenesById: new Map(p1.scenes.map(s => [s.id, s])) });
+    const byId = new Map(p1.scenes.map(s => [s.id, s]));
+    const again = await recaptureScenes({ capture: ctx.deps.capture, scenes: [...new Set(flakyCands.map(f => f.scene))].map(id => byId.get(id)).filter(Boolean), url: base || rec.url, samplePaths: rec.samplePaths || {}, harDir, storageState: join(ctx.nunchiDir, 'auth.json'), allowHosts: rec.allowHosts || [], allowBaseHosts, browserPath: ctx.deps.browserPath });
+    flakyConfirmed = cameBack(again);
   }
   // the group's boxes on each screen, before and after (they are what the fix changes)
   const p1Controls = controlsReader(p1Dir);

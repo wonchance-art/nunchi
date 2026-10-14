@@ -83,7 +83,8 @@ export function probeProblems(v) {
 // - group: { rule: [{ fp, rule, route, cells }], ai: [{ fp, route, cells }] } (the group's ledger rows, not fixed);
 // - p0, p1: probeView() of the two probes; scope0: the route|cell keys P0 looked at;
 // - known: fingerprints the ledger already holds (open), for routes P1 added (no baseline there);
-// - flakyConfirmed(f): a flaky rule's finding was there again when its scene was captured once more;
+// - flakyConfirmed(f): a flaky rule's finding was there again when its scene was captured once more (true/false), or
+//   null when that second look did not see the screen (inconclusive: nothing can be said);
 // - proof: the served code was shown to be the commit's (design §4.4); drift: { share, moved, scenes } or null.
 // → { outcome, reason, … } with outcome one of inconclusive | regression | not-fixed | unbaselined | drift | fixed |
 //   recheck (rule items gone, AI items wait for the re-check).
@@ -102,16 +103,17 @@ export function judgeRules({ group, p0, p1, known = new Set(), flakyConfirmed = 
   const mine = new Set(group.rule.map(i => i.fp));
   const before = k => p0.all.filter(x => `${x.id.route}|${x.id.cell}` === k);
   const isGroups = x => mine.has(x.f.fp) || group.rule.some(it => p0.all.some(o => o.f.fp === it.fp && sameDefect(o.id, x.id)));
-  const regressions = [], unbaselined = [];
+  const regressions = [], unbaselined = [], unsure = [];
   for (const x of p1.all) {
     if (isGroups(x)) continue;
     const k = `${x.id.route}|${x.id.cell}`;
     if (p0.looks.has(k)) {
       if (before(k).some(o => sameDefect(o.id, x.id))) continue;
-      if (FLAKY.has(x.f.rule) && !flakyConfirmed(x.f)) continue;
+      if (FLAKY.has(x.f.rule)) { const back = flakyConfirmed(x.f); if (back === null) { unsure.push(x.f.scene); continue; } if (!back) continue; }
       regressions.push(x.f);
     } else if (!known.has(x.f.fp)) unbaselined.push(x.f);
   }
+  if (unsure.length) return { outcome: 'inconclusive', needsYou: 'c', reasons: [{ why: 'recapture-failed', text: `${new Set(unsure).size} screen(s) captured again for a flaky rule did not load`, cells: [...new Set(unsure)].sort() }] };
   if (regressions.length) return { outcome: 'regression', regressions: regressions.map(brief) };
   // 3. not-fixed: the defect matched in any cell
   const still = [];

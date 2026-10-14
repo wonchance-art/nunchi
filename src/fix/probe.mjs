@@ -13,6 +13,7 @@ import { createServer } from 'node:net';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { startRun, finishRun, workTree } from '../runs.mjs';
+import { looked } from '../ledger.mjs';
 import { discover } from '../discover.mjs';
 import { buildSourceMap, sourceHashes } from '../sourcemap.mjs';
 import { writeStable, privateDir, refuseLink } from '../stable.mjs';
@@ -140,24 +141,33 @@ export async function captureProbe({ capture, root, nunchiDir, runsDir, idsFile 
   }
 }
 
-// A flaky rule's finding is re-captured once on its scene (design §4.5) before it counts: those scenes alone, into a
-// private temporary folder (no run). → (finding) => whether the same rule fired on that scene again.
-export async function recaptureFlaky({ capture, findings, url, scope, samplePaths, harDir, storageState, allowHosts = [], allowBaseHosts = [], browserPath, scenesById }) {
-  if (!findings.length) return () => true;
+// Scenes of P1 captured once more (design §4.5: a flaky rule's finding counts only when it comes back), each alone,
+// into a private temporary folder (no run), against the same server P1 used (the caller keeps it up until judging is
+// done). → again(sceneId): that scene's findings on the second look, null when the second look did not see the screen
+// (it failed, was redirected, an error page: nothing can be said), undefined for a scene not captured again.
+export async function recaptureScenes({ capture, scenes, url, samplePaths, harDir, storageState, allowHosts = [], allowBaseHosts = [], browserPath }) {
   const again = new Map();
+  if (!scenes.length) return id => again.get(id);
   const out = mkdtempSync(join(tmpdir(), 'nunchi-flaky-'));
   try {
-    for (const f of findings) {
-      const s = scenesById.get(f.scene);
-      if (!s || again.has(f.scene)) continue;
+    for (const s of scenes) {
+      if (!s || again.has(s.id)) continue;
       const states = s.state === 'normal' ? ['normal'] : ['normal', s.state];
-      const r = await capture({ baseUrl: url, scenes: [{ route: s.route, path: samplePaths[s.route] || s.route, person: s.person }], out: join(out, String(again.size)), viewports: [s.viewport], states, network: 'replay',
-        recordingDir: harDir, storageState: s.person === 'signed-in' ? storageState : null, allowHosts, allowBaseHosts, browserPath, runMeta: { kind: 'fix-probe' }, flow: {}, canaries: 0, wholeAppDetectors: false });
-      again.set(f.scene, r.findings.filter(x => x.scene === f.scene));
+      let r = null;
+      try {
+        r = await capture({ baseUrl: url, scenes: [{ route: s.route, path: samplePaths[s.route] || s.route, person: s.person }], out: join(out, String(again.size)), viewports: [s.viewport], states, network: 'replay',
+          recordingDir: harDir, storageState: s.person === 'signed-in' ? storageState : null, allowHosts, allowBaseHosts, browserPath, runMeta: { kind: 'fix-probe' }, flow: {}, canaries: 0, wholeAppDetectors: false });
+      } catch { r = null; }
+      const seen = (r?.manifest?.scenes || []).find(x => x && x.id === s.id);
+      const health = (r?.manifest?.health?.problems || []).some(p => ['app-unreachable', 'login-expired', 'recording-stale'].includes(String(p.status)));
+      again.set(s.id, seen && looked(seen) && !health && !(Number(seen.replayMisses) > 0) ? (r.findings || []).filter(x => x.scene === s.id) : null);
     }
   } finally { rmSync(out, { recursive: true, force: true }); }
-  return f => (again.get(f.scene) || []).some(x => x.rule === f.rule && (x.fp === f.fp || x.selector === f.selector));
+  return id => again.get(id);
 }
+// Whether a flaky rule's finding came back on its scene's second look: true, false, or null (the second look did not
+// see the screen). A finding whose scene was not captured again counts as it is.
+export const cameBack = again => f => { const a = again(f.scene); return a === undefined ? true : a === null ? null : a.some(x => x.rule === f.rule && (x.fp === f.fp || x.selector === f.selector)); };
 
 // Visual drift between P0 and P1 on the screens both captured (design §4.5 row 4), the group's boxes left out.
 // `boxesOf(sceneId)`: the group's boxes on that screen, before and after. → { share, moved, scenes: [{ scene, share, moved }] }
