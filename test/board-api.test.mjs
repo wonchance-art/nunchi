@@ -84,6 +84,29 @@ test('api: a decision that lands while the model is being built is shown on the 
   } finally { await b.close(); }
 });
 
+test('api: a live claim is part of the version: written, it shows; expired by the reader\'s clock, it goes, without any other change', async () => {
+  const p = smallProject();
+  let t = Date.parse('2026-10-15T01:00:00Z');
+  const { b, call } = await board(p, { now: () => t });
+  const g = gid(p, 'dead-href');
+  try {
+    const v0 = (await call('/api/generation')).json.version;
+    assert.equal((await call(`/api/groups/${g}`)).json.fixing, null);
+    mkdirSync(join(b.stateDir, 'claims'), { recursive: true });
+    writeFileSync(join(b.stateDir, 'claims', `${g}.json`), JSON.stringify({ declaredAgent: 'Fixture agent', startedAt: new Date(t - 5 * 60e3).toISOString(), lastRenewal: new Date(t).toISOString() }));
+    const v1 = (await call('/api/generation')).json.version;
+    assert.notEqual(v1, v0, 'a claim changes the version');
+    assert.deepEqual((await call(`/api/groups/${g}`)).json.fixing, { agent: 'Fixture agent', minutes: 5 });
+    t += 10 * 60e3;
+    assert.equal((await call(`/api/groups/${g}`)).json.fixing.minutes, 15, 'its minutes are current');
+    t += 25 * 60e3;                                             // 35 minutes since the last renewal: expired
+    const v2 = (await call('/api/generation')).json.version;
+    assert.ok(v2 !== v1 && v2.split('.').pop() === v0.split('.').pop(), `expired: the version changes back to no claim (${v0}, ${v1}, ${v2})`);
+    assert.equal((await call(`/api/groups/${g}`)).json.fixing, null, 'and the group is no longer shown as being fixed');
+    assert.deepEqual((await call('/api/summary')).json.now, []);
+  } finally { await b.close(); }
+});
+
 test('api: /api/summary is the summary findings --json carries (one function)', async () => {
   const p = smallProject();
   const { b, call } = await board(p);

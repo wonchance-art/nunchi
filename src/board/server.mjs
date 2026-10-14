@@ -25,7 +25,7 @@ import { join, dirname, resolve, relative, isAbsolute, basename } from 'node:pat
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir, userInfo } from 'node:os';
-import { buildBoardModel, groupList, groupDetail, screenWall, safe, RUN_ID } from './model.mjs';
+import { buildBoardModel, groupList, groupDetail, screenWall, safe, readClaims, RUN_ID } from './model.mjs';
 import { BASE_CSS, BOARD_CSS } from './look.mjs';
 import { decidedText, CAP_MS } from './shared.mjs';
 import * as P from '../project.mjs';
@@ -157,19 +157,25 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     const dir = join(nunchiDir, 'decisions');
     try { return sha(readdirSync(dir).sort().map(n => { try { const s = statSync(join(dir, n)); return `${n}:${s.mtimeMs}`; } catch { return n; } }).join('|'), 12); } catch { return '-'; }
   };
-  const version = () => `${readGeneration(genFile)}.${decisionsSig()}`;
+  // the live claims (which group, which agent; not their minutes): a claim written, removed or expired (by the reader's
+  // clock: claims bump no generation) changes the version
+  const claimsDir = join(stateDir, 'claims');
+  const claimsSig = () => { const c = readClaims(claimsDir, now()); return c.size ? sha([...c].map(([g, x]) => `${g}:${x.agent}`).join('|'), 12) : '-'; };
+  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${claimsSig()}`;
+  // claims as they are now (their minutes too) on a cached model
+  const freshClaims = m => { const c = readClaims(claimsDir, now()); m.claims = c; for (const g of m.groups) g.fixing = c.get(g.id) || null; return m; };
   let cache = null;
   // The cache is tagged with the version read before the build: a change that lands while the model is being built
   // makes the next request build again, instead of serving the older model under the newer version.
   const model = () => {
     const v = version();
-    if (cache && cache.v === v) return cache.m;
+    if (cache && cache.v === v) return freshClaims(cache.m);
     warnings.clear();
     const m = buildBoardModel({ nunchiDir, projectDir: project, warn: w => warnings.add(w) });
     m.lenses = lensTable(project);
     testHooks.afterBuild?.();
     cache = { v, m };
-    return m;
+    return freshClaims(m);
   };
 
   // ---- responses ---------------------------------------------------------------------------------------------------

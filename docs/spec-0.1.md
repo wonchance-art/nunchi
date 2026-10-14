@@ -1148,7 +1148,9 @@ addresses; evidence details; decisions on the group or its fingerprints with how
 the live endpoints answer (the others 404, so nothing unblinds).
 - *Live updates:* the server watches the state folder (not recursively, 200 ms debounce) and polls every 3 s; what it
   compares is the generation **plus a signature of `.nunchi/decisions`** (names and times of its folders), because a
-  decision that arrives through git bumps no generation. A change sends `event: generation` with the new version on
+  decision that arrives through git bumps no generation, **plus the live claims** (group and agent of each claim
+  not expired by the reader's clock), because a claim bumps none either and expires without a write; a cached model
+  takes the claims as they are on each request (their minutes too). A change sends `event: generation` with the new version on
   every open stream (a `fetch` stream read with `ReadableStream`, SSE framing, a ping every 15 s); the page then
   reloads the summary and, in place, the list and detail it shows. A failed stream falls back to polling
   `/api/generation` every 3 s. `nunchi decide` now bumps the generation after it writes the decision files too (the
