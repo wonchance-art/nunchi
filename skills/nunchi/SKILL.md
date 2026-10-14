@@ -14,8 +14,8 @@ lenses, and turn confirmed findings into fixes.
 > Status: preview (0.0.2). `discover`, `login` and `capture` (record/replay, forced states, rule and
 > computed lenses) work. For the AI lenses the engine plans work units, records grounded answers (`hunt`),
 > verifies them against decoys (`verify`), keeps them in the ledger, and re-checks them after a change
-> (`recheck`); the fix loop and the board are not built yet. Do not claim captures, findings or fixes that
-> the engine did not produce, and do not offer to fix as if nunchi did it.
+> (`recheck`). The live board (`open`) is where the user decides; the fix loop is not built yet. Do not claim
+> captures, findings or fixes that the engine did not produce, and do not offer to fix as if nunchi did it.
 
 ## Steps
 
@@ -48,12 +48,21 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    why, and how many replay misses there were. In replay every fetch/XHR/EventSource miss and every non-GET is
    aborted and WebSockets are closed, so nothing reached a server; a miss means the recording is stale (suggest
    `--network record`), while a closed stream is listed apart and re-recording does not change it.
-   When the user decides on a group, record it with `decide <group id> fix|keep|false-positive|hold`
-   (`keep` needs `--reason intended|out-of-scope`, `false-positive` needs `--reason not-a-problem|wrong-place`).
-   Never decide for the user, and never act on a decision `findings` marks as needing approval.
-6. After the user or you change code, re-capture only what the change can affect:
+6. Then run `open` and send the user to the board: it opens in their browser by itself (a one-time link you never
+   see), shows the verdict, every finding with its screenshot and the screens, and takes their decisions with one
+   key each. Say: "The board is open in your browser. Decide there, then tell me *fix them*." Do not try to get the
+   board's link or address, and never request the board's port yourself: it is the user's channel, and the
+   plugin's hook refuses it. `open` returns at once (the board stops after 2 hours idle; `open --stop` stops it now);
+   running `open` again opens a fresh tab. If the user's machine has no browser for it, tell them to run
+   `nunchi open` in their own terminal. Never run `open --label` (labelling is the user's, in their terminal).
+   If the user tells you a decision in chat instead, record it with `decide <group id> fix|keep|false-positive|hold
+   --from-chat` (`keep` needs `--reason intended|out-of-scope`, `false-positive` needs `--reason
+   not-a-problem|wrong-place`; `not-a-problem` and `later` work as words too) and say that a *keep* or *not a
+   problem* you recorded counts for "ready to ship" only once they confirm it in the board. Never decide for the
+   user, never run `approve`, and never act on a decision `findings` marks as needing approval or confirmation.
+7. After the user or you change code, re-capture only what the change can affect:
    `capture --url <base> --changed-since HEAD` (add `--plan` first to show which screens that is).
-7. When the user wants to look through the findings and screens themselves, `export --html <dir>` (`--run <id>`
+8. When the user wants a copy to keep or share (the board is live and local), `export --html <dir>` (`--run <id>`
    for an older run, `--inline` for one self-contained file) writes a read-only review page: `<dir>/index.html` plus
    the screenshots in `<dir>/img/`. Tell them the path to open in a browser; it works offline. The page shows
    the `decide` command for each finding instead of buttons, so decisions still go through them. It holds
@@ -62,7 +71,7 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
 
 ## AI lenses (hunt)
 
-After step 5, when the user wants the deeper sweep. The engine cuts the work and checks the answers; you judge.
+After step 6, when the user wants the deeper sweep. The engine cuts the work and checks the answers; you judge.
 
 1. `hunt --plan` (`--lens L5,L6` to narrow; `--run <id>` for an older run). Without `--budget` it plans within the
    default 400,000 tokens, spent lens by lens, worst defects first (L1 broken, L9 data loss, L6 copy, then L2,
@@ -170,3 +179,8 @@ code and captured again:
   account on a local or preview server.
 - A finding without evidence (a DOM element, selector, measurement or file:line)
   is not a finding.
+- The user decides; you never decide for them. The board (and `nunchi decide` in their own terminal) is their
+  channel: never read nunchi's state (`.git/nunchi/`, `.nunchi/state/`), the answer keys, `.nunchi/auth.json` or a
+  run's `canaries.json`; never write decisions, labels, lens packs or `.nunchi/config.json` by hand; never request
+  the board's port; never run `approve`, `open --label` or nunchi under a pseudo-terminal. The plugin's hook refuses
+  these in Claude Code; in other agents, hold to them yourself.
