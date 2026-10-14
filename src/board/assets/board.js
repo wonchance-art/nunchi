@@ -615,11 +615,26 @@ function toast(text, act) {
   el.replaceChildren(...kids);
   el.hidden = false;
   fitDock();
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(hideToast, 6000);
+  if (!toastHeld.hover && !toastHeld.focus) toastLater(); else clearTimeout(toastTimer);
 }
-// Undo lasts as long as its toast: once the toast is gone, Z has nothing to undo.
-function hideToast() { TOAST.hidden = true; clearTimeout(toastTimer); S.undo = null; }
+// The toast waits while the pointer is over it or the focus is in it, and gets its 6 seconds again after (WCAG 2.2.1).
+const toastHeld = { hover: false, focus: false };
+const toastLater = () => { clearTimeout(toastTimer); toastTimer = setTimeout(hideToast, 6000); };
+TOAST.addEventListener('pointerenter', () => { toastHeld.hover = true; clearTimeout(toastTimer); });
+TOAST.addEventListener('pointerleave', () => { toastHeld.hover = false; if (!toastHeld.focus && !TOAST.hidden) toastLater(); });
+TOAST.addEventListener('focusin', () => { toastHeld.focus = true; clearTimeout(toastTimer); });
+TOAST.addEventListener('focusout', e => { if (TOAST.contains(e.relatedTarget)) return; toastHeld.focus = false; if (!toastHeld.hover && !TOAST.hidden) toastLater(); });
+// Undo lasts as long as its toast: once the toast is gone, Z has nothing to undo. A focus that was in the toast goes
+// back to the row (or the view's heading), never to the page itself.
+function hideToast() {
+  const had = TOAST.contains(d.activeElement);
+  TOAST.hidden = true;
+  clearTimeout(toastTimer);
+  toastHeld.hover = toastHeld.focus = false;
+  S.undo = null;
+  fitDock();
+  if (had) { const row = S.route.view === 'findings' && S.focus ? $(`row-${S.focus}`) : null; if (row) row.focus(); else focusHeading(); }
+}
 
 // A question that cannot misfire: the safe choice has the focus.
 function ask(text, ok = 'Yes') {

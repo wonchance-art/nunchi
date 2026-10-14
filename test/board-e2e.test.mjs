@@ -189,6 +189,46 @@ test('board e2e: the decision bar and the toast never cover each other or the fo
   }
 });
 
+test('board e2e: the toast waits while the pointer is over it or the focus is in it (WCAG 2.2.1); hidden with the focus inside, the focus goes back to the row', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = project();
+  const b = await startBoard({ projectDir: p.root });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await context.newPage();
+  try {
+    await page.clock.install();
+    await page.goto(b.newLink());
+    await page.waitForSelector('#h-progress');
+    await page.click('a[data-nav=findings]');
+    await page.waitForSelector('#h-findings');
+    await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
+    const shown = () => page.evaluate(() => !document.getElementById('toast').hidden);
+    const decideOne = async () => { await page.keyboard.press('j'); await page.keyboard.press('s'); await page.waitForSelector('#toast:not([hidden])'); };
+    // the pointer over it: it waits; away again, 6 s later it goes
+    await decideOne();
+    await page.hover('#toast');
+    await page.clock.runFor(9000);
+    assert.equal(await shown(), true, 'held while the pointer is over it');
+    await page.mouse.move(5, 5);
+    await page.clock.runFor(6500);
+    assert.equal(await shown(), false, 'gone 6 s after the pointer left');
+    // the focus in it: it waits; Esc hides it and the focus goes back to the row
+    await decideOne();
+    await page.focus('#toast button');
+    await page.clock.runFor(9000);
+    assert.equal(await shown(), true, 'held while the focus is in it');
+    await page.keyboard.press('Escape');
+    assert.equal(await shown(), false);
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('row')), true, 'the focus is back on a row, not the page');
+    // Undo from the toast's own button: the focus goes back to the row as well
+    await decideOne();
+    await page.focus('#toast button:last-child');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => /Undone/.test(document.getElementById('toast').textContent));
+    assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('row')), true);
+  } finally { await context.close(); await b.close(); }
+});
+
 test('board e2e: keys by their place — F on a Korean layout fixes, W with Caps Lock keeps as intended', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = project();
