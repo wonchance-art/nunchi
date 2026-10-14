@@ -9,7 +9,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { ensurePrivate } from './runs.mjs';
 import { resolveStateRoot, trackedState, stateFiles, ensureStateDir, adoptLegacy, present, bumpGeneration } from './state.mjs';
-import { syncLedger, readDecisions, buildDecision, saveDecision, readApprovals, bindApproved, addApproved, approvalKey, seriousTarget, view, groups as groupRows,
+import { syncLedger, newId, readDecisions, buildDecision, saveDecision, readApprovals, bindApproved, addApproved, approvalKey, seriousTarget, view, groups as groupRows,
   adoptLedger, carryLedger, isLedger, isApprovedDoc, mergeApprovedDocs, DECISIONS } from './ledger.mjs';
 import { aiLoader, recheckLoader } from './ai-fold.mjs';
 import { sweepLeftovers } from './stable.mjs';
@@ -122,6 +122,10 @@ export function resolveTargets(rows, gs, ids, { prefix = true } = {}) {
   }
   return out;
 }
+
+// Several targets decided at once are one batch, from the CLI and the board alike (a group decided on its
+// fingerprints included), so one undo or reopen takes them together.
+export const batchFor = targets => (targets.length > 1 ? newId() : null);
 
 // Records one decision per target, as `nunchi decide` always has: the approval first (with the channel it was made
 // through), so a crash in between leaves an approval of nothing, never this user's own decision looking as if it came

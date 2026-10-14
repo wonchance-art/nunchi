@@ -524,7 +524,7 @@ if (cmd === 'setup') {
     try { buildDecision({ target: targets[0], decision, reason, note: args.note || null, by: 'check' }); }
     catch (e) { console.error('nunchi: ' + e.message); process.exit(1); }
     const channel = await channelHere(`${decision}${reason ? ` (${reason})` : ''} on ${targets.length} target(s)`);
-    const made = ledgerGuard(() => P.recordDecisions(led, { targets, decision, reason, note: args.note || null, by: P.whoAmI(), channel }));
+    const made = ledgerGuard(() => P.recordDecisions(led, { targets, decision, reason, note: args.note || null, by: P.whoAmI(), channel, batch: P.batchFor(targets) }));
     console.log(args.json ? JSON.stringify(made, null, 2) : made.map(d => `${d.decision} → ${d.target.group ? 'group ' + d.target.group : 'fingerprint ' + d.target.fp} (${d.id})`).join('\n'));
     if (!args.json && channel === 'cli-agent' && (decision === 'keep' || decision === 'false-positive')) console.log('recorded by your AI: it counts for "ready to ship" once you confirm it in the board (nunchi open)');
   } else if (cmd === 'approve') {

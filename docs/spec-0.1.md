@@ -1196,12 +1196,13 @@ the live endpoints answer (the others 404, so nothing unblinds).
 against the ledger as it is now (stale → 409), requires the reason the decision takes and refuses one it does not
 (`reasonProblem`, the check `buildDecision` makes, so `nunchi decide x fix --reason intended` is refused too), then
 writes through `project.mjs` `recordDecisions`, the function `nunchi decide` uses: the approval first (channel
-`board`), then one decision file per group (a shared `batch` id when there are several), then the generation. A
+`board`), then one decision file per target (a shared `batch` id when there are several, from `nunchi decide` too:
+`project.mjs` `batchFor`), then the generation. A
 group holding an AI finding nobody double-checked is decided on each of its fingerprints (`resolveTargets`, for the
 CLI and the board alike), because a group decision does not cover such a finding (§2.2) and would count for none of
 them; it stays one group for the questions and the decision time.
 Parity is tested: the same decision from the CLI and the board gives files that differ only in id, time, author,
-channel and batch, and the same status. The server asks for a confirmation (409 with the sentence; the page shows it
+channel and the batch's id (both sides give a group decided on its fingerprints one batch), and the same status. The server asks for a confirmation (409 with the sentence; the page shows it
 with Cancel focused) before a dismissal that includes a blocker (by protected severity), an L9 finding or more than
 10 groups ("Mark 17 groups Not a problem? 2 are high."), before fixing an AI finding nobody double-checked ("This
 hasn't been double-checked. Fix anyway?"), and before deciding against a live claim (claims are the fix loop's,

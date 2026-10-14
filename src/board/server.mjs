@@ -29,7 +29,7 @@ import { buildBoardModel, groupList, groupDetail, screenWall, safe, readClaims, 
 import { BASE_CSS, BOARD_CSS } from './look.mjs';
 import { decidedText, CAP_MS } from './shared.mjs';
 import * as P from '../project.mjs';
-import { DECISIONS, protectOf, newId, approvalKey, reasonProblem } from '../ledger.mjs';
+import { DECISIONS, protectOf, approvalKey, reasonProblem } from '../ledger.mjs';
 import { listRuns, workTree } from '../runs.mjs';
 import { readGeneration } from '../state.mjs';
 import { readManifest, sceneDir } from '../hunt.mjs';
@@ -452,7 +452,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
         if (fixing) return fail(res, 409, 'confirm', { confirm: { text: `${fixing.agent} is fixing this right now. Stop and mark ${decidedText(decision, null)}?`, ok: 'Stop and mark' } });
       }
     }
-    const batch = targets.length > 1 ? newId() : null;
+    const batch = P.batchFor(targets);
     const made = P.recordDecisions(led, { targets, decision, reason, note, by, channel: 'board', batch });
     cache = null;
     if (ms !== null && decision !== 'reopen') {
@@ -478,7 +478,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
       if (!d || !mine.length || !mine.every(r => r.decision?.id === id)) return fail(res, 409, 'decided again since: nothing was undone', { stale: true });
       made.push(d);
     }
-    const out = P.recordDecisions(led, { targets: made.map(d => d.target), decision: 'reopen', by, channel: 'board', batch: made.length > 1 ? newId() : null });
+    const out = P.recordDecisions(led, { targets: made.map(d => d.target), decision: 'reopen', by, channel: 'board', batch: P.batchFor(made) });
     cache = null;
     return send(res, 200, { ok: true, made: out.map(d => ({ id: d.id, target: d.target, decision: d.decision })) });
   }

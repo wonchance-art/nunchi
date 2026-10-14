@@ -323,7 +323,10 @@ test('decide parity: a group holding an AI finding nobody double-checked is deci
     const t = decisionTimes(readMetrics(metricsPath(b.stateDir)));
     assert.equal(t.singles.n, 1, 'one group decided is a single for the decision time');
   } finally { await b.close(); }
-  const strip = ({ id, at, channel, by, batch, ...rest }) => rest;
+  // one batch on each side (the CLI's expansion too, so one undo or reopen takes both), the same files otherwise
+  const batches = p => [...new Set(decisions(p.nunchi).map(d => d.batch))];
+  for (const p of [one, two]) { const [x, ...more] = batches(p); assert.deepEqual([typeof x, more], ['string', []], 'one batch id, the CLI\'s expansion included'); assert.match(x, /^[\w-]+$/); }
+  const strip = ({ id, at, channel, by, batch, ...rest }) => ({ ...rest, batched: typeof batch === 'string' });
   assert.deepEqual(decisions(one.nunchi).map(strip).sort((a, b) => (a.target.fp < b.target.fp ? -1 : 1)), decisions(two.nunchi).map(strip).sort((a, b) => (a.target.fp < b.target.fp ? -1 : 1)));
 });
 
