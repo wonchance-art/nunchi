@@ -1087,7 +1087,8 @@ matches a board link.
   `timingSafeEqual(sha256(a), sha256(b))`; a cookie or query parameter never counts. A reloaded tab has no key and
   says to run `nunchi open` again (the key is never stored, `sessionStorage` included).
 - Only the page shell answers without a key: `/`, `/assets/board.js`, `/assets/shared.mjs`, `/assets/board.css`,
-  bundled files with no data of the project (tested). Screenshots are fetched with the key and shown as blob URLs.
+  bundled files with no data of the project (tested), and `/favicon.ico` (204, empty). Screenshots are fetched with
+  the key and shown as blob URLs.
 - *Requests:* `Sec-Fetch-Site`, when sent, must be `same-origin` or `none` (403); `req.url` must start with `/` (400)
   and be ≤ 2048 characters (414); GET and POST only, OPTIONS 405; a GET has no body (413); writes need
   `Content-Type: application/json` (415), `Origin` equal to `http://127.0.0.1:<port>` (403) and a body ≤ 64 KB (413,
@@ -1100,8 +1101,9 @@ matches a board link.
   has none, refused when `lstat` says link), `fstat`-ed, read from that descriptor, served as `image/jpeg` only if
   it starts like a JPEG (415 otherwise). No listing, no SVG, nothing else.
 - *Rate limits:* 30 wrong keys or links a minute, then a minute in which requests **without** a valid key get 429 (a
-  valid key is never locked out, so another process cannot shut the person out); 600 requests and 60 writes per
-  10 s; 20 link trades a minute; 8 live streams.
+  valid key is never locked out, so another process cannot shut the person out); a request with no key at all (what
+  the browser fetches by itself) is refused but not counted; 600 requests and 60 writes per 10 s; 20 link trades a
+  minute; 8 live streams.
 - *Strings:* every string the board's code did not write (app text, selectors, claims, decision `by` and `note`, lens
   text, URLs) is redacted (credential URL parts and query values, then secret shapes) and clipped on the server, and
   set with `textContent` on the page. Secret findings show location and kind only. App URLs are never links; the
@@ -1238,6 +1240,13 @@ Codex CLI has no such hook. The skill states the same rules for other agents.
   (Codex) working; the hook denies the command in Claude Code.
 - Primary buttons have dark text in dark mode on the board (the export's white on the dark accent is 2.6:1; the
   export is unchanged here).
+
+**Measured (2026-10-15 00:32–00:49 KST).** Pebble `node bench/run.mjs --twice` is unchanged: rule recall 34/34, 0 false
+positives on 8 clean scenes, determinism identical (1,141 files; `origin/main` gives the same 1,141 on this machine,
+so the one file more than M1's note is the environment's), fingerprints 100% (52/52), 151 s per capture. Held-out
+pegroom (a scratch copy): 180 screens, rule recall 38/38; the board on that run (1440 px and 390 px, Progress,
+Findings, Detail, Screens, the undo toast) loads every screenshot through the key, sends nothing but to itself, and
+showed two bugs fixed before merge: the favicon lockout and the Progress mark (§7.2 rate limits; tests added).
 
 **Not done in M2:** the fix loop's states (attempts, drift, before/after, `fix --undo`), probe runs hidden from
 `runs`, and Coverage and Screens beyond the wall (M7) are later milestones; label pools from the gate harness (G);
