@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>nunchi board</title>
+<link rel="stylesheet" href="/assets/board.css">
+<script type="module" src="/assets/board.js"></script>
+</head>
+<body class="board">
+<a class="skip" href="#main">Skip to content</a>
+<div class="shell">
+<nav class="side" aria-label="nunchi">
+<div class="side-top"><span class="brand">nunchi</span>
+<p class="runbox" id="runbox"><b>Board</b><br><span class="muted">connecting…</span></p></div>
+<ul class="nav" id="nav">
+<li><a href="#/progress" data-nav="progress">Progress</a></li>
+<li><a href="#/findings" data-nav="findings">Findings <span class="cnt" id="nav-findings"></span></a></li>
+<li><a href="#/screens" data-nav="screens">Screens <span class="cnt" id="nav-screens"></span></a></li>
+</ul>
+<div class="side-foot" id="side-foot">
+<p>The live board of your app's findings. What you decide here is recorded as yours.</p>
+<p><button type="button" id="more-views">More views in 0.2</button> · <button type="button" id="help-open">Keys (?)</button></p>
+</div>
+</nav>
+<main id="main" tabindex="-1"><p class="loading">Opening the board…</p></main>
+</div>
+<div id="announce" class="sr" aria-live="polite" aria-atomic="true"></div>
+<div id="toast" class="toast" hidden></div>
+<dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+<noscript><p class="lost">The board needs JavaScript. The static review page (<code>nunchi export --html</code>) works without it.</p></noscript>
+</body>
+</html>

@@ -132,3 +132,78 @@ main{padding:16px 16px 40px}.panel-box{padding:18px 16px}.hero h1{font-size:22px
 .panels{max-width:none;position:static}.cmd-label{flex-basis:100%}.cmd{flex:1 1 0;min-width:0}.seg-legend{float:none;width:100%;padding:2px 6px}}
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
 `;
+
+// The live board's additions (design §3.4): the decision bar, tabs, the list as a listbox, banners, the undo toast,
+// dialogs, label mode. Views are rendered one at a time by the page's script, so the static page's :target rules are
+// switched off here. Every control is at least 44 px high; motion is off when the person asks for less of it.
+export const BOARD_CSS = `
+[hidden]{display:none!important}
+.board .view{display:block}.board .detail{display:block}
+.board h1[tabindex="-1"]:focus,.board h2[tabindex="-1"]:focus{outline:none}
+button{font:inherit;color:inherit}
+.b{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;min-width:44px;padding:0 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);font-size:14px;cursor:pointer;text-decoration:none}
+.b:hover{background:var(--soft)}.b[disabled]{opacity:.55;cursor:not-allowed}
+.b-primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}.b-primary:hover{background:var(--accent);filter:brightness(.92);color:#fff}
+.b-quiet{border-color:transparent;background:transparent;color:var(--accent)}.b-quiet:hover{background:var(--accent-soft)}
+.kbd{display:inline-block;min-width:20px;padding:0 5px;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;background:var(--soft);color:var(--ink-2);font:12px/18px var(--mono);text-align:center}
+.side-foot a{color:var(--muted)}.side-foot button{min-height:44px;padding:0;border:0;background:none;color:var(--accent);font-size:12px;cursor:pointer;text-decoration:underline}
+.tabs{display:flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:10px;background:var(--seg);align-self:flex-start}
+.tabs [role=tab]{display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:0 14px;border:0;border-radius:7px;background:transparent;color:var(--ink-2);font-size:14px;cursor:pointer}
+.tabs [role=tab][aria-selected=true]{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(27,29,33,.12)}
+.tabs .cnt{color:var(--muted);font-weight:400}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.field{display:inline-flex;align-items:center;gap:8px;font-size:14px;color:var(--ink-2)}
+.field select,.field input{min-height:44px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);font:inherit;font-size:14px}
+.field input{min-width:220px}
+.banner{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:8px 16px;border-radius:10px;background:var(--accent-soft);color:var(--accent-ink);font-size:14px}
+.banner-warn{background:var(--high-soft);color:var(--high-ink)}
+.sect+.sect{border-top:1px solid var(--line-soft)}
+.sect-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px 12px;min-height:44px;padding:4px 12px 4px 20px;background:var(--soft)}
+.sect-head h2{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:14px}
+.board .rows{outline:none}
+.board .row{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:6px 14px;padding:12px 20px;border-top:1px solid var(--line-soft);min-height:44px;cursor:pointer}
+.board .row:hover{background:var(--soft)}
+.board .row[aria-selected=true]{background:var(--accent-soft);box-shadow:inset 4px 0 0 var(--accent)}
+.board .row:focus{outline:3px solid var(--accent);outline-offset:-3px}
+.row .tick{flex:none;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:2px solid var(--line);border-radius:5px;color:transparent;font-size:14px;line-height:1}
+.row[aria-selected=true] .tick{border-color:var(--accent);background:var(--accent);color:#fff}
+.tag-human{background:var(--good-soft);color:var(--good)}
+.toolbar{position:sticky;bottom:0;z-index:5;display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:0 -2px 10px rgba(27,29,33,.08)}
+.toolbar .tb-label{align-self:center;padding:0 6px;font-size:13px;color:var(--muted)}
+.dbtn{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0;min-height:52px;min-width:44px;padding:4px 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);cursor:pointer;text-align:left}
+.dbtn:hover{background:var(--soft)}.dbtn b{font-size:14px}.dbtn small{font-size:12px;color:var(--muted)}
+.dbtn .kbd{margin-left:6px}
+.dbtn-fix{border-color:var(--accent)}
+.toast{position:fixed;left:50%;bottom:104px;z-index:20;transform:translateX(-50%);display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;max-width:min(680px,calc(100vw - 32px));padding:8px 8px 8px 18px;border-radius:12px;background:#1B1D21;color:#fff;box-shadow:0 6px 24px rgba(0,0,0,.25);transition:opacity .2s}
+.toast .b{background:transparent;border-color:#4A4E57;color:#fff}.toast .b:hover{background:#2C2F35}
+.toast[hidden]{display:none}
+dialog{max-width:min(560px,calc(100vw - 32px));padding:22px 24px;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--ink)}
+dialog::backdrop{background:rgba(27,29,33,.45)}
+dialog h2{font-size:17px;margin:0 0 10px}.dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:16px}
+.keys{width:100%;border-collapse:collapse;font-size:14px}.keys td{padding:6px 8px;border-top:1px solid var(--line-soft)}.keys td:first-child{white-space:nowrap}
+.check{display:flex;align-items:center;gap:10px;min-height:44px;font-size:14px}.check input{width:20px;height:20px}
+.confirm-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
+.confirm-list li{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:10px 12px;border:1px solid var(--line-soft);border-radius:8px}
+.confirm-list .what{flex:1 1 260px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.now{margin:0;padding:0;list-style:none;font-size:14px;color:var(--ink-2)}
+.handoff{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:12px 16px;border-radius:10px;background:var(--good-soft);color:var(--good);font-weight:600}
+.copyline{display:flex;flex-wrap:wrap;align-items:center;gap:8px}.copyline code{padding:8px 10px;background:var(--soft);border:1px solid var(--line);border-radius:6px}
+.fig-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.fig-tools .seg-b{display:inline-flex;gap:4px;padding:4px;border-radius:10px;background:var(--seg)}
+.seg-b button{min-height:44px;padding:0 14px;border:0;border-radius:7px;background:transparent;color:var(--ink-2);cursor:pointer;font-size:14px}
+.seg-b button[aria-pressed=true]{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(27,29,33,.12)}
+.history{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:14px}
+.history li{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+.needs{padding:14px 16px;border-radius:10px;background:var(--high-soft);color:var(--high-ink);display:flex;flex-direction:column;gap:8px}
+.needs .actions{display:flex;flex-wrap:wrap;gap:8px}
+.lost{max-width:640px;margin:10vh auto;padding:28px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.label-banner{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;padding:12px 18px;border-radius:12px;background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+.label-keys{display:flex;flex-wrap:wrap;gap:8px}
+.board .card{list-style:none}.board .card button{display:block;width:100%;height:100%;padding:0;border:0;background:var(--panel);border-radius:12px;overflow:hidden;box-shadow:0 0 0 1px var(--line);color:var(--ink);text-align:left;cursor:pointer}
+.board .card button:hover,.board .card button[aria-pressed=true]{box-shadow:0 0 0 3px var(--accent)}
+.board .panels .screen-panel{display:block}
+.empty-note{margin:0;padding:16px 20px;color:var(--muted)}
+.loading{padding:24px;color:var(--muted)}
+@media (max-width:760px){.toast{bottom:16px}.toolbar{position:static}.field input{min-width:0;width:100%}.dbtn{flex:1 1 40%}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
+`;

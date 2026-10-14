@@ -47,15 +47,25 @@ Usage:
                           (use 3 when the AI lenses will run: a capture without them gains nothing)
                           (tagged \`canary\` in manifest.json, listed in canaries.json, never in findings.json)
     exit code 3 when the run is not usable (login expired, app unreachable); the run is kept
+  nunchi open [--no-browser] [--stop] [--label [--labeller <name>]] [--port <n>]
+                                            The live board: findings, screens and decisions in your browser, updated
+                                            as the ledger changes. Starts a local server (127.0.0.1 only) in the
+                                            background and returns; it opens your browser with a one-time link and
+                                            stops after 2 hours idle. Run again to open another tab; --stop stops it.
+                                            --label: blinded labelling for the precision check
   nunchi findings [--rule <rule>] [--all] [--status open,to-fix,…] [--json]
                                             What is open: one row per kind of defect; --rule lists its groups
                                             (a group = one defect, however many screens it is on)
-  nunchi decide <id…> fix|keep|false-positive|hold|reopen [--reason …] [--note …]
+  nunchi decide <id…> fix|keep|false-positive|not-a-problem|hold|later|reopen [--reason …] [--note …] [--from-chat]
                                             Record a decision on a group or fingerprint (prefix of its id is enough).
                                             keep needs --reason intended|out-of-scope; false-positive needs
-                                            --reason not-a-problem|wrong-place. Decisions are files under .nunchi/decisions/
+                                            --reason not-a-problem|wrong-place. Decisions are files under .nunchi/decisions/.
+                                            In your own terminal you type a short code to confirm; run by your AI
+                                            (or with --from-chat), keep and not-a-problem count for "ready to
+                                            ship" once you confirm them in the board
   nunchi approve <decision id…> | --all     Accept decisions that came through git (made on another machine)
-  nunchi trust [--json]                     Per-lens precision from your decisions (fix ÷ (fix + false positive))
+  nunchi trust [--json]                     Per-lens precision from your decisions (fix ÷ (fix + false positive)),
+                                            and how long decisions in the board took (singles and batches apart)
   nunchi runs [--json]                      List captured runs (newest last) and which is latest
   nunchi gc [--keep 5]                      Delete old runs, keep the newest N and the latest
   nunchi map [--root <dir>] [--json]        Which source files each route renders (source ↔ scene map)
@@ -112,7 +122,7 @@ Usage:
   nunchi --version
   nunchi --help
 
-Status: 0.1-c in progress. The fix loop and the live board come later.`;
+Status: 0.1-c in progress. The fix loop comes later.`;
 
 function parse(argv) {
   const args = { _: [] };
@@ -131,7 +141,8 @@ function parse(argv) {
     else if (a === '--from-chat') args.fromChat = true;
     else if (a === '--stop') args.stop = true;
     else if (a === '--label') args.label = true;
-    else if (['--reason', '--note', '--run', '--status', '--rule'].includes(a)) args[a.slice(2)] = argv[++i];
+    else if (['--reason', '--note', '--run', '--status', '--rule', '--labeller'].includes(a)) args[a.slice(2)] = argv[++i];
+    else if (a === '--port') args.port = Number(argv[++i]);
     else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since', '--lens', '--budget', '--record', '--vendor', '--canaries', '--html'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a === '--version' || a === '-v') args.version = true;
@@ -535,6 +546,35 @@ if (cmd === 'setup') {
       console.log(formatDecisionTimes(decisionTimes(ledgerGuard(() => readMetrics(metricsPath(st.root.dir))))));
     }
   }
+} else if (cmd === 'open') {
+  // The live board (design §3.1): a detached server; this command returns at once. The board's key never reaches this
+  // output unless stdin and stdout are the person's own terminal and no browser was opened (--no-browser).
+  const nunchiDir = resolve('.nunchi');
+  const { openBoard, stopBoards } = await import('./board/launch.mjs');
+  const st = stateOf(nunchiDir);
+  if (args.stop) {
+    const n = await stopBoards(st.root.dir, process.cwd());
+    console.log(n ? `stopped ${n === 1 ? 'the board' : `${n} boards`}` : 'no board is running for this project');
+    process.exit(0);
+  }
+  if (!latestRun(join(nunchiDir, 'runs'))) { console.error('nunchi open: no runs yet: nunchi capture --url <your local server>'); process.exit(1); }
+  // the board writes state (decisions, approvals, metrics): the state folder is private before it starts
+  const led = loadLedger(nunchiDir);
+  if (args.port !== undefined && !(Number.isInteger(args.port) && args.port > 1023 && args.port < 65536)) { console.error('nunchi open: --port takes a port number from 1024 to 65535'); process.exit(1); }
+  let labeller = null;
+  if (args.label) {
+    const { slugLabeller, LABELLER } = await import('./labels.mjs');
+    labeller = args.labeller ? String(args.labeller) : slugLabeller(P.whoAmI());
+    if (!LABELLER.test(labeller)) { console.error('nunchi open: --labeller takes lower-case letters, digits and - (up to 40)'); process.exit(1); }
+  }
+  const tty = !!(process.stdin.isTTY && process.stdout.isTTY);
+  let r;
+  try { r = await openBoard({ projectDir: process.cwd(), stateDir: led.st.root.dir, mode: args.label ? 'label' : 'board', labeller, browser: !args.noBrowser, linkToTerminal: tty, port: args.port || 0 }); }
+  catch (e) { console.error(`nunchi open: ${e.message}`); process.exit(2); }
+  console.log(`board open on 127.0.0.1:${r.port}${r.reused ? ' (already running)' : ''}${args.label ? ` · label mode for ${labeller}` : ''}`);
+  if (r.link) console.log(`open this link in your browser; it works once, for 2 minutes:\n  ${r.link}`);
+  else if (args.noBrowser) console.log('no browser was opened; to open it, run nunchi open in your own terminal');
+  else console.log(r.reused ? 'a fresh one-time link was opened in the browser' : 'the browser shows it; it stops after 2 hours idle (nunchi open --stop stops it now)');
 } else if (cmd === 'runs') {
   const { listRuns } = await import('./runs.mjs');
   const dir = resolve('.nunchi/runs');
