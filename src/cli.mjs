@@ -81,10 +81,16 @@ Usage:
                                             Check the hunter's answers (every item answered, every defect
                                             grounded in a selector of the scene or a file:line under --root)
                                             and write ai-findings.json and coverage.json into the run
+  nunchi export --html <dir> [--run <id>] [--inline] [--json]
+                                            A static review page of one run and the ledger: <dir>/index.html plus
+                                            <dir>/img/ (screenshots, copied). --inline puts the images inside
+                                            index.html (one file). Offline, no scripts or fonts from anywhere;
+                                            open it in a browser. It shows screenshots of your app: sharing it
+                                            sends them off this machine
   nunchi --version
   nunchi --help
 
-Status: 0.1-a in progress. AI lenses, the ledger, the fix loop and the board come later.`;
+Status: 0.1-c in progress. The fix loop and the live board come later.`;
 
 function parse(argv) {
   const args = { _: [] };
@@ -98,8 +104,9 @@ function parse(argv) {
     else if (a === '--root') args.root = argv[++i];
     else if (a === '--keep') args.keep = Number(argv[++i]);
     else if (a === '--all') args.all = true;
+    else if (a === '--inline') args.inline = true;
     else if (['--reason', '--note', '--run', '--status', '--rule'].includes(a)) args[a.slice(2)] = argv[++i];
-    else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since', '--lens', '--budget', '--record', '--vendor', '--canaries'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
+    else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since', '--lens', '--budget', '--record', '--vendor', '--canaries', '--html'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a === '--version' || a === '-v') args.version = true;
     else args._.push(a);
@@ -516,6 +523,21 @@ if (cmd === 'setup') {
       if (r.verify.suspect) console.log(`SUSPECT: ${r.verify.suspectReason}. This run's verifications are marked suspect; verify again in a fresh context.`);
     }
   } else { console.error('nunchi verify: use --plan, or --record <verdicts.json>'); process.exit(1); }
+} else if (cmd === 'export') {
+  // A static review page (spec §7): read-only, offline, byte-identical for the same run and ledger.
+  if (!args.html) { console.error('nunchi export: use --html <dir> (writes <dir>/index.html and <dir>/img/)'); process.exit(1); }
+  const { exportHtml } = await import('./export-html.mjs');
+  const dir = runDirOf(args, 'export');
+  const outDir = resolve(args.html);
+  if (inside(resolve('.nunchi', 'runs'), outDir) || outDir === resolve('.nunchi', 'runs')) { console.error('nunchi export: write the page outside .nunchi/runs (runs are evidence and are never edited)'); process.exit(1); }
+  const r = exportHtml({ runDir: dir, nunchiDir: resolve('.nunchi'), outDir, inline: !!args.inline });
+  if (args.json) console.log(JSON.stringify(r, null, 2));
+  else {
+    const mb = Math.round(r.bytes / 1e5) / 10;
+    console.log(`review page → ${r.out}${r.inline ? ' (one file, images inline)' : ` (+ ${r.images} screenshots in img/)`} · ${mb} MB`);
+    console.log(`run ${r.run ?? '(not numbered)'} · ${r.scenes} screens · ${r.groups} groups, ${r.open} open${r.inLedger ? '' : ' · this run is not in the local ledger: statuses come from decisions only'}`);
+    console.log('Open it in a browser. It holds screenshots of your app: putting it anywhere else sends them off this machine.');
+  }
 } else if (cmd === 'gc') {
   const r = gcRuns(resolve('.nunchi/runs'), { keep: Number.isInteger(args.keep) && args.keep > 0 ? args.keep : 5 });
   console.log(args.json ? JSON.stringify(r, null, 2) : `kept ${r.kept.join(', ') || 'nothing'} · removed ${r.removed.join(', ') || 'nothing'}`);

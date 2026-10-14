@@ -146,6 +146,16 @@ function jwtRole(token) {
 
 export const mask = value => value.slice(0, 4) + '…';
 
+// Export-time redaction (design §5): any secret-shaped value in a string becomes `[secret-shaped: <kind>]`,
+// so a page or report built from the evidence never carries one, whatever field it came from.
+const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+export function scrubSecrets(text) {
+  if (typeof text !== 'string') return text;
+  let out = text;
+  for (const p of SECRET_PATTERNS) out = out.replace(p.re, `[secret-shaped: ${p.kind}]`);
+  return out.replace(JWT, m => `[secret-shaped: ${jwtRole(m) === 'service_role' ? 'supabase-service-role-jwt' : 'jwt'}]`);
+}
+
 export function secretFindings(scripts) {
   const out = [];
   for (const { path, body } of scripts) {

@@ -276,7 +276,7 @@ const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const clip = (v, n = 200) => (typeof v === 'string' ? (v.length > n ? v.slice(0, n) + '…' : v) : undefined);
 
 // Where a scene's selectors live. Exact string match: the hunter copies a selector from the evidence.
-function sceneIndex(runDir, sceneId) {
+export function sceneIndex(runDir, sceneId) {
   const read = (n, fallback) => { try { return JSON.parse(readFileSync(join(runDir, sceneId, n), 'utf8')); } catch { return fallback; } };
   const idx = new Map();
   // First file wins, except that an entry with a box (controls, measure) replaces one without (styles, links).

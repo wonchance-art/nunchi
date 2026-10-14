@@ -447,6 +447,48 @@ Exports: SARIF, Markdown, JSON. `nunchi check`: no capture; runs guard rules and
 exit code only. First run (H11): key routes × rule lenses within ~2 minutes; the deep sweep continues and
 fills the board live.
 
+### 7.1 `nunchi export --html` (built 2026-10-14 KST)
+
+A static review page of one run plus the ledger, the read-only precursor of the board (`src/export-html.mjs`).
+`nunchi export --html <dir> [--run <id>] [--inline] [--json]` writes `<dir>/index.html` and `<dir>/img/<sha256 of the
+bytes, 16 hex>.jpg` (each scene's `full.jpg`, copied byte for byte, so identical screens share one file); `--inline`
+puts the images in `index.html` as data URIs instead (one file; pegroom: 8 MB against 6.1 MB linked). Only
+`index.html` and `img/` are replaced in `<dir>`; a folder inside `.nunchi/runs` is refused.
+- *Views* (mock-up v3 layout, system fonts): **Progress** (verdict as in design §3.4 where it can be computed
+  statically: blocker/high open → "Not yet · …", no AI review → "Probably · rules only", screens not seen → "Yes, for
+  what was checked · …"; open groups by severity; new, fixed and came back since the parent run; screens checked; AI
+  review; counts per decision). **Findings** (one section per kind, worst first, low collapsed; a row per group with
+  where, source and status; status tabs Open · To fix · Later · Kept · Not a problem · Fixed · All; AI claims not
+  double-checked in a last collapsed section). **Finding detail** (the screenshot cropped to the boxes plus ~200 px,
+  at least one first view high, with Desktop/Phone when both exist and "Whole screen"; code file:line when the
+  finding has one; seen on; decision; evidence details collapsed; the four `nunchi decide <group> …` commands with
+  Copy, never buttons that do nothing). **Screens** (every non-canary scene as a card with a badge — "2 high · 1
+  medium", "Clean", "Nothing open", "Sent to sign-in", "Redirected", "Not seen" — filtered by width, who and state;
+  a selected screen shows large with numbered dashed boxes and its findings).
+- *Data*: the run's `manifest.json`, `run.json`, `findings.json`, `flow.json` (wall order), `measure.json` (the h1 as
+  a screen name), `ai-findings.json` (confirmed and claimed only), `verify.json` and `coverage.json`; statuses from
+  `view()` over `.nunchi/state/ledger.json`, the decisions and approvals. A run the ledger has not folded is folded
+  in memory only (statuses from decisions, no comparison). AI findings are folded in memory the same way until M1
+  puts them in the ledger. A finding without a box takes its element's box from the scene's evidence (the hunt's
+  selector index). Boxes are percentages of the screenshot (CSS px × the first view's pixel ratio); none is drawn
+  for an element inside a scroll area (`inside`) or outside the image, and the page says why.
+- *Determinism*: no clock or random value; ids are hashes of scene and group ids; every list sorted. Two exports of
+  the same run, ledger and decisions are byte-identical (test, and pegroom: identical).
+- *Redaction and escaping*: HAR, `network.json`, `console.json`, `text.txt` and `aria.yml` are never read. Every
+  string that did not come from the exporter is secret-scrubbed (`[secret-shaped: <kind>]`, the scanner of §3 L9) and
+  HTML-escaped; URLs are redacted again and are never links; secret findings show location and kind only.
+  Screenshots are CSS backgrounds, so the page has no `<img>`. CSP (meta): `default-src 'none'; img-src 'self' data:;
+  style-src 'unsafe-inline'; script-src 'sha256-…'; base-uri 'none'; form-action 'none'` — the one inline script
+  (current view, Copy buttons) is allowed by its hash, and the page works without it (views are `:target`
+  sections, filters are radio buttons with `:has()`).
+- *Accessibility*: nav, main and aside landmarks, a skip link, visible focus, 44 px primary targets, severity as
+  text beside its dot, filters as native radio groups, `prefers-color-scheme` honoured; 360 px to wide desktop.
+- *Not done*: page text is shown (claims, evidence text) — the `--include-page-text` default of design §5 applies to
+  md/json/sarif, and screenshots carry the same text anyway; no per-run trend; no cropping or downscaling of the
+  images; the verdict does not check "last full check newer than the last fix commit" (the fix loop is not built).
+  Publishing the page (e.g. as an Artifact) is the skill's job, only with the user's explicit OK, since it sends the
+  screenshots off the machine.
+
 ## 8. Release gates (0.1)
 
 | Gate | Target |
