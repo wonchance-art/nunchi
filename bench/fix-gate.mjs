@@ -3,18 +3,22 @@
 // gate can be measured later. It prints what the engine said for each seed; it claims nothing about the gate (the gate
 // is pre-registered and run apart: docs/prereg-fix.md, its own sample and the detector-sensitivity sets).
 //
-//   node bench/fix-gate.mjs [--app <dir>] [--fixes <file>] [--seeds P03,P18] [--fresh] [--keep]
-//     --app    the benchmark app (default bench/pebble); its bench.json says how to install it, its samples and login
-//     --fixes  the recorded fixes (default bench/fixes/<name>.json): per seed, the edits a fixer would make
-//     --fresh  each seed is an independent trial from a fresh copy (§9.4); default: one sequential pass on one copy
-//     --keep   leave the copies in place (their paths are printed)
+//   node bench/fix-gate.mjs [--app <dir>] [--fixes <file>] [--seeds P03,P18] [--order <n>] [--serve start|dev] [--one-copy] [--keep]
+//     --app       the benchmark app (default bench/pebble); its bench.json says how to install it, its samples and login
+//     --fixes     the recorded fixes (default bench/fixes/<name>.json): per seed, the edits a fixer would make
+//     --order     the seed of the order the seeds run in (default 1; printed): a shuffle, the same for the same seed
+//     --serve     how fix --start/--verify start the app (default start: next start after the approved build); printed
+//     --one-copy  one sequential pass on one copy (the batch line covers every seed); default, and the gate's: each seed
+//                 an independent trial from a fresh copy and a fresh state (§9.4)
+//     --keep      leave the copies in place (their paths are printed)
 //
 // Per trial: a fresh git repository of the app (dependencies hard-linked from the app folder), the check profile approved
 // by the operator running this script (their own terminal: channel cli-tty), the app built and served once for a
 // sweep (`nunchi capture --network record`), the seeds' groups (found by rule, route and match) decided Fix as the AI
-// would record it from chat, `fix --plan`; then per seed: `fix --start --serve start` (baseline checks, P0); the recorded edit;
-// `fix --checks`; one commit with the trailers it printed; `fix --verify --serve start` (P1, the judgement). The engine's
-// own lines are printed as they are, then a table and `fix --summary`.
+// would record it from chat, `fix --plan`; then per seed: `fix --start --serve <mode>` (baseline checks, P0); the recorded
+// edit; `fix --checks`; one commit with the trailers it printed; `fix --verify --serve <mode>` (P1, the judgement). The
+// engine's own lines are printed as they are, then a table and `fix --summary`. What the gate still needs before it can
+// run is in docs/spec-0.1.md §9.5.
 // Needs Chromium (NUNCHI_BROWSER or `nunchi setup`) and npm.
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
@@ -33,8 +37,20 @@ const APP = resolve(arg('--app', join(HERE, 'pebble')));
 const BENCH = JSON.parse(readFileSync(join(APP, 'bench.json'), 'utf8'));
 const FIXES = JSON.parse(readFileSync(resolve(arg('--fixes', join(HERE, 'fixes', `${BENCH.name}.json`))), 'utf8'));
 const only = arg('--seeds') ? new Set(arg('--seeds').split(',').map(s => s.trim())) : null;
-const seeds = FIXES.fixes.filter(f => !only || only.has(f.seed));
-const fresh = process.argv.includes('--fresh'), keep = process.argv.includes('--keep');
+const fresh = !process.argv.includes('--one-copy'), keep = process.argv.includes('--keep');
+const SERVE = arg('--serve', 'start');
+if (!['start', 'dev'].includes(SERVE)) throw new Error('--serve takes start or dev');
+const ORDER = Number(arg('--order', '1'));
+if (!Number.isInteger(ORDER)) throw new Error('--order takes a whole number');
+// a seeded shuffle (mulberry32, Fisher–Yates): the order is part of what a run says, and the same seed repeats it
+function shuffled(list, seed) {
+  let a = seed >>> 0;
+  const rnd = () => { a = (a + 0x6d2b79f5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); [out[i], out[j]] = [out[j], out[i]]; }
+  return out;
+}
+const seeds = shuffled(FIXES.fixes.filter(f => !only || only.has(f.seed)), ORDER);
 const log = m => process.stderr.write(m + '\n');
 const sh = (cmd, args, opts = {}) => execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024, ...opts });
 const git = (cwd, ...a) => sh('git', ['-c', 'user.name=fix-gate', '-c', 'user.email=fix-gate@example.invalid', '-c', 'commit.gpgsign=false', ...a], { cwd }).trim();
@@ -108,7 +124,7 @@ async function trial(copy, fix) {
   const t0 = Date.now();
   const g = groupOf(copy.root, fix);
   if (g.error) return { seed: fix.seed, outcome: 'harness: no group', line: g.error, ms: Date.now() - t0 };
-  const start = json(nunchi(copy.root, 'fix', '--start', g.group, '--serve', 'start', '--agent', 'fix-gate harness', '--json'));
+  const start = json(nunchi(copy.root, 'fix', '--start', g.group, '--serve', SERVE, '--agent', 'fix-gate harness', '--json'));
   if (start.code) return { seed: fix.seed, group: g.group, outcome: 'start refused', line: (start.lines || []).join(' / ').slice(0, 300), ms: Date.now() - t0 };
   for (const e of fix.edits) {
     const p = join(copy.root, e.file);
@@ -121,7 +137,7 @@ async function trial(copy, fix) {
   if (checks.code) return { seed: fix.seed, group: g.group, outcome: 'checks block', line: (checks.lines || []).slice(-1)[0], ms: Date.now() - t0 };
   git(copy.root, 'add', '--', ...fix.edits.map(e => e.file));
   git(copy.root, 'commit', '-q', '-m', `Fix ${fix.seed}: ${fix.rule} on ${fix.route}`, '-m', checks.trailers.join('\n'));
-  const v = json(nunchi(copy.root, 'fix', '--verify', g.group, '--serve', 'start', '--json'));
+  const v = json(nunchi(copy.root, 'fix', '--verify', g.group, '--serve', SERVE, '--json'));
   return { seed: fix.seed, group: g.group, outcome: v.outcome ? `${v.outcome}${v.needsYou ? ` (${v.needsYou})` : ''}` : `exit ${v.code}`, line: (v.lines || []).join(' / '), ms: Date.now() - t0 };
 }
 
@@ -144,7 +160,7 @@ try {
     results.push(r);
   }
   const summary = copy ? nunchi(copy.root, 'fix', '--summary').out.trim() : '';
-  console.log(`fix-gate harness · ${BENCH.name} · ${results.length} seed(s) · ${fresh ? 'independent trials' : 'one sequential pass'}`);
+  console.log(`fix-gate harness · ${BENCH.name} · ${results.length} seed(s) · ${fresh ? 'independent trials (a fresh copy and state each)' : 'one sequential pass'} · order seed ${ORDER} (${seeds.map(f => f.seed).join(', ')}) · serve ${SERVE}`);
   console.log('seed  outcome                 seconds  what the engine said');
   for (const r of results) console.log(`${r.seed.padEnd(5)} ${r.outcome.padEnd(23)} ${String(Math.round(r.ms / 1000)).padStart(7)}  ${r.line}`);
   if (summary) console.log(`batch${fresh ? ' (the last trial)' : ''}: ${summary}`);
