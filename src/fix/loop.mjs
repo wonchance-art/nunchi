@@ -73,10 +73,27 @@ function toFix(rows) {
   const decisions = fixing.map(r => r.decision).sort((a, b) => cmp(a.at || '', b.at || '') || cmp(a.id, b.id));
   return { open, fixing, decision: decisions[decisions.length - 1] || null, unverified: fixing.filter(r => r.decision && r.decision.verified === false) };
 }
-// The fix commits of this group for this decision (attempts, design §4.5), from git's trailers on every branch.
+// The attempts made for this decision (design §4.5), from git's trailers on every branch: distinct Nunchi-Attempt values
+// of the fix commits carrying the group and this decision (a rebased copy, or the same commit on a remote branch, is
+// one attempt, not two). A git error throws (fail closed).
 function attemptsUsed(ctx, group, decisionId) {
   if (!ctx.git) return 0;
-  return ctx.git.groupCommits(group).filter(c => (c.trailers[TRAILERS.fix] || []).includes(group) && (c.trailers[TRAILERS.decision] || [null])[0] === decisionId).length;
+  return new Set(ctx.git.groupCommits(group).filter(c => (c.trailers[TRAILERS.fix] || []).includes(group) && (c.trailers[TRAILERS.decision] || [null])[0] === decisionId)
+    .map(c => (c.trailers[TRAILERS.attempt] || [null])[0])).size;
+}
+// Whether an earlier Fix decision of this group used every attempt (needs you b): then only a person's new Fix (the
+// board's "Try again with a note…", or nunchi decide in their own terminal) starts another round, never the agent's.
+function exhaustedBefore(ctx, group, decisionId) {
+  if (!ctx.git) return false;
+  const by = new Map();
+  for (const c of ctx.git.groupCommits(group)) {
+    if (!(c.trailers[TRAILERS.fix] || []).includes(group)) continue;
+    const d = (c.trailers[TRAILERS.decision] || [null])[0];
+    if (d === decisionId) continue;
+    if (!by.has(d)) by.set(d, new Set());
+    by.get(d).add((c.trailers[TRAILERS.attempt] || [null])[0]);
+  }
+  return [...by.values()].some(s => s.size >= MAX_ATTEMPTS) || allRecords(ctx.stateDir, group).some(r => r.outcome?.needsYou === 'b' && r.decision?.id !== decisionId);
 }
 
 // The last sweep of this worktree: what the probes copy (persons, states, sample paths, the base URL).
@@ -129,6 +146,7 @@ function headIsFix(ctx, rec) {
   if (!head || head === rec.base) return null;
   const t = ctx.git.trailers(head);
   if (!(t[TRAILERS.fix] || []).includes(rec.group) || !(t[TRAILERS.attempt] || []).includes(String(rec.attempt))) return null;
+  if (rec.decision?.id && !(t[TRAILERS.decision] || []).includes(rec.decision.id)) return null;
   return head;
 }
 export function reconcile(ctx, group) {
@@ -263,6 +281,7 @@ export async function startFix(ctx, id, opts = {}) {
     if (last && last.phase === 'needs-you') {
       const newer = tf.decision && last.decision && tf.decision.id !== last.decision.id && cmp(tf.decision.at || '', last.decision.at || '') >= 0;
       const k = last.outcome?.needsYou;
+      if (newer && k === 'b' && tf.decision.human !== true) return refuse([...said, `The AI couldn't fix '${title}' in ${MAX_ATTEMPTS} tries, and only the person can start another round: ask them to choose “Try again with a note…” for it in the board (nunchi open). A Fix your AI records does not count.`]);
       if (!newer) {
         if (k === 'a') return refuse([...said, `The last fix of '${title}' waits for you in the board: it also changed other parts of the screen. Look there ("Looks fine", "Undo this fix" or "Try again with a note…").`]);
         if (k === 'b') return refuse([...said, `The AI couldn't fix '${title}' in ${MAX_ATTEMPTS} tries: it waits for you in the board ("Try again with a note…", Keep or Later).`]);
@@ -280,6 +299,7 @@ export async function startFix(ctx, id, opts = {}) {
     if ((t[TRAILERS.fix] || []).includes(g.group) && !(last && last.commit === head && !isOpen(last))) return refuse([...said, `HEAD carries an unverified fix of '${title}': resume with nunchi fix --verify ${g.group}.`]);
     const used = attemptsUsed(ctx, g.group, tf.decision.id);
     if (used >= MAX_ATTEMPTS) return refuse([...said, `The AI couldn't fix '${title}' in ${MAX_ATTEMPTS} tries: it waits for you in the board ("Try again with a note…", Keep or Later).`]);
+    if (tf.decision.human !== true && exhaustedBefore(ctx, g.group, tf.decision.id)) return refuse([...said, `The AI couldn't fix '${title}' in ${MAX_ATTEMPTS} tries, and only the person can start another round: ask them to choose “Try again with a note…” for it in the board (nunchi open). A Fix your AI records does not count.`]);
   }
   if (early) {
     if (!head) return refuse('This repository has no commit yet: commit once, then fix.');
@@ -489,7 +509,8 @@ export async function verifyFix(ctx, id, opts = {}) {
   const problems = [];
   if (head !== rec.commit) problems.push(`HEAD (${short(head)}) is not the fix commit of this attempt (${short(rec.commit)})`);
   if (parents.length !== 2 || parents[1] !== rec.base) problems.push(`the fix must be exactly one commit on ${short(rec.base)} (git rev-list --parents -n1 HEAD gives ${parents.map(short).join(' ')})`);
-  if (!(t[TRAILERS.fix] || []).includes(g.group) || !(t[TRAILERS.attempt] || []).includes(String(rec.attempt))) problems.push(`the commit lacks the trailers ${trailersOf(rec).join(' / ')}`);
+  if (!(t[TRAILERS.fix] || []).includes(g.group) || !(t[TRAILERS.attempt] || []).includes(String(rec.attempt)) || (rec.decision?.id && !(t[TRAILERS.decision] || []).includes(rec.decision.id))) problems.push(`the commit lacks the trailers ${trailersOf(rec).join(' / ')}`);
+  if (rec.branch && ctx.git.branch() !== rec.branch) problems.push(`HEAD is ${ctx.git.branch() ? `on ${ctx.git.branch()}` : 'detached'}, not on the fix branch ${rec.branch}: switch back to it`);
   if (!ctx.git.clean()) problems.push(`the working tree is not clean (${ctx.git.status().slice(0, 4).join(', ')})`);
   if (ctx.git.branch() === ctx.git.defaultBranch()) problems.push(`the fix is on ${ctx.git.branch()}, the default branch: nunchi never fixes there`);
   if (problems.length) return refuse([...said, `Not verified: ${problems.join('; ')}.`]);
@@ -674,13 +695,14 @@ function dirtyLine(title, commit, files, { refusal = false } = {}) {
 
 // Undo the fix commit (only while it is HEAD; design §4.7). `rec` is in phase reverting/undoing already.
 function doRevert(ctx, rec, why, { cancelWord = null, quiet = false, title = rec.title || 'this finding' } = {}) {
-  const r = ctx.git.revert({ fixCommit: rec.commit, group: rec.group, attempt: rec.attempt, why: String(why).slice(0, 300),
+  const r = ctx.git.revert({ fixCommit: rec.commit, group: rec.group, attempt: rec.attempt, why: String(why).slice(0, 300), branch: rec.branch || null,
     onStart: () => { rec = update(ctx.stateDir, rec, { revertStarted: kst(ctx.deps.now()) }, gen(ctx)); } });
   if (!r.ok) {
-    const kind = r.reason === 'signing' ? 'signing' : r.reason === 'dirty' ? 'dirty' : 'revert-failed';
+    const kind = r.reason === 'signing' ? 'signing' : r.reason === 'dirty' ? 'dirty' : r.reason === 'wrong-branch' ? 'wrong-branch' : 'revert-failed';
     const line = r.reason === 'signing'
       ? `Couldn't undo the fix of '${title}' (commit ${short(rec.commit)}): your repository requires signed commits and signing failed. nunchi never commits unsigned: it needs you.`
       : r.reason === 'dirty' ? dirtyLine(title, rec.commit, r.files)
+      : r.reason === 'wrong-branch' ? `Couldn't undo the fix of '${title}' (commit ${short(rec.commit)}): ${r.message}. Switch back to ${rec.branch}, then tell your AI “undo it” — it needs you.`
       : `Couldn't undo the fix of '${title}' (commit ${short(rec.commit)}): ${r.message}. Nothing was reset; it needs you.`;
     closeWith(ctx, rec, 'needs-you', { kind: 'needs-you', needsYou: kind, commit: rec.commit, line });
     return out(quiet ? 1 : 0, line, { outcome: 'needs-you', needsYou: kind });

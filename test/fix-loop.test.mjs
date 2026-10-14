@@ -808,3 +808,71 @@ test('a route only P1 has, showing a defect the ledger already holds open, is no
   assert.deepEqual(latest(p).p1.scope.routes, ['/help', '/settings']);
   assert.match(v.lines.at(-1), /^Fixed 'Tap target smaller than 24px'/);
 });
+
+// ---- attempts are the person's to renew (M3 review, 2.3–2.5) -----------------------------------------------------------
+
+test('attempts: after 2 tries only a person\'s new Fix starts another round; one the agent records (from chat) is refused', async () => {
+  const p = await fixProject();
+  await attempt(p, { change: ['TINY', 'WRAP'] });
+  await attempt(p, { change: ['TINY', 'WRAP'] });
+  assert.deepEqual([latest(p).phase, latest(p).outcome.needsYou], ['needs-you', 'b']);
+  const led = P.loadLedger(p.nunchi, { root: p.root });
+  P.recordDecisions(led, { targets: [{ group: p.group }], decision: 'fix', by: 'agent', channel: 'cli-agent' });
+  const s = await F.startFix(ctxOf(p), p.group);
+  assert.equal(s.code, 1);
+  assert.match(s.lines.at(-1), /only the person can start another round: ask them to choose “Try again with a note…” for it in the board \(nunchi open\)\. A Fix your AI records does not count\.$/);
+  // with the records lost, git's trailers still say an earlier decision used every attempt
+  rmSync(join(stateDir(p), 'fixes'), { recursive: true, force: true });
+  assert.equal((await F.startFix(ctxOf(p), p.group)).code, 1);
+  P.recordDecisions(P.loadLedger(p.nunchi, { root: p.root }), { targets: [{ group: p.group }], decision: 'fix', by: 'Tester', channel: 'board', note: 'use the shared button' });
+  assert.equal((await F.startFix(ctxOf(p), p.group)).code, 0, 'the person\'s Fix from the board starts attempt 1 again');
+});
+
+test('attempts: a fix commit without the Nunchi-Decision trailer is not verified (it would never be counted)', async () => {
+  const p = await fixProject();
+  assert.equal((await F.startFix(ctxOf(p), p.group)).code, 0);
+  edit(p.root, 'app/settings/page.jsx', 'TINY', 'WRAP');
+  const c = await F.checkFix(ctxOf(p), p.group);
+  commitWith(p.root, trailers(c).filter(t => !t.startsWith('Nunchi-Decision')));
+  const v = await F.verifyFix(ctxOf(p), p.group);
+  assert.equal(v.code, 1);
+  assert.match(v.lines.at(-1), /^No commit of this attempt is on HEAD: commit the fix as one commit ending with the trailers nunchi fix --checks printed \(Nunchi-Fix: [0-9a-f]{12} \/ Nunchi-Attempt: 1 \/ Nunchi-Decision: /);
+  assert.equal(latest(p).phase, 'checked', 'not taken for this attempt\'s commit');
+});
+
+test('attempts: counted as distinct Nunchi-Attempt values, so a copy of a fix commit (a rebase, another branch) is one attempt', async () => {
+  const p = await fixProject();
+  await attempt(p, { change: ['TINY', 'WRAP'] });                        // attempt 1: not fixed, undone
+  const fix1 = git(p.root, 'rev-parse', 'HEAD~1');
+  const branch = git(p.root, 'branch', '--show-current');
+  git(p.root, 'switch', '-q', '-c', 'copy', latest(p).base);
+  git(p.root, 'cherry-pick', fix1);                                      // the same attempt, another commit
+  git(p.root, 'switch', '-q', branch);
+  const s = await F.startFix(ctxOf(p), p.group);
+  assert.equal(s.code, 0, s.lines.join('\n'));
+  assert.match(s.lines.join('\n'), /attempt 2 of 2/);
+});
+
+test('attempts: a git error while counting throws rather than counting none', async () => {
+  const p = await fixProject();
+  const { fixGit } = await import('../src/fix/git.mjs');
+  const g = fixGit(p.root);
+  rmSync(join(p.root, '.git'), { recursive: true, force: true });
+  assert.throws(() => g.groupCommits(p.group));
+});
+
+test('branch: verify and undo only on the fix branch; the same commit on another branch, or a detached HEAD → refused / needs you', async () => {
+  const p = await fixProject();
+  await attempt(p, { change: ['TINY', 'ROOMY'], verify: false });
+  const head = git(p.root, 'rev-parse', 'HEAD');
+  git(p.root, 'switch', '-q', '-c', 'elsewhere');
+  const v = await F.verifyFix(ctxOf(p), p.group);
+  assert.match(v.lines.at(-1), /HEAD is on elsewhere, not on the fix branch nunchi\/fixes-\d{4}: switch back to it/);
+  git(p.root, 'switch', '-q', latest(p).branch);
+  await F.verifyFix(ctxOf(p), p.group);
+  assert.equal(latest(p).phase, 'fixed');
+  git(p.root, 'switch', '-q', '--detach', head);
+  const u = F.undoFix(ctxOf(p), p.group);
+  assert.match(u.lines.at(-1), /^Couldn't undo the fix of 'Tap target smaller than 24px' \(commit [0-9a-f]{7}\): HEAD is detached, not on the fix branch nunchi\/fixes-\d{4}\. Switch back to nunchi\/fixes-\d{4}, then tell your AI “undo it” — it needs you\.$/);
+  assert.equal(git(p.root, 'rev-parse', 'HEAD'), head, 'nothing reverted');
+});

@@ -84,11 +84,12 @@ export function fixGit(root) {
     treeOf: rev => git(['rev-parse', '--verify', '--end-of-options', `${rev}^{tree}`]).trim(),
     trailers: (rev = 'HEAD') => parseTrailers(git(['log', '-1', '--format=%(trailers:only,unfold)', '--end-of-options', rev])),
     subject: (rev = 'HEAD') => git(['log', '-1', '--format=%s', '--end-of-options', rev]).trim(),
-    // every commit on any branch whose trailers name the group: fix commits and reverts, newest first
+    // every commit on any branch whose trailers name the group: fix commits and reverts, newest first. Narrowed by
+    // --grep (the trailer lines); a git error or timeout throws: counting none would hand out attempts (fail closed).
     groupCommits: group => {
       if (!GROUP.test(group)) return [];
-      const out = tryGit(['log', '--all', '--format=%H%x1f%P%x1f%(trailers:only,unfold)%x1e']);
-      if (!out) return [];
+      const out = git(['log', '--all', `--grep=^${TRAILERS.fix}: ${group}$`, `--grep=^${TRAILERS.revert}: ${group} `, '--format=%H%x1f%P%x1f%(trailers:only,unfold)%x1e']);
+      if (!out.trim()) return [];
       return out.split('\x1e').map(r => r.replace(/^\s+/, '')).filter(Boolean).map(r => {
         const [sha, parents, tr] = r.split('\x1f');
         return { sha: sha.trim(), parents: (parents || '').trim().split(/\s+/).filter(Boolean), trailers: parseTrailers(tr) };
@@ -104,8 +105,10 @@ export function fixGit(root) {
     // Only on a clean working tree and index: `revert --no-commit` starts from the index, so staged work would be
     // committed inside the undo, and `revert --abort` (a reset --merge) would throw it away. `onStart` runs right before
     // git revert (the caller records that this revert is nunchi's, so only nunchi's is ever aborted).
-    revert: ({ fixCommit, group, attempt, why = '', onStart = () => {} }) => {
+    revert: ({ fixCommit, group, attempt, why = '', branch = null, onStart = () => {} }) => {
       if (!HEX.test(String(fixCommit))) return { ok: false, reason: 'failed', message: 'no fix commit to undo' };
+      // on the fix branch only: a detached HEAD, or another branch at the same commit, is not where the fix lives
+      if (branch && api.branch() !== branch) return { ok: false, reason: 'wrong-branch', message: `HEAD is ${api.branch() ? `on ${api.branch()}` : 'detached'}, not on the fix branch ${branch}` };
       if (api.head() !== fixCommit) return { ok: false, reason: 'not-head', message: `the fix commit ${fixCommit.slice(0, 7)} is no longer the last commit (HEAD is ${String(api.head()).slice(0, 7)})` };
       if (api.inProgress().length) return { ok: false, reason: 'in-progress', message: `a ${api.inProgress()[0]} is in progress` };
       const dirty = api.uncommitted();
