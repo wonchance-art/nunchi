@@ -8,11 +8,12 @@ import { buildSourceMap, affectedRoutes, sourceHashes } from './sourcemap.mjs';
 import { startRun, finishRun, gcRuns, latestRun, workTree, ensureGitignore, ensurePrivate, readConfig, gitRunner, DIFF_SAFE } from './runs.mjs';
 import { baseUrlRefusal } from './network.mjs';
 import { codeNavigations } from './flow.mjs';
-import { syncLedger, readDecisions, buildDecision, saveDecision, readApproved, bindApproved, addApproved, approvalKey, seriousTarget, view, groups as groupRows, titleOf, DECISIONS, NOT_LOOKED_RUNS, STALE_HUNTS, adoptLedger, carryLedger, latestRunOf, isLedger, isApprovedDoc, mergeApprovedDocs } from './ledger.mjs';
-import { resolveStateRoot, trackedState, stateFiles, ensureStateDir, adoptLegacy, writeKey, readKey, removeKey, removeKeys, keyPath, present } from './state.mjs';
-import { aiLoader, recheckLoader, runIdentity, routeHashes } from './ai-fold.mjs';
-import { sweepLeftovers, withLock } from './stable.mjs';
-import { execFileSync } from 'node:child_process';
+import { readDecisions, approvalKey, buildDecision, view, DECISIONS, NOT_LOOKED_RUNS, STALE_HUNTS, latestRunOf } from './ledger.mjs';
+import { ensureStateDir, writeKey, readKey, removeKey, removeKeys, keyPath } from './state.mjs';
+import { runIdentity, routeHashes } from './ai-fold.mjs';
+import { withLock } from './stable.mjs';
+import * as P from './project.mjs';
+import { LEDGER_ERRORS } from './project.mjs';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -46,15 +47,25 @@ Usage:
                           (use 3 when the AI lenses will run: a capture without them gains nothing)
                           (tagged \`canary\` in manifest.json, listed in canaries.json, never in findings.json)
     exit code 3 when the run is not usable (login expired, app unreachable); the run is kept
+  nunchi open [--no-browser] [--stop] [--label [--labeller <name>]] [--port <n>]
+                                            The live board: findings, screens and decisions in your browser, updated
+                                            as the ledger changes. Starts a local server (127.0.0.1 only) in the
+                                            background and returns; it opens your browser with a one-time link and
+                                            stops after 2 hours idle. Run again to open another tab; --stop stops it.
+                                            --label: blinded labelling for the precision check
   nunchi findings [--rule <rule>] [--all] [--status open,to-fix,…] [--json]
                                             What is open: one row per kind of defect; --rule lists its groups
                                             (a group = one defect, however many screens it is on)
-  nunchi decide <id…> fix|keep|false-positive|hold|reopen [--reason …] [--note …]
+  nunchi decide <id…> fix|keep|false-positive|not-a-problem|hold|later|reopen [--reason …] [--note …] [--from-chat]
                                             Record a decision on a group or fingerprint (prefix of its id is enough).
                                             keep needs --reason intended|out-of-scope; false-positive needs
-                                            --reason not-a-problem|wrong-place. Decisions are files under .nunchi/decisions/
+                                            --reason not-a-problem|wrong-place. Decisions are files under .nunchi/decisions/.
+                                            In your own terminal you type a short code to confirm; run by your AI
+                                            (or with --from-chat), keep and not-a-problem count for "ready to
+                                            ship" once you confirm them in the board
   nunchi approve <decision id…> | --all     Accept decisions that came through git (made on another machine)
-  nunchi trust [--json]                     Per-lens precision from your decisions (fix ÷ (fix + false positive))
+  nunchi trust [--json]                     Per-lens precision from your decisions (fix ÷ (fix + false positive)),
+                                            and how long decisions in the board took (singles and batches apart)
   nunchi runs [--json]                      List captured runs (newest last) and which is latest
   nunchi gc [--keep 5]                      Delete old runs, keep the newest N and the latest
   nunchi map [--root <dir>] [--json]        Which source files each route renders (source ↔ scene map)
@@ -111,7 +122,7 @@ Usage:
   nunchi --version
   nunchi --help
 
-Status: 0.1-c in progress. The fix loop and the live board come later.`;
+Status: 0.1-c in progress. The fix loop comes later.`;
 
 function parse(argv) {
   const args = { _: [] };
@@ -127,7 +138,11 @@ function parse(argv) {
     else if (a === '--all') args.all = true;
     else if (a === '--inline') args.inline = true;
     else if (a === '--again') args.again = true;
-    else if (['--reason', '--note', '--run', '--status', '--rule'].includes(a)) args[a.slice(2)] = argv[++i];
+    else if (a === '--from-chat') args.fromChat = true;
+    else if (a === '--stop') args.stop = true;
+    else if (a === '--label') args.label = true;
+    else if (['--reason', '--note', '--run', '--status', '--rule', '--labeller'].includes(a)) args[a.slice(2)] = argv[++i];
+    else if (a === '--port') args.port = Number(argv[++i]);
     else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since', '--lens', '--budget', '--record', '--vendor', '--canaries', '--html'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a === '--version' || a === '-v') args.version = true;
@@ -184,81 +199,21 @@ function runDirOf(args, cmdName) {
   return p;
 }
 const readJson = p => JSON.parse(readFileSync(p, 'utf8'));
-// A ledger file that cannot be read, held by another nunchi process, or changed under it again and again: said
-// plainly, exit 2, nothing written.
-const LEDGER_ERRORS = ['CORRUPT', 'LOCKED', 'CONFLICT', 'UNSAFE_PATH'];
+// A ledger file that cannot be read, held by another nunchi process, or changed under it again and again (and the
+// other errors project.mjs names): said plainly, exit 2, nothing written.
 const ledgerGuard = fn => {
   try { return fn(); }
   catch (e) { if (!LEDGER_ERRORS.includes(e.code)) throw e; console.error('nunchi: ' + e.message); process.exit(2); }
 };
-// The state store of this project (state.mjs, design §8.1): in a repository, the folder every worktree shares under
-// the common git folder; otherwise .nunchi/state. Its files, and this worktree's stream (whose runs it folds).
-// A shared folder that cannot be written falls back to .nunchi/state, said once and recorded (state.mjs
-// resolveStateRoot); state files committed to git are never read there.
-function stateOf(nunchiDir) {
-  const project = dirname(nunchiDir);
-  let root;
-  try { root = resolveStateRoot(project); } catch (e) { if (!LEDGER_ERRORS.includes(e.code)) throw e; console.error('nunchi: ' + e.message); process.exit(2); }
-  if (root.warning) console.error('nunchi: ' + root.warning);
-  if (root.fallback) {
-    const committed = trackedState(project).filter(n => n !== 'fallback.json');
-    if (committed.length) { console.error(`nunchi: ${committed.map(n => `.nunchi/state/${n}`).join(', ')} committed to git: state that came through git is never read (anyone with push access could have written it). Remove it from git (git rm --cached) and run again.`); process.exit(2); }
-  }
-  return { root, files: stateFiles(root.dir), runsDir: join(nunchiDir, 'runs'), nunchiDir };
-}
-// The state folder is private before anything writes its first file (D12). A `.nunchi/state` written before the
-// state was shared is moved into the shared folder once, and said.
-function openState(nunchiDir, { create = existsSync(nunchiDir) } = {}) {
-  const st = stateOf(nunchiDir);
-  try { ensurePrivate(nunchiDir, create && !st.root.shared ? ['state/'] : []); } catch (e) { console.error('nunchi: ' + e.message); process.exit(2); }
-  if (st.root.shared) ledgerGuard(() => adopt(st));
-  return st;
-}
-function adopt(st) {
-  ensureStateDir(st.root);
-  const tracked = st.root.legacy && present(st.root.legacy) ? trackedState(dirname(st.nunchiDir)) : [];
-  const r = adoptLegacy(st.root, { tracked, migrateLedger: adoptLedger, carryLedger, validateLedger: isLedger, validateApproved: isApprovedDoc, mergeApproved: mergeApprovedDocs });
-  for (const m of r.moved) console.error(`nunchi: moved .nunchi/state/${m} into the repository's shared state (${st.root.dir}), which every worktree of this repository reads; the old file is kept as ${m}.moved`);
-  for (const t of r.tracked) console.error(`nunchi: .nunchi/state/${t} is committed to git, so it was not moved into the shared state: state that came through git is never read. If it was committed by mistake: git rm --cached .nunchi/state/${t}`);
-  if (r.moved.includes('ledger.json') && r.notCarried.length) console.error(`nunchi: the shared ledger had its own record already: ${r.carried} open item(s) of .nunchi/state/ledger.json it did not have were carried over; not carried over: ${r.notCarried.join('; ')}`);
-}
-// Brings the ledger up to date: runs not folded yet (their rule findings), verified AI findings and re-check
-// verdicts not folded yet or changed since (design §2.1, §2.2, §2.4), and decisions not noted yet.
-const syncState = (st, { decisions = null, root = process.cwd(), timeoutMs } = {}) =>
-  syncLedger(st.files.ledger, st.runsDir, { decisions, stream: st.root.stream, generation: st.files.generation, timeoutMs, loaders: { ai: aiLoader({ root: resolve(root) }), recheck: recheckLoader } });
-// What a crash in the middle of a write left behind (temp files, lock folders), once it is an hour old.
-function sweep(nunchiDir, st = null) {
-  const dirs = [join(nunchiDir, 'state'), join(nunchiDir, 'runs'), join(nunchiDir, 'decisions')];
-  if (st?.root.shared) dirs.push(st.root.dir);
-  for (const sub of ['runs', 'decisions']) {
-    try { for (const e of readdirSync(join(nunchiDir, sub), { withFileTypes: true })) if (e.isDirectory()) dirs.push(join(nunchiDir, sub, e.name)); } catch {}
-  }
-  for (const d of dirs) sweepLeftovers(d);
-}
-// The ledger as the ledger commands read it (findings, decide, approve, trust, export, recheck): brought up to date
-// (runs not folded yet, decisions not noted yet), with approvals carried over from older versions.
-function loadLedger(nunchiDir, { root } = {}) {
-  // the state folder is private before any of these commands writes its first file there (D12): the ledger's
-  // catch-up fold and noted decisions, decide's and approve's approvals
-  const st = openState(nunchiDir);
-  return ledgerGuard(() => {
-    sweep(nunchiDir, st);
-    const decisions = readDecisions(join(nunchiDir, 'decisions'));
-    // complete runs a crash left unfolded, and when each decision was first seen here
-    const state = syncState(st, { decisions, root });
-    const serious = seriousTarget(state);
-    const raw = readApproved(st.files.approved);
-    let { approved, bound, left } = bindApproved(raw, decisions, { serious });
-    // approvals written by older versions: carried over once, each one said
-    if (bound.length || left.length || [...approved].some(k => !raw.has(k))) {
-      const r = addApproved(st.files.approved, [], { decisions, serious, generation: st.files.generation });
-      for (const b of r.bound) console.error(`nunchi: the approval of decision ${b.id} (${b.decision} on ${b.target}) from an older nunchi now names that decision's content`);
-      for (const l of r.left) console.error(`nunchi: the approval of decision ${l.id} was not carried over (${l.why}); if you made it, approve it again: nunchi approve ${l.id}`);
-      approved = r.approved;
-    }
-    return { state, decisions, approved, serious, st };
-  });
-}
+const warn = m => console.error('nunchi: ' + m);
+// The state store of this project, its folder made private, and the ledger, through the functions the board uses too
+// (project.mjs).
+const stateOf = nunchiDir => ledgerGuard(() => P.stateOf(nunchiDir, { warn }));
+const openState = (nunchiDir, opts = {}) => ledgerGuard(() => P.openState(nunchiDir, { ...opts, warn }));
+const adopt = st => P.adopt(st, { warn });
+const syncState = P.syncState;
+const sweep = P.sweep;
+const loadLedger = (nunchiDir, { root } = {}) => ledgerGuard(() => P.loadLedger(nunchiDir, { root, warn }));
 // Files written into a complete run after it was captured (hunt, verify, canaries, re-check) are read, changed and
 // written under the run's own lock (design §8.1), so two commands on one run never lose each other's writes.
 const runLock = (runDir, fn) => withLock(join(runDir, 'run-files'), fn, { timeoutMs: 15000 });
@@ -478,15 +433,28 @@ if (cmd === 'setup') {
   catch (e) { console.error(e.code === 'NO_BROWSER' ? 'nunchi: ' + e.message : e.stack); process.exit(2); }
 } else if (['findings', 'decide', 'approve', 'trust'].includes(cmd)) {
   const nunchiDir = resolve('.nunchi');
-  const decisionsDir = join(nunchiDir, 'decisions');
-  const { state, decisions, approved, serious, st } = loadLedger(nunchiDir);
-  const approvedFile = st.files.approved;
-  const rows = view(state, decisions, approved);
-  const gs = groupRows(rows);
+  const led = loadLedger(nunchiDir);
+  const { state, decisions, approved, st } = led;
+  const { rows, groups: gs } = P.ledgerView(led);
   if (!Object.keys(state.items).length && cmd !== 'approve') { console.error('nunchi: nothing captured yet (run nunchi capture first)'); process.exit(1); }
+  // how a decision made here is recorded (design §1): `cli-tty` when stdin and stdout are this person's terminal and
+  // they type the code shown; otherwise `cli-agent` (the agent recording what the user said in chat; --from-chat says
+  // so without asking). A dismissal recorded by the agent counts for "Ready to ship" only once confirmed in the board.
+  const channelHere = async what => {
+    if (args.fromChat || !process.stdin.isTTY || !process.stdout.isTTY) return 'cli-agent';
+    const { randomInt } = await import('node:crypto');
+    const { createInterface } = await import('node:readline');
+    const ABC = 'ACDEFHJKMNPRTUVWXY34679';
+    const code = Array.from({ length: 4 }, () => ABC[randomInt(ABC.length)]).join('');
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await new Promise(res => { rl.on('close', () => res(null)); rl.question(`${what}\nType ${code} to confirm (anything else cancels): `, a => { res(a); rl.close(); }); });
+    if (String(answer ?? '').trim().toUpperCase() !== code) { console.error('nunchi: not recorded (the confirmation code was not typed)'); process.exit(1); }
+    return 'cli-tty';
+  };
   if (cmd === 'findings') {
     const want = args.status ? new Set(args.status.split(',')) : args.all ? null : new Set(['open', 'regressed', 'to-fix', 'mixed']);
-    // AI groups not double-checked (claimed, or a verdict that was suspect, rejected or insufficient) are kept apart,
+    // AI groups not double-checked (claimed, or a verdict that was suspect, rejected or insufficient, or from a run with
+    // too few decoys to check the checker) are kept apart,
     // collapsed into one line (design §2.2, §3.4); --all, --status and --rule list them
     const unchecked = g => g.source === 'ai' && !g.checked;
     const collapsed = !args.all && !args.status && !args.rule ? gs.filter(g => unchecked(g) && want.has(g.status)) : [];
@@ -508,20 +476,30 @@ if (cmd === 'setup') {
     for (const r of rows) if (r.notLookedAt && (!unlooked.has(r.group) || r.notLookedAt < unlooked.get(r.group))) unlooked.set(r.group, r.notLookedAt);
     const staleAi = gs.filter(g => g.status === 'stale').length;
     const needsYou = rows.filter(r => r.needsYou && !r.goneAt).length;
-    if (args.json) console.log(JSON.stringify({ run: latest, blind, kinds: kinds.map(k => ({ ...k, routes: [...k.routes].sort() })), groups: shown, ...(collapsed.length ? { notDoubleChecked: collapsed.map(g => g.group) } : {}) }, null, 2));
+    // the board's Progress summary (one function for both, design §3.3)
+    const { summary } = await import('./summary.mjs');
+    let runner = null; try { runner = gitRunner(process.cwd()); } catch {}
+    const sum = summary({ state, rows, groups: gs, stream: st.root.stream, runsDir: st.runsDir, git: runner });
+    if (args.json) console.log(JSON.stringify({ run: latest, blind, kinds: kinds.map(k => ({ ...k, routes: [...k.routes].sort() })), groups: shown, ...(collapsed.length ? { notDoubleChecked: collapsed.map(g => g.group) } : {}), summary: sum }, null, 2));
     else {
-      const count = st => rows.filter(r => r.status === st).length;
-      console.log(`run ${latest} · ${rows.length} unique defects in ${gs.length} groups · open ${count('open') + count('regressed')} · to fix ${count('to-fix')} · fixed ${count('fixed')} · kept ${count('kept')} · dismissed ${count('dismissed')}`);
+      // groups by status, as the board's Decisions panel counts them (summary.byStatus: a group with rows in two
+      // statuses counts in both; "came back" counts as open)
+      const b = sum.byStatus;
+      console.log(`run ${latest} · ${rows.length} unique defects in ${gs.length} groups · groups open ${b.open} · to fix ${b['to-fix']} · later ${b.held} · fixed ${b.fixed} · kept ${b.kept} · not a problem ${b.dismissed}`);
+      console.log(`ready to ship? ${sum.verdict.text}`);
       const blindWhy = { 'app-unreachable': 'the app did not load', 'recording-stale': 'the recording no longer had the data', 'one-page': 'most screens showed one and the same page (another app or an error page at that address?)' };
       if (blind) console.log(`run ${latest} marked nothing fixed: ${blindWhy[blind] || blind}`);
       const stale = rows.filter(r => r.notLookedAt).length;
       if (stale) console.log(`${stale} open defect(s) not looked at again for ${NOT_LOOKED_RUNS}+ runs (their screens, states or viewports were not captured like for like): they cannot be marked fixed until a run covers them`);
       if (!args.rule) {
         for (const k of kinds) console.log(`${k.severity.padEnd(7)} ${k.title} — ${k.groups} group(s) on ${k.routes.size || 'no'} screen(s), ${k.places} place(s)   nunchi findings --rule ${k.rule}`);
-        if (collapsed.length) console.log(`AI, not double-checked: ${collapsed.length} group(s) (claimed only, or a verdict that was suspect, rejected or insufficient) — nunchi findings --all lists them`);
+        if (collapsed.length) console.log(`AI, not double-checked: ${collapsed.length} group(s) (claimed only, or a verdict that was suspect, rejected or insufficient, or from a run with too few decoys to check the checker) — nunchi findings --all lists them`);
+        const fewDecoys = new Set(rows.filter(r => r.source === 'ai' && !r.goneAt && r.verification?.tooFewDecoys === true).map(r => r.group)).size;
+        if (fewDecoys) console.log(`${fewDecoys} AI group(s) verified in a run with too few decoys to check the checker: not suspect, and not double-checked either`);
         if (!kinds.length && !collapsed.length) console.log(want ? 'nothing open — `nunchi findings --all` lists everything' : 'no findings');
         if (staleAi && want) console.log(`${staleAi} AI group(s) stale: ${STALE_HUNTS} later hunts saw their screens and did not claim them — nunchi findings --status stale`);
         if (needsYou) console.log(`${needsYou} AI finding(s) need you: the re-check could not tell whether they are gone`);
+        if (sum.confirm.length) console.log(`${sum.confirm.length} decision(s) recorded by the AI or from git wait for you to confirm them in the board (nunchi open); until then they do not count for "ready to ship"`);
       }
       for (const g of args.rule ? shown : []) {
         const where = g.routes.length > 1 ? `${g.routes.length} screens` : (g.routes[0] ?? 'whole app');
@@ -533,28 +511,22 @@ if (cmd === 'setup') {
     }
   } else if (cmd === 'decide') {
     const [, ...rest] = args._;
-    const decision = rest.find(x => DECISIONS[x]);
-    const ids = rest.filter(x => !DECISIONS[x]);
-    if (!decision || !ids.length) { console.error('usage: nunchi decide <group or fingerprint id…> fix|keep|false-positive|hold|reopen [--reason …] [--note …]'); process.exit(1); }
-    const { execFileSync: run } = await import('node:child_process');
-    let by = process.env.USER || 'unknown';
-    try { by = run('git', ['config', 'user.name'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || by; } catch {}
-    const made = [];
-    for (const id of ids) {
-      let g = gs.filter(x => x.group.startsWith(id));
-      const f = rows.filter(x => x.fp.startsWith(id));
-      // an AI item with no component is its own group (group = fingerprint, §5.1): one id, decided on the fingerprint
-      if (g.length === 1 && f.length === 1 && g[0].group === f[0].fp) g = [];
-      if (g.length + f.length !== 1) { console.error(`nunchi: "${id}" matches ${g.length + f.length} groups/fingerprints; give more characters`); process.exit(1); }
-      const target = g.length ? { group: g[0].group } : { fp: f[0].fp };
-      try { made.push(buildDecision({ target, decision, reason: args.reason || null, note: args.note || null, by })); }
-      catch (e) { console.error('nunchi: ' + e.message); process.exit(1); }
-    }
-    // the approval first: a crash in between leaves an approval of nothing, never this user's own decision
-    // looking as if it came through git
-    ledgerGuard(() => addApproved(approvedFile, made.map(approvalKey), { decisions, serious, generation: st.files.generation }));
-    for (const d of made) saveDecision(decisionsDir, d);
+    // the board's words are accepted too (design §3.4): not-a-problem = false-positive --reason not-a-problem, later = hold
+    const ALIAS = { 'not-a-problem': { decision: 'false-positive', reason: 'not-a-problem' }, later: { decision: 'hold', reason: null } };
+    const word = rest.find(x => DECISIONS[x] || ALIAS[x]);
+    const ids = rest.filter(x => !DECISIONS[x] && !ALIAS[x]);
+    if (!word || !ids.length) { console.error('usage: nunchi decide <group or fingerprint id…> fix|keep|false-positive|not-a-problem|hold|later|reopen [--reason …] [--note …] [--from-chat]'); process.exit(1); }
+    const decision = ALIAS[word]?.decision ?? word;
+    const reason = args.reason || ALIAS[word]?.reason || null;
+    let targets;
+    try { targets = P.resolveTargets(rows, gs, ids); } catch (e) { if (e.code !== 'BAD_TARGET') throw e; console.error('nunchi: ' + e.message); process.exit(1); }
+    // checked before asking for the confirmation code: a decision that cannot be made is refused first
+    try { buildDecision({ target: targets[0], decision, reason, note: args.note || null, by: 'check' }); }
+    catch (e) { console.error('nunchi: ' + e.message); process.exit(1); }
+    const channel = await channelHere(`${decision}${reason ? ` (${reason})` : ''} on ${targets.length} target(s)`);
+    const made = ledgerGuard(() => P.recordDecisions(led, { targets, decision, reason, note: args.note || null, by: P.whoAmI(), channel, batch: P.batchFor(targets) }));
     console.log(args.json ? JSON.stringify(made, null, 2) : made.map(d => `${d.decision} → ${d.target.group ? 'group ' + d.target.group : 'fingerprint ' + d.target.fp} (${d.id})`).join('\n'));
+    if (!args.json && channel === 'cli-agent' && (decision === 'keep' || decision === 'false-positive')) console.log('recorded by your AI: it counts for "ready to ship" once you confirm it in the board (nunchi open)');
   } else if (cmd === 'approve') {
     const pending = decisions.filter(d => !approved.has(approvalKey(d)));
     const chosen = args.all ? pending : [];
@@ -564,15 +536,51 @@ if (cmd === 'setup') {
       chosen.push(...same);
     }
     if (!chosen.length) { console.log(pending.length ? `${pending.length} decision(s) from git wait for approval: nunchi approve <id…> or --all\n` + pending.map(d => `  ${d.id}  ${d.decision} ${d.target.group || d.target.fp} by ${d.by} at ${d.at}`).join('\n') : 'no decisions waiting for approval'); process.exit(0); }
-    ledgerGuard(() => addApproved(approvedFile, chosen.map(approvalKey), { decisions, serious, generation: st.files.generation }));
-    console.log(`approved ${chosen.length} decision(s)`);
+    const channel = await channelHere(`approve ${chosen.length} decision(s) that came through git`);
+    ledgerGuard(() => P.approveDecisions(led, chosen, { channel }));
+    console.log(`approved ${chosen.length} decision(s)${channel === 'cli-agent' ? ' (recorded by your AI: dismissals among them count for "ready to ship" once you confirm them in the board)' : ''}`);
   } else {
     const { trust, currentTargets } = await import('./ledger.mjs');
     const t = trust(rows, currentTargets(decisions, state));
     if (args.json) console.log(JSON.stringify(t, null, 2));
-    // per lens and source (design §2.2): a rule lens and the AI lens of the same name keep separate records
-    else for (const x of Object.values(t)) console.log(`${(x.source === 'ai' ? `${x.lens} AI` : x.lens).padEnd(4)} precision ${x.precision === null ? '—' : Math.round(x.precision * 100) + '%'} (${x.fix} fix · ${x.falsePositive} false positive of the last ${x.window})${x.suspect ? '  SUSPECT: new findings need a closer look' : ''}  · fixed ${x.fixed}/${x.decidedFix}`);
+    else {
+      // per lens and source (design §2.2): a rule lens and the AI lens of the same name keep separate records
+      for (const x of Object.values(t)) console.log(`${(x.source === 'ai' ? `${x.lens} AI` : x.lens).padEnd(4)} precision ${x.precision === null ? '—' : Math.round(x.precision * 100) + '%'} (${x.fix} fix · ${x.falsePositive} false positive of the last ${x.window})${x.suspect ? '  SUSPECT: new findings need a closer look' : ''}  · fixed ${x.fixed}/${x.decidedFix}`);
+      // decision time measured by the board (design §3.5): singles and batches apart, Later apart
+      const { readMetrics, decisionTimes, formatDecisionTimes, metricsPath } = await import('./metrics.mjs');
+      console.log(formatDecisionTimes(decisionTimes(ledgerGuard(() => readMetrics(metricsPath(st.root.dir))))));
+    }
   }
+} else if (cmd === 'open') {
+  // The live board (design §3.1): a detached server; this command returns at once. The board's key never reaches this
+  // output unless stdin and stdout are the person's own terminal and no browser was opened (--no-browser).
+  const nunchiDir = resolve('.nunchi');
+  const { openBoard, stopBoards } = await import('./board/launch.mjs');
+  const st = stateOf(nunchiDir);
+  if (args.stop) {
+    const n = await stopBoards(st.root.dir, process.cwd());
+    console.log(n ? `stopped ${n === 1 ? 'the board' : `${n} boards`}` : 'no board is running for this project');
+    process.exit(0);
+  }
+  if (!latestRun(join(nunchiDir, 'runs'))) { console.error('nunchi open: no runs yet: nunchi capture --url <your local server>'); process.exit(1); }
+  // the board writes state (decisions, approvals, metrics): the state folder is private before it starts
+  const led = loadLedger(nunchiDir);
+  if (args.port !== undefined && !(Number.isInteger(args.port) && args.port > 1023 && args.port < 65536)) { console.error('nunchi open: --port takes a port number from 1024 to 65535'); process.exit(1); }
+  let labeller = null;
+  if (args.label) {
+    const { slugLabeller, LABELLER } = await import('./labels.mjs');
+    labeller = args.labeller ? String(args.labeller) : slugLabeller(P.whoAmI());
+    if (!LABELLER.test(labeller)) { console.error('nunchi open: --labeller takes lower-case letters of any script, digits and - (up to 40)'); process.exit(1); }
+  }
+  const tty = !!(process.stdin.isTTY && process.stdout.isTTY);
+  let r;
+  try { r = await openBoard({ projectDir: process.cwd(), stateDir: led.st.root.dir, mode: args.label ? 'label' : 'board', labeller, browser: !args.noBrowser, linkToTerminal: tty, port: args.port || 0 }); }
+  catch (e) { console.error(`nunchi open: ${e.message}`); process.exit(2); }
+  console.log(`board open on 127.0.0.1:${r.port}${r.reused ? ' (already running)' : ''}${args.label ? ` · label mode for ${labeller}` : ''}`);
+  if (r.portIgnored) console.log(`--port ${r.portIgnored} is ignored: the running board keeps port ${r.port} (nunchi open --stop, then nunchi open --port ${r.portIgnored}, to move it)`);
+  if (r.link) console.log(`open this link in your browser; it works once, for 2 minutes:\n  ${r.link}`);
+  else if (args.noBrowser) console.log('no browser was opened; to open it, run nunchi open in your own terminal');
+  else console.log(r.reused ? 'a fresh one-time link was opened in the browser' : 'the browser shows it; it stops after 2 hours idle (nunchi open --stop stops it now)');
 } else if (cmd === 'runs') {
   const { listRuns } = await import('./runs.mjs');
   const dir = resolve('.nunchi/runs');
@@ -691,14 +699,15 @@ if (cmd === 'setup') {
     if (args.again) {
       const oldKey = guard(() => readKey(dir, 'verify-key.json'));
       const judged = V.keyRounds(oldKey).length ? V.verdictsFromKey(aiFindingsOf(dir, 'verify').findings, oldKey) : null;
-      if (!judged?.some(f => f && f.source === 'ai' && f.verification?.suspect === true)) { console.error(`nunchi verify: --again verifies a suspect run once more; ${judged ? 'this run\'s verification is not suspect' : 'this run has not been verified yet (verify --plan)'}`); process.exit(1); }
+      if (!judged?.some(f => f && f.source === 'ai' && f.verification?.suspect === true)) { console.error(`nunchi verify: --again verifies a suspect run once more; ${!judged ? 'this run has not been verified yet (verify --plan)' : judged.some(f => f && f.source === 'ai' && f.verification?.tooFewDecoys === true) ? `this run's verification is not suspect: it had ${V.TOO_FEW_DECOYS}, and a new plan of the same screens has no more (capture more screens)` : 'this run\'s verification is not suspect'}`); process.exit(1); }
     }
     const made = guard(() => {
       const { findings } = aiFindingsOf(dir, 'verify');
       // which findings to ask about follows ai-findings.json (a status written there by hand only leaves a finding
       // out, so it stays a claim in the ledger: the ledger counts only verdicts the key holds)
       const oldKey = readKey(dir, 'verify-key.json');
-      const { packets, key } = V.planVerify({ findings, canaryScenes, controlsOf, filesOf, again: !!args.again });
+      const scenes = manifest.scenes.filter(s => s && s.canary === undefined).map(s => ({ id: s.id, route: s.route ?? null, viewport: s.viewport ?? null }));
+      const { packets, key } = V.planVerify({ findings, canaryScenes, controlsOf, filesOf, scenes, again: !!args.again });
       if (!key.claims) return null;
       // the rounds recorded before keep counting, as long as their claims still match the findings
       const earlier = oldKey ? V.roundsStillValid(findings, oldKey) : [];
@@ -739,6 +748,7 @@ if (cmd === 'setup') {
       console.log(`verified by ${r.verify.verifier.label}${r.verify.verifier.vendor ? ` (${r.verify.verifier.vendor})` : ''}: confirmed ${c.confirmed} · rejected ${c.rejected} · insufficient ${c.insufficient}${c.unanswered ? ` · unanswered ${c.unanswered}` : ''}`);
       console.log(`decoys passed through: ${d.passedThrough}/${d.answered}${d.answered < d.total ? ` (${d.total - d.answered} unanswered)` : ''}`);
       if (r.verify.suspect) console.log(`SUSPECT: ${r.verify.suspectReason}. This run's verifications are marked suspect; verify again in a fresh context (verify --plan --again).`);
+      else if (r.verify.outcome === 'too-few-decoys') console.log(`NOT DOUBLE-CHECKED: ${r.verify.tooFewDecoys}. The verdicts are recorded, but they count as no double-check: \`findings\` keeps these AI findings with those not double-checked. A run that captures more screens offers more decoys.`);
     }
   } else { console.error('nunchi verify: use --plan, or --record <verdicts.json>'); process.exit(1); }
 } else if (cmd === 'recheck') {

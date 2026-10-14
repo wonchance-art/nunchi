@@ -9,8 +9,8 @@ each finding tied to evidence: the element, its box on the screenshot, the measu
 Built for people who make web apps with AI coding tools (Claude Code, Cursor, Codex, Lovable, Bolt, v0)
 and don't write tests.
 
-> **Preview (0.0.2).** nunchi finds defects; it does not yet verify them with a second AI, fix them, or
-> show a progress board. Those are 0.1. Tested on Linux, macOS and Windows in CI, on Node 20, 22 and 24,
+> **Preview (0.0.2).** nunchi finds defects and shows them on a live local board where you decide; it does not
+> fix them yet. That is 0.1. Tested on Linux, macOS and Windows in CI, on Node 20, 22 and 24,
 > but so far only against a synthetic benchmark app and small fixtures — tell us what it gets wrong on
 > your app.
 
@@ -44,11 +44,19 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
 - **One line per problem, not per screen**: findings are fingerprinted and grouped, so a shared component's
   defect on 17 screens is one row (`nunchi findings`); your decisions (`nunchi decide <id> fix|keep|…`) are small
   files you commit, and what got fixed or came back is computed from the next capture
+- **A live board** (`nunchi open`): the verdict ("Ready to ship?"), every finding with its screenshot, all screens,
+  and one-key decisions with undo, in your browser, updated as captures land. It listens on 127.0.0.1 only, and a
+  one-time link gives your browser a key held in memory; your AI never sees it. Decisions your AI records from chat
+  are shown, but a *keep* or *not a problem* counts only once you confirm it there. In Claude Code the plugin's hook
+  also keeps the AI's tools out of nunchi's state, keys and board. The hook matches paths and words, and neither it
+  nor the board is a security boundary against code running as your user: they attest who decided, against honest
+  mistakes and naive prompt injections. For a repository you don't trust, run the agent in a container or as
+  another user
 - **Runs** you can compare: each capture is its own folder with the commit and working-tree state it came from;
   a login that expired or an app that isn't running is reported once, not as a hundred findings
 
-Not yet (0.1): AI lenses (copy, states, visual judgment) with a separate verifier, the fix-and-re-capture loop,
-and the local progress board.
+Not yet (0.1): the fix-and-re-capture loop. The AI lenses (copy, states, visual judgment) with a separate verifier
+are built and being measured.
 
 ## Benchmark
 
@@ -77,7 +85,7 @@ The checks were tuned on this app once; a second, held-out app is what the 0.1 g
 빈 데이터 · 오류 · 느림 · 끊김 상태까지 찍어서 깨지거나 어긋난 곳을 찾고, 결함마다 증거(요소 · 화면 위 위치 · 측정값 ·
 파일:줄)를 붙입니다. AI 코딩 도구로 웹앱을 만들고 테스트는 쓰지 않는 사람을 위해 만듭니다.
 
-**미리보기(0.0.2).** 지금은 *찾기*까지입니다. 다른 AI가 다시 확인하기, 고치고 다시 찍기, 진행판은 0.1에서 나옵니다.
+**미리보기(0.0.2).** 지금은 *찾기*와 진행판(`nunchi open`, 내 브라우저에서 결정)까지입니다. 고치고 다시 찍기는 0.1에서 나옵니다.
 Claude Code에서 `/plugin marketplace add wonchance-art/nunchi` → `/plugin install nunchi@nunchi` 후, 앱 폴더에서
 nunchi로 검사해 달라고 하면 됩니다. 처음 한 번 `nunchi setup`이 고정된 패키지 2개(설치 스크립트 없이)와 Chromium(약
 170MB)을 받습니다. 실제 앱에서 틀리게 잡는 것이 있으면 알려 주세요.

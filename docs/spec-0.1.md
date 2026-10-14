@@ -504,8 +504,10 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   voids nothing — nobody looked, so it measures nothing.
 - `src/verify.mjs`, `nunchi verify --plan`: one packet per AI claim (`source: 'ai'`, `status: 'claimed'`, not on a
   canary copy): lens, rule, severity, scene, route, viewport, selector, box, evidence minus reasoning-like
-  keys, and the scene's evidence files. Decoys = ⌈n/4⌉ (20% of packets): false claims on visible, unclaimed
-  controls of the claimed scenes, from `controls.json` (a clear label claimed unclear `L6.unclear-label`,
+  keys, and the scene's evidence files. Decoys = max(3, ⌈n/4⌉) (20% of packets, at least `MIN_CONTROLS` = 3, the
+  re-check's minimum too): false claims on visible, unclaimed controls of the claimed scenes first, then of the run's
+  other captured scenes (never a canary copy; the scene's own route and viewport), in a seeded order, from
+  `controls.json` (a clear label claimed unclear `L6.unclear-label`,
   ordinary copy claimed as scaffold `L7.template-copy`, a non-destructive control claimed destructive without
   confirm `L9.destructive-without-confirm`, two identically named controls claimed as different verbs
   `L5.same-action-different-verb`), the claim's own lens first. A decoy has the evidence shape `hunt --record`
@@ -519,9 +521,24 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   The verifier is recorded as *same-model check* unless `--vendor` names another vendor; nothing is sent
   anywhere. A plan refuses verdicts once the claims it was built from changed.
 - *M1 (2026-10-14 KST, design 0.1-c §2.2):*
-  - **Suspect also when fewer decoys than planned.** The key records `decoysPlanned` (⌈n/4⌉ for n claims) and
-    `verify.json` says it too; a run whose screens offered fewer decoy targets is suspect ("fewer decoys than
-    planned (0 of 2)"), so a run with no decoy target can no longer pass unchecked.
+  - **Fewer decoys than planned is no double-check.** The key records `decoysPlanned` (max(3, ⌈n/4⌉) for n claims)
+    and `verify.json` says it too, so a run with no decoy target can no longer pass unchecked. *Changed (review of PR
+    #29, round 2, 2026-10-15 KST):* such a run was suspect whatever its verifier did; a small app could never be
+    double-checked and never be told why. Now it has its own outcome, **too few decoys to check the checker**
+    (`verify.json` `outcome: "too-few-decoys"`, `suspect: false`, `tooFewDecoys` with the counts; each verification
+    `tooFewDecoys: true`). It is not suspect, and it is not a double-check either: those AI findings stay *not
+    double-checked* (the ledger's `checkedAi` is false; a rejection there keeps the claim, as a suspect one does), and
+    `verify --record`, `findings`, the board's tag, Detail and Progress line and the export say "too few decoys to
+    check the checker". `verify --plan --again` is refused for it (a new plan of the same screens has no more
+    decoys; capturing more screens gives more). A decoy confirmed or left unanswered in such a run still makes it
+    suspect (pass-through or "no decoy was answered" come first). Decoys are never doubled up on one element to
+    reach 3.
+  - **Decoys stay off what the run claims** (review of PR #29, round 2, 2026-10-15 KST). A selector claimed on any
+    scene of the run is no decoy on any scene (a shared header or nav is the same element on every screen: a decoy
+    there could be true, and a correct verifier confirming it made the run suspect), nor is an element whose
+    accessible name a claim of the same rule names (the claimed control's `controls.json` name, its identity name or
+    its `aria=` name). One element gives at most one decoy: by selector across the run's screens, and by rule and
+    name.
   - **`verify --plan --again`** verifies a suspect run once more: findings whose verdict came from a suspect
     verification are claims again (packets show the severity as claimed, never the earlier verifier's correction),
     and the new verdicts replace them. On a run that is not suspect it is refused (exit 1).
@@ -544,8 +561,11 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   - **`hunt --record` folds too** (its claims, not double-checked yet, and the cells it saw), so a hunt that claims
     nothing still counts towards staleness (§5.1). `verify --record` replaces that fold with the verdicts.
   - *Choice (2026-10-14 KST):* the re-check plans at least 3 controls before anything can be fixed (§4.1). The
-    verify plan keeps ⌈n/4⌉ decoys: the 0.1-b verify contract pins that count, and a verify never fixes anything
-    (a verdict only says whether a group decision may cover an item). Raising it is left to the M2 review.
+    verify plan kept ⌈n/4⌉ decoys, raising it left to the M2 review. *Raised (review of PR #29, 2026-10-15 KST):*
+    the verify plan has at least 3 decoys as well (`decoysWanted`, the same function as the re-check's
+    `controlsWanted`): with one decoy, a verifier that confirms at random passes half the time. So that small runs
+    can offer 3, decoys come from any captured scene of the run once the claimed scenes run out. The 0.1-b verify
+    contract test pins the new counts (8 claims → 3 decoys, 1 → 3, 40 → 10).
 - Not done yet: decoys come only from controls (no L2/L10 decoys); "stricter threshold for pages with a history of
   false positives" is not built; the verifier's re-capture is the skill's job.
 
@@ -772,10 +792,15 @@ unreadable one by one). Built in `src/ledger.mjs`:
     released only by its owner. Waiting ends after 5 s with an error. Renames Windows refuses while another process
     reads in the folder (EPERM, EACCES, EBUSY) are retried with backoff, for the lock, the ledger files, run folders
     and `runs/latest` (last writer wins; a failed `latest` write never fails a capture).
+- **Channels (2026-10-15 KST, design §1, §7.2):** a decision records how it was made (`channel`: board, cli-tty,
+  cli-agent) and an optional `batch`; approved.json keeps the channel per approval and the keys a person confirmed in
+  the board. A keep or false-positive no person made or confirmed shows as kept / dismissed but does not clear
+  "Ready to ship" (summary.mjs).
 - **CLI:** `nunchi findings` (one row per kind; `--rule <rule>` lists its groups; `--status`, `--all`, `--json`),
   `nunchi decide <id…> <decision> [--reason] [--note]`, `nunchi approve <id…>|--all`, `nunchi trust`.
   Since M1 `findings` lists double-checked AI kinds as `AI · <checklist item>` beside the rule kinds, collapses AI
-  groups not double-checked (claimed only, or a verdict that was suspect, rejected or insufficient) into one line
+  groups not double-checked (claimed only, or a verdict that was suspect, rejected or insufficient, or from a run with
+  too few decoys to check the checker, §4) into one line
   (`--all`, `--status` and `--rule` list them; `--json` names them under `notDoubleChecked`), and says how many AI
   groups are stale and how many AI findings need you.
 
@@ -841,12 +866,12 @@ Field app 1 (§9.2) after this: 1,082 findings → 578 unique defects → 99 gro
   re-check key came after keys moved out, so one inside the project is never read. Every folder from the state base
   (`…/nunchi`) down to the key is nunchi's own: a symbolic link among them is refused (`UNSAFE_PATH`), never written
   through. `gc` removes the keys of the runs it removes. The fold reads keys without moving anything (`peekKey`).
-- *M2 deny hook (notes, 2026-10-14 KST).* What an agent in the project must not read or write once M2 adds the hook:
+- *M2 deny hook (notes, 2026-10-14 KST; built 2026-10-15 KST, §7.2).* What an agent in the project must not read or write once M2 adds the hook:
   the answer keys' folder (`$XDG_STATE_HOME/nunchi/**`, or its Windows and home fallbacks), whose path the CLI
   prints to the agent ("the answer key is kept outside the project (…)") — the hook must deny that folder by path,
   since printing it tells the agent where it is; and the shared state, `<git-common-dir>/nunchi/**` (ledger,
-  approvals, run-id counter, generation), not only `.nunchi/state`. Until then the keys are kept out of the
-  project, not out of reach.
+  approvals, run-id counter, generation), not only `.nunchi/state`. The hook (§7.2) denies both, by path, in Claude
+  Code.
 - *Run files* written after a capture (hunt, verify, canaries, re-check) take the run's own lock (§2.4).
 
 **Schema 2** (`ledger.json`, migrated on read; the next ledger command writes it back with `rev`).
@@ -922,13 +947,14 @@ else is derived from those, the same whatever order the folds come in:
   fingerprint, so one dismissal never covers every similar button.
 - *Exists* while some hunt claims it as `confirmed` or `claimed`; `rejected` and `insufficient` never make an item
   (they stay in `ai-findings.json`). A claim counts as seen unless a verifier that was not suspect rejected it.
-- *Verification* (`{status, by, vendor?, suspect, run, at?}`): the latest verdict that was not suspect, else the
-  latest suspect one, else `claimed`. A human decision is above all of them (the view, §5). A later verdict that was
+- *Verification* (`{status, by, vendor?, suspect, tooFewDecoys?, run, at?}`): the latest verdict that was not suspect
+  and not from a run with too few decoys (§4), else the latest other one, else `claimed`. A human decision is above all of them (the view, §5). A later verdict that was
   not suspect and says rejected or insufficient stays on the item (shown not double-checked) rather than hiding it.
 - *Severity:* displayed = the severity a confirming verifier gave, else the claimed one; protection (`protect`, what
   blocker/L9 rules and `seriousTarget` use) = the most severe any present claim or verdict gave, so a verifier that
   lowers a blocker does not let a git dismissal hide it.
-- *Group decisions* (view): one covers an AI item only when the item is double-checked (confirmed, not suspect) or
+- *Group decisions* (view): one covers an AI item only when the item is double-checked (confirmed, not suspect, not
+  from a run with too few decoys) or
   the decision came after its latest verification (`verification.at`, when that verdict was folded; a claimed-only
   item has none); on a blocker or L9 item never a fingerprint first folded after the decision (`addedAt`). Otherwise
   the row's `note` says why. A decision on the fingerprint applies as for rule items.
@@ -962,7 +988,7 @@ else is derived from those, the same whatever order the folds come in:
 
 ## 7. Progress board and exports (0.1-c)
 
-Local server (`nunchi open`) that watches the ledger and redraws live. Views: progress · findings board ·
+Local server (`nunchi open`, built in M2: §7.2) that watches the ledger and redraws live. Views: progress · findings board ·
 finding detail · coverage map · design system · screen wall · states & messages · copy groups.
 Keyboard: J/K move, F fix, W keep, X false positive, S hold; batch decisions by root cause, kind or lens (H13).
 
@@ -1027,7 +1053,14 @@ puts the images in `index.html` as data URIs instead (one file; pegroom: 8 MB ag
   (`https://user:pass@`) are redacted (`redactText`), then secret shapes are replaced by `[secret-shaped: <kind>]`,
   then it is clipped, then HTML-escaped. `scrubSecrets` (`src/rules.mjs`) is the one scrubber for capture and export
   alike: whole private key blocks of every kind, Stripe secret and restricted keys, AWS access key ids and secret keys,
-  GitHub, Slack, Google, Anthropic and OpenAI keys, `Authorization:`/`Bearer` values that hold a digit, any JWT (also
+  GitHub, Slack, Google, Anthropic and OpenAI keys, `Authorization:` values after a scheme (`Basic`, `Bearer`, `Token`,
+  `Digest`, `Negotiate`: any value, a digitless base64 `user:password` included) or holding a digit, `Bearer` values
+  that hold a digit, cookie headers with a `name=value` pair (`Cookie:`, `Set-Cookie:`, `document.cookie =`: the whole
+  value, `cookie`), headers named like a key or token (`x-api-key`, `api_key`, `apiKey`, `X-Auth-Token`,
+  `x-csrf-token`, `private-token`, `client_secret` …: a value with a digit or of 20+ characters, `api-key`), a URL path
+  segment of 24+ characters mixing lower case, upper case and digits or of 32+ hex digits (`url-path-token`; review of
+  PR #29, 2026-10-15 KST; *known limit:* redaction is by pattern, so a token that is only a path segment and does not
+  have that shape, shorter, one case, or words joined by `-`, is shown as it is), any JWT (also
   split across lines), each after no letter or digit; `selector-secrets.mjs` runs it first and then the same kinds
   with no boundary at all, plus `long-token`. It is wider than the L9 bundle scan, which it does not change. Objects
   and arrays are redacted leaf by leaf before they are serialised. URLs are never links; secret findings show
@@ -1049,6 +1082,332 @@ puts the images in `index.html` as data URIs instead (one file; pegroom: 8 MB ag
   images; the verdict does not check "last full check newer than the last fix commit" (the fix loop is not built).
   Publishing the page (e.g. as an Artifact) is the skill's job, only with the user's explicit OK, since it sends the
   screenshots off the machine.
+
+### 7.2 `nunchi open`: the live board (built 2026-10-15 KST, design 0.1-c §3, §1, §9.2, M2)
+
+The live version of §7.1's page, where the person decides (`src/board/`). The look, the strings table and the
+screenshot geometry are the export's: one stylesheet (`src/board/look.mjs`, inlined by the export, served by the
+board), one pure module for words, keys, crop and box geometry and the decision clock (`src/board/shared.mjs`,
+imported by the engine and served to the page). The export's bytes did not change in M2, until the review of PR #29
+(2026-10-15 KST) moved rules into the shared stylesheet on purpose (Deviations, below). The page builds its DOM from
+data with `textContent` only (no markup is ever parsed from data; a test checks the script has no `innerHTML`), so
+the export's string renderers cannot be reused as they are; what is shared is the view model's inputs, the words,
+the geometry and the CSS classes.
+
+**Process (§3.1).** `nunchi open [--no-browser] [--stop] [--label [--labeller <name>]] [--port <n>]` starts
+`src/board/server.mjs` detached and returns at once. The server writes `state/boards/<pid>.json` (pid, port, mode,
+project, control socket: never a key) and listens on a control socket (Unix: `state/boards/<pid>.sock`, or a 0700
+folder of this user in the temp folder when that path is too long; Windows: a named pipe), mode 0600, that answers
+`ping`, `open` (the server opens the browser itself with a fresh link) and `stop`, and never returns a link or a
+key. A second `nunchi open` pings this project's records (a record whose board does not answer is removed) and reuses
+a live board of the same mode; the check and the start run under a lock (`state/boards/launch.lock.d`, the state's
+lock, waited for without blocking), so two `nunchi open` at once start one board. A running board keeps its port: a
+`--port` that differs is ignored, and said ("--port N is ignored: the running board keeps port M"). The board stops after 2 hours without a request (the live stream and the polling
+fallback do not count), telling an open tab. The link is printed only when stdin and stdout are the person's
+terminal and no browser is opened (`--no-browser`); run by an agent, the output is `board open on 127.0.0.1:<port>`
+and nothing secret. The server never writes a link to its stdout (which carries `{"port"}` only): `nunchi open`
+hands it an extra pipe as fd 3 and asks for the link with `--link-to-parent`, and the link goes over that pipe (a
+file or terminal on fd 3 gets nothing). Started any other way, the server hands out no link: it opens the browser
+itself, or nothing (tested by running the script directly). The browser opener is an absolute path from a fixed
+list (`/usr/bin/xdg-open`, `/usr/local/bin/xdg-open`, `/bin/xdg-open`, `/run/current-system/sw/bin/xdg-open`;
+`/usr/bin/open`; `C:\Windows\System32\cmd.exe /d /s /c start`), never PATH, `$BROWSER` or `ComSpec`, given only a URL
+that matches a board link, with an allow-listed environment: the desktop session's `DISPLAY`, `WAYLAND_DISPLAY`,
+`DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR` and `XDG_CURRENT_DESKTOP` (macOS `TMPDIR`; Windows `SystemRoot`,
+`windir`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`, `PATHEXT`), `HOME` from the account (not the
+variable) and a fixed system `PATH`. The detached server gets an allow-listed environment too (PATH and the user's
+config for git, `XDG_STATE_HOME` / `LOCALAPPDATA` for the answer keys, locale, temp folders, the desktop session):
+never `NODE_*`, `LD_*`, `DYLD_*`, `BROWSER` or `GIT_*` (tested on `/proc/<pid>/environ`). Its working folder is the
+OS temp folder (this user's on Windows; `launch.mjs` `serverCwd`), never the project or its state, which sit in the
+project's `.git` or `.nunchi` (on Windows a process inside a folder keeps it from being removed or renamed: a
+worktree, a checkout); git's user name is read in the project. A running board still watches the state folder (not
+recursively), which can keep the project from being renamed or removed on Windows while it runs: `nunchi open
+--stop` stops it and releases the folder (as does its 2-hour idle stop). The hook's
+matcher keeps `NotebookRead`: matching a tool that a newer Claude Code no longer has costs nothing, and an older one
+still has it.
+
+**Security (§3.2; `test/board-security.test.mjs` has a test per check).**
+- *Bind* 127.0.0.1 only. *Host* must be exactly `127.0.0.1:<port>`, or 421 (also without a Host header: node's own
+  400 is switched off so the refusal carries the headers).
+- *Key* (safer than the design, see below): the link carries a **one-time launch code** in its fragment
+  (`/#t=<64 hex>`, valid 2 minutes, spent on first use); the page trades it (`POST /api/session`) for a **per-tab key**
+  of 32 random bytes and drops the fragment (`history.replaceState`). Keys and codes live in the server's memory only:
+  not in a file, an argument, an environment variable or a cookie (tested on the detached process's
+  `/proc/<pid>/cmdline` and `environ`). Every request sends `X-Nunchi-Token`, compared as
+  `timingSafeEqual(sha256(a), sha256(b))`; a cookie or query parameter never counts. A reloaded tab has no key and
+  says to run `nunchi open` again (the key is never stored, `sessionStorage` included).
+- Only the page shell answers without a key: `/`, `/assets/board.js`, `/assets/shared.mjs`, `/assets/board.css`,
+  bundled files with no data of the project (tested), and `/favicon.ico` (204, empty). Screenshots are fetched with
+  the key and shown as blob URLs.
+- *Requests:* `Sec-Fetch-Site`, when sent, must be `same-origin` or `none` (403); `req.url` must start with `/` (400)
+  and be ≤ 2048 characters (414); GET and POST only, OPTIONS 405; a GET has no body (413, by Content-Length or any
+  Transfer-Encoding, the page shell included); writes need `Content-Type: application/json` (415), `Origin` equal to
+  `http://127.0.0.1:<port>` (403) and a body ≤ 64 KB (413,
+  by Content-Length or while streaming); the link trade (`POST /api/session`) reads at most 1 KB, so a long body is
+  refused before its code is looked at. At most 64 connections at once (`server.maxConnections`; the page needs a
+  handful); node closes one more. No CORS header on any response.
+- *Headers* on every response, refusals included: the CSP of the design, `X-Frame-Options: DENY`, `nosniff`,
+  `Referrer-Policy: no-referrer`, CORP and COOP `same-origin`, `Cache-Control: no-store`, and a Permissions-Policy.
+- *Files:* the bundled assets and `/evidence/<run>/<scene>/<full.jpg|top.jpg>` only. The run must be a complete run
+  of `.nunchi/runs` (not a partial folder), its folder no link and inside the real `.nunchi/runs`; the scene one the
+  run's manifest names, not a canary copy, its folder no link; the file opened with `O_NOFOLLOW` (on Windows, which
+  has none, refused when `lstat` says link), `fstat`-ed, read from that descriptor, served as `image/jpeg` only if
+  it starts like a JPEG (415 otherwise). No listing, no SVG, nothing else.
+- *Rate limits:* 30 wrong keys or links a minute, then a minute in which requests **without** a valid key get 429 (a
+  valid key is never locked out, so another process cannot shut the person out); a request with no key at all (what
+  the browser fetches by itself) is refused but not counted as a guess. Requests without a key have a budget of their
+  own (60 per 10 s), so they never use up the person's: 600 requests and 60 writes per 10 s, counted only for
+  requests with a valid key. The page shell is never limited or locked out (the same bytes for everyone). A link
+  trade tries the code first, so a fresh link always works; failed trades are limited to 20 a minute and wait out the
+  lockout. 8 live streams.
+- *Strings:* every string the board's code did not write (app text, selectors, claims, decision `by` and `note`, lens
+  text, URLs) is redacted (credential URL parts and query values, then secret shapes) and clipped on the server, and
+  set with `textContent` on the page. Secret findings show location and kind only. App URLs are never links; the
+  one link to a file is `vscode://file/<path>:<line>` for a file inside the project. [Copy path] copies the whole
+  path (redacted, not the clipped one shown, at most 4096 characters); a path holding a control character (C0, C1,
+  DEL, bidi marks and overrides, line separators, BOM) is shown with U+FFFD in their place and gets neither [Copy
+  path] nor a link.
+- *Offline:* no external script, style, font or image (tested on the assets, and in the browser test every request
+  goes to the board or a blob of its own).
+
+**API (§3.3), all with the key.** `GET /api/summary` (summary.mjs `summary()`, the same function `findings --json`
+carries as `summary`; plus the latest run, the Now lines, confirmations, the check card, and whether the working
+tree differs from the latest run's), `GET /api/groups?status=&lens=&q=&group=` (sections of group ids for the tab,
+lens and plain substring asked, by `kind` | `file` | `screen` | `lens`; AI groups not double-checked in their own
+sections; and every group of the ledger by id, so the page can update rows it shows whatever they match now),
+`GET /api/groups/:id` (instances with their screen, box and whether it can be drawn; screens with evidence
+addresses; evidence details; decisions on the group or its fingerprints with how each was made; code location),
+`GET /api/screens` (the latest run's screens with the export's badges and numbered findings),
+`GET /evidence/…`, `POST /api/decide`, `POST /api/undo`, `POST /api/confirm`, `POST /api/approve-checks`,
+`GET /api/live`, and `GET /api/generation` (the polling fallback). Added to the design's table: `POST /api/session`,
+`/api/screens`, `/api/generation`, `/api/undo`. In label mode only `/api/label/pool`, `/api/label/item/:id`, `POST /api/label`, the evidence and
+the live endpoints answer (the others 404, so nothing unblinds).
+- *Live updates:* the server watches the state folder (not recursively, 200 ms debounce) and polls every 3 s; what it
+  compares is the generation **plus a signature of `.nunchi/decisions`** (names and times of its folders), because a
+  decision that arrives through git bumps no generation, **plus the live claims** (group and agent of each claim
+  not expired by the reader's clock), because a claim bumps none either and expires without a write; a cached model
+  takes the claims as they are on each request (their minutes too). A change sends `event: generation` with the new version on
+  every open stream (a `fetch` stream read with `ReadableStream`, SSE framing, a ping every 15 s); the page then
+  reloads the summary and, in place, the list and detail it shows. A stream that fails or ends falls back to polling
+  `/api/generation` every 3 s, and is tried again once the board answers (after 3 s of polling, doubling to 60 s while
+  it cannot be opened). A request that gets no answer at all is retried with a growing wait (1, 2, 4, then 8 s;
+  the first poll after a stream that ran and ended comes after 1 s), and the first miss shows "Reconnecting…" beside
+  the run box, said once by the polite live region; only 4 in a row say "The board is not running" (about 8 s after a
+  hard kill, against 36 s before the review of PR #29, round 2); an answer of any status (429, 503) means it is
+  running and clears the status. Tested by closing the server and every connection under an open page. `nunchi decide` now bumps the generation after it writes the decision files too (the
+  approvals' bump came before the files existed).
+- The model (`src/board/model.mjs`) is ledger-wide, as `findings` sees it (`view()` through `project.mjs`), not one
+  run: a partial latest run does not hide open items. Evidence comes from the run that last saw each item: a rule
+  item's findings in that run (box from the finding or the scene's evidence index), an AI item's own record per cell.
+  It is cached by version (the one read before the build, so a change that lands during a build makes the next
+  request build again) and rebuilt on a change.
+
+**Decisions (§3.4) and parity.** `POST /api/decide {targets, decision, reason, note?, ms?, confirmed?}` checks the ids
+against the ledger as it is now (stale → 409), requires the reason the decision takes and refuses one it does not
+(`reasonProblem`, the check `buildDecision` makes, so `nunchi decide x fix --reason intended` is refused too), then
+writes through `project.mjs` `recordDecisions`, the function `nunchi decide` uses: the approval first (channel
+`board`), then one decision file per target (a shared `batch` id when there are several, from `nunchi decide` too:
+`project.mjs` `batchFor`), then the generation. A
+group holding an AI finding nobody double-checked is decided on each of its fingerprints (`resolveTargets`, for the
+CLI and the board alike), because a group decision does not cover such a finding (§2.2) and would count for none of
+them; it stays one group for the questions and the decision time.
+Parity is tested: the same decision from the CLI and the board gives files that differ only in id, time, author,
+channel and the batch's id (both sides give a group decided on its fingerprints one batch), and the same status. The server asks for a confirmation (409 with the sentence; the page shows it
+with Cancel focused) before a dismissal that includes a blocker (by protected severity), an L9 finding or more than
+10 groups ("Mark 17 groups Not a problem? 2 are high."), before fixing an AI finding nobody double-checked ("This
+hasn't been double-checked. Fix anyway?"), and before deciding against a live claim (claims are the fix loop's,
+M3; the board reads `claims/<group>.json` with the reader-computed 30-minute expiry already).
+`POST /api/confirm {keys}` confirms the dismissals the agent recorded or that came through git, all at once (the keys
+the summary lists; stale → 409). `POST /api/approve-checks {profile}` approves the check profile shown
+(`src/checks.mjs`: the build, typecheck, lint and test lines and their pre/post lines, the package-manager config
+hashes, `packageManager`) into `state/scripts-approved.json` with channel `board`; a changed profile has another
+hash and asks again. The card appears when the fix loop asks (`state/checks-request.json`, M3).
+
+**Channels (design §1).** A decision file names the channel it was written by (`board`, `cli-tty`, `cli-agent`) and
+its batch; `approved.json` keeps the channel per approval key (`channels`) and the keys a person confirmed in the
+board (`confirmed`); a key approved before channels has none (`unknown`). The view gives each decision `channel`
+(`git` when not approved here) and `human` (board or cli-tty, or confirmed). `nunchi decide` is `cli-tty` only when
+stdin and stdout are TTYs and the person types back a 4-character code it shows (a wrong answer records nothing);
+otherwise, or with `--from-chat`, `cli-agent`. `nunchi approve` records its channel the same way. A *keep* or *not a
+problem* that no person made or confirmed is recorded and shown (`findings` still says kept / dismissed) but does
+not clear the group from "Ready to ship" (the verdict says "N to confirm"; `findings` says so in a line). A *fix*
+from the agent counts (design §1 table). `decide` takes the board's words `not-a-problem` and `later`.
+
+**Interaction (§3.4).**
+- *Verdict* (summary.mjs): "Too early to say · a capture is running" (a `.partial` run folder), "· nothing captured
+  yet", "· this run had a problem"; then "Not yet · 1 blocker, 6 high: 4 to decide, 1 to confirm, 3 waiting for the AI,
+  2 later" over blocker and high groups, each counted once by its most pressing reason (needs you, to decide, to
+  confirm, not double-checked, verified by a suspect check, waiting for the AI, later); "Not yet · N fixes since the
+  last full check: capture again" (commits with a `Nunchi-Fix:` trailer after the full check's commit, through the
+  hardened git runner); "Probably · rules only — the AI review hasn't run"; "Yes, for what was checked · no full
+  check yet" or "· N screens not checked" (a screen redirected to another page is not checked, here and in the
+  counts, as in the export); "Yes".
+- *Since last full check:* a full check is a sweep with `wholeApp`; the panel counts groups new, fixed and back after
+  the previous full check, labelled "Since last full check (run 0007)" (that run), or "First full check (run N)".
+- *Keys:* F, W, Shift+W, X, Shift+X, S, always with an explicit reason, read by their place on the keyboard and
+  Shift (`code`, so they are the same on any layout, a Korean one included, and with Caps Lock on); `?` and `/` are
+  the characters (`key`), wherever a layout puts them; after each decision a 6-second toast with the
+  other reason and Undo (Z); Z writes `reopen` for the last decision or batch (as the design says; restoring an
+  earlier decision would write the agent's dismissal back as the board's), and only while its toast shows. The page
+  sends the ids of the decisions it made (`POST /api/undo {decisions}`); the server reopens exactly their targets (the
+  fingerprints of a group decided on its fingerprints), only for decisions approved with channel `board`, and answers
+  409 unless each target still shows that decision (decided again since, here, in the terminal or through git:
+  nothing is undone). Buttons carry the permanent sub-labels, except in a window 420 px high or less (below).
+- *Frozen list:* while Findings or Detail is open, order and members stay; rows take new statuses in place; a banner
+  says "Updated: 2 new, 1 fixed · Show (R)". Decisions target group ids.
+- *Batches:* group by kind (default), root-cause file (the grounded file of an AI item, else "No file known"),
+  screen or lens; "Decide all N ▸" per section; Space toggles a row, Shift+J/K extends.
+- *Not double-checked AI groups* sit in a collapsed last section with [Ask the AI to double-check], which shows the
+  sentence to copy. One verified in a run with too few decoys (§4) is among them, tagged "AI · not double-checked
+  (too few decoys to check the checker)"; Detail's Reviewer line and the Progress AI line say it too, never "suspect".
+- *Default order:* severity → came back → new since the last full check → reach (screens) → rule before AI; sections
+  follow the order of their first group.
+- *Detail:* the crop of the box plus 200 px (at least a first view high), 0 for the whole screen, the white + dark
+  dashed box, "Seen on N screens · [ / ] to flip", Desktop/Phone, the next two groups' screenshots preloaded,
+  [Copy path] and the editor link, decisions with how each was made and [Reopen], J/K for the next and previous group.
+- *Handoff:* "All decided. 6 to fix. Go back to your AI chat and say “fix them”." [Copy], under the verdict and on
+  Findings, once nothing is left to decide (AI findings not double-checked wait for the AI first).
+- *Fix states:* a live claim shows "<agent> is fixing · N min"; *needs you* from a re-check that could not tell
+  ("Look at the screen, then decide; or tell your AI “re-check it”"). The fix loop's kinds (a) and (b), before/after
+  and `fix --undo` come with M3, which writes the records they read.
+- *Accessibility:* landmarks (nav, main), a skip link; the list is one listbox per section (multi-select, roving
+  focus), sections are headings, the status tabs a tablist with arrows, the decision bar a toolbar with arrows; after
+  a decision the focus moves to the next row and a polite live region says "Kept (intended). Next: Raw error text,
+  high, 4 screens"; the Now line is announced at most every 10 s; single-character shortcuts can be turned off in
+  the keys dialog (`?`), and keys are off in text fields (`/` searches; Esc goes back to the row); the focus never
+  falls to the page: a redraw (a live update, an undo) puts it back on the same control, the row or the heading, Z in
+  Detail goes back to the finding it reopened, and a tab that lost the board focuses and says its message; Shift+J and
+  Shift+K say how many groups are selected; severity is a word beside its dot; every
+  control is at least 44 px, and so are the links that stand alone (the skip link, "4 of 5" screens checked, the
+  sidebar's two buttons); reduced motion stops all transitions; dark mode; no sideways scroll at 390 px. Tested
+  with axe (no violation) on each view, light at 1280 px and dark at 390 px. Non-text contrast (WCAG 1.4.11): the
+  edge of a field, button, decision button, tick box and screen card is `--control` (#7A7F88, 3.4:1 or more against
+  the panel, the ground and a selected row, light and dark); the toast's buttons and focus ring are 3:1 or more on
+  the toast, and in dark mode the toast is light so that it stands out from the panel (tested in both schemes).
+- *The dock:* the decision bar and the undo toast right above it are one sticky dock at the bottom of the window,
+  on a phone too (2 × 2 buttons there), so the toast never covers the bar whatever its height; the page measures the
+  dock (`--dock-h`) and `scroll-padding-bottom` keeps the focused row clear of it (WCAG 2.4.11), also when the
+  toast makes the dock taller. On a view without a bar the toast sits at the bottom of the window, inside `main` (so it is in a landmark, axe
+  `region`). Esc while it shows hides it and does Esc's usual step in the same press (back to the list from Detail,
+  clearing a selection); the Keys help says so. The toast waits
+  while the pointer is over it or the focus is in it, and gets its 6 seconds again after (WCAG 2.2.1); hidden with
+  the focus inside (Esc, Undo, the other reason), the focus goes back to the row, or the view's heading. A screen's
+  numbered markers have room inside the Screens panel (they sit half outside their box). Tested at 1280 × 560,
+  800 × 520 and 390 × 640. In a window 420 px high or less (a phone on its side, 200% zoom at 640 × 360) the bar's
+  buttons sit in one row without their sub-labels and the toast is on one line, still 44 px each: the dock takes 16%
+  of a 640 × 360 window, 32% with the toast (32% and 51% before); tested at 640 × 360 and 800 × 420, measured in
+  one evaluation.
+- *Views:* only Progress, Findings (and Detail) and Screens; "More views in 0.2" lists the commands that show the rest.
+  It and "Keys (?)" are at the foot of the sidebar, and in the header on a phone (≤ 760 px), 44 px each.
+- *Words:* one table (`shared.mjs`), English. Decision times show as relative or local; files keep KST. The main
+  button's "Decide N" is the number the verdict says is to decide when it says one (blocker and high; they come first
+  in the list), else every group to decide (`summary.decideNow`). "Screens are from before your latest edits: tell
+  your AI “capture again”" when the working tree differs. A request with no answer says "the board did not answer
+  (is it still running? nunchi open starts it)", never the browser's "Failed to fetch".
+
+**Decision time (§3.5).** The page's `DecisionClock` runs from showing a group (focusing its row, opening its detail)
+to the first decision key, paused while the tab is hidden and after 30 s without input, capped at 120 s. The board
+keeps it in `state/metrics.json` (`metrics.mjs`): singles, batches (once, with their size) and Later apart, keyed by
+decision or batch id, durations only (no clock), stable JSON, never sent. Undo is no decision. `nunchi trust`
+prints "decision time (board): singles median …, p90 … · batches … · later, apart …".
+
+**Label mode (§9.2).** `nunchi open --label [--labeller <name>]` (default: git's user name as a folder name, the same
+every time: NFKD, marks removed, NFC, lower case, anything but letters of any script and digits as `-`, up to 40
+characters; a name with no letter or digit left, or a Windows device name, becomes `u-<6 hex of its hash>`): a board that
+serves only labelling. The pool is the ledger's AI groups that are still there and the latest run's rejected and
+insufficient claims; decoys and known-true items come from the gate's harness (§9), which knows which they are. Each
+item shows the lens's name, definition and checklist question, the claim, the screenshot with its box, the element
+and file:line; hidden are rule or AI, the verdict, the verifier, the severity, statuses and decisions. The order is
+a hash of labeller and item. Keys 1 (correct), 2 (wrong), 3 (unsure), J/K; a banner "Labelling for the precision
+check · 23/50"; no decision bar. A label is `.nunchi/labels/<labeller>/<id>.json` `{id, lens, rule, label, labeller,
+channel: board, at}`, written atomically, and its content is noted in `state/labels-approved.json`.
+
+**The deny hook (design §1; spec §5.1 notes).** `hooks/hooks.json` runs `src/deny-hook.mjs` before Read,
+NotebookRead, Write, Edit, MultiEdit, NotebookEdit, Bash, Grep, Glob and WebFetch; exit 2 with the reason denies.
+It fails closed: input it cannot read (not JSON, over 4 MB) and an error while judging deny the call. The command is
+`command -v node >/dev/null 2>&1 || exit 0; node …/deny-hook.mjs` (a POSIX shell, as Claude Code runs hooks; Git Bash
+on Windows): without node there is no hook, the documented limit. Git is asked for the common folder only when the
+project uses nunchi: a `.nunchi` in the folder or one above, or a `nunchi` folder in the repository's common git
+folder (found with file checks up to the nearest `.git`, a linked worktree's `.git` file followed through its
+`gitdir:` line and `commondir`), so a call in a project that never used nunchi, or outside a repository, spawns
+nothing (85 → 69 ms a call measured here, most of it node's start); the path rules hold there all the same. It
+denies every tool the shared state (`<git-common-dir>/nunchi/**`, by git's own answer and by any `.git/nunchi` in a
+path) and `.nunchi/state/**`; the answer keys (`$XDG_STATE_HOME/nunchi`, `%LOCALAPPDATA%\nunchi`,
+`~/.local/state/nunchi`, all three); `.nunchi/auth.json`; a run's `canaries.json` and older keys; a running board's
+port (any loopback name, curl, nc, `/dev/tcp`, WebFetch), control socket and `/proc/<pid>`, and any
+`/proc/<n>/cmdline|environ|mem|maps|fd`. It denies writes (Write, Edit, and Bash commands that are not plain reads)
+to `.nunchi/decisions/**`, `.nunchi/labels/**`, `.nunchi/lenses/**`, `lenses.lock.json` and `.nunchi/config.json`
+(reads stay open: they are committed). It denies `nunchi … approve`, `… label` / `--label`, `--approve-checks`,
+nunchi (by name, `npx nunchi@<version>` included, or its `cli.mjs`) under `script`, `unbuffer`, `expect`, `socat`,
+`tmux`, `screen`, `dtach`, `abduco`, `zellij`, `winpty` or a pty module (Python `pty` or `pexpect`, `node-pty`,
+ConPTY): it would pass for `cli-tty`; `XDG_STATE_HOME=`, `LOCALAPPDATA=`, `HOME=`, `USERPROFILE=` or `APPDATA=` set
+in a command that runs nunchi, and `export`/`set`/`$env:` of `XDG_STATE_HOME` or `LOCALAPPDATA` anywhere (the answer
+keys would land where the hook does not look); and running `board/server.mjs` or `board/launch.mjs` directly (node,
+bun, deno, npx, `import(…)`) or any `--link-to-parent`.
+A Bash command is read as segments (also at `$(`, backticks and parentheses), with words joined as a shell joins
+them (`.nu"nchi"`, escapes), `cd` followed, globs and braces expanded against the file system (`.nunchi/runs/*/*.json`
+is the files it names), pieces of words checked as paths (inline code), and `sh -c` / `eval` judged as commands;
+inline code that names nunchi's places in pieces (`join('.git', 'nunchi')`) is denied. Recursive reads — `grep -r`,
+`rg`, `find` with `-exec`/`-ok`/`-delete`, `find` or `rg --files` into `xargs` — are denied when they reach the state,
+the keys, `auth.json` or a run's canaries, unless their filters leave those out (`--exclude-dir=.git
+--exclude-dir=.nunchi`, `--include`, `-g '!.git'`, `-t`, `-name`, `-path … -prune`); rg's own skipping of dot folders
+counts unless `--hidden`, `-.` or `-uu`. Process lists with command lines (`ps aux`, `ps -ef`, `ps -o args`, `pgrep -a`,
+`top -c`, `/proc/*/cmdline`, and Grep or Read of `/proc`) are denied only while a board record of this project is in the
+state (the one-time link is in a browser's command line only then; `ps aux | grep vite` is an everyday command
+otherwise), and the message says so; a record a crashed board left keeps the rule on until the next `nunchi open` or
+`--stop` removes it. Grep and Glob are denied with a base in `.git`, `.nunchi` itself, `.nunchi/runs`
+or `/proc`. Links are followed before deciding. A pure data hook: no network, nothing written. Limits: it reads paths and
+words in the call; a command that builds a path at run time is not seen. Codex CLI has no such hook. The skill
+states the same rules for other agents.
+
+*What this is, and is not.* The hook, the channels and the board's confirmation are an **attestation** of who
+decided: they hold against honest mistakes and naive prompt injection (an agent that follows text on a screen, or
+guesses a command). They are **not a security boundary** against code that runs as the same user as the person:
+such code can read the same files, start the same processes and drive the same browser. A text hook in particular
+cannot see a script that imports `board/launch.mjs`, or a copy of the board's script edited to print its link: it
+sees the `--link-to-parent` flag (checked in the words as the shell joins them, whatever the script is called) and
+the script's own names, nothing a file does once it runs. Nor does it judge archives and recursive copies of the
+whole project or of `.git` (`tar`, `zip`, `cp -r`, `rsync`): they take the state and the canaries along, and the copy
+lies outside the paths it guards; nor `find -path` patterns (`find . -path '*nunchi*state*'` lists the state's
+files). For a repository you do not trust, run the agent in a container or as a separate user.
+
+**Deviations from design §3, and why (the safer option each time).**
+- One-time code in the link, traded for a per-tab key, instead of the key itself in the fragment: a link that leaks
+  (shell history, a browser's command line, a process list) is spent or expired. A reload needs a fresh link.
+- The page shell's assets answer without a key (a module script cannot send a header); they hold no data.
+- The decisions folder is watched as well as the generation (git-arrived decisions); `decide` bumps after writing.
+- Z writes `reopen` (the design's wording), never a copy of an earlier decision.
+- Approvals of `nunchi approve` record their channel instead of being refused when run by the agent: a `cli-agent`
+  approval of a dismissal counts for status but not for "Ready to ship" until confirmed, which keeps the chat path
+  (Codex) working; the hook denies the command in Claude Code.
+- Primary buttons have dark text in dark mode (white on the dark accent is 2.6:1), in the shared stylesheet since the
+  review of PR #29, so the export has it too: the export's bytes changed there on purpose, by that rule and by
+  `.row-where` wrapping anywhere (a long route without a break no longer runs out of its row).
+
+**Measured (2026-10-15 00:32–00:49 KST).** Pebble `node bench/run.mjs --twice` is unchanged: rule recall 34/34, 0 false
+positives on 8 clean scenes, determinism identical (1,141 files; `origin/main` gives the same 1,141 on this machine,
+so the one file more than M1's note is the environment's), fingerprints 100% (52/52), 151 s per capture. Held-out
+pegroom (a scratch copy): 180 screens, rule recall 38/38; the board on that run (1440 px and 390 px, Progress,
+Findings, Detail, Screens, the undo toast) loads every screenshot through the key, sends nothing but to itself, and
+showed two bugs fixed before merge: the favicon lockout and the Progress mark (§7.2 rate limits; tests added).
+After the fixes of the review of PR #29 (2026-10-15 02:56 KST), the bench is unchanged: rule recall 34/34, 0 false
+positives on 8 clean scenes, determinism identical (1,141 files), fingerprints 100% (52/52); 170 s per capture, with
+the Node 24 test suite running beside it. The suite: 429 tests on Node 22.22.0 and on Node 24.21.0, Chromium
+included. After round 2 of the review (2026-10-15 04:04–04:09 KST): rule recall 34/34, 0 false positives on 8 clean
+scenes, determinism identical (1,141 files), fingerprints 100% (52/52), 160 s per capture with the Node 24 suite
+beside it; 438 tests on Node 22.22.0 and on Node 24.21.0, Chromium included.
+
+**Known limits (review of PR #29, 2026-10-15 KST; left as they are).**
+- The hook's check of the board's port names `127.0.0.1`, `localhost`, `::1`, `0.0.0.0` and `0`; other spellings of
+  loopback (`127.1`, `127.0.1`, `2130706433`, `0x7f000001`) reach the port unseen. The board still answers only with
+  the key, and the Host check refuses any Host but `127.0.0.1:<port>`.
+- On Windows the control socket is a named pipe with the default access of the user's session: another local user
+  may be able to connect and send `open` or `stop` (never a link or a key: the pipe hands out neither).
+- The decision time is measured by the page and sent as `ms` (0 to 120000, checked): whoever holds the tab's key can
+  send any value in that range, so the metric is the person's own record, not a proof.
+
+**Not done in M2:** the fix loop's states (attempts, drift, before/after, `fix --undo`), probe runs hidden from
+`runs`, and Coverage and Screens beyond the wall (M7) are later milestones; label pools from the gate harness (G);
+Korean words (the table is ready).
 
 ## 8. Release gates (0.1)
 

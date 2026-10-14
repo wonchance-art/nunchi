@@ -23,7 +23,7 @@
 import { existsSync, readdirSync, rmSync, copyFileSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { sha, stableJson, privateDir } from './stable.mjs';
-import { decoyCount, SUSPECT_PASS_THROUGH } from './verify.mjs';
+import { MIN_CONTROLS, decoysWanted, SUSPECT_PASS_THROUGH } from './verify.mjs';
 import { looked, byRun } from './ledger.mjs';
 import { sceneDir } from './hunt.mjs';
 
@@ -37,8 +37,8 @@ export const RECHECK_FILES = ['top.jpg', 'full.jpg', 'aria.yml', 'text.txt', 'co
 // unchanged screen says nothing about them, so they are always asked.
 export const NEVER_SKIP = new Set(['L3', 'L9']);
 // Controls planned, at least: with fewer, a re-checker answering at random passes too often.
-export const MIN_CONTROLS = 3;
-export const controlsWanted = n => (n > 0 ? Math.max(MIN_CONTROLS, decoyCount(n)) : 0);
+export { MIN_CONTROLS };
+export const controlsWanted = decoysWanted;                      // the verify plan's minimum, the same function
 // The modification time every mirrored file gets (2001-09-09T10:46:40+09:00): the same for every scene.
 export const MIRROR_TIME = 1_000_000_000;
 const ALIAS = /^s[0-9a-f]{10}$/;

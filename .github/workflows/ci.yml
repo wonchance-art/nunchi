@@ -61,6 +61,22 @@ jobs:
       - working-directory: ${{ runner.temp }}/fresh
         run: node --test test/cli-runs.test.mjs test/setup.test.mjs
 
+  plugin:
+    name: plugin manifests (claude plugin validate --strict)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DISABLE_TELEMETRY: '1'
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # the Claude Code CLI, pinned, for this check only (it is no dependency of nunchi)
+      - run: npm install --global @anthropic-ai/claude-code@2.1.299
+      - run: npm run validate:plugin
+
   bench:
     name: benchmark gates (Pebble)
     runs-on: ubuntu-latest

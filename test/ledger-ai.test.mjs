@@ -13,7 +13,7 @@ import * as S from '../src/stable.mjs';
 import * as St from '../src/state.mjs';
 import * as V from '../src/verify.mjs';
 import { aiIdentity } from '../src/ai-identity.mjs';
-import { aiFoldInput } from '../src/ai-fold.mjs';
+import { aiFoldInput, foldFinding } from '../src/ai-fold.mjs';
 import { planHunt, recordHunt } from '../src/hunt.mjs';
 import { loadLenses } from '../src/lenses.mjs';
 
@@ -579,14 +579,62 @@ test('a capture never fixes an AI item: a sweep that looked at its screen and fo
   assert.equal(L.view(st, [])[0].status, 'open');
 });
 
-test('verify: a run with fewer decoys than planned is suspect (its screens offered no decoy target)', () => {
+test('verify: a run with fewer decoys than planned has too few decoys to check the checker: not suspect, and not double-checked', () => {
   const claims = Array.from({ length: 4 }, (_, i) => ({ source: 'ai', status: 'claimed', lens: 'L6', rule: 'L6.vague-error', severity: 'medium', scene: 's', route: '/', viewport: 'm', selector: `p:nth-of-type(${i + 1})`, box: [0, 0, 1, 1], evidence: { claim: `c${i}` } }));
   const { key } = V.planVerify({ findings: claims });
-  assert.deepEqual([key.decoys, key.decoysPlanned], [0, 1]);
+  assert.deepEqual([key.decoys, key.decoysPlanned], [0, 3], 'at least 3 decoys are planned for any claim');
   const r = V.recordVerdicts({ findings: claims, key, verdicts: Object.keys(key.packets).map(packet => ({ packet, verdict: 'confirmed', reason: 'ok' })) });
-  assert.equal(r.verify.suspect, true);
-  assert.match(r.verify.suspectReason, /fewer decoys than planned \(0 of 1\)/);
-  assert.ok(r.findings.every(f => f.verification.suspect));
+  // before the review of PR #29 (round 2) this was suspect whatever the verifier did
+  assert.deepEqual([r.verify.suspect, r.verify.outcome, r.verify.suspectReason], [false, 'too-few-decoys', undefined]);
+  assert.match(r.verify.tooFewDecoys, /^too few decoys to check the checker \(0 of 3: the screens offered too few decoy targets\); these findings are not double-checked$/);
+  assert.ok(r.findings.every(f => f.verification.tooFewDecoys === true && f.verification.suspect === undefined));
+  // into the ledger: confirmed, not suspect, and still not double-checked
+  const st = L.foldAi(L.emptyState(), { run: '0001', key: 'k', findings: r.findings.map(f => foldFinding(f)), now: 1 });
+  for (const it of Object.values(st.items)) {
+    assert.deepEqual([it.verification.status, it.verification.suspect, it.verification.tooFewDecoys, L.checkedAi(it)], ['confirmed', false, true, false]);
+  }
+  // a rejection in such a run is no double-check either: the claim stays
+  const later = L.foldAi(st, { run: '0002', key: 'k2', findings: r.findings.map(f => foldFinding({ ...f, status: 'rejected', verification: { ...f.verification, verdict: 'rejected' } })), now: 2 });
+  assert.ok(Object.keys(st.items).length > 0);
+  assert.deepEqual(Object.keys(later.items), Object.keys(st.items), 'a rejection by an unchecked verifier keeps the item');
+  // with a decoy the verifier confirmed, a run short of decoys is suspect as before
+  const two = { ...key, decoysPlanned: 3, decoys: 1, packets: { ...key.packets, p999: { decoy: true, template: 'unclear-label' } } };
+  const s2 = V.recordVerdicts({ findings: claims, key: two, verdicts: Object.keys(two.packets).map(packet => ({ packet, verdict: 'confirmed', reason: 'ok' })) });
+  assert.deepEqual([s2.verify.suspect, s2.verify.outcome, s2.verify.suspectReason], [true, 'suspect', 'decoy pass-through 1/1 > 10%']);
+});
+
+test('verify: too few decoys through the CLI — said by verify --record, findings, the summary and the board model; --again says why it cannot help', async () => {
+  const cwd = project();
+  const dir = makeRun(cwd, '0001');
+  // the home screens offer no control: only Add Task and Home are left for decoys (2 of 3)
+  for (const vp of ['m', 'd']) writeFileSync(join(dir, `~.guest.normal.${vp}`, 'controls.json'), '[]');
+  const rec = await huntAndVerify(cwd, '0001');
+  assert.equal(rec.code, 0, rec.stderr);
+  assert.doesNotMatch(rec.stdout, /SUSPECT/);
+  assert.match(rec.stdout, /NOT DOUBLE-CHECKED: too few decoys to check the checker \(2 of 3/);
+  const verify = JSON.parse(readFileSync(join(dir, 'verify.json'), 'utf8'));
+  assert.deepEqual([verify.outcome, verify.suspect, verify.decoys.total, verify.decoysPlanned], ['too-few-decoys', false, 2, 3]);
+  const [g] = await aiGroups(cwd);
+  assert.deepEqual([g.example.verification.status, g.example.verification.suspect, g.example.verification.tooFewDecoys, g.checked], ['confirmed', false, true, false]);
+  const text = (await cli(cwd, 'findings')).stdout;
+  assert.match(text, /AI, not double-checked: 1 group\(s\) \(.*too few decoys to check the checker\)/);
+  assert.match(text, /1 AI group\(s\) verified in a run with too few decoys to check the checker: not suspect, and not double-checked either/);
+  const sum = (await json(cwd, 'findings')).summary;
+  assert.deepEqual([sum.ai.doubleChecked, sum.ai.notDoubleChecked, sum.ai.suspect, sum.ai.tooFewDecoys], [0, 1, false, true]);
+  assert.match(sum.verdict.text, /not double-checked/);
+  assert.doesNotMatch(sum.verdict.text, /suspect/);
+  // the static export says it the same way
+  assert.equal((await cli(cwd, 'export', '--html', 'review')).code, 0);
+  const html = readFileSync(join(cwd, 'review', 'index.html'), 'utf8');
+  assert.match(html, /AI · not double-checked \(too few decoys to check the checker\)/);
+  assert.match(html, /0 double-checked .*too few decoys to check the checker/);
+  const M = await import('../src/board/model.mjs');
+  const model = M.buildBoardModel({ nunchiDir: join(cwd, '.nunchi'), projectDir: cwd });
+  const d = M.groupDetail(model, g.group);
+  assert.deepEqual([d.checked, d.suspect, d.tooFewDecoys, d.verification.tooFewDecoys, d.verification.suspect], [false, false, true, true, false]);
+  const again = await cli(cwd, 'verify', '--plan', '--again');
+  assert.equal(again.code, 1);
+  assert.match(again.stderr, /not suspect: it had too few decoys to check the checker/);
 });
 
 test('verify --plan --again re-verifies a suspect run (its suspect verdicts become claims again); a run that is not suspect is refused', async () => {

@@ -21,20 +21,11 @@ import { readManifest, jpegSize, sceneIndex, sceneDir } from './hunt.mjs';
 import { scrubSecrets } from './rules.mjs';
 import { redactUrl, redactText } from './network.mjs';
 import { sha } from './stable.mjs';
+import { BASE_CSS } from './board/look.mjs';
+import { SEV, SEV_LABEL, STATUS_LABEL, FILTERS, WHO, WIDTH, STATES, STATE_LABEL, PERSONS, VPS, drawable as drawableOn, shotGeometry, pct, plural, human, sceneLabelText, WORDS } from './board/shared.mjs';
 
-const SEV = { blocker: 0, high: 1, medium: 2, low: 3 };
-const SEV_LABEL = { blocker: 'Blocker', high: 'High', medium: 'Medium', low: 'Low' };
+// Board words (design §3.4) and the screenshot geometry come from one table shared with the live board.
 const ACTIVE = new Set(['open', 'regressed', 'to-fix', 'held']);
-// Board words (design §3.4): one table, so a Korean toggle is cheap later.
-const STATUS_LABEL = { open: 'Open', regressed: 'Came back', 'to-fix': 'To fix', held: 'Later', kept: 'Kept', dismissed: 'Not a problem', fixed: 'Fixed' };
-const FILTERS = [['open', 'Open'], ['to-fix', 'To fix'], ['held', 'Later'], ['kept', 'Kept'], ['dismissed', 'Not a problem'], ['fixed', 'Fixed'], ['all', 'All']];
-const WHO = { guest: 'Visitor', 'signed-in': 'Signed in' };
-const WIDTH = { d: 'Desktop', m: 'Phone' };
-const STATES = ['normal', 'empty', 'error', 'slow', 'offline'];
-const STATE_LABEL = { normal: 'Normal', empty: 'Empty', error: 'Error', slow: 'Slow', offline: 'Offline' };
-const PERSONS = ['guest', 'signed-in'];
-const VPS = ['d', 'm'];
-const CONTEXT_PX = 200;                                    // design §3.4: the box plus about 200 px of context
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const rank = (list, v) => { const i = list.indexOf(v); return i < 0 ? list.length : i; };
@@ -107,9 +98,6 @@ function dataNow(state, decisions) {
   const times = [...Object.values(state.decisionsSeen || {}).map(Number), ...decisions.map(d => Date.parse(d?.at))].filter(Number.isFinite);
   return times.length ? Math.max(...times) : 0;
 }
-const pct = n => `${Math.round(n * 10000) / 100}%`;
-const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
-const human = rule => { const r = String(rule).replace(/^L\d+\./, '').replace(/-/g, ' '); return r.charAt(0).toUpperCase() + r.slice(1); };
 
 // ---- model ---------------------------------------------------------------------------------------------
 
@@ -227,13 +215,15 @@ export function buildModel({ runDir, nunchiDir, ledger = null }) {
     const own = instances.filter(f => f.group === g.group);
     const ais = own.filter(f => f.source === 'ai');
     const isAi = ais.length > 0 || g.example.inputs?.source === 'ai' || rows.some(r => r.group === g.group && ai.some(f => f.fp === r.fp));
-    const verified = ais.some(f => f.aiStatus === 'confirmed');
+    // confirmed in a run with too few decoys to check the checker is no double-check (verify.mjs)
+    const verified = ais.some(f => f.aiStatus === 'confirmed' && f.verification?.tooFewDecoys !== true);
     const suspect = ais.some(f => f.verification?.suspect);
+    const tooFewDecoys = !verified && ais.some(f => f.verification?.tooFewDecoys === true);
     const keys = new Set(Object.keys(g.statuses));
     if (keys.has('regressed')) keys.add('open');
     return {
       ...g, hid: 'f-' + g.group, instances: own, source: isAi ? 'ai' : 'rule',
-      ai: isAi ? { verified, suspect, verifier: ais.find(f => f.verification)?.verification?.verifier || null } : null,
+      ai: isAi ? { verified, suspect, tooFewDecoys, verifier: ais.find(f => f.verification)?.verification?.verifier || null } : null,
       title: isAi ? human(g.rule) : g.title,
       headline: isAi ? String(own[0]?.evidence?.claim || human(g.rule)) : g.title,
       filterKeys: [...keys].sort(),
@@ -264,9 +254,8 @@ const statusChips = g => (g.status === 'mixed' ? Object.keys(g.statuses).sort((a
 // An open item no run has looked at again for a while (ledger NOT_LOOKED_RUNS): the oldest such run of the group.
 const notLooked = g => g.rows.map(r => str(r.notLookedAt)).filter(Boolean).sort(byRun)[0] || null;
 const sourceTag = g => (!g.ai ? '<span class="tag">Rule</span>'
-  : g.ai.verified ? `<span class="tag tag-ai">AI · double-checked${g.ai.suspect ? ' (suspect)' : ''}</span>` : '<span class="tag tag-warn">AI · not double-checked</span>');
+  : g.ai.verified ? `<span class="tag tag-ai">AI · double-checked${g.ai.suspect ? ' (suspect)' : ''}</span>` : `<span class="tag tag-warn">AI · not double-checked${g.ai.tooFewDecoys ? ` (${WORDS['too-few-decoys']})` : ''}</span>`);
 // plain text (for aria-label, which t() escapes once) and markup
-const sceneLabelText = s => `${WHO[s.person] || s.person} · ${WIDTH[s.viewport] || s.viewport} · ${STATE_LABEL[s.state] || s.state}`;
 const sceneLabel = s => t(sceneLabelText(s));
 const whereOf = g => {
   if (!g.routes.length) return g.rule === 'secret-in-client-bundle' ? 'Browser bundle' : 'Whole app';
@@ -280,33 +269,16 @@ const whereOf = g => {
 // with boxes positioned in percentages of the region. `boxes` are in CSS pixels of the page.
 function shot(s, { boxes = [], crop = false, label, cls = '' }) {
   const img = s.img;
-  const px = boxes.map(b => ({ ...b, x: b.box[0] * img.dpr, y: b.box[1] * img.dpr, w: b.box[2] * img.dpr, h: b.box[3] * img.dpr }));
-  let cy = 0, ch = img.h;
-  if (crop && px.length) {
-    const ctx = CONTEXT_PX * img.dpr;
-    let top = Math.max(0, Math.min(...px.map(b => b.y)) - ctx), bottom = Math.min(img.h, Math.max(...px.map(b => b.y + b.h)) + ctx);
-    const want = Math.min(img.h, img.vh);
-    if (bottom - top < want) { bottom = Math.min(img.h, top + want); top = Math.max(0, bottom - want); }
-    cy = Math.round(top); ch = Math.max(1, Math.round(bottom - top));
-  }
-  const posY = ch >= img.h ? 0 : cy / (img.h - ch);
-  const marks = px.map(b => {
-    const style = `left:${pct(b.x / img.w)};top:${pct((b.y - cy) / ch)};width:${pct(b.w / img.w)};height:${pct(b.h / ch)}`;
+  const { ch, posY, marks: geo } = shotGeometry(img, boxes, { crop });
+  const marks = geo.map(b => {
+    const style = `left:${pct(b.left)};top:${pct(b.top)};width:${pct(b.width)};height:${pct(b.height)}`;
     return `<span class="box" style="${style}">${b.n ? `<span class="num">${b.n}</span>` : ''}</span>`;
   }).join('');
   return `<div class="shot i-${img.key}${cls ? ' ' + cls : ''}" role="img" aria-label="${t(label)}" style="aspect-ratio:${img.w} / ${ch};background-position:0 ${pct(posY)}">${marks}</div>`;
 }
 
-// Where a box can be drawn: an element box, not in a scroll area the image cannot show, inside the image.
-function drawable(f, s) {
-  if (!s || !s.img) return { ok: false, why: 'no screenshot' };
-  if (!Array.isArray(f.box)) return { ok: false, why: 'no element box' };
-  if (f.inside) return { ok: false, why: 'inside a scroll area, not in the image' };
-  const [x, y, w, h] = f.box.map(v => v * s.img.dpr);
-  if (!(w > 0 && h > 0)) return { ok: false, why: 'hidden element' };
-  if (x >= s.img.w || y >= s.img.h || x + w <= 0 || y + h > s.img.h + 1) return { ok: false, why: 'outside the screenshot' };
-  return { ok: true };
-}
+// Where a box can be drawn (board/shared.mjs, the same rule the live board uses).
+const drawable = (f, s) => drawableOn(f, s ? s.img : null);
 
 function evidenceList(f) {
   const ev = f.evidence || {};
@@ -373,9 +345,9 @@ function progressView(m) {
   })() : '<section class="panel-box" aria-labelledby="h-since"><h2 id="h-since">Ledger</h2><p class="muted">This run is not in the local ledger, so there is nothing to compare with. Statuses come from your decisions only.</p></section>';
   const aiLine = !m.ai ? 'not run (rules and computed checks only)'
     : (() => {
-      const n = m.instances.filter(f => f.source === 'ai').length, conf = m.instances.filter(f => f.source === 'ai' && f.aiStatus === 'confirmed').length;
+      const n = m.instances.filter(f => f.source === 'ai').length, conf = m.instances.filter(f => f.source === 'ai' && f.aiStatus === 'confirmed' && f.verification?.tooFewDecoys !== true).length;
       const cov = m.coverage?.summary;
-      return `${plural(n, 'finding')}, ${conf} double-checked${cov ? ` · ${num(cov.seen)}/${num(cov.cells)} cells seen` : ''}${m.verify?.suspect ? ' · <span class="warn">verification suspect</span>' : ''}`;
+      return `${plural(n, 'finding')}, ${conf} double-checked${cov ? ` · ${num(cov.seen)}/${num(cov.cells)} cells seen` : ''}${m.verify?.suspect ? ' · <span class="warn">verification suspect</span>' : ''}${m.verify?.outcome === 'too-few-decoys' ? ` · <span class="warn">${WORDS['too-few-decoys']}</span>` : ''}`;
     })();
   const pctChecked = m.scenes.length ? Math.round((checked / m.scenes.length) * 100) : 0;
   return `<section id="progress" class="view" tabindex="-1" aria-labelledby="h-progress">
@@ -483,7 +455,7 @@ ${seen.length ? `<dt>Seen on</dt><dd>${seen.slice(0, 12).map(s => `<a href="#${s
 ${decision ? `<dt>Decision</dt><dd>${t(decision.decision)}${decision.reason ? ` (${t(decision.reason)})` : ''} · ${t(decision.by)} · ${t(decision.at)}${decision.verified ? '' : ' · <span class="warn">came through git, not approved on this machine</span>'}</dd>` : ''}
 ${notes.map(n => `<dt>Note</dt><dd class="warn">${t(n)}</dd>`).join('')}
 ${notLooked(g) ? `<dt>Looked at</dt><dd class="warn">Not looked at since run ${t(notLooked(g))}: no run since has captured every screen it was on, so it cannot be marked fixed.</dd>` : ''}
-${verification ? `<dt>Reviewer</dt><dd>${t(verification.verdict)} · ${t(verification.verifier || '')}${verification.suspect ? ' · <span class="warn">suspect</span>' : ''}${verification.reason ? ` — ${t(verification.reason, 240)}` : ''}</dd>` : ''}
+${verification ? `<dt>Reviewer</dt><dd>${t(verification.verdict)} · ${t(verification.verifier || '')}${verification.suspect ? ' · <span class="warn">suspect</span>' : ''}${verification.tooFewDecoys === true ? ` · <span class="warn">${WORDS['too-few-decoys']}: not a double-check</span>` : ''}${verification.reason ? ` — ${t(verification.reason, 240)}` : ''}</dd>` : ''}
 </dl>
 <details class="evidence"><summary>Evidence details</summary>
 <dl class="facts-dl">
@@ -581,136 +553,7 @@ function css(m, imageUrl) {
   // the selected screen's card is outlined in the wall
   if (m.scenes.length) filterCss.push(m.scenes.map(s => `body:has(#${s.hid}:target) .card[data-sid="${s.hid}"] a`).join(',') + '{box-shadow:0 0 0 3px var(--accent)}');
   const imgs = [...m.images.keys()].sort().map(k => `.i-${k}{background-image:url(${imageUrl(k)})}`).join('\n');
-  return `:root{--ground:#F3F4F6;--panel:#FFFFFF;--line:#E5E7EB;--line-soft:#EEF0F2;--ink:#1B1D21;--ink-2:#4A4E57;--muted:#5F636B;--soft:#F8F9FA;--accent:#3346C2;--accent-ink:#23318F;--accent-soft:#EEF0FB;--seg:#E9EBEF;
---high:#E2650F;--high-soft:#FFF4EB;--high-ink:#8A3B00;--medium:#C9A227;--medium-soft:#FBF3D6;--medium-ink:#6B5300;--low:#A6A9B0;--low-soft:#F1F2F4;--low-ink:#4A4E57;--blocker:#C8102E;--blocker-soft:#FDECEE;--blocker-ink:#9B0C23;--good:#1E6B3A;--good-soft:#E8F5EC;
---sans:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans","Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;color-scheme:light}
-@media (prefers-color-scheme:dark){:root{--ground:#141518;--panel:#1C1E22;--line:#30333A;--line-soft:#2A2C31;--ink:#ECEDEF;--ink-2:#C4C7CD;--muted:#9CA0A8;--soft:#22252A;--accent:#8C9BFF;--accent-ink:#C9D0FF;--accent-soft:#272C4A;--seg:#2A2C31;
---high-soft:#3A2414;--high-ink:#FFB37A;--medium-soft:#352D12;--medium-ink:#E8CC6A;--low-soft:#2A2C31;--low-ink:#C4C7CD;--blocker-soft:#3D1419;--blocker-ink:#FF8A99;--good:#6FCF8E;--good-soft:#16301F;color-scheme:dark}}
-*{box-sizing:border-box}html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--ground);color:var(--ink);font:15px/1.5 var(--sans)}
-a{color:var(--accent)}a:hover{color:var(--accent-ink)}
-:focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:4px}
-code,.mono{font-family:var(--mono);font-size:.9em;overflow-wrap:anywhere}
-h1{margin:0;font-size:24px;line-height:1.25;font-weight:600}h2{margin:0;font-size:15px;font-weight:600}
-.sr{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-.skip{position:absolute;left:-9999px}.skip:focus{left:16px;top:8px;z-index:10;background:var(--panel);padding:10px 14px}
-.muted{color:var(--muted)}.small{font-size:13px}.warn{color:var(--high-ink)}.good{color:var(--good)}.pad{padding:0 18px}
-.shell{display:flex;min-height:100vh}
-.side{flex:0 0 232px;background:var(--panel);border-right:1px solid var(--line);padding:20px 14px;display:flex;flex-direction:column;gap:20px}
-.brand{font-family:var(--mono);font-weight:500;font-size:17px;padding:0 10px}
-.runbox{margin:0;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--soft);font-size:13px}
-.runbox b{font-weight:600}
-.nav{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;list-style:none}
-.nav a{display:flex;justify-content:space-between;align-items:center;min-height:44px;padding:0 10px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:14px}
-.nav a:hover{background:var(--soft)}.nav .cnt{color:var(--muted)}
-.nav a[aria-current="page"]{background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
-.side-foot{margin-top:auto;padding:0 10px;font-size:12px;color:var(--muted)}
-main{flex:1 1 auto;min-width:0;padding:28px 32px 48px}
-.stack{max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
-.view{display:none}.view:target{display:block}
-body:not(:has(.view:target)):not(:has(.screen-panel:target)) #progress{display:block}
-body:has(.screen-panel:target) #screens{display:block}
-body:not(:has(.view:target)):not(:has(.screen-panel:target)) .nav a[data-nav="progress"],body:has(#findings:target) .nav a[data-nav="findings"],body:has(.detail:target) .nav a[data-nav="findings"],body:has(#screens:target) .nav a[data-nav="screens"],body:has(.screen-panel:target) .nav a[data-nav="screens"]{background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
-.panel-box{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:22px 24px;display:flex;flex-direction:column;gap:14px}
-.hero h1{font-size:28px}.eyebrow{margin:0 0 4px;font-size:14px;color:var(--muted)}
-.hero-top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:16px}.hero-top p{margin:4px 0 0}
-.btn{display:inline-flex;align-items:center;min-height:44px;padding:0 18px;border-radius:8px;font-weight:600;text-decoration:none}
-.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{color:#fff;filter:brightness(.92)}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
-.tile{display:flex;flex-direction:column;gap:2px;padding:14px 16px;min-height:44px;border-radius:10px;background:var(--soft);color:var(--ink);text-decoration:none}
-.tile-high{background:var(--high-soft);box-shadow:inset 0 0 0 1px #F6CBA8}.tile-blocker{background:var(--blocker-soft);box-shadow:inset 0 0 0 1px #F2B8C1}
-.tile-n{font-size:28px;font-weight:500}
-.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px}
-.facts{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:14px}
-.meter-row{display:flex;justify-content:space-between;font-size:14px}
-.meter{height:6px;background:var(--line);border-radius:3px;overflow:hidden}.meter span{display:block;height:6px;background:var(--good)}
-.statuses{margin:0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:10px 18px;font-size:14px}
-.sev{display:inline-flex;align-items:center;gap:6px;padding:1px 10px 1px 8px;border-radius:999px;font-size:13px;font-weight:600;white-space:nowrap}
-.sev .dot{width:8px;height:8px;border-radius:50%;flex:none}
-.sev-blocker{background:var(--blocker-soft);color:var(--blocker-ink)}.sev-blocker .dot{background:var(--blocker)}
-.sev-high{background:var(--high-soft);color:var(--high-ink)}.sev-high .dot{background:var(--high)}
-.sev-medium{background:var(--medium-soft);color:var(--medium-ink)}.sev-medium .dot{background:var(--medium)}
-.sev-low{background:var(--low-soft);color:var(--low-ink)}.sev-low .dot{background:var(--low)}
-.tag,.st{display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;white-space:nowrap;background:var(--low-soft);color:var(--low-ink)}
-.tag-ai{background:var(--accent-soft);color:var(--accent-ink)}.tag-warn{background:var(--high-soft);color:var(--high-ink)}
-.st-open{background:var(--panel);color:var(--ink);box-shadow:inset 0 0 0 1px var(--line)}.st-regressed{background:var(--high-soft);color:var(--high-ink)}
-.st-to-fix{background:var(--accent-soft);color:var(--accent-ink)}.st-fixed{background:var(--good-soft);color:var(--good)}
-.head-row{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:12px}.head-row p{margin:2px 0 0}
-fieldset.seg{display:flex;flex-wrap:wrap;gap:4px;margin:0;padding:4px;border:0;border-radius:10px;background:var(--seg);align-self:flex-start;min-width:0}
-.seg input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
-.seg label{display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:0 14px;border-radius:7px;font-size:14px;color:var(--ink-2);cursor:pointer}
-.seg input:checked+label{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(27,29,33,.12)}
-.seg input:focus-visible+label{outline:3px solid var(--accent);outline-offset:1px}
-.seg .cnt{color:var(--muted);font-weight:400}
-.seg-legend{float:left;align-self:center;padding:0 8px 0 6px;font-size:13px;color:var(--muted)}
-.filters{display:flex;flex-wrap:wrap;gap:8px}
-.list-box{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
-.kind+.kind,.list-box>.empty{border-top:1px solid var(--line-soft)}
-.kind>summary,.unchecked-sum{display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:44px;padding:8px 20px;background:var(--soft);cursor:pointer;list-style:none}
-.kind>summary::-webkit-details-marker,.unchecked-sum::-webkit-details-marker{display:none}
-.kind>summary::before,.unchecked-sum::before{content:"▸";color:var(--muted);margin-right:-4px}.kind[open]>summary::before,.unchecked[open]>.unchecked-sum::before{content:"▾"}
-.kind-title{flex:1;display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-weight:600;font-size:14px}
-.rows{margin:0;padding:0;list-style:none}
-.row a{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:6px 14px;padding:12px 20px;border-top:1px solid var(--line-soft);color:var(--ink);text-decoration:none;min-height:44px}
-.row a:hover{background:var(--accent-soft)}
-.row-main{flex:1 1 300px;min-width:0;display:flex;flex-direction:column;gap:2px}.row-what{font-weight:500;overflow-wrap:anywhere}.row-where{font-size:13px;color:var(--muted)}
-.row-tags{display:flex;flex-wrap:wrap;gap:6px}
-.empty{display:none;margin:0;padding:16px 20px;color:var(--muted)}
-.unchecked .kind{border-top:1px solid var(--line-soft)}.unchecked>p{margin:10px 0}
-.clean-note{margin:0;padding:18px 20px;background:var(--good-soft);color:var(--good);border-radius:12px;font-weight:600}
-.detail-nav{max-width:1000px;margin:0 auto 12px;display:flex;justify-content:space-between;gap:12px;font-size:14px}
-.detail-nav a{display:inline-flex;align-items:center;min-height:44px}.pn{display:flex;gap:16px}
-.detail-box{max-width:1000px;margin:0 auto}
-.detail-head h1{font-size:22px;line-height:1.3;overflow-wrap:anywhere}.chips{margin:0 0 6px;display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px}
-.fig p{margin:0 0 6px}
-.detail:has(.vt-m:checked) .fig-d,.detail:has(.vt-d:checked) .fig-m{display:none}
-.shot{position:relative;width:100%;background-repeat:no-repeat;background-size:100% auto;background-color:var(--soft);border-radius:8px;box-shadow:0 0 0 1px var(--line)}
-.fig-m .shot,.shot-m{max-width:390px;margin:0 auto}
-.box{position:absolute;border:2px dashed #1B1D21;box-shadow:0 0 0 2px #FFFFFF;border-radius:3px;min-width:6px;min-height:6px}
-.num{position:absolute;left:-11px;top:-11px;width:20px;height:20px;border-radius:50%;background:#1B1D21;color:#fff;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 2px #fff}
-.whole{margin-top:8px}.whole summary,.evidence summary{min-height:44px;display:flex;align-items:center;cursor:pointer;color:var(--ink-2)}
-.facts-dl{margin:0;display:grid;grid-template-columns:110px minmax(0,1fr);gap:8px 16px;font-size:14px}
-.facts-dl dt{color:var(--muted)}.facts-dl dd{margin:0;overflow-wrap:anywhere}
-.evidence{border-top:1px solid var(--line-soft);padding-top:4px}
-.decide{max-width:1000px;margin:16px auto 0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 24px;display:flex;flex-direction:column;gap:8px}
-.decide p{margin:0}.cmds{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:8px}
-.cmds li{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px}
-.cmd-label{flex:0 0 180px;display:flex;flex-direction:column}
-.cmd{flex:1 1 260px;padding:8px 10px;background:var(--soft);border:1px solid var(--line);border-radius:6px;user-select:all}
-.copy{display:none;min-height:44px;padding:0 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);font:inherit;font-size:14px;cursor:pointer}
-.js .copy{display:inline-block}
-.facts-inline{margin:0;display:flex;flex-wrap:wrap;gap:6px 18px;font-size:14px;color:var(--ink-2)}
-.wall-wrap{display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start}
-.wall{flex:999 1 520px;min-width:0;margin:0;padding:0;list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:16px}
-.card a{display:block;height:100%;background:var(--panel);border-radius:12px;overflow:hidden;box-shadow:0 0 0 1px var(--line);color:var(--ink);text-decoration:none}
-.card a:hover{box-shadow:0 0 0 2px var(--accent)}
-.thumb-wrap{position:relative;display:block}
-.thumb{display:block;width:100%;aspect-ratio:16/10;background-size:cover;background-position:top center;background-color:var(--soft);border-bottom:1px solid var(--line-soft)}
-.thumb-m{aspect-ratio:4/5}.thumb-none{display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px}
-.badge{position:absolute;left:8px;top:8px;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600;box-shadow:0 1px 2px rgba(27,29,33,.16)}
-.badge-blocker{background:#FDECEE;color:#9B0C23}.badge-high{background:#FFF4EB;color:#8A3B00}.badge-medium{background:#FBF3D6;color:#6B5300}.badge-low{background:#F1F2F4;color:#4A4E57}.badge-clean{background:#E8F5EC;color:#1E6B3A}.badge-dark{background:#1B1D21;color:#fff}
-.card-body{display:flex;flex-direction:column;gap:1px;padding:10px 12px 12px}.card-name{font-weight:600;font-size:14px;overflow-wrap:anywhere}
-.panels{flex:1 1 340px;max-width:460px;position:sticky;top:16px;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
-.panels-empty{margin:0;padding:18px}.panels:has(.screen-panel:target) .panels-empty{display:none}
-.screen-panel{display:none}.screen-panel:target{display:block}
-.sp-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:14px 18px;border-bottom:1px solid var(--line-soft)}
-.sp-head p{margin:2px 0 0}.sp-head a{display:inline-flex;align-items:center;min-height:44px;font-size:14px}
-.screen-panel .shot{border-radius:0;box-shadow:none}
-.sp-list{margin:0;padding:6px 0;list-style:none}
-.sp-list a{display:flex;gap:10px;padding:10px 18px;min-height:44px;color:var(--ink);text-decoration:none}.sp-list a:hover{background:var(--accent-soft)}
-.numb{flex:none;width:22px;height:22px;border-radius:50%;background:#1B1D21;color:#fff;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
-.numb-none{background:var(--low-soft);color:var(--muted)}
-.sp-text{display:flex;flex-direction:column;min-width:0}.sp-what{font-size:14px;font-weight:500;overflow-wrap:anywhere}.sp-text .small{color:var(--muted)}
-.sp-sibs{padding:0 18px;border-top:1px solid var(--line-soft);background:var(--soft)}.sp-sibs summary{min-height:44px;display:flex;align-items:center;cursor:pointer}
-.sp-sibs p{margin:0 0 10px;display:flex;flex-wrap:wrap;gap:4px 14px}.sp-sibs a{display:inline-flex;align-items:center;min-height:32px}
-.view:focus,.screen-panel:focus{outline:none}
-@media (max-width:760px){.shell{flex-direction:column}.side{flex:none;border-right:0;border-bottom:1px solid var(--line);padding:12px 16px;gap:10px}
-.side-top{display:flex;align-items:center;justify-content:space-between;gap:10px}.brand{padding:0}.runbox{padding:4px 8px}
-.nav{flex-direction:row;flex-wrap:wrap}.nav a{flex:1 1 auto;justify-content:center;gap:6px}.side-foot{display:none}
-main{padding:16px 16px 40px}.panel-box{padding:18px 16px}.hero h1{font-size:22px}.facts-dl{grid-template-columns:1fr;gap:2px}.facts-dl dd{margin-bottom:8px}
-.panels{max-width:none;position:static}.cmd-label{flex-basis:100%}.cmd{flex:1 1 0;min-width:0}.seg-legend{float:none;width:100%;padding:2px 6px}}
-@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
-${filterCss.join('\n')}
+  return `${BASE_CSS}${filterCss.join('\n')}
 ${imgs}
 `;
 }

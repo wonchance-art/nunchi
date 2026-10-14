@@ -533,8 +533,10 @@ export function runForFold(runDir) {
 // Everything else is derived from those (deriveAi), the same whatever order the folds came in.
 
 const CREATES = s => s === 'confirmed' || s === 'claimed';
-// A hunt's claim says the defect is there unless a verifier that was not suspect rejected it.
-const PRESENT = h => h.claimed && !(h.status === 'rejected' && !h.suspect);
+// A verdict that is no double-check: a suspect verifier's, or one from a run with too few decoys to check the checker.
+const weak = h => !!h.suspect || !!h.tooFewDecoys;
+// A hunt's claim says the defect is there unless a verifier that was checked and not suspect rejected it.
+const PRESENT = h => h.claimed && !(h.status === 'rejected' && !weak(h));
 const STATUS_RANK = { confirmed: 0, claimed: 1, insufficient: 2, rejected: 3 };
 const byEvent = (a, b) => byRun(String(a.run), String(b.run)) || cmp(a.stream ?? 'main', b.stream ?? 'main');
 export const STALE_HUNTS = 2;
@@ -581,11 +583,12 @@ export function deriveAi(item) {
   }
   const lastHunted = hunts.reduce((m, h) => maxRun(m, h.run), null);
   const silent = new Set(hunts.filter(h => h.silent && lastSeen && byRun(h.run, lastSeen) > 0).map(h => `${h.run}|${h.stream ?? 'main'}`));
-  // the verdict: the latest one a verifier gave that was not suspect, else the latest suspect one, else claimed
+  // the verdict: the latest one a verifier gave that was checked and not suspect, else the latest other one, else claimed
   const judged = claims.filter(h => AI_VERDICTS.has(h.status));
-  const chosen = judged.filter(h => !h.suspect).pop() || judged.pop() || latest;
+  const chosen = judged.filter(h => !weak(h)).pop() || judged.pop() || latest;
   const verification = {
-    status: chosen.status, by: chosen.by ?? null, ...(chosen.vendor ? { vendor: chosen.vendor } : {}), suspect: !!chosen.suspect, run: chosen.run,
+    status: chosen.status, by: chosen.by ?? null, ...(chosen.vendor ? { vendor: chosen.vendor } : {}), suspect: !!chosen.suspect,
+    ...(chosen.tooFewDecoys && !chosen.suspect ? { tooFewDecoys: true } : {}), run: chosen.run,
     ...(AI_VERDICTS.has(chosen.status) && Number.isFinite(chosen.at) ? { at: chosen.at } : {}),
   };
   // the screen it was last seen on, per cell, with its element and box there: the old evidence a re-check shows and
@@ -643,7 +646,8 @@ export function foldAi(state, { run, stream = 'main', key = null, findings = [],
     const scenes = {};
     for (const f of list) if (f.cell && f.sceneHash) scenes[f.cell] = { scene: f.scene, ...f.sceneHash, selector: f.selector ?? null, box: f.box ?? null };
     const entry = {
-      run, stream, at: now, claimed: true, status: best.status, suspect: list.some(f => !!f.suspect), by: best.by ?? null, ...(best.vendor ? { vendor: best.vendor } : {}),
+      run, stream, at: now, claimed: true, status: best.status, suspect: list.some(f => !!f.suspect), ...(list.some(f => !!f.tooFewDecoys) ? { tooFewDecoys: true } : {}),
+      by: best.by ?? null, ...(best.vendor ? { vendor: best.vendor } : {}),
       claimedSeverity: worst(list.map(f => f.claimedSeverity)), verdictSeverity: worst(list.filter(f => AI_VERDICTS.has(f.status)).map(f => f.verdictSeverity)),
       cells: [...new Set(list.map(f => f.cell).filter(Boolean))].sort(), scenes, group: best.group,
       examples: [...new Set(list.map(f => f.scene).filter(Boolean))].sort().slice(0, 20), selector: best.selector ?? null, box: best.box ?? null,
@@ -775,12 +779,33 @@ export function readDecisions(dir) {
 
 const kst = (d = new Date()) => new Date(d.getTime() + 9 * 3600e3).toISOString().replace('Z', '+09:00');
 
-export function buildDecision({ target, decision, reason = null, note = null, by }) {
-  if (!DECISIONS[decision]) throw Object.assign(new Error(`unknown decision "${decision}" (${Object.keys(DECISIONS).join(', ')})`), { code: 'BAD_ARGS' });
-  const reasons = DECISIONS[decision];
-  if (reasons.length && !reasons.includes(reason)) throw Object.assign(new Error(`"${decision}" needs --reason ${reasons.join(' | ')}`), { code: 'BAD_ARGS' });
-  const id = `${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
-  return { schema: 1, id, target, decision, reason, note: note ? String(note).slice(0, 500) : null, by, at: kst(), fingerprintVersion: FINGERPRINT_VERSION };
+// How a decision, approval or label was made (design 0.1-c §1): `board` (the board UI, with its session token),
+// `cli-tty` (`nunchi decide` in the user's own terminal: stdin and stdout TTYs and a typed confirmation code),
+// `cli-agent` (anything else: the agent recording what the user said in chat). `git` is never written: it is what a
+// decision that arrived through a commit and was not approved here is. A decision file names the channel it was
+// written by; the channel that counts is the one this machine recorded with its approval (approved.json), because a
+// file from git can claim anything.
+export const CHANNELS = ['board', 'cli-tty', 'cli-agent'];
+export const HUMAN_CHANNELS = new Set(['board', 'cli-tty']);
+const BATCH_ID = /^[\w-]{1,40}$/;
+export const newId = () => `${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
+
+// The reason a decision takes: one of its reasons when it has some, none at all otherwise (`fix --reason intended` is
+// refused, not recorded). One check for `nunchi decide` and the board (`asked`: how the reason is given there).
+// → null, or what is wrong.
+export function reasonProblem(decision, reason, { asked = '--reason ' } = {}) {
+  const reasons = Object.hasOwn(DECISIONS, decision) ? DECISIONS[decision] : null;
+  if (!reasons) return `unknown decision "${decision}" (${Object.keys(DECISIONS).join(', ')})`;
+  if (reasons.length) return reasons.includes(reason) ? null : `"${decision}" needs ${asked}${reasons.join(' | ')}`;
+  return reason === null || reason === undefined ? null : `"${decision}" takes no reason`;
+}
+export function buildDecision({ target, decision, reason = null, note = null, by, channel = null, batch = null }) {
+  const bad = reasonProblem(decision, reason);
+  if (bad) throw Object.assign(new Error(bad), { code: 'BAD_ARGS' });
+  if (channel !== null && !CHANNELS.includes(channel)) throw Object.assign(new Error(`unknown channel "${channel}"`), { code: 'BAD_ARGS' });
+  if (batch !== null && !BATCH_ID.test(String(batch))) throw Object.assign(new Error('a batch id is up to 40 letters, digits, _ or -'), { code: 'BAD_ARGS' });
+  return { schema: 1, id: newId(), target, decision, reason, note: note ? String(note).slice(0, 500) : null, by, at: kst(), fingerprintVersion: FINGERPRINT_VERSION,
+    ...(channel ? { channel } : {}), ...(batch ? { batch: String(batch) } : {}) };
 }
 
 // Committed and shared: written to a temp file, synced, then renamed into place.
@@ -798,20 +823,36 @@ export const decisionHash = d => sha(stableJson(d), 64);
 export const approvalKey = d => `${d.id}:${decisionHash(d)}`;
 const APPROVED_FIX = 'nothing was written; fix it by hand, or delete it (decisions made here then need nunchi approve again)';
 const strings = x => Array.isArray(x) && x.every(y => typeof y === 'string');
-export const isApprovedDoc = doc => !!doc && strings(doc.approved) && (doc.legacy === undefined || strings(doc.legacy));
+const stringMap = x => !!x && typeof x === 'object' && !Array.isArray(x) && Object.values(x).every(y => typeof y === 'string');
+export const isApprovedDoc = doc => !!doc && strings(doc.approved) && (doc.legacy === undefined || strings(doc.legacy))
+  && (doc.channels === undefined || stringMap(doc.channels)) && (doc.confirmed === undefined || strings(doc.confirmed));
 const APPROVED_READ = { fix: APPROVED_FIX, validate: isApprovedDoc, why: 'has no "approved" list' };
 const NOTE = 'decisions made or approved on this machine, by id and content; anything else came through git';
 
 function readApprovedDoc(file) {
   const { doc } = readDoc(file, APPROVED_READ);
-  return doc ? { approved: new Set(doc.approved), legacy: doc.legacy || [] } : { approved: new Set(), legacy: [] };
+  return doc ? { approved: new Set(doc.approved), legacy: doc.legacy || [], channels: doc.channels || {}, confirmed: doc.confirmed || [] }
+    : { approved: new Set(), legacy: [], channels: {}, confirmed: [] };
 }
 export const readApproved = file => readApprovedDoc(file).approved;
+// The approvals with how each was made (design §1): `channels` (approval key → board | cli-tty | cli-agent; an
+// approval written before channels existed has none) and `confirmed` (keys a person confirmed in the board).
+export function readApprovals(file) {
+  const d = readApprovedDoc(file);
+  return { approved: d.approved, channels: new Map(Object.entries(d.channels)), confirmed: new Set(d.confirmed) };
+}
+// The channels and confirmations an approval list keeps: only for keys it still approves, sorted.
+function keepChannels(approved, channels = {}, confirmed = []) {
+  const ch = Object.fromEntries(Object.entries(channels).filter(([k, v]) => approved.has(k) && CHANNELS.includes(v)).sort(([a], [b]) => (a < b ? -1 : 1)));
+  const cf = [...new Set(confirmed)].filter(k => approved.has(k)).sort();
+  return { ...(Object.keys(ch).length ? { channels: ch } : {}), ...(cf.length ? { confirmed: cf } : {}) };
+}
 // Two approval lists of this machine, merged (state.mjs adoptLegacy). Every approval and legacy id of both stays.
 export function mergeApprovedDocs(a, b) {
   const approved = [...new Set([...(a?.approved || []), ...(b?.approved || [])])].sort();
   const legacy = [...new Set([...(a?.legacy || []), ...(b?.legacy || [])])].sort();
-  return { schema: 2, note: NOTE, approved, ...(legacy.length ? { legacy } : {}) };
+  return { schema: 2, note: NOTE, approved, ...(legacy.length ? { legacy } : {}),
+    ...keepChannels(new Set(approved), { ...(b?.channels || {}), ...(a?.channels || {}) }, [...(a?.confirmed || []), ...(b?.confirmed || [])]) };
 }
 
 // Is a decision on this target one that could hide something serious (a blocker or an L9 finding)? A target the
@@ -858,14 +899,21 @@ export function bindApproved(approved, decisions, { serious = () => true } = {})
 // Through the state store (read, change, commit if nobody wrote in between, else again), so two decides at once
 // both count; a file that cannot be read stops the write. Older approvals are carried over on the way
 // (bindApproved); those not carried over are kept under `legacy`, never honoured.
-export function addApproved(file, keys, { decisions = [], serious, generation = null } = {}) {
+// `channel` (design §1): how these approvals were made, kept per key. An approval already on record keeps the channel
+// it was made with (approving a decision again does not change how it was made). `confirm`: keys a person confirmed
+// in the board (a decision the agent recorded, or one that came through git), approved here too if they were not.
+export function addApproved(file, keys, { decisions = [], serious, generation = null, channel = null, confirm = [] } = {}) {
+  if (channel !== null && !CHANNELS.includes(channel)) throw Object.assign(new Error(`unknown channel "${channel}"`), { code: 'BAD_ARGS' });
   let r;
   updateDoc(file, doc => {
-    const cur = doc ? { approved: new Set(doc.approved), legacy: doc.legacy || [] } : { approved: new Set(), legacy: [] };
+    const cur = doc ? { approved: new Set(doc.approved), legacy: doc.legacy || [], channels: doc.channels || {}, confirmed: doc.confirmed || [] }
+      : { approved: new Set(), legacy: [], channels: {}, confirmed: [] };
     r = bindApproved(cur.approved, decisions, { serious });
-    for (const k of keys) r.approved.add(k);
+    const channels = { ...cur.channels };
+    for (const k of keys) { if (channel && !r.approved.has(k) && !channels[k]) channels[k] = channel; r.approved.add(k); }
+    for (const k of confirm) r.approved.add(k);
     const legacy = [...new Set([...cur.legacy, ...r.left.map(x => x.id)])].sort();
-    return { schema: 2, note: NOTE, approved: [...r.approved].sort(), ...(legacy.length ? { legacy } : {}) };
+    return { schema: 2, note: NOTE, approved: [...r.approved].sort(), ...(legacy.length ? { legacy } : {}), ...keepChannels(r.approved, channels, [...cur.confirmed, ...confirm]) };
   }, { read: APPROVED_READ, prev: false, generation });
   return r;
 }
@@ -876,8 +924,8 @@ export function addApproved(file, keys, { decisions = [], serious, generation = 
 export const FUTURE_SLACK_MS = 5 * 60e3;
 // An open item no run has looked at again for this many runs is said to be so: it cannot be marked fixed.
 export const NOT_LOOKED_RUNS = 3;
-// An AI item double-checked by a verifier that was not suspect.
-export const checkedAi = item => item.verification?.status === 'confirmed' && !item.verification.suspect;
+// An AI item double-checked by a verifier that was not suspect, in a run with enough decoys to check it.
+export const checkedAi = item => item.verification?.status === 'confirmed' && !item.verification.suspect && !item.verification.tooFewDecoys;
 
 // Status of every fingerprint, from the state and the decisions. The latest decision on the fingerprint or on
 // its group that may count wins (at the same time, the fingerprint's). A decision's time is the earlier of its
@@ -889,7 +937,10 @@ export const checkedAi = item => item.verification?.status === 'confirmed' && !i
 // AI items (design §2.2): a group decision covers one only when it is double-checked (confirmed, not suspect) or
 // the decision came after its latest verification; on a blocker or L9 item it never covers a fingerprint first
 // seen after the decision. An AI item no longer claimed by 2 hunts that saw its screen is `stale`.
-export function view(state, decisions, approved = new Set(), { now = Date.now() } = {}) {
+// `channels` / `confirmed` (readApprovals): with them, each row's decision also says how it was made (`channel`:
+// board, cli-tty, cli-agent, `unknown` for an approval from before channels, `git` when not approved here) and
+// whether a person made or confirmed it (`human`, design §1).
+export function view(state, decisions, approved = new Set(), { now = Date.now(), channels = null, confirmed = null } = {}) {
   decisions = currentTargets(decisions, state);
   const seenAt = state.decisionsSeen || {};
   const keys = new Map();
@@ -926,6 +977,11 @@ export function view(state, decisions, approved = new Set(), { now = Date.now() 
       d = x;
     }
     const verified = d ? approved.has(keyOfDecision(d)) : true;
+    const how = d && channels ? (() => {
+      const key = keyOfDecision(d);
+      const channel = !verified ? 'git' : channels.get(key) || 'unknown';
+      return { channel, human: verified && (HUMAN_CHANNELS.has(channel) || !!confirmed?.has(key)), key, target: d.target, ...(d.note ? { note: d.note } : {}), ...(d.batch ? { batch: d.batch } : {}) };
+    })() : null;
     if (d && d.decision === 'reopen') d = null;
     let status;
     if (item.goneAt) status = 'fixed';
@@ -939,7 +995,7 @@ export function view(state, decisions, approved = new Set(), { now = Date.now() 
     const last = item.lookedAt || item.lastSeen;
     const own = runsOf(streamOf(item));
     const notLookedAt = !item.goneAt && own.at.has(last) && own.list.length - 1 - own.at.get(last) >= NOT_LOOKED_RUNS ? last : null;
-    rows.push({ ...item, source: item.source || 'rule', status, decision: d ? { id: d.id, decision: d.decision, reason: d.reason, by: d.by, at: d.at, verified } : null, note, notLookedAt,
+    rows.push({ ...item, source: item.source || 'rule', status, decision: d ? { id: d.id, decision: d.decision, reason: d.reason, by: d.by, at: d.at, verified, ...(how || {}) } : null, note, notLookedAt,
       ...(ai ? { stale, needsYou: item.needsYou ?? null, checked: checkedAi(item) } : {}) });
   }
   return rows.sort((x, y) => SEVERITY[x.severity] - SEVERITY[y.severity] || (x.group < y.group ? -1 : x.group > y.group ? 1 : x.fp < y.fp ? -1 : 1));

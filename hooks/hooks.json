@@ -1,0 +1,17 @@
+{
+  "description": "nunchi: keeps the AI's tools away from the board's key, nunchi's shared state, the answer keys and the commands only a person may run (design 0.1-c §1)",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read|NotebookRead|Write|Edit|MultiEdit|NotebookEdit|Bash|Grep|Glob|WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v node >/dev/null 2>&1 || exit 0; node \"${CLAUDE_PLUGIN_ROOT}/src/deny-hook.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

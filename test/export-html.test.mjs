@@ -312,6 +312,19 @@ test('scrubSecrets and redactUrl: the wider set of secret shapes, credential par
   assert.equal(scrubSecrets('Authorization: Bearer abc.def-ghi_jkl9'), 'Authorization: Bearer [secret-shaped: authorization]');
   assert.equal(scrubSecrets('Authorization: required for this page'), 'Authorization: required for this page', 'page text without a credential stays');
   assert.equal(scrubSecrets('sent Bearer ' + 'T'.repeat(23) + '7'), 'sent Bearer [secret-shaped: bearer-token]');
+  // review B8: cookies, key headers, a digitless Basic credential, a token in a URL path
+  assert.equal(scrubSecrets('Cookie: sid=fixture; theme=dark'), 'Cookie: [secret-shaped: cookie]');
+  assert.equal(scrubSecrets('Set-Cookie: session=FixtureValue; Path=/; HttpOnly'), 'Set-Cookie: [secret-shaped: cookie]');
+  assert.equal(scrubSecrets('document.cookie = "sid=fixture"'), 'document.cookie = "[secret-shaped: cookie]"');
+  assert.equal(scrubSecrets('x-api-key: ' + 'fixture' + 'key42'), 'x-api-key: [secret-shaped: api-key]');
+  assert.equal(scrubSecrets('{"apiKey": "' + 'abcdefghijklmnopqrstuv' + '"}'), '{"apiKey": "[secret-shaped: api-key]"}', 'no digit, but 20 characters or more');
+  assert.equal(scrubSecrets('X-Auth-Token=' + 'Fx7'.repeat(4)), 'X-Auth-Token=[secret-shaped: api-key]');
+  assert.equal(scrubSecrets('Authorization: Basic ' + 'Zml4dHVyZTpmaXh0dXJl'.replace(/\d/g, 'Q')), 'Authorization: Basic [secret-shaped: authorization]', 'base64 of user:password with no digit');
+  assert.equal(scrubSecrets('GET /reset-password/' + 'aB3dE5gH7jK9mN1pQ3sT5vX7' + '?x=1'), 'GET /reset-password/[secret-shaped: url-path-token]?x=1');
+  assert.equal(scrubSecrets('/invite/' + '9f8e7d6c5b4a39281706f5e4d3c2b1a0'), '/invite/[secret-shaped: url-path-token]');
+  for (const keep of ['Cookie settings', 'Cookie: required', 'Session ID: shown below', '/settings/notification-preferences-for-teams', '/_next/static/chunks/app-3f9a8b7c6d5e.js', '/docs/GettingStartedWithTheApp']) {
+    assert.equal(scrubSecrets(keep), keep, `page text and ordinary paths stay: ${keep}`);
+  }
   assert.equal(redactUrl('https://bob:hunter2@db.example.test/x?token=1'), 'https://db.example.test/x?token=REDACTED');
   assert.equal(redactText('connect https://bob:hunter2@db.example.test failed'), 'connect https://db.example.test failed');
   const html = htmlOf(oneFinding({ message: 'see /x?api_key=K9FIXTURE9&y=1 and https://bob:hunter2pass@db.example.test/', href: 'https://ann:pw4fixture@h.example.test/p' }));
