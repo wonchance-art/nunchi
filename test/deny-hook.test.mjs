@@ -235,7 +235,8 @@ test('deny hook: the script answers exit 2 with the reason on stderr to deny, ex
 });
 
 test('CI validates the plugin manifests (claude plugin validate --strict, the CLI pinned)', () => {
-  const ci = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  // line ends as git checks the file out (CRLF on Windows)
+  const ci = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8').replace(/\r\n/g, '\n');
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
   assert.equal(pkg.scripts['validate:plugin'], 'claude plugin validate --strict .');
   assert.match(ci, /\n {6}- run: npm run validate:plugin\n/, 'a step runs it');

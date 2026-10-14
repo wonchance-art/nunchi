@@ -157,7 +157,7 @@ button{font:inherit;color:inherit}
 .b-primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}.b-primary:hover{background:var(--accent);filter:brightness(.92);color:#fff}
 .b-quiet{border-color:transparent;background:transparent;color:var(--accent)}.b-quiet:hover{background:var(--accent-soft)}
 .kbd{display:inline-block;min-width:20px;padding:0 5px;border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;background:var(--soft);color:var(--ink-2);font:12px/18px var(--mono);text-align:center}
-.side-foot a{color:var(--muted)}.side-foot button{min-height:44px;padding:0;border:0;background:none;color:var(--accent);font-size:12px;cursor:pointer;text-decoration:underline}
+.side-foot a{color:var(--muted)}.side-foot button{min-height:44px;min-width:44px;padding:0;border:0;background:none;color:var(--accent);font-size:12px;cursor:pointer;text-decoration:underline}
 .tabs{display:flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:10px;background:var(--seg);align-self:flex-start}
 .tabs [role=tab]{display:inline-flex;align-items:center;gap:6px;min-height:44px;padding:0 14px;border:0;border-radius:7px;background:transparent;color:var(--ink-2);font-size:14px;cursor:pointer}
 .tabs [role=tab][aria-selected=true]{background:var(--panel);color:var(--ink);font-weight:600;box-shadow:0 1px 2px rgba(27,29,33,.12)}
