@@ -449,6 +449,23 @@ test('§3.1 the link never reaches stdout: the server started directly, with any
   } finally { await stopBoards(stateDir, p.root); }
 });
 
+test('§3.1 nunchi open twice at once starts one board (a launch lock); a running board keeps its port and says --port is ignored', { timeout: 60000 }, async () => {
+  const p = smallProject();
+  const stateDir = join(p.nunchi, 'state');
+  try {
+    const [a, b] = await Promise.all([openBoard({ projectDir: p.root, stateDir, browser: false, idleMs: 20000 }), openBoard({ projectDir: p.root, stateDir, browser: false, idleMs: 20000 })]);
+    assert.equal(a.port, b.port, 'the same board');
+    assert.deepEqual([a.reused, b.reused].sort(), [false, true]);
+    assert.equal(readdirSync(join(stateDir, 'boards')).filter(n => n.endsWith('.json')).length, 1, 'one board record');
+    const c = await openBoard({ projectDir: p.root, stateDir, browser: false, port: a.port === 47999 ? 47998 : 47999 });
+    assert.equal(c.port, a.port);
+    assert.equal(c.portIgnored, a.port === 47999 ? 47998 : 47999, 'said, not silently dropped');
+    const cli = await new Promise(res => execFile('node', [CLI, 'open', '--no-browser', '--port', String(c.portIgnored)], { cwd: p.root, encoding: 'utf8', timeout: 30000 }, (err, stdout) => res(stdout)));
+    assert.match(cli, new RegExp(`--port ${c.portIgnored} is ignored: the running board keeps port ${a.port}`));
+    assert.ok(!readdirSync(join(stateDir, 'boards')).some(n => n.startsWith('launch.lock.d')), 'the lock is given back');
+  } finally { await stopBoards(stateDir, p.root); }
+});
+
 test('§3.1 the browser opener: only a board link with a launch code, by an absolute path from a fixed list (never PATH, $BROWSER or ComSpec)', () => {
   const url = `http://127.0.0.1:4321/#t=${'a'.repeat(64)}`;
   const only = (...ok) => ({ exists: p => ok.includes(p), env: { ComSpec: 'C:\\evil\\cmd.exe', SystemRoot: 'C:\\Windows', BROWSER: '/tmp/evil', PATH: '/tmp/evil' } });

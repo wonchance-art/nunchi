@@ -145,7 +145,8 @@ export function sweepLeftovers(dir, { olderThanMs = 3600e3, now = Date.now() } =
 // - released only while it still holds our token.
 // - Windows refuses to rename the lock folder while another process reads owner.json in it: those renames, and
 //   the reads, are retried (retryBusy), so a release is never lost to a reader.
-// Held only around read–change–write of a small file, never across capture or network I/O. Acquisition backs
+// Held only around read–change–write of a small file, and by `nunchi open` while it starts a board (withLockAsync,
+// which waits without blocking), never across capture or network I/O. Acquisition backs
 // off for `timeoutMs`, then fails with code LOCKED, also when a stale lock cannot be removed.
 const procFile = p => { try { return readFileSync(p, 'utf8'); } catch { return null; } };
 const bootId = () => procFile('/proc/sys/kernel/random/boot_id')?.trim() ?? null;
@@ -227,7 +228,8 @@ function release(dir, token) {
   rmSync(gone, RM);
 }
 
-export function withLock(path, fn, { timeoutMs = 5000, staleMs = 30000 } = {}) {
+// The steps of taking a lock, shared by the blocking and the awaiting way to wait for it.
+function prepareLock(path) {
   const dir = `${path}.lock.d`;
   mkdirSync(dirname(path), { recursive: true });
   const token = randomBytes(8).toString('hex');
@@ -237,27 +239,45 @@ export function withLock(path, fn, { timeoutMs = 5000, staleMs = 30000 } = {}) {
   const held = io.holdAlive(aliveFile);
   try { mkdirSync(ready); } catch (e) { held?.release(); throw e; }
   writeFileSync(join(ready, 'owner.json'), JSON.stringify({ token, pid: process.pid, host: hostname(), boot: bootId(), ns: pidNs(), start: procStart(process.pid), alive: held ? basename(aliveFile) : null, at: Date.now() }));
-  const t0 = Date.now();
-  try {
-    for (let wait = 5; ; wait = Math.min(wait * 2, 100)) {
-      try { io.rename(ready, dir); break; } catch (e) { if (!taken(e)) throw e; }
-      const stale = staleOwner(dir, staleMs);
-      if (stale && reap(dir, stale, staleMs)) continue;
-      if (Date.now() - t0 > timeoutMs) {
-        const o = readOwner(dir);
-        const who = o ? ` (pid ${o.pid} on ${o.host}${sameMachine(o) ? `, ${alive(o.pid) ? 'running' : 'exited'}` : ''})` : '';
-        throw Object.assign(new Error(`${path} is locked by another nunchi process${who}; try again in a moment, or remove ${dir} if no nunchi is running`), { code: 'LOCKED' });
-      }
-      sleep(wait);
+  return { path, dir, token, ready, held, t0: Date.now() };
+}
+// One try: → true when the lock is ours; false to wait and try again; throws LOCKED after `timeoutMs`.
+function tryLock(l, { timeoutMs, staleMs }) {
+  for (;;) {
+    try { io.rename(l.ready, l.dir); return true; } catch (e) { if (!taken(e)) throw e; }
+    const stale = staleOwner(l.dir, staleMs);
+    if (stale && reap(l.dir, stale, staleMs)) continue;
+    if (Date.now() - l.t0 > timeoutMs) {
+      const o = readOwner(l.dir);
+      const who = o ? ` (pid ${o.pid} on ${o.host}${sameMachine(o) ? `, ${alive(o.pid) ? 'running' : 'exited'}` : ''})` : '';
+      throw Object.assign(new Error(`${l.path} is locked by another nunchi process${who}; try again in a moment, or remove ${l.dir} if no nunchi is running`), { code: 'LOCKED' });
     }
-  } catch (e) { rmSync(ready, RM); held?.release(); throw e; }
-  // a long holder touches the lock between steps, so a holder on another machine does not judge it stale
-  const touch = () => { if (readOwner(dir)?.token === token) { const t = new Date(); try { utimesSync(join(dir, 'owner.json'), t, t); } catch {} } };
-  try { return fn({ touch }); }
-  finally {
-    try { release(dir, token); }
-    finally { held?.release(); }                                 // after the lock is gone, never before
+    return false;
   }
+}
+const abandon = l => { rmSync(l.ready, RM); l.held?.release(); };
+// a long holder touches the lock between steps, so a holder on another machine does not judge it stale
+function heldLock(l) {
+  return {
+    touch: () => { if (readOwner(l.dir)?.token === l.token) { const t = new Date(); try { utimesSync(join(l.dir, 'owner.json'), t, t); } catch {} } },
+    release: () => { try { release(l.dir, l.token); } finally { l.held?.release(); } },   // the proof of life after the lock, never before
+  };
+}
+
+export function withLock(path, fn, { timeoutMs = 5000, staleMs = 30000 } = {}) {
+  const l = prepareLock(path);
+  try { for (let wait = 5; !tryLock(l, { timeoutMs, staleMs }); wait = Math.min(wait * 2, 100)) sleep(wait); }
+  catch (e) { abandon(l); throw e; }
+  const h = heldLock(l);
+  try { return fn({ touch: h.touch }); } finally { h.release(); }
+}
+// The same lock, waited for without blocking (for a holder that awaits: `nunchi open` starting a board).
+export async function withLockAsync(path, fn, { timeoutMs = 5000, staleMs = 30000 } = {}) {
+  const l = prepareLock(path);
+  try { for (let wait = 5; !tryLock(l, { timeoutMs, staleMs }); wait = Math.min(wait * 2, 100)) await new Promise(r => setTimeout(r, wait)); }
+  catch (e) { abandon(l); throw e; }
+  const h = heldLock(l);
+  try { return await fn({ touch: h.touch }); } finally { h.release(); }
 }
 
 // The parts of the lock a test needs to drive one race step by step.

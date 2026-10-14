@@ -10,6 +10,7 @@ import { readdirSync, readFileSync, unlinkSync, realpathSync, lstatSync } from '
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { boardsDir } from './server.mjs';
+import { withLockAsync, privateDir } from '../stable.mjs';
 
 const SERVER = fileURLToPath(new URL('./server.mjs', import.meta.url));
 
@@ -67,13 +68,19 @@ const firstLine = (stream, ms) => new Promise((res, rej) => {
 });
 const parse = s => { try { return JSON.parse(s); } catch { throw new Error('the board answered something else'); } };
 
-// → { port, reused, link? }
-export async function openBoard({ projectDir, stateDir, mode = 'board', labeller = null, browser = true, linkToTerminal = false, port = 0, idleMs = null }) {
+// → { port, reused, link?, portIgnored? }. Under a lock (`boards/launch.lock.d`): two `nunchi open` at once start one
+// board, and the second reuses it. A running board keeps its port: a `port` asked for that differs is ignored, and
+// said (`portIgnored`).
+export async function openBoard(opts) {
+  privateDir(boardsDir(opts.stateDir));                      // the board's socket folder: this user's only (0700)
+  return withLockAsync(join(boardsDir(opts.stateDir), 'launch'), () => openUnlocked(opts), { timeoutMs: 30000 });
+}
+async function openUnlocked({ projectDir, stateDir, mode = 'board', labeller = null, browser = true, linkToTerminal = false, port = 0, idleMs = null }) {
   const live = (await boardsOf(stateDir, projectDir)).filter(b => b.mode === mode && (mode !== 'label' || b.labeller === labeller));
   if (live.length) {
     const b = live[0];
     if (browser) await ask(b.socket, 'open');
-    return { port: b.port, reused: true };
+    return { port: b.port, reused: true, ...(port && port !== b.port ? { portIgnored: port } : {}) };
   }
   const wantLink = !browser && linkToTerminal;
   const args = [SERVER, '--project', resolve(projectDir), '--mode', mode, ...(port ? ['--port', String(port)] : []), ...(browser ? ['--open'] : []),

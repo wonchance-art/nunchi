@@ -572,6 +572,7 @@ if (cmd === 'setup') {
   try { r = await openBoard({ projectDir: process.cwd(), stateDir: led.st.root.dir, mode: args.label ? 'label' : 'board', labeller, browser: !args.noBrowser, linkToTerminal: tty, port: args.port || 0 }); }
   catch (e) { console.error(`nunchi open: ${e.message}`); process.exit(2); }
   console.log(`board open on 127.0.0.1:${r.port}${r.reused ? ' (already running)' : ''}${args.label ? ` · label mode for ${labeller}` : ''}`);
+  if (r.portIgnored) console.log(`--port ${r.portIgnored} is ignored: the running board keeps port ${r.port} (nunchi open --stop, then nunchi open --port ${r.portIgnored}, to move it)`);
   if (r.link) console.log(`open this link in your browser; it works once, for 2 minutes:\n  ${r.link}`);
   else if (args.noBrowser) console.log('no browser was opened; to open it, run nunchi open in your own terminal');
   else console.log(r.reused ? 'a fresh one-time link was opened in the browser' : 'the browser shows it; it stops after 2 hours idle (nunchi open --stop stops it now)');
