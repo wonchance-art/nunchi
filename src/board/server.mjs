@@ -153,7 +153,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   let lockedUntil = 0;
   let lastActive = now();
   let origin = null, hostHeader = null;
-  const by = P.whoAmI();
+  const by = P.whoAmI(project);
 
   // ---- the model, cached by what changes it ----------------------------------------------------------------------
   // the state's generation plus the decision folders (decisions that arrived through git bump no generation)

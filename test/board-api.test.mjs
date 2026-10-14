@@ -572,3 +572,17 @@ test('label mode (§9.2): blinded items from the AI pool, its own keys, labels p
   } finally { await other.b.close(); }
   await assert.rejects(startBoard({ projectDir: p.root, mode: 'label', labeller: 'Not Valid' }), /labeller/);
 });
+
+test('who decides: git\'s user.name of the project, also for a server whose working folder is the temp folder', async () => {
+  const p = smallProject();
+  const git = (...a) => new Promise((res, rej) => execFile('git', a, { cwd: p.root }, e => (e ? rej(e) : res())));
+  await git('init', '-q');
+  await git('config', 'user.name', 'Project Person');
+  assert.equal(P.whoAmI(p.root), 'Project Person', 'the project\'s own config');
+  const { b, call } = await board(p);
+  try {
+    const r = await call('/api/decide', { targets: [gid(p, 'dead-href')], decision: 'hold', reason: null });
+    assert.equal(r.status, 200);
+    assert.equal(decisions(p.nunchi)[0].by, 'Project Person', 'the board records the project\'s user, wherever it runs');
+  } finally { await b.close(); }
+});

@@ -1116,8 +1116,11 @@ that matches a board link, with an allow-listed environment: the desktop session
 variable) and a fixed system `PATH`. The detached server gets an allow-listed environment too (PATH and the user's
 config for git, `XDG_STATE_HOME` / `LOCALAPPDATA` for the answer keys, locale, temp folders, the desktop session):
 never `NODE_*`, `LD_*`, `DYLD_*`, `BROWSER` or `GIT_*` (tested on `/proc/<pid>/environ`). Its working folder is the
-state's `boards` folder, never the project (on Windows a process inside a folder keeps it from being removed or
-renamed: a worktree, a checkout); it watches only the state folder and closes the watch when it stops. The hook's
+OS temp folder (this user's on Windows; `launch.mjs` `serverCwd`), never the project or its state, which sit in the
+project's `.git` or `.nunchi` (on Windows a process inside a folder keeps it from being removed or renamed: a
+worktree, a checkout); git's user name is read in the project. A running board still watches the state folder (not
+recursively), which can keep the project from being renamed or removed on Windows while it runs: `nunchi open
+--stop` stops it and releases the folder (as does its 2-hour idle stop). The hook's
 matcher keeps `NotebookRead`: matching a tool that a newer Claude Code no longer has costs nothing, and an older one
 still has it.
 

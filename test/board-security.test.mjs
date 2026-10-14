@@ -5,12 +5,12 @@ import assert from 'node:assert/strict';
 import { request } from 'node:http';
 import { connect } from 'node:net';
 import { readFileSync, writeFileSync, mkdirSync, symlinkSync, readdirSync, statSync, cpSync, openSync, closeSync, readlinkSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
-import { networkInterfaces } from 'node:os';
+import { join, relative, isAbsolute } from 'node:path';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
 import { startBoard, CSP, SECURITY_HEADERS, MAX_BODY, MAX_SESSION_BODY, MAX_CONNECTIONS, LIMITS, MAX_STREAMS, openerCommand, openerEnv, sameSecret, CODE_TTL_MS } from '../src/board/server.mjs';
-import { openBoard, stopBoards, serverEnv, real } from '../src/board/launch.mjs';
+import { openBoard, stopBoards, serverEnv, real, serverCwd } from '../src/board/launch.mjs';
 import { smallProject, jpeg, writeRun } from './fixtures/board-project.mjs';
 
 const POSIX = process.platform !== 'win32';
@@ -558,6 +558,13 @@ test('§3.1 the opener and the detached server get an allow-listed environment: 
   const s = serverEnv({ ...hostile, LANG: 'C.UTF-8', XDG_STATE_HOME: '/x/state' });
   for (const k of ['BROWSER', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'NODE_OPTIONS', 'NODE_PATH', 'GIT_DIR']) assert.ok(!(k in s), k);
   for (const k of ['PATH', 'HOME', 'LANG', 'XDG_STATE_HOME']) assert.ok(k in s, `${k} is kept (git and the answer keys need it)`);
+  // on every OS: the server's working folder is outside the project and its state (in .git or .nunchi)
+  {
+    const q = smallProject();
+    const rel = relative(realpathSync(q.root), realpathSync(serverCwd()));
+    assert.ok(rel.startsWith('..') || isAbsolute(rel), `the server runs outside the project (${rel})`);
+    assert.equal(realpathSync(serverCwd()), realpathSync(tmpdir()));
+  }
   // the detached process itself, through nunchi open's launcher
   if (process.platform !== 'linux') return;
   const p = smallProject();
@@ -572,8 +579,8 @@ test('§3.1 the opener and the detached server get an allow-listed environment: 
     const env = readFileSync(`/proc/${rec.pid}/environ`, 'utf8').split('\0').map(x => x.split('=')[0]);
     for (const k of ['BROWSER', 'NODE_PATH', 'LD_LIBRARY_PATH']) assert.ok(!env.includes(k), `the server has no ${k}`);
     assert.ok(env.includes('PATH'));
-    // its working folder is the state's boards folder, not the project (on Windows a process inside a folder keeps it
-    // from being removed)
-    assert.equal(realpathSync(readlinkSync(`/proc/${rec.pid}/cwd`)), realpathSync(join(stateDir, 'boards')));
+    // its working folder is the temp folder, not the project or its state (on Windows a process inside a folder keeps
+    // it from being removed or renamed)
+    assert.equal(realpathSync(readlinkSync(`/proc/${rec.pid}/cwd`)), realpathSync(serverCwd()));
   } finally { await stopBoards(stateDir, p.root); }
 });

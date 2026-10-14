@@ -6,6 +6,7 @@
 // Otherwise the board opens the browser itself and nothing secret is printed.
 import { spawn } from 'node:child_process';
 import { connect } from 'node:net';
+import { tmpdir } from 'node:os';
 import { readdirSync, readFileSync, unlinkSync, realpathSync, lstatSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,6 +71,9 @@ const firstLine = (stream, ms) => new Promise((res, rej) => {
 });
 const parse = s => { try { return JSON.parse(s); } catch { throw new Error('the board answered something else'); } };
 
+// The detached server's working folder: the OS temp folder (this user's on Windows), outside any project.
+export const serverCwd = () => tmpdir();
+
 // → { port, reused, link?, portIgnored? }. Under a lock (`boards/launch.lock.d`): two `nunchi open` at once start one
 // board, and the second reuses it. A running board keeps its port: a `port` asked for that differs is ignored, and
 // said (`portIgnored`).
@@ -88,9 +92,9 @@ async function openUnlocked({ projectDir, stateDir, mode = 'board', labeller = n
   const args = [SERVER, '--project', resolve(projectDir), '--mode', mode, ...(port ? ['--port', String(port)] : []), ...(browser ? ['--open'] : []),
     ...(wantLink ? ['--link-to-parent'] : []), ...(labeller ? ['--labeller', labeller] : []), ...(idleMs ? ['--idle-ms', String(idleMs)] : [])];
   // stdout carries the port only; the link, when this terminal is to print it, comes over a pipe of its own (fd 3)
-  // its working folder is the boards folder of the state, never the project: on Windows a process inside a folder
-  // keeps it from being removed or renamed (a worktree, a checkout)
-  const child = spawn(process.execPath, args, { cwd: boardsDir(stateDir), detached: true, stdio: ['ignore', 'pipe', 'ignore', ...(wantLink ? ['pipe'] : [])], windowsHide: true, env: serverEnv() });
+  // its working folder is the temp folder (serverCwd), never the project or its state (which may be in the project's
+  // .git or .nunchi): on Windows a process inside a folder keeps it from being removed or renamed (a worktree, a checkout)
+  const child = spawn(process.execPath, args, { cwd: serverCwd(), detached: true, stdio: ['ignore', 'pipe', 'ignore', ...(wantLink ? ['pipe'] : [])], windowsHide: true, env: serverEnv() });
   let line, link = null;
   try {
     line = parse(await firstLine(child.stdout, 20000));

@@ -94,10 +94,11 @@ export function ledgerView(led, { now } = {}) {
 
 // ---- decisions (the same for `nunchi decide` and the board) ------------------------------------------------------
 
-// Who decides: git's user.name, else the login name.
-export function whoAmI() {
+// Who decides: git's user.name in the project (its own config too), else the login name. `cwd`: the project (the board's
+// server runs in the temp folder).
+export function whoAmI(cwd = process.cwd()) {
   let by = process.env.USER || process.env.USERNAME || 'unknown';
-  try { by = execFileSync('git', ['config', 'user.name'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim() || by; } catch {}
+  try { by = execFileSync('git', ['config', 'user.name'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).trim() || by; } catch {}
   return by;
 }
 
