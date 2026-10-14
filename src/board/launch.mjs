@@ -2,7 +2,8 @@
 // never blocks; a second `nunchi open` finds the running board through `state/boards/<pid>.json` (its port and
 // control socket, never its token) and asks it, over that socket, to open the browser with a fresh one-time link.
 // `--stop` stops this project's boards. The link is printed only when stdin and stdout are the person's own terminal
-// and no browser is opened (`--no-browser`); otherwise the board opens the browser itself and nothing secret is printed.
+// and no browser is opened (`--no-browser`); the board hands it over a pipe of its own (fd 3), never its stdout.
+// Otherwise the board opens the browser itself and nothing secret is printed.
 import { spawn } from 'node:child_process';
 import { connect } from 'node:net';
 import { readdirSync, readFileSync, unlinkSync, realpathSync, lstatSync } from 'node:fs';
@@ -51,9 +52,10 @@ const firstLine = (stream, ms) => new Promise((res, rej) => {
   let buf = '';
   const t = setTimeout(() => rej(new Error('the board did not start within 20 s')), ms);
   stream.setEncoding('utf8');
-  stream.on('data', d => { buf += d; const i = buf.indexOf('\n'); if (i >= 0) { clearTimeout(t); try { res(JSON.parse(buf.slice(0, i))); } catch { rej(new Error('the board answered something else')); } } });
+  stream.on('data', d => { buf += d; const i = buf.indexOf('\n'); if (i >= 0) { clearTimeout(t); res(buf.slice(0, i)); } });
   stream.on('end', () => { clearTimeout(t); rej(new Error('the board stopped while starting')); });
 });
+const parse = s => { try { return JSON.parse(s); } catch { throw new Error('the board answered something else'); } };
 
 // → { port, reused, link? }
 export async function openBoard({ projectDir, stateDir, mode = 'board', labeller = null, browser = true, linkToTerminal = false, port = 0, idleMs = null }) {
@@ -63,14 +65,18 @@ export async function openBoard({ projectDir, stateDir, mode = 'board', labeller
     if (browser) await ask(b.socket, 'open');
     return { port: b.port, reused: true };
   }
+  const wantLink = !browser && linkToTerminal;
   const args = [SERVER, '--project', resolve(projectDir), '--mode', mode, ...(port ? ['--port', String(port)] : []), ...(browser ? ['--open'] : []),
-    ...(!browser && linkToTerminal ? ['--link-to-parent'] : []), ...(labeller ? ['--labeller', labeller] : []), ...(idleMs ? ['--idle-ms', String(idleMs)] : [])];
-  const child = spawn(process.execPath, args, { cwd: resolve(projectDir), detached: true, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
-  let line;
-  try { line = await firstLine(child.stdout, 20000); }
-  finally { child.stdout.destroy(); child.unref(); }
+    ...(wantLink ? ['--link-to-parent'] : []), ...(labeller ? ['--labeller', labeller] : []), ...(idleMs ? ['--idle-ms', String(idleMs)] : [])];
+  // stdout carries the port only; the link, when this terminal is to print it, comes over a pipe of its own (fd 3)
+  const child = spawn(process.execPath, args, { cwd: resolve(projectDir), detached: true, stdio: ['ignore', 'pipe', 'ignore', ...(wantLink ? ['pipe'] : [])], windowsHide: true });
+  let line, link = null;
+  try {
+    line = parse(await firstLine(child.stdout, 20000));
+    if (wantLink && !line.error) link = await firstLine(child.stdio[3], 5000).catch(() => null);
+  } finally { for (const s of child.stdio) s?.destroy(); child.unref(); }
   if (line.error) throw Object.assign(new Error(line.error), { code: 'BOARD_FAILED' });
-  return { port: line.port, reused: false, ...(line.link ? { link: line.link } : {}) };
+  return { port: line.port, reused: false, ...(link && /^http:\/\/127\.0\.0\.1:\d{1,5}\/#t=[0-9a-f]{64}$/.test(link) ? { link } : {}) };
 }
 
 export async function stopBoards(stateDir, projectDir) {

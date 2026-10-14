@@ -182,5 +182,6 @@ code and captured again:
 - The user decides; you never decide for them. The board (and `nunchi decide` in their own terminal) is their
   channel: never read nunchi's state (`.git/nunchi/`, `.nunchi/state/`), the answer keys, `.nunchi/auth.json` or a
   run's `canaries.json`; never write decisions, labels, lens packs or `.nunchi/config.json` by hand; never request
-  the board's port; never run `approve`, `open --label` or nunchi under a pseudo-terminal. The plugin's hook refuses
-  these in Claude Code; in other agents, hold to them yourself.
+  the board's port; never run `approve`, `open --label`, the board's script itself or nunchi under a
+  pseudo-terminal. The plugin's hook refuses these in Claude Code; in other agents, hold to them yourself. These
+  rules record honestly who decided; they are not a lock against code that runs as the user.

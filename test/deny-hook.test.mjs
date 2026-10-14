@@ -103,6 +103,20 @@ test('deny hook: the human-only commands, and nunchi under a pseudo-terminal, ar
   ]) assert.equal(call(r, 'Bash', { command }), null, command);
 });
 
+test('deny hook: the board\'s script is never run directly and its link handover is never asked for; reading its source is fine', () => {
+  const r = repo();
+  for (const command of [
+    'node src/board/server.mjs --project . --mode board', 'node ./node_modules/nunchi/src/board/server.mjs --project .', 'nohup node "src/board/server.mjs" &',
+    'env FOO=1 node src/board/server.mjs', 'node src/cli.mjs open --link-to-parent', 'node src/board/server.mjs --link-to-parent 3>&1',
+    'node -e "import(\'./src/board/launch.mjs\').then(m => m.openBoard({ projectDir: \'.\', browser: false }))"',
+    'node --input-type=module -e "const { openBoard } = await import(\'/abs/nunchi/src/board/launch.mjs\')"', 'bun src/board/server.mjs',
+    'node -e "x({ linkToTerminal: true })"',
+  ]) assert.ok(call(r, 'Bash', { command }), command);
+  for (const command of ['cat src/board/server.mjs', 'git diff -- src/board/server.mjs', 'grep -n openBoard src/board/launch.mjs', 'node --test test/board-security.test.mjs', 'nunchi open --no-browser']) {
+    assert.equal(call(r, 'Bash', { command }), null, command);
+  }
+});
+
 test('deny hook: requests to a running board, its socket and its process are denied, by any loopback name; the app\'s own port is not', () => {
   const r = repo();
   const p = protectedOf(r.root, { env: r.env });

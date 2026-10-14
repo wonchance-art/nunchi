@@ -48,8 +48,10 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
   and one-key decisions with undo, in your browser, updated as captures land. It listens on 127.0.0.1 only, and a
   one-time link gives your browser a key held in memory; your AI never sees it. Decisions your AI records from chat
   are shown, but a *keep* or *not a problem* counts only once you confirm it there. In Claude Code the plugin's hook
-  also keeps the AI's tools out of nunchi's state, keys and board; that hook matches paths and words, so it stops
-  mistakes and naive prompt injections, not a determined agent — the board's confirmation is the boundary
+  also keeps the AI's tools out of nunchi's state, keys and board. The hook matches paths and words, and neither it
+  nor the board is a security boundary against code running as your user: they attest who decided, against honest
+  mistakes and naive prompt injections. For a repository you don't trust, run the agent in a container or as
+  another user
 - **Runs** you can compare: each capture is its own folder with the commit and working-tree state it came from;
   a login that expired or an app that isn't running is reported once, not as a hundred findings
 

@@ -15,13 +15,16 @@
 // Denied as writes (reading them is fine: they are committed files): `.nunchi/decisions/**`, `.nunchi/labels/**`,
 // `.nunchi/lenses/**`, `.nunchi/lenses.lock.json`, `.nunchi/config.json` (allowHosts is the user's to write, D10).
 // Denied commands: `nunchi … approve`, `nunchi … label` / `--label`, `nunchi fix --approve-checks` (human channels
-// only), and nunchi run under a pseudo-terminal wrapper (`script`, `unbuffer`, `expect`, a Python pty): that would pass
-// for the person's own terminal (the `cli-tty` channel).
+// only), nunchi run under a pseudo-terminal wrapper (`script`, `unbuffer`, `expect`, a Python pty): that would pass
+// for the person's own terminal (the `cli-tty` channel); and the board's script run directly, or asked for its link
+// (`--link-to-parent`).
 //
 // Honest limits (design §8.3): this matches paths and words in the tool call. A command that builds a path at run
-// time (variables, base64, a script file) is not seen; it guards against honest mistakes and naive injections, while
-// the boundary that holds is the board's human channel (a dismissal recorded by the agent does not count until the
-// person confirms it there). Codex CLI has no such hook.
+// time (variables, base64, a script file) is not seen. Neither this hook nor the board's channels are a security
+// boundary against code that runs as the same user: such code can read the same files and start the same processes
+// as the person. What they give is an attestation that holds against honest mistakes and naive prompt injection (a
+// dismissal recorded by the agent does not count until the person confirms it in the board). For a repository you do
+// not trust, run the agent in a container or as another user. Codex CLI has no such hook.
 import { readFileSync, readdirSync, realpathSync, lstatSync } from 'node:fs';
 import { join, resolve, dirname, basename, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
@@ -117,9 +120,16 @@ const GIT_READ = new Set(['diff', 'log', 'show', 'status', 'add', 'commit', 'bla
 const words = seg => (seg.match(/"[^"]*"|'[^']*'|[^\s"']+/g) || []).map(w => w.replace(/^["']|["']$/g, ''));
 // Path-like words of a command (after `=`, too: `--out=.nunchi/state`).
 const pathsIn = cmd => words(cmd.replace(/[;&|()<>`]/g, ' ')).flatMap(w => [w, ...(w.includes('=') ? [w.slice(w.indexOf('=') + 1)] : [])]).filter(w => /[/\\.~$%]/.test(w));
+// The board is started by `nunchi open` only: run directly, or asked for its link, it could hand a session to the agent.
+const BOARD_SCRIPT = /(^|[\s;&|(`'"/=])board\/(server|launch)\.mjs\b/;
+const RUNS_CODE = /(^|\/)(node|nodejs|bun|deno|tsx|ts-node|npx|pnpx|bunx)(\.exe)?$/i;
 export function bashRule(command, prot) {
   const cmd = String(command || '');
   const flat = cmd.replace(/\\/g, '/');
+  if (/--link-to-parent\b|\blinkToTerminal\b/.test(flat)) return 'the board\'s link goes to the person\'s own terminal only (they run nunchi open --no-browser there)';
+  for (const seg of flat.split(/;|&&|\|\||\||\n/)) {
+    if (BOARD_SCRIPT.test(seg) && (words(seg).some(w => RUNS_CODE.test(w)) || /\b(import|require)\s*\(|--(import|require)\b/.test(seg))) return 'the board is started by nunchi open, never by running its script';
+  }
   if (NUNCHI.test(flat)) {
     if (/\b(approve)\b/.test(flat) && /(nunchi|cli\.mjs)\b[^;&|\n]*\sapprove\b/.test(flat)) return 'approving decisions is the person\'s (the board, or nunchi approve in their own terminal)';
     if (/(nunchi|cli\.mjs)\b[^;&|\n]*\s(label\b|--label\b)/.test(flat)) return 'labelling is done by a person in the board (they run nunchi open --label themselves)';

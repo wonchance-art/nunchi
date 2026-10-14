@@ -1073,8 +1073,11 @@ key. A second `nunchi open` pings this project's records (a record whose board d
 a live board of the same mode. The board stops after 2 hours without a request (the live stream and the polling
 fallback do not count), telling an open tab. The link is printed only when stdin and stdout are the person's
 terminal and no browser is opened (`--no-browser`); run by an agent, the output is `board open on 127.0.0.1:<port>`
-and nothing secret. The browser opener is `xdg-open`, `/usr/bin/open` or `cmd /c start`, given only a URL that
-matches a board link.
+and nothing secret. The server never writes a link to its stdout (which carries `{"port"}` only): `nunchi open`
+hands it an extra pipe as fd 3 and asks for the link with `--link-to-parent`, and the link goes over that pipe (a
+file or terminal on fd 3 gets nothing). Started any other way, the server hands out no link: it opens the browser
+itself, or nothing (tested by running the script directly). The browser opener is `xdg-open`, `/usr/bin/open` or
+`cmd /c start`, given only a URL that matches a board link.
 
 **Security (§3.2; `test/board-security.test.mjs` has a test per check).**
 - *Bind* 127.0.0.1 only. *Host* must be exactly `127.0.0.1:<port>`, or 421 (also without a Host header: node's own
@@ -1223,11 +1226,18 @@ path) and `.nunchi/state/**`; the answer keys (`$XDG_STATE_HOME/nunchi`, `%LOCAL
 port (any loopback name, curl, nc, `/dev/tcp`, WebFetch), control socket and `/proc/<pid>`, and any
 `/proc/<n>/cmdline|environ|mem|maps|fd`. It denies writes (Write, Edit, and Bash commands that are not plain reads)
 to `.nunchi/decisions/**`, `.nunchi/labels/**`, `.nunchi/lenses/**`, `lenses.lock.json` and `.nunchi/config.json`
-(reads stay open: they are committed). It denies `nunchi … approve`, `… label` / `--label`, `--approve-checks`, and
-nunchi under `script`, `unbuffer`, `expect`, `socat` or a Python pty (it would pass for `cli-tty`). Links are
-followed before deciding. A pure data hook: no network, nothing written. Limits: it reads paths and words in the
-call; a command that builds a path at run time is not seen. The board's confirmation is the boundary that holds;
-Codex CLI has no such hook. The skill states the same rules for other agents.
+(reads stay open: they are committed). It denies `nunchi … approve`, `… label` / `--label`, `--approve-checks`,
+nunchi under `script`, `unbuffer`, `expect`, `socat` or a Python pty (it would pass for `cli-tty`), and running
+`board/server.mjs` or `board/launch.mjs` directly (node, bun, deno, npx, `import(…)`) or any `--link-to-parent`.
+Links are followed before deciding. A pure data hook: no network, nothing written. Limits: it reads paths and
+words in the call; a command that builds a path at run time is not seen. Codex CLI has no such hook. The skill
+states the same rules for other agents.
+
+*What this is, and is not.* The hook, the channels and the board's confirmation are an **attestation** of who
+decided: they hold against honest mistakes and naive prompt injection (an agent that follows text on a screen, or
+guesses a command). They are **not a security boundary** against code that runs as the same user as the person:
+such code can read the same files, start the same processes and drive the same browser. For a repository you do not
+trust, run the agent in a container or as a separate user.
 
 **Deviations from design §3, and why (the safer option each time).**
 - One-time code in the link, traded for a per-tab key, instead of the key itself in the fragment: a link that leaks

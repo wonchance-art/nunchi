@@ -18,7 +18,7 @@
 //   O_NOFOLLOW, fstat-ed and served from that descriptor, as image/jpeg only (no SVG, nothing else).
 // - rate limits on failed keys, requests, writes and streams.
 import { createServer } from 'node:http';
-import { createServer as createNetServer } from 'node:net';
+import { createServer as createNetServer, Socket } from 'node:net';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync, openSync, fstatSync, readSync, closeSync, lstatSync, realpathSync, readdirSync, statSync, unlinkSync, watch, constants, chmodSync, existsSync } from 'node:fs';
 import { join, dirname, resolve, relative, isAbsolute, basename } from 'node:path';
@@ -558,9 +558,21 @@ async function main(argv) {
   for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, () => board.close('signal'));
   process.on('exit', cleanup);
   if (opt.open) openInBrowser(board.newLink());
-  // the parent (`nunchi open`) reads one line: the port, and a link only when its own stdin and stdout are the
-  // person's terminal and no browser was opened
-  process.stdout.write(JSON.stringify({ port: board.port, ...(opt.linkToParent ? { link: board.newLink() } : {}) }) + '\n');
+  // A link is never written to stdout (anything that starts this script could read it there). It goes to the parent
+  // `nunchi open` only, over the extra pipe the parent handed this process as fd 3, when the parent asked for it (its
+  // own stdin and stdout are the person's terminal and no browser was opened). Started without that pipe, the board
+  // hands out no link at all: it opens the browser, or nothing.
+  if (opt.linkToParent) linkToParent(board.newLink());
+  process.stdout.write(JSON.stringify({ port: board.port }) + '\n');
+}
+
+// fd 3, when it is a pipe (never a file, a terminal or nothing): one line, the link. → whether it was written.
+export function linkToParent(link, fd = 3) {
+  let s;
+  try { s = new Socket({ fd, readable: false, writable: true }); } catch { return false; }
+  s.on('error', () => {});
+  s.end(link + '\n');
+  return true;
 }
 
 const direct = process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;

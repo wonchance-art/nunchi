@@ -4,16 +4,18 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { request } from 'node:http';
 import { connect } from 'node:net';
-import { readFileSync, writeFileSync, mkdirSync, symlinkSync, readdirSync, statSync, cpSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, symlinkSync, readdirSync, statSync, cpSync, openSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { startBoard, CSP, SECURITY_HEADERS, MAX_BODY, LIMITS, MAX_STREAMS, openerCommand, sameSecret, CODE_TTL_MS } from '../src/board/server.mjs';
+import { openBoard, stopBoards } from '../src/board/launch.mjs';
 import { smallProject, jpeg, writeRun } from './fixtures/board-project.mjs';
 
 const POSIX = process.platform !== 'win32';
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
+const SERVER = fileURLToPath(new URL('../src/board/server.mjs', import.meta.url));
 
 // One raw request: every header as given (Host included, or none at all).
 function raw(port, { method = 'GET', path = '/', headers = {}, body = null, host = `127.0.0.1:${port}` } = {}) {
@@ -378,6 +380,45 @@ test('§3.1 nunchi open: detached, returns at once; the key and the link never r
     assert.match(stop.stdout, /stopped the board/);
   }
   assert.equal(readdirSync(join(p.nunchi, 'state', 'boards')).filter(n => n.endsWith('.json')).length, 0, 'its record is gone');
+});
+
+test('§3.1 the link never reaches stdout: the server started directly, with any flag, prints its port only; nunchi open gets the link over a pipe of its own (fd 3)', { timeout: 60000 }, async () => {
+  const p = smallProject();
+  const start = (stdio) => {
+    const child = spawn(process.execPath, [SERVER, '--project', p.root, '--link-to-parent', '--idle-ms', '20000'], { stdio });
+    const line = new Promise((res, rej) => {
+      let buf = '';
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', d => { buf += d; if (buf.includes('\n')) res(buf); });
+      child.on('exit', () => rej(new Error(`exited: ${buf}`)));
+    });
+    return { child, line };
+  };
+  const stop = c => new Promise(r => { c.on('exit', r); c.kill('SIGTERM'); });
+  // no fd 3: the port, nothing else
+  const a = start(['ignore', 'pipe', 'ignore']);
+  const out = await a.line;
+  await stop(a.child);
+  assert.match(out, /^\{"port":\d+\}\n$/, 'the port only');
+  assert.ok(!/#t=|[0-9a-f]{64}/.test(out), 'no link and no key on stdout');
+  // fd 3 a file: not a pipe, so no link is written to it
+  const file = join(p.root, 'fd3.txt');
+  const fd = openSync(file, 'w');
+  const b = start(['ignore', 'pipe', 'ignore', fd]);
+  assert.match(await b.line, /^\{"port":\d+\}\n$/);
+  await stop(b.child);
+  closeSync(fd);
+  assert.equal(readFileSync(file, 'utf8'), '', 'nothing written to a file on fd 3');
+  // nunchi open's own launcher: the link comes over its pipe and is a working one-time link
+  const stateDir = join(p.nunchi, 'state');
+  const r = await openBoard({ projectDir: p.root, stateDir, browser: false, linkToTerminal: true, idleMs: 20000 });
+  try {
+    assert.match(r.link, new RegExp(`^http://127\\.0\\.0\\.1:${r.port}/#t=[0-9a-f]{64}$`));
+    const s = await raw(r.port, { method: 'POST', path: '/api/session', headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${r.port}` }, body: JSON.stringify({ code: r.link.split('#t=')[1] }) });
+    assert.equal(s.status, 200);
+    const again = await openBoard({ projectDir: p.root, stateDir, browser: false, linkToTerminal: true });
+    assert.deepEqual([again.reused, again.link], [true, undefined], 'a running board never hands a link to a second caller');
+  } finally { await stopBoards(stateDir, p.root); }
 });
 
 test('§3.1 the browser opener: only a board link with a launch code, by absolute path or the platform\'s own opener', () => {
