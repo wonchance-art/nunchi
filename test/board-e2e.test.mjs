@@ -62,6 +62,8 @@ test('board e2e: the one-time link opens it, a key decides, Z undoes — the led
     await page.click('a[data-nav=findings]');
     await page.waitForSelector('#h-findings');
     await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
+    const marked = await page.$$eval('.nav a', as => as.filter(a => getComputedStyle(a).backgroundColor !== 'rgba(0, 0, 0, 0)').map(a => a.getAttribute('data-nav')));
+    assert.deepEqual(marked, ['findings'], 'the sidebar marks the view shown, and only it');
     const first = await page.evaluate(() => document.activeElement?.getAttribute('data-id'));
     assert.equal(first, gid(p, 'secret-in-client-bundle'), 'the worst group has the focus');
     await page.keyboard.press('j');

@@ -67,6 +67,8 @@ function assets() {
     '/assets/board.js': { body: read('assets/board.js'), type: 'text/javascript; charset=utf-8' },
     '/assets/shared.mjs': { body: read('shared.mjs'), type: 'text/javascript; charset=utf-8' },
     '/assets/board.css': { body: Buffer.from(BASE_CSS + BOARD_CSS), type: 'text/css; charset=utf-8' },
+    // the browser asks for this on every move within the page; an empty answer, no data
+    '/favicon.ico': { body: Buffer.alloc(0), type: 'image/x-icon', status: 204 },
   };
 }
 
@@ -231,7 +233,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     if (req.method === 'GET' && Number(req.headers['content-length'] || 0) > 0) return fail(res, 413, 'a GET has no body');
 
     // the page shell: no data, no token
-    if (req.method === 'GET' && files[path] && !u.search) return send(res, 200, files[path].body, files[path].type);
+    if (req.method === 'GET' && files[path] && !u.search) return send(res, files[path].status || 200, files[path].body, files[path].type);
 
     if (req.method === 'POST') {
       if (path !== '/api/session' && !limits.write.hit(t)) return fail(res, 429, 'too many changes at once');
@@ -250,7 +252,8 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
       lastActive = t;
       return send(res, 200, { token, mode, ...(mode === 'label' ? { labeller } : {}) });
     }
-    if (!keyed) { if (!limits.fail.hit(t)) lockedUntil = t + 60e3; return fail(res, 401, 'no key: open the board with nunchi open'); }
+    // a wrong key counts towards the lockout; a request with no key at all (what a browser fetches by itself) does not
+    if (!keyed) { if (req.headers['x-nunchi-token'] !== undefined && !limits.fail.hit(t)) lockedUntil = t + 60e3; return fail(res, 401, 'no key: open the board with nunchi open'); }
     // the live stream and its polling fallback are not the person doing something: they do not keep the board up
     if (path !== '/api/live' && path !== '/api/generation') lastActive = t;
     return route(req, res, u, path);

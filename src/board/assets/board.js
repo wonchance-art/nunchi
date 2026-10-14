@@ -693,8 +693,17 @@ function renderDetail(focus = false) {
 
 // ---- Screens ----------------------------------------------------------------------------------------------------------
 
+// Thumbnails are fetched when they come near the screen (a wall can have hundreds).
+let thumbs = null;
+function lazy(el, url) {
+  if (!('IntersectionObserver' in window)) return bg(el, url);
+  thumbs ||= new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) { thumbs.unobserve(e.target); bg(e.target, e.target.getAttribute('data-src')); } }, { rootMargin: '600px' });
+  el.setAttribute('data-src', url);
+  thumbs.observe(el);
+}
 function renderScreens(focus = false) {
   if (S.route.view !== 'screens' || !S.screens) return;
+  thumbs?.disconnect(); thumbs = null;
   const all = S.screens.scenes;
   const F = S.screenFilter;
   const vps = W.VPS.filter(v => all.some(s => s.viewport === v)), whos = W.PERSONS.filter(p => all.some(s => s.person === p)), states = W.STATES.filter(x => all.some(s => s.state === x));
@@ -709,7 +718,7 @@ function renderScreens(focus = false) {
   const sel = S.screenSel ? all.find(s => s.key === S.screenSel) : null;
   const card = s => {
     const th = h('span', { class: `thumb thumb-${s.viewport === 'm' ? 'm' : 'd'}`, 'aria-hidden': 'true' });
-    if (s.img) bg(th, s.img.thumb); else { th.classList.add('thumb-none'); th.textContent = 'No screenshot'; }
+    if (s.img) lazy(th, s.img.thumb); else { th.classList.add('thumb-none'); th.textContent = 'No screenshot'; }
     const b = h('button', { type: 'button', 'aria-pressed': sel?.key === s.key ? 'true' : 'false', 'aria-label': `${s.h1 || s.route}, ${s.label}: ${s.badge}` },
       h('span', { class: 'thumb-wrap' }, th, h('span', { class: `badge badge-${['blocker', 'high', 'medium', 'low', 'clean', 'dark'].includes(s.kind) ? s.kind : 'low'}` }, s.badge)),
       h('span', { class: 'card-body' }, h('span', { class: 'card-name' }, s.h1 || s.route), h('span', { class: 'mono muted small' }, s.route), h('span', { class: 'small muted' }, s.label), h('span', { class: `small ${s.kind === 'dark' ? 'warn' : 'muted'}` }, s.note)));

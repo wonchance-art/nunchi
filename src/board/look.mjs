@@ -138,6 +138,9 @@ main{padding:16px 16px 40px}.panel-box{padding:18px 16px}.hero h1{font-size:22px
 // switched off here. Every control is at least 44 px high; motion is off when the person asks for less of it.
 export const BOARD_CSS = `
 [hidden]{display:none!important}
+/* the static page marks its view by :target; the board by aria-current only */
+.board .nav a[data-nav]:not([aria-current="page"]){background:transparent!important;color:var(--ink)!important;font-weight:400!important}
+.board .nav a[data-nav]:not([aria-current="page"]):hover{background:var(--soft)!important}
 .board .view{display:block}.board .detail{display:block}
 .board h1[tabindex="-1"]:focus,.board h2[tabindex="-1"]:focus{outline:none}
 button{font:inherit;color:inherit}

@@ -264,6 +264,16 @@ test('§3.2 rate limits: wrong keys lock out requests without a key (never the p
   } finally { await second.b.close(); }
 });
 
+test('§3.2 rate limits: what a browser fetches by itself (the favicon, on every move within the page) never locks a fresh link out', async () => {
+  const { b, origin, code } = await board();
+  try {
+    for (let i = 0; i < LIMITS.fail[0] + 20; i++) assert.equal((await raw(b.port, { path: '/favicon.ico', headers: { 'sec-fetch-dest': 'image' } })).status, 204);
+    for (let i = 0; i < LIMITS.fail[0] + 20; i++) assert.equal((await raw(b.port, { path: '/api/summary' })).status, 401, 'no key: refused, but not counted as a guess');
+    const r = await raw(b.port, { method: 'POST', path: '/api/session', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: code() }) });
+    assert.equal(r.status, 200, 'a fresh link still opens the board');
+  } finally { await b.close(); }
+});
+
 test('§3.2 untrusted strings: app text, decision notes and secrets reach the page redacted, as data; the page never parses markup', async () => {
   const SECRET = 'sk_' + 'live_' + 'FixtureOnly0000000000000009';
   const p = smallProject();
