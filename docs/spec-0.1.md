@@ -452,8 +452,14 @@ fills the board live.
 A static review page of one run plus the ledger, the read-only precursor of the board (`src/export-html.mjs`).
 `nunchi export --html <dir> [--run <id>] [--inline] [--json]` writes `<dir>/index.html` and `<dir>/img/<sha256 of the
 bytes, 16 hex>.jpg` (each scene's `full.jpg`, copied byte for byte, so identical screens share one file); `--inline`
-puts the images in `index.html` as data URIs instead (one file; pegroom: 8 MB against 6.1 MB linked). Only
-`index.html` and `img/` are replaced in `<dir>`; a folder inside `.nunchi/runs` is refused.
+puts the images in `index.html` as data URIs instead (one file; pegroom: 8 MB against 6.1 MB linked).
+- *Output folder* (hardened after review, 2026-10-14 KST): nothing is replaced that an export did not write.
+  `img/.nunchi-export` lists the images written there, and a re-export removes only those. An `img/` with other
+  files and no list, an `index.html` without the `<meta name="generator" content="nunchi export --html">` marker,
+  and a symlinked `index.html` or `img/` are all refused before anything changes. `index.html` is written to a new
+  file and renamed into place. A folder inside `.nunchi/runs` or inside the run is refused, checked on the real path
+  of its nearest existing parent (so a symlink cannot get round it), case-insensitively on Windows and macOS.
+  A `--html` value starting with `--` is a missing value.
 - *Views* (mock-up v3 layout, system fonts): **Progress** (verdict as in design §3.4 where it can be computed
   statically: blocker/high open → "Not yet · …", no AI review → "Probably · rules only", screens not seen → "Yes, for
   what was checked · …"; open groups by severity; new, fixed and came back since the parent run; screens checked; AI
@@ -475,8 +481,18 @@ puts the images in `index.html` as data URIs instead (one file; pegroom: 8 MB ag
 - *Determinism*: no clock or random value; ids are hashes of scene and group ids; every list sorted. Two exports of
   the same run, ledger and decisions are byte-identical (test, and pegroom: identical).
 - *Redaction and escaping*: HAR, `network.json`, `console.json`, `text.txt` and `aria.yml` are never read. Every
-  string that did not come from the exporter is secret-scrubbed (`[secret-shaped: <kind>]`, the scanner of §3 L9) and
-  HTML-escaped; URLs are redacted again and are never links; secret findings show location and kind only.
+  string that did not come from the exporter goes through one helper: credential query values and URL userinfo
+  (`https://user:pass@`) are redacted (`redactText`), then secret shapes are replaced by `[secret-shaped: <kind>]`
+  (`scrubSecrets`, its own list, wider than the L9 bundle scan: whole private key blocks of every kind, Stripe
+  secret and restricted keys, AWS access key ids and secret keys, GitHub, Slack, Google, Anthropic and OpenAI keys,
+  `Authorization:`/`Bearer` values, JWTs also when split across lines), then it is clipped, then HTML-escaped. Objects
+  and arrays are redacted leaf by leaf before they are serialised. URLs are never links; secret findings show
+  location and kind only. Run files are data too: severities, statuses and viewports are checked against their
+  enums, group and fingerprint ids must be 12 hex (others are hashed), counts are numbers, boxes four numbers, and a
+  scene id that is not one plain path segment is left out and never opened (`sceneDir`, shared with the hunt).
+- *Older runs*: `--run <id>` of a run that is not the ledger's latest shows the ledger as it stood after that run,
+  folded again from the run folders up to it; when one of them is gone, the current ledger is rewound instead (fixed or
+  came back later → undone) and the page says statuses are as of now. Decisions are always as of now.
   Screenshots are CSS backgrounds, so the page has no `<img>`. CSP (meta): `default-src 'none'; img-src 'self' data:;
   style-src 'unsafe-inline'; script-src 'sha256-…'; base-uri 'none'; form-action 'none'` — the one inline script
   (current view, Copy buttons) is allowed by its hash, and the page works without it (views are `:target`

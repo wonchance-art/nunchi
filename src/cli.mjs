@@ -525,12 +525,12 @@ if (cmd === 'setup') {
   } else { console.error('nunchi verify: use --plan, or --record <verdicts.json>'); process.exit(1); }
 } else if (cmd === 'export') {
   // A static review page (spec §7): read-only, offline, byte-identical for the same run and ledger.
-  if (!args.html) { console.error('nunchi export: use --html <dir> (writes <dir>/index.html and <dir>/img/)'); process.exit(1); }
+  if (typeof args.html !== 'string' || !args.html || args.html.startsWith('--')) { console.error('nunchi export: use --html <dir> (writes <dir>/index.html and <dir>/img/)'); process.exit(1); }
   const { exportHtml } = await import('./export-html.mjs');
   const dir = runDirOf(args, 'export');
-  const outDir = resolve(args.html);
-  if (inside(resolve('.nunchi', 'runs'), outDir) || outDir === resolve('.nunchi', 'runs')) { console.error('nunchi export: write the page outside .nunchi/runs (runs are evidence and are never edited)'); process.exit(1); }
-  const r = exportHtml({ runDir: dir, nunchiDir: resolve('.nunchi'), outDir, inline: !!args.inline });
+  let r;
+  try { r = exportHtml({ runDir: dir, nunchiDir: resolve('.nunchi'), outDir: resolve(args.html), inline: !!args.inline }); }
+  catch (e) { if (e.code !== 'EXPORT_TARGET') throw e; console.error(`nunchi export: ${e.message}`); process.exit(1); }
   if (args.json) console.log(JSON.stringify(r, null, 2));
   else {
     const mb = Math.round(r.bytes / 1e5) / 10;

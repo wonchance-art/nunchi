@@ -2,7 +2,7 @@
 // invented content only; no browser needed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, realpathSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, realpathSync, statSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 import { exportHtml, buildModel, escapeHtml } from '../src/export-html.mjs';
 import { annotate, foldRun, writeDecision, addApproved } from '../src/ledger.mjs';
 import { scrubSecrets } from '../src/rules.mjs';
+import { redactUrl, redactText } from '../src/network.mjs';
+import { sceneDir, sceneIndex } from '../src/hunt.mjs';
 import { stableJson } from '../src/stable.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -30,7 +32,8 @@ function project({ scenes, findings = [], ai = null, decide = null, fold = true 
   const run = join(nunchi, 'runs', '0001');
   const vps = [{ id: 'm', width: 390, height: 844 }, { id: 'd', width: 1280, height: 800 }];
   scenes.forEach((s, i) => {
-    const vp = vps.find(v => v.id === s.viewport);
+    if (s.noFiles) return;
+    const vp = vps.find(v => v.id === s.viewport) || vps[1];
     if (s.status === 'captured') {
       write(join(run, s.id, 'top.jpg'), jpeg(vp.width, vp.height, i));
       write(join(run, s.id, 'full.jpg'), jpeg(vp.width, s.fullHeight || 2000, i + 100));
@@ -42,7 +45,7 @@ function project({ scenes, findings = [], ai = null, decide = null, fold = true 
     write(join(run, s.id, 'text.txt'), 'PAGE-TEXT-ONLY-IN-TEXT-TXT\n');
   });
   write(join(nunchi, 'har', 'guest.json'), { entries: { a: { body: 'HAR-BODY-1', headers: { authorization: 'Bearer HAR-TOKEN-1' } } } });
-  const manifest = { schema: 1, baseUrl: 'http://127.0.0.1:3000', viewports: vps, clock: '2026-01-01T00:00:00.000Z', health: { status: 'ok', problems: [] }, states: ['normal', 'error'], scenes: scenes.map(({ h1, controls, fullHeight, ...s }) => s) };
+  const manifest = { schema: 1, baseUrl: 'http://127.0.0.1:3000', viewports: vps, clock: '2026-01-01T00:00:00.000Z', health: { status: 'ok', problems: [] }, states: ['normal', 'error'], scenes: scenes.map(({ h1, controls, fullHeight, noFiles, ...s }) => s) };
   const scope = { routes: [...new Set(scenes.map(s => s.route))].sort(), persons: ['guest', 'signed-in'], viewports: ['m', 'd'], states: ['normal', 'error'], changedSince: null };
   write(join(run, 'manifest.json'), manifest);
   write(join(run, 'run.json'), { schema: 1, id: '0001', parent: null, commit: '0123456789abcdef', dirty: true, scope, health: manifest.health });
@@ -75,6 +78,7 @@ function sample() {
     finding('raw-error-text', 'high', notesErr, { lens: 'L6', selector: 'body', evidence: { text: `Error: key ${SECRET} rejected` } }),
     finding('dead-href', 'low', home, { lens: 'L7', selector: 'footer a', evidence: { href: '/promo?token=URL-TOKEN-1&x=1' } }),
     finding('dead-href', 'low', homeM, { lens: 'L7', selector: 'footer a', evidence: { href: '/promo?token=URL-TOKEN-1&x=1' } }),
+    finding('dead-href', 'low', notesErr, { lens: 'L7', selector: 'footer a', evidence: { href: '/promo?token=URL-TOKEN-1&x=1' } }),   // same group, second fingerprint
     { lens: 'L9', rule: 'secret-in-client-bundle', severity: 'blocker', scene: null, route: null, viewport: null, selector: null, box: null, evidence: { url: '/assets/app.js', kind: 'stripe-live-secret-key', masked: 'sk_l…' } },
   ];
   const ai = [
@@ -99,7 +103,8 @@ test('export --html: byte-identical twice, linked and inline; images named by co
   const [a, b] = exportTwice(p);
   assert.deepEqual(filesOf(a), filesOf(b));
   for (const f of filesOf(a)) assert.ok(readFileSync(join(a, f)).equals(readFileSync(join(b, f))), `${f} differs`);
-  const imgs = readdirSync(join(a, 'img')).sort();
+  const imgs = readdirSync(join(a, 'img')).filter(f => f.endsWith('.jpg')).sort();
+  assert.equal(readFileSync(join(a, 'img', '.nunchi-export'), 'utf8'), imgs.map(f => f + '\n').join(''), 'the marker lists exactly the images written');
   assert.equal(imgs.length, 5, 'one full screenshot per captured scene');
   for (const f of imgs) assert.equal(f, createHash('sha256').update(readFileSync(join(a, 'img', f))).digest('hex').slice(0, 16) + '.jpg');
   const [c, d] = exportTwice(p, { inline: true });
@@ -170,6 +175,7 @@ test('export --html: findings with ledger statuses, boxes from the element box, 
   // the clipped button's box [100,200,50,20] on a 1280×2000 screenshot, cropped to a first-view-high window from the top
   assert.ok(html.includes('left:7.81%;top:25%;width:3.91%;height:2.5%'), 'box positioned in percentages of the crop');
   assert.ok(html.includes(`nunchi decide ${byRule['clipped-text'].group} keep --reason intended`), 'decisions are offered as CLI commands');
+  for (const g of m.groups) assert.ok(html.includes(`<dt>Fingerprints</dt><dd class="mono">${g.fps.join(' ')}</dd>`), `every fingerprint of ${g.rule} in full`);
   assert.ok(!/<button[^>]*>\s*(Fix|Keep|Not a problem|Later)\b/.test(html), 'no decision buttons that would do nothing');
   assert.match(html, /class="badge badge-clean">Clean</, '/about has nothing: Clean');
   assert.match(html, /class="badge badge-medium">2 medium</, '/notes: the rule and the AI finding');
@@ -218,4 +224,172 @@ test('export --html: a defect gone in this run shows as fixed; CLI writes the pa
   assert.match(html, /Gone on re-capture in run 0002/);
   assert.throws(() => execFileSync('node', [CLI, 'export'], { cwd: p.root, stdio: 'pipe' }), /--html/);
   assert.throws(() => execFileSync('node', [CLI, 'export', '--html', '.nunchi/runs/x'], { cwd: p.root, stdio: 'pipe' }), /outside \.nunchi\/runs/);
+});
+
+// ---- regressions from the adversarial review (2026-10-14 KST) ------------------------------------------
+
+const htmlOf = (p, opts = {}) => { const out = join(p.root, 'out'); exportHtml({ runDir: p.run, nunchiDir: p.nunchi, outDir: out, ...opts }); return readFileSync(join(out, 'index.html'), 'utf8'); };
+const oneFinding = (evidence, extra = {}) => {
+  const home = scene('/', 'guest', 'normal', 'd', { h1: 'Home' });
+  return project({ scenes: [home], findings: [finding('raw-error-text', 'high', home, { evidence, ...extra })] });
+};
+const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+const JWT = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ sub: 'fixture-user', role: 'authenticated' })}.${'s'.repeat(24)}SIGTAIL`;
+
+test('export --html: never deletes, follows or replaces what it did not write; the runs check survives symlinks', () => {
+  const p = project(sample());
+  const run = outDir => exportHtml({ runDir: p.run, nunchiDir: p.nunchi, outDir });
+  // a folder of the user's own: their index.html and img/logos/brand.svg stay as they were
+  const mine = join(p.root, 'site');
+  write(join(mine, 'index.html'), '<h1>my site</h1>');
+  write(join(mine, 'img', 'logos', 'brand.svg'), '<svg/>');
+  assert.throws(() => run(mine), e => e.code === 'EXPORT_TARGET' && /not written by nunchi export/.test(e.message));
+  assert.equal(readFileSync(join(mine, 'index.html'), 'utf8'), '<h1>my site</h1>');
+  rmSync(join(mine, 'index.html'));
+  assert.throws(() => run(mine), e => e.code === 'EXPORT_TARGET' && /did not write/.test(e.message));
+  assert.equal(readFileSync(join(mine, 'img', 'logos', 'brand.svg'), 'utf8'), '<svg/>');
+  // a symlinked index.html is never written through
+  const linked = join(p.root, 'linked');
+  write(join(p.root, 'notes.txt'), 'my notes');
+  mkdirSync(linked);
+  symlinkSync(join(p.root, 'notes.txt'), join(linked, 'index.html'));
+  assert.throws(() => run(linked), e => e.code === 'EXPORT_TARGET' && /symlink/.test(e.message));
+  assert.equal(readFileSync(join(p.root, 'notes.txt'), 'utf8'), 'my notes');
+  // a re-export removes only the images it listed; a file the user added to img/ stays
+  const ok = join(p.root, 'review');
+  run(ok);
+  write(join(ok, 'img', 'mine.png'), 'PNG');
+  run(ok);
+  assert.equal(readFileSync(join(ok, 'img', 'mine.png'), 'utf8'), 'PNG');
+  exportHtml({ runDir: p.run, nunchiDir: p.nunchi, outDir: ok, inline: true });
+  assert.deepEqual(readdirSync(join(ok, 'img')), ['mine.png'], 'inline: our images and marker gone, the user\'s file kept');
+  // .nunchi/runs through a symlink is still .nunchi/runs; so is the run folder itself
+  symlinkSync(join(p.nunchi, 'runs'), join(p.root, 'sneaky'));
+  assert.throws(() => run(join(p.root, 'sneaky', 'page')), e => e.code === 'EXPORT_TARGET' && /\.nunchi\/runs/.test(e.message));
+  assert.ok(!existsSync(join(p.nunchi, 'runs', 'page')));
+  // `--html --inline` is a missing value, not a folder called --inline
+  assert.throws(() => execFileSync('node', [CLI, 'export', '--html', '--inline'], { cwd: p.root, stdio: 'pipe' }), /--html <dir>/);
+  assert.ok(!existsSync(join(p.root, '--inline')));
+});
+
+test('scrubSecrets: whole private key blocks of every kind, cut-off ones included', () => {
+  for (const kind of ['RSA ', 'EC ', 'DSA ', 'OPENSSH ', 'ENCRYPTED ', '']) {
+    const block = `-----BEGIN ${kind}PRIVATE KEY-----\nMIIBOgIBAAJBAKjFIXTUREBODY\nAAAAmore\n-----END ${kind}PRIVATE KEY-----`;
+    assert.equal(scrubSecrets(`key: ${block} done`), 'key: [secret-shaped: private-key] done', kind);
+  }
+  assert.equal(scrubSecrets('-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQOYBFIXTUREBODY\n-----END PGP PRIVATE KEY BLOCK-----'), '[secret-shaped: private-key]');
+  assert.equal(scrubSecrets('x -----BEGIN RSA PRIVATE KEY-----\nMIIFIXTUREBODY cut off'), 'x [secret-shaped: private-key]', 'a block cut off before its END line');
+  const html = htmlOf(oneFinding({ text: '-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAKjFIXTUREBODY\n-----END RSA PRIVATE KEY-----' }));
+  assert.ok(!html.includes('FIXTUREBODY'));
+});
+
+test('export --html: secrets inside arrays and objects are redacted leaf by leaf, before serialising', () => {
+  // serialised first, `\n` becomes the letter n right before the token, and a word-boundary pattern no longer sees it
+  const gh = 'ghp' + '_' + 'F1xture'.repeat(6);
+  const html = htmlOf(oneFinding({ lines: ['Error:\n' + gh, 'Error:\n' + SECRET, { deeper: [`k=${SECRET}`] }], [`k ${SECRET}`]: 1 }));
+  assert.ok(!html.includes('FixtureOnly') && !html.includes('F1xture'), 'no part of either key');
+  assert.ok(html.includes('[secret-shaped: stripe-live-secret-key]') && html.includes('[secret-shaped: github-token]'));
+});
+
+test('export --html: redaction runs before clipping, so a cut never leaves part of a secret', () => {
+  const html = htmlOf(oneFinding({ text: 'x'.repeat(384) + ' ' + SECRET }, { selector: 'main ' + 'p '.repeat(143) + SECRET }));
+  assert.ok(!html.includes('sk_live_Fix') && !html.includes('FixtureOnly'), 'no prefix of the key survives the clip');
+});
+
+test('scrubSecrets and redactUrl: the wider set of secret shapes, credential params in any text, URL userinfo', () => {
+  const cases = [
+    ['ASIA' + 'Q'.repeat(16), 'aws-access-key-id'], ['github_' + 'pat_' + 'A1'.repeat(15), 'github-token'],
+    ['xapp-' + '1-A0B1C2D3E4F5', 'slack-token'], ['xoxe.' + 'xoxp-1-abcdefgh12', 'slack-token'], ['AI' + 'za' + 'S'.repeat(35), 'google-api-key'],
+    ['rk_' + 'live_' + 'R'.repeat(20), 'stripe-live-restricted-key'], ['sk-' + 'ant-' + 'api03-' + 'a'.repeat(30), 'anthropic-api-key'],
+    ['key_sk_' + 'live_' + 'Z'.repeat(20), 'stripe-live-secret-key'], [JWT.replace(/\./g, '\n.'), 'jwt'],
+  ];
+  for (const [secret, kind] of cases) assert.ok(scrubSecrets(`v ${secret} w`).includes(`[secret-shaped: ${kind}]`) && !scrubSecrets(`v ${secret} w`).includes(secret.slice(-8)), `${kind}: ${secret}`);
+  assert.equal(scrubSecrets('aws_secret_access_key = ' + 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYFIXTURE'), 'aws_secret_access_key = [secret-shaped: aws-secret-access-key]');
+  assert.equal(scrubSecrets('Authorization: Bearer abc.def-ghi_jkl'), 'Authorization: Bearer [secret-shaped: authorization]');
+  assert.equal(scrubSecrets('sent Bearer ' + 'T'.repeat(24)), 'sent Bearer [secret-shaped: bearer-token]');
+  assert.equal(redactUrl('https://bob:hunter2@db.example.test/x?token=1'), 'https://db.example.test/x?token=REDACTED');
+  assert.equal(redactText('connect https://bob:hunter2@db.example.test failed'), 'connect https://db.example.test failed');
+  const html = htmlOf(oneFinding({ message: 'see /x?api_key=K9FIXTURE9&y=1 and https://bob:hunter2pass@db.example.test/', href: 'https://ann:pw4fixture@h.example.test/p' }));
+  for (const leak of ['K9FIXTURE9', 'hunter2pass', 'pw4fixture']) assert.ok(!html.includes(leak), leak);
+});
+
+test('export --html: an older run shows the ledger as it stood after that run, not later fixes', () => {
+  const s = sample();
+  const p = project(s);
+  const scope = JSON.parse(readFileSync(join(p.run, 'run.json'), 'utf8')).scope;
+  const rest = p.findings.filter(f => f.rule !== 'clipped-text');
+  const state = JSON.parse(readFileSync(join(p.nunchi, 'state', 'ledger.json'), 'utf8'));
+  write(join(p.nunchi, 'state', 'ledger.json'), foldRun(state, { id: '0002', scope, health: { problems: [] }, findings: rest }));
+  write(join(p.nunchi, 'runs', '0002', 'manifest.json'), readFileSync(join(p.run, 'manifest.json')));
+  write(join(p.nunchi, 'runs', '0002', 'findings.json'), { schema: 1, findings: rest });
+  write(join(p.nunchi, 'runs', '0002', 'run.json'), { schema: 1, id: '0002', parent: '0001', scope });
+  const m = buildModel({ runDir: p.run, nunchiDir: p.nunchi });
+  const clipped = m.groups.find(g => g.rule === 'clipped-text');
+  assert.equal(clipped.status, 'open', 'in run 0001 it was open; it is fixed only from 0002 on');
+  assert.equal(m.asOfNow, false);
+  const html = htmlOf(p);
+  assert.match(html, /Not yet · 1 blocker, 1 high/);
+  assert.match(html, /as they stood after this run/);
+  assert.ok(!html.includes('Gone on re-capture'));
+  // older runs gone (gc): the current ledger rewound instead, and the page says so
+  const st = JSON.parse(readFileSync(join(p.nunchi, 'state', 'ledger.json'), 'utf8'));
+  write(join(p.nunchi, 'state', 'ledger.json'), { ...st, runs: ['0000', ...st.runs] });
+  const m2 = buildModel({ runDir: p.run, nunchiDir: p.nunchi });
+  assert.equal(m2.asOfNow, true);
+  assert.equal(m2.groups.find(g => g.rule === 'clipped-text').status, 'open');
+});
+
+test('export --html: scene ids that are not one plain path segment are never opened', () => {
+  const home = scene('/', 'guest', 'normal', 'd', { h1: 'Home' });
+  const evil = { ...scene('/evil', 'guest', 'normal', 'd'), id: '../../../../outside', noFiles: true };
+  const p = project({ scenes: [home, evil], findings: [finding('clipped-text', 'medium', evil, { selector: 'main > b' })] });
+  write(join(p.root, '..', 'outside', 'measure.json'), { h1: 'OUTSIDE-H1' });
+  write(join(p.run, '..', '..', '..', '..', 'outside', 'measure.json'), { h1: 'OUTSIDE-H1' });
+  write(join(p.run, '..', '..', '..', '..', 'outside', 'controls.json'), [{ selector: 'main > b', box: [1, 2, 3, 4] }]);
+  const html = htmlOf(p);
+  assert.ok(!html.includes('OUTSIDE-H1'));
+  assert.equal(buildModel({ runDir: p.run, nunchiDir: p.nunchi }).scenes.length, 1);
+  for (const bad of ['..', '.', '', 'a/b', 'a\\b', 'c:x', '../x', null]) assert.equal(sceneDir(p.run, bad), null, String(bad));
+  assert.equal(sceneDir(p.run, home.id), join(p.run, home.id));
+  assert.equal(sceneIndex(p.run, '../../../../outside').idx.size, 0);
+});
+
+test('export --html: tampered run files cannot add markup through enums, ids or counts', () => {
+  const home = scene('/', 'guest', 'normal', 'd', { h1: 'Home' });
+  const odd = { ...scene('/odd', 'guest', 'normal', 'd', { h1: 'Odd' }), viewport: 'm"><q>Q</q>' };
+  const p = project({ scenes: [home, odd] });
+  const meta = '<meta http-equiv="refresh" content="0;url=data:,x">';
+  write(join(p.run, 'findings.json'), { schema: 1, findings: [
+    { lens: 'L1', rule: 'clipped-text', severity: `high">${meta}`, scene: home.id, route: '/', viewport: 'd"><u>U</u>', selector: 'main', box: ['<s>', 1, 2, 3], evidence: {}, fp: '"><i>I</i>', group: '<b>G</b>' },
+    { lens: 'L1', rule: 'clipped-text', severity: 'low', scene: odd.id, route: '/odd', viewport: odd.viewport, selector: 'main', box: [1, 2, 3, 4], evidence: {}, fp: 'abcdefabcdef', group: 'abcdefabcdef' },
+  ] });
+  write(join(p.run, 'ai-findings.json'), { schema: 1, findings: [] });
+  write(join(p.run, 'coverage.json'), { summary: { seen: '<em>E</em>', cells: '<em>' } });
+  const man = JSON.parse(readFileSync(join(p.run, 'manifest.json'), 'utf8'));
+  write(join(p.run, 'manifest.json'), { ...man, health: { status: 'recording-stale', problems: [{ status: 'recording-stale', scenes: '<del>D</del>', of: '<ins>' }] } });
+  rmSync(join(p.nunchi, 'state', 'ledger.json'));
+  const html = htmlOf(p);
+  for (const bad of ['http-equiv="refresh"', '<u>', '<i>', '<b>G', '<q>', '<em>', '<del>', '<ins>', '<s>']) assert.ok(!html.includes(bad), bad);
+  assert.equal((html.match(/<meta /g) || []).length, 5, 'only the page\'s own five meta elements');
+  assert.ok(!/(?:id|href|for|name|data-copy)="[^"]*[<>]/.test(html), 'ids and links carry no markup');
+});
+
+test('export --html: screenshot labels are escaped once', () => {
+  const s = { ...scene('/notes', 'signed-in', 'r&d', 'd', { h1: 'Notes' }) };
+  const html = htmlOf(project({ scenes: [s] }));
+  assert.ok(html.includes('aria-label="Screenshot of /notes, Signed in · Desktop · r&amp;d"'));
+  assert.ok(!html.includes('&amp;amp;'));
+});
+
+test('export --html: hostile route, selector and evidence key, and a JWT, arrive as inert text', () => {
+  const route = '/x<script>alert(3)</script>';
+  const s = { ...scene('/x', 'guest', 'normal', 'd', { h1: 'X' }), route };
+  const p = project({ scenes: [s], findings: [finding('raw-error-text', 'high', s, { route, selector: 'main"><svg onload=alert(4)>', evidence: { '<k onclick=alert(5)>': 'v', text: `token ${JWT} end` } })] });
+  const html = htmlOf(p);
+  assert.equal((html.match(/<script/g) || []).length, 1);
+  for (const bad of ['<svg', '<k ', 'onclick=alert(5)>', 'SIGTAIL']) assert.ok(!html.includes(bad), bad);
+  assert.ok(html.includes('/x&lt;script&gt;alert(3)&lt;/script&gt;'), 'the route is shown, escaped');
+  assert.ok(html.includes('main&quot;&gt;&lt;svg onload=alert(4)&gt;'), 'the selector is shown, escaped');
+  assert.ok(html.includes('&lt;k onclick=alert(5)&gt;'), 'the evidence key is shown, escaped');
+  assert.ok(html.includes('[secret-shaped: jwt]'));
 });

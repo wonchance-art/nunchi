@@ -11,13 +11,13 @@
 // - The page's CSP allows no external load at all: images from the page's own folder (or inlined), inline
 //   style, and the one inline script by its hash. The page works without that script (views are :target
 //   sections, filters are radio buttons); the script only marks the current view and adds Copy buttons.
-import { readFileSync, existsSync, mkdirSync, rmSync, copyFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, existsSync, mkdirSync, copyFileSync, writeFileSync, lstatSync, readdirSync, unlinkSync, renameSync, realpathSync, rmdirSync, constants as FS } from 'node:fs';
+import { join, resolve, relative, isAbsolute, dirname, basename } from 'node:path';
 import { createHash } from 'node:crypto';
 import { readState, foldRun, readDecisions, readApproved, view, groups as groupRows, titleOf, annotate } from './ledger.mjs';
-import { readManifest, jpegSize, sceneIndex } from './hunt.mjs';
+import { readManifest, jpegSize, sceneIndex, sceneDir } from './hunt.mjs';
 import { scrubSecrets } from './rules.mjs';
-import { redactUrl } from './network.mjs';
+import { redactUrl, redactText } from './network.mjs';
 import { sha } from './stable.mjs';
 
 const SEV = { blocker: 0, high: 1, medium: 2, low: 3 };
@@ -39,9 +39,64 @@ const rank = (list, v) => { const i = list.indexOf(v); return i < 0 ? list.lengt
 const readJsonOr = (p, fallback) => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return fallback; } };
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 export const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ESC[c]);
-// Every string that did not come from this file: secret-scrubbed, then escaped. Never interpolate data any other way.
-const t = s => escapeHtml(scrubSecrets(String(s ?? '')));
 const clip = (s, n) => { s = String(s ?? ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+// Redaction of one string: credential URL parts and query values, then secret shapes (design §5).
+const clean = s => scrubSecrets(redactText(String(s ?? '')));
+// The one way data reaches the markup: redacted first, then clipped (so a cut never leaves part of a secret), then
+// escaped. Every string that did not come from this file goes through here.
+const t = (s, n = 0) => escapeHtml(n ? clip(clean(s), n) : clean(s));
+// Objects and arrays are redacted leaf by leaf before they are serialised (a JSON `\n` would hide a word boundary).
+const deepClean = v => (Array.isArray(v) ? v.map(deepClean)
+  : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [clean(k), deepClean(v[k])]))
+  : typeof v === 'string' ? clean(v) : v);
+// Run files are data too: values that become ids, class names or numbers in the markup are checked here, at the
+// edge, so a tampered findings.json or manifest.json can never add markup through them.
+const HEX12 = /^[0-9a-f]{12}$/;
+const idOf = v => (typeof v === 'string' && HEX12.test(v) ? v : sha(String(v ?? ''), 12));
+const sevOf = v => (Object.hasOwn(SEV, v) ? v : 'low');
+const stOf = v => (Object.hasOwn(STATUS_LABEL, v) ? v : 'open');
+const vpCls = v => (VPS.includes(v) ? v : 'x');
+const num = v => (Number.isFinite(Number(v)) ? Number(v) : 0);
+const str = v => (typeof v === 'string' ? v : null);
+const box4 = b => (Array.isArray(b) && b.length >= 4 && b.slice(0, 4).every(n => typeof n === 'number' && Number.isFinite(n)) ? b.slice(0, 4) : null);
+const normFinding = f => ({
+  ...f, lens: String(f.lens ?? ''), rule: String(f.rule ?? ''), severity: sevOf(f.severity), fp: idOf(f.fp), group: idOf(f.group),
+  scene: str(f.scene), route: str(f.route), viewport: str(f.viewport), selector: str(f.selector), box: box4(f.box), inside: str(f.inside),
+  evidence: f.evidence && typeof f.evidence === 'object' && !Array.isArray(f.evidence) ? f.evidence : {},
+});
+const normRow = r => ({
+  ...r, lens: String(r.lens ?? ''), rule: String(r.rule ?? ''), severity: sevOf(r.severity), fp: idOf(r.fp), group: idOf(r.group), status: stOf(r.status),
+  route: str(r.route), places: num(r.places) || 1, examples: Array.isArray(r.examples) ? r.examples.filter(x => typeof x === 'string') : [],
+});
+const normScene = s => ({
+  ...s, id: s.id, route: str(s.route) ?? '', person: String(s.person ?? ''), state: String(s.state ?? ''), viewport: String(s.viewport ?? ''),
+  status: String(s.status ?? ''), reason: str(s.reason), finalPath: str(s.finalPath),
+});
+const RUN_ID = /^\d{4,}$/;
+const runNo = id => (RUN_ID.test(String(id)) ? Number(id) : NaN);
+
+// The ledger as it stood right after `runId`: the runs up to it folded again from their folders, as capture
+// folds them. When one of those folders is gone (gc), the current ledger is rewound instead: what came later is
+// undone where the state still says so (fixed later → open, came back later → not yet). `asOfNow` says which.
+function stateAt(state, runId, runsDir, normalize) {
+  const ids = state.runs.filter(id => runNo(id) <= runNo(runId));
+  let acc = { schema: 1, fingerprintVersion: state.fingerprintVersion, runs: [], items: {} };
+  for (const id of ids) {
+    const dir = join(runsDir, id);
+    if (!RUN_ID.test(id) || !existsSync(join(dir, 'findings.json')) || !existsSync(join(dir, 'manifest.json'))) { acc = null; break; }
+    const meta = readJsonOr(join(dir, 'run.json'), {});
+    const manifest = readJsonOr(join(dir, 'manifest.json'), {});
+    acc = foldRun(acc, { id, scope: meta.scope || {}, health: manifest.health || { problems: [] }, findings: normalize(readJsonOr(join(dir, 'findings.json'), { findings: [] }).findings || []) });
+  }
+  if (acc) return { state: acc, asOfNow: false };
+  const items = {};
+  const later = id => id && runNo(id) > runNo(runId);
+  for (const [fp, it] of Object.entries(state.items)) {
+    if (later(it.firstSeen)) continue;
+    items[fp] = { ...it, goneAt: later(it.goneAt) ? null : it.goneAt, regressedAt: later(it.regressedAt) ? null : it.regressedAt, lastSeen: later(it.lastSeen) ? runId : it.lastSeen };
+  }
+  return { state: { ...state, runs: ids, items }, asOfNow: true };
+}
 const pct = n => `${Math.round(n * 10000) / 100}%`;
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 const human = rule => { const r = String(rule).replace(/^L\d+\./, '').replace(/-/g, ' '); return r.charAt(0).toUpperCase() + r.slice(1); };
@@ -64,22 +119,27 @@ export function buildModel({ runDir, nunchiDir }) {
   const state = readState(join(nunchiDir, 'state', 'ledger.json'));
   const decisions = readDecisions(join(nunchiDir, 'decisions'));
   const approved = readApproved(join(nunchiDir, 'state', 'approved.json'));
-  const withFp = list => (list.every(f => f.fp && f.group) ? list : annotate(list.map(({ fp, group, ...f }) => f)));
-  const rules = withFp(ruleFindings);
-  // A run the local ledger has not folded (a --out folder, a fresh clone) is folded here, in memory only.
+  const withFp = list => (list = list.filter(f => f && typeof f === 'object'), (list.every(f => f.fp && f.group) ? list : annotate(list.map(({ fp, group, ...f }) => f))).map(normFinding));
+  const rules = withFp(Array.isArray(ruleFindings) ? ruleFindings : []);
+  // A run the local ledger has not folded (a --out folder, a fresh clone) is folded here, in memory only. An older
+  // run is shown as the ledger stood after it, not as it stands now.
   const inLedger = runId !== null && state.runs.includes(runId);
+  const latest = state.runs.length ? state.runs[state.runs.length - 1] : null;
   const empty = { schema: 1, runs: [], items: {} };
-  const ruleState = inLedger ? state : foldRun(empty, { id: runId ?? 'this run', scope: meta.scope || {}, health: manifest.health || { problems: [] }, findings: rules });
+  let ruleState = state, asOfNow = false;
+  if (!inLedger) ruleState = foldRun(empty, { id: runId ?? 'this run', scope: meta.scope || {}, health: manifest.health || { problems: [] }, findings: rules });
+  else if (runId !== latest) ({ state: ruleState, asOfNow } = stateAt(state, runId, join(nunchiDir, 'runs'), withFp));
   const ai = aiFindings ? withFp(aiFindings) : [];
   // AI findings are not in the ledger yet (design M1); their decisions still apply by fingerprint and group.
   const aiState = foldRun(empty, { id: runId ?? 'this run', findings: ai });
   const present = new Set([...rules, ...ai].map(f => f.fp));
-  const rows = [...view(ruleState, decisions, approved), ...view(aiState, decisions, approved)]
+  const rows = [...view(ruleState, decisions, approved), ...view(aiState, decisions, approved)].map(normRow)
     .filter(r => present.has(r.fp) || (inLedger && r.goneAt === runId));
 
   // scenes, in the wall's order (flow.json R7), canary copies left out
   const routeOrder = flow?.order || [];
-  const scenes = manifest.scenes.filter(s => s.canary === undefined).map(s => ({ ...s }));
+  // a scene id is a folder name: one that is not a single plain path segment is left out, never opened
+  const scenes = (Array.isArray(manifest.scenes) ? manifest.scenes : []).filter(s => s && s.canary === undefined && sceneDir(runDir, s.id)).map(normScene);
   const firstSeenRoute = new Map(); scenes.forEach((s, i) => { if (!firstSeenRoute.has(s.route)) firstSeenRoute.set(s.route, i); });
   const routeRank = r => { const i = routeOrder.indexOf(r); return i < 0 ? routeOrder.length + firstSeenRoute.get(r) : i; };
   scenes.sort((a, b) => routeRank(a.route) - routeRank(b.route) || rank(PERSONS, a.person) - rank(PERSONS, b.person)
@@ -90,10 +150,11 @@ export function buildModel({ runDir, nunchiDir }) {
   scenes.forEach((s, i) => {
     s.order = i;
     s.hid = 's-' + sha(s.id, 10);
-    const m = readJsonOr(join(runDir, s.id, 'measure.json'), {});
+    const dir = sceneDir(runDir, s.id);
+    const m = readJsonOr(join(dir, 'measure.json'), {});
     s.h1 = typeof m.h1 === 'string' ? m.h1 : Array.isArray(m.h1) && typeof m.h1[0] === 'string' ? m.h1[0] : null;
     s.img = null;
-    const fullPath = join(runDir, s.id, 'full.jpg'), topPath = join(runDir, s.id, 'top.jpg');
+    const fullPath = join(dir, 'full.jpg'), topPath = join(dir, 'top.jpg');
     const file = existsSync(fullPath) ? fullPath : existsSync(topPath) ? topPath : null;
     if (file && s.status === 'captured') {
       const buf = readFileSync(file);
@@ -119,7 +180,7 @@ export function buildModel({ runDir, nunchiDir }) {
     if (!f.selector) return { box: null, inside: f.inside || null };
     if (!indexes.has(f.scene)) indexes.set(f.scene, sceneIndex(runDir, f.scene).idx);
     const hit = indexes.get(f.scene).get(f.selector);
-    return { box: hit?.box || null, inside: f.inside || hit?.inside || null };
+    return { box: box4(hit?.box), inside: f.inside || str(hit?.inside) };
   };
   const instances = [...rules.map(f => ({ ...f, source: 'rule' })), ...ai.map(f => ({ ...f, source: 'ai', aiStatus: f.status }))]
     .map(f => ({ ...f, ...boxOf(f) }));
@@ -140,7 +201,7 @@ export function buildModel({ runDir, nunchiDir }) {
       ...g, hid: 'f-' + g.group, instances: own, source: isAi ? 'ai' : 'rule',
       ai: isAi ? { verified, suspect, verifier: ais.find(f => f.verification)?.verification?.verifier || null } : null,
       title: isAi ? human(g.rule) : g.title,
-      headline: isAi ? clip(own[0]?.evidence?.claim || human(g.rule), 160) : g.title,
+      headline: isAi ? String(own[0]?.evidence?.claim || human(g.rule)) : g.title,
       filterKeys: [...keys].sort(),
       active: [...keys].some(k => ACTIVE.has(k)),
       rows: rows.filter(r => r.group === g.group),
@@ -158,17 +219,19 @@ export function buildModel({ runDir, nunchiDir }) {
   const kinds = [...kindMap.values()].sort((a, b) => Number(a.unchecked) - Number(b.unchecked) || SEV[a.severity] - SEV[b.severity] || b.groups.length - a.groups.length || cmp(a.rule, b.rule));
   const ordered = kinds.flatMap(k => k.groups);
 
-  return { runId, meta, manifest, inLedger, scenes, sceneById, images, instances, groups: ordered, kinds, rows, ai: aiFindings !== null, verify, coverage };
+  return { runId, latest, asOfNow, meta, manifest, inLedger, scenes, sceneById, images, instances, groups: ordered, kinds, rows, ai: aiFindings !== null, verify, coverage };
 }
 
 // ---- rendering helpers ----------------------------------------------------------------------------------
 
-const sevChip = s => `<span class="sev sev-${s}"><span class="dot" aria-hidden="true"></span>${SEV_LABEL[s]}</span>`;
-const statusChip = st => `<span class="st st-${st}">${STATUS_LABEL[st] || 'Mixed'}</span>`;
+const sevChip = s => `<span class="sev sev-${sevOf(s)}"><span class="dot" aria-hidden="true"></span>${SEV_LABEL[sevOf(s)]}</span>`;
+const statusChip = st => (STATUS_LABEL[st] ? `<span class="st st-${st}">${STATUS_LABEL[st]}</span>` : '<span class="st st-mixed">Mixed</span>');
 const statusChips = g => (g.status === 'mixed' ? Object.keys(g.statuses).sort((a, b) => rank(Object.keys(STATUS_LABEL), a) - rank(Object.keys(STATUS_LABEL), b)).map(statusChip).join(' ') : statusChip(g.status));
 const sourceTag = g => (!g.ai ? '<span class="tag">Rule</span>'
   : g.ai.verified ? `<span class="tag tag-ai">AI · double-checked${g.ai.suspect ? ' (suspect)' : ''}</span>` : '<span class="tag tag-warn">AI · not double-checked</span>');
-const sceneLabel = s => `${WHO[s.person] || t(s.person)} · ${WIDTH[s.viewport] || t(s.viewport)} · ${STATE_LABEL[s.state] || t(s.state)}`;
+// plain text (for aria-label, which t() escapes once) and markup
+const sceneLabelText = s => `${WHO[s.person] || s.person} · ${WIDTH[s.viewport] || s.viewport} · ${STATE_LABEL[s.state] || s.state}`;
+const sceneLabel = s => t(sceneLabelText(s));
 const whereOf = g => {
   if (!g.routes.length) return g.rule === 'secret-in-client-bundle' ? 'Browser bundle' : 'Whole app';
   const shown = g.routes.slice(0, 2).map(r => `<span class="mono">${t(r)}</span>`).join(', ');
@@ -218,8 +281,8 @@ function evidenceList(f) {
     const v = ev[k];
     if (v === null || v === undefined) continue;
     const isUrl = ['url', 'href', 'src', 'finalPath', 'path'].includes(k) && typeof v === 'string';
-    const text = isUrl ? redactUrl(v) : typeof v === 'string' ? v : JSON.stringify(v);
-    out.push(`<dt>${t(k)}</dt><dd class="${typeof v === 'string' && !isUrl ? '' : 'mono'}">${t(clip(text, 400))}</dd>`);
+    const text = isUrl ? redactUrl(v) : typeof v === 'string' ? v : JSON.stringify(deepClean(v));
+    out.push(`<dt>${t(k, 80)}</dt><dd class="${typeof v === 'string' && !isUrl ? '' : 'mono'}">${t(text, 400)}</dd>`);
   }
   return out.join('');
 }
@@ -247,7 +310,7 @@ function progressView(m) {
   const bySev = { blocker: 0, high: 0, medium: 0, low: 0 };
   for (const g of active) bySev[g.severity]++;
   const count = k => m.groups.filter(g => g.filterKeys.includes(k)).length;
-  const problems = m.manifest.health?.problems || [];
+  const problems = Array.isArray(m.manifest.health?.problems) ? m.manifest.health.problems : [];
   const checked = m.scenes.filter(s => s.status === 'captured' && !(s.reason && /^redirected/.test(s.reason))).length;
   const notSeen = m.scenes.filter(s => s.status !== 'captured');
   const bh = bySev.blocker + bySev.high;
@@ -269,13 +332,13 @@ function progressView(m) {
     const fixed = gs(r => r.goneAt === id), fresh = gs(r => r.firstSeen === id && !r.goneAt), back = gs(r => r.regressedAt === id && !r.goneAt);
     const title = m.meta.parent ? `Since run ${t(m.meta.parent)}` : 'First run';
     return `<section class="panel-box" aria-labelledby="h-since"><h2 id="h-since">${title}</h2>
-<ul class="facts"><li><b class="good">${fixed}</b> fixed</li><li><b>${fresh}</b> new</li>${back ? `<li><b class="warn">${back}</b> came back after a fix</li>` : ''}</ul></section>`;
+<ul class="facts"><li><b class="good">${fixed}</b> fixed</li><li><b>${fresh}</b> new</li>${back ? `<li><b class="warn">${back}</b> came back after a fix</li>` : ''}</ul>${m.runId !== m.latest ? `<p class="muted small">Run ${t(m.runId)} is not the latest (${t(m.latest)}): statuses are ${m.asOfNow ? 'as of now, with what was fixed or came back after it undone (its older runs are gone)' : 'as they stood after this run'}; decisions are as of now.</p>` : ''}</section>`;
   })() : '<section class="panel-box" aria-labelledby="h-since"><h2 id="h-since">Ledger</h2><p class="muted">This run is not in the local ledger, so there is nothing to compare with. Statuses come from your decisions only.</p></section>';
   const aiLine = !m.ai ? 'not run (rules and computed checks only)'
     : (() => {
       const n = m.instances.filter(f => f.source === 'ai').length, conf = m.instances.filter(f => f.source === 'ai' && f.aiStatus === 'confirmed').length;
       const cov = m.coverage?.summary;
-      return `${plural(n, 'finding')}, ${conf} double-checked${cov ? ` · ${cov.seen}/${cov.cells} cells seen` : ''}${m.verify?.suspect ? ' · <span class="warn">verification suspect</span>' : ''}`;
+      return `${plural(n, 'finding')}, ${conf} double-checked${cov ? ` · ${num(cov.seen)}/${num(cov.cells)} cells seen` : ''}${m.verify?.suspect ? ' · <span class="warn">verification suspect</span>' : ''}`;
     })();
   const pctChecked = m.scenes.length ? Math.round((checked / m.scenes.length) * 100) : 0;
   return `<section id="progress" class="view" tabindex="-1" aria-labelledby="h-progress">
@@ -294,7 +357,7 @@ ${since}
 <ul class="facts">
 <li>AI review: ${aiLine}</li>
 ${notSeen.length ? `<li>${plural(notSeen.length, 'screen')} not seen: ${t([...new Set(notSeen.map(s => s.reason || s.status))].sort().join(', '))}</li>` : ''}
-${problems.map(p => `<li class="warn">Run problem: ${t(p.status)} (${p.scenes}/${p.of} screens) — ${WHY[p.status] || ''}</li>`).join('')}
+${problems.map(p => `<li class="warn">Run problem: ${t(p.status)} (${num(p.scenes)}/${num(p.of)} screens) — ${WHY[p.status] || ''}</li>`).join('')}
 </ul></section>
 </div>
 <section class="panel-box" aria-labelledby="h-status"><h2 id="h-status">Decisions</h2>
@@ -308,7 +371,7 @@ function findingsView(m) {
   const count = k => (k === 'all' ? m.groups.length : m.groups.filter(g => g.filterKeys.includes(k)).length);
   const radios = FILTERS.map(([k, label]) => `<input type="radio" name="fs" id="fs-${k}" value="${k}"${k === 'open' ? ' checked' : ''}><label for="fs-${k}">${label} <span class="cnt">${count(k)}</span></label>`).join('');
   const row = g => `<li class="row" data-st="${g.filterKeys.join(' ')}"><a href="#${g.hid}">
-<span class="row-main">${g.ai ? `<span class="row-what">${t(g.headline)}</span><span class="row-where">${whereOf(g)}</span>` : `<span class="row-what">${whereOf(g)}</span>${g.instances.length ? `<span class="row-where">${t(clip(gistOf(g.instances[0]), 120))}</span>` : ''}`}</span>
+<span class="row-main">${g.ai ? `<span class="row-what">${t(g.headline, 160)}</span><span class="row-where">${whereOf(g)}</span>` : `<span class="row-what">${whereOf(g)}</span>${g.instances.length ? `<span class="row-where">${t(gistOf(g.instances[0]), 120)}</span>` : ''}`}</span>
 <span class="row-tags">${sourceTag(g)} ${statusChips(g)}</span></a></li>`;
   const kind = k => `<details class="kind" data-st="${[...new Set(k.groups.flatMap(g => g.filterKeys))].sort().join(' ')}"${k.severity === 'low' ? '' : ' open'}>
 <summary><span class="kind-title">${sevChip(k.severity)} <span>${t(k.title)}</span></span><span class="muted small">${plural(k.groups.length, 'group')}</span></summary>
@@ -354,9 +417,9 @@ function detailView(m, g, prev, next) {
     const boxes = same.filter(x => drawable(x, s).ok).map(x => ({ box: x.box }));
     const not = same.map(x => drawable(x, s)).find(d => !d.ok);
     return `<div class="fig fig-${vp}"><p class="muted small">${t(s.route)} · ${sceneLabel(s)} <a href="#${s.hid}">Screen</a></p>
-${shot(s, { boxes, crop: true, label: `Screenshot of ${s.route}, ${sceneLabel(s)}${boxes.length ? ', with the element outlined' : ''}` })}
+${shot(s, { boxes, crop: true, label: `Screenshot of ${s.route}, ${sceneLabelText(s)}${boxes.length ? ', with the element outlined' : ''}` })}
 ${!boxes.length && not ? `<p class="muted small">Not outlined: ${not.why}.</p>` : ''}
-${s.img && boxes.length ? `<details class="whole"><summary>Whole screen</summary>${shot(s, { boxes, label: `Whole screenshot of ${s.route}, ${sceneLabel(s)}` })}</details>` : ''}</div>`;
+${s.img && boxes.length ? `<details class="whole"><summary>Whole screen</summary>${shot(s, { boxes, label: `Whole screenshot of ${s.route}, ${sceneLabelText(s)}` })}</details>` : ''}</div>`;
   };
   const toggle = figs.length > 1 ? `<fieldset class="seg"><legend class="sr">Width</legend>${figs.map((f, i) => `<input type="radio" class="vt-${f.viewport}" name="v-${g.group}" id="v-${g.group}-${f.viewport}"${i === 0 ? ' checked' : ''}><label for="v-${g.group}-${f.viewport}">${WIDTH[f.viewport]}</label>`).join('')}</fieldset>` : '';
   const first = inst[0] || null;
@@ -372,7 +435,7 @@ ${s.img && boxes.length ? `<details class="whole"><summary>Whole screen</summary
 <nav class="detail-nav" aria-label="Finding navigation"><a href="#findings">← All findings</a><span class="pn">${prev ? `<a href="#${prev.hid}" rel="prev">Previous</a>` : ''}${next ? `<a href="#${next.hid}" rel="next">Next</a>` : ''}</span></nav>
 <div class="panel-box detail-box">
 <header class="detail-head"><p class="chips">${sevChip(g.severity)} <span class="muted">${t(g.title)}</span> ${sourceTag(g)} ${statusChips(g)}</p>
-<h1 id="h-${g.group}">${t(g.headline)}</h1></header>
+<h1 id="h-${g.group}">${t(g.headline, 160)}</h1></header>
 ${fixedOnly ? `<p>Gone on re-capture in run ${t(m.runId)} (last seen in run ${t(row.lastSeen)}).</p>${examples.length ? `<p class="muted small">Where it was: ${examples.map(id => (m.sceneById.has(id) ? `<a href="#${m.sceneById.get(id).hid}">${t(id)}</a>` : `<span class="mono">${t(id)}</span>`)).join(', ')}</p>` : ''}` : ''}
 ${figs.length ? `${toggle}${figs.map(f => figure(f, f.viewport)).join('')}` : !fixedOnly ? '<p class="muted">No screenshot: this finding belongs to the whole app, not one screen.</p>' : ''}
 <dl class="facts-dl">
@@ -381,16 +444,16 @@ ${first?.rule === 'secret-in-client-bundle' ? `<dt>Where</dt><dd class="mono">${
 ${seen.length ? `<dt>Seen on</dt><dd>${seen.slice(0, 12).map(s => `<a href="#${s.hid}">${t(s.route)} · ${sceneLabel(s)}</a>`).join('<br>')}${seen.length > 12 ? `<br><span class="muted">+${seen.length - 12} more</span>` : ''}</dd>` : ''}
 ${decision ? `<dt>Decision</dt><dd>${t(decision.decision)}${decision.reason ? ` (${t(decision.reason)})` : ''} · ${t(decision.by)} · ${t(decision.at)}${decision.verified ? '' : ' · <span class="warn">came through git, not approved on this machine</span>'}</dd>` : ''}
 ${notes.map(n => `<dt>Note</dt><dd class="warn">${t(n)}</dd>`).join('')}
-${verification ? `<dt>Reviewer</dt><dd>${t(verification.verdict)} · ${t(verification.verifier || '')}${verification.suspect ? ' · <span class="warn">suspect</span>' : ''}${verification.reason ? ` — ${t(clip(verification.reason, 240))}` : ''}</dd>` : ''}
+${verification ? `<dt>Reviewer</dt><dd>${t(verification.verdict)} · ${t(verification.verifier || '')}${verification.suspect ? ' · <span class="warn">suspect</span>' : ''}${verification.reason ? ` — ${t(verification.reason, 240)}` : ''}</dd>` : ''}
 </dl>
 <details class="evidence"><summary>Evidence details</summary>
 <dl class="facts-dl">
 <dt>Rule</dt><dd class="mono">${t(g.lens)} · ${t(g.rule)}</dd>
 <dt>Group</dt><dd class="mono">${t(g.group)}</dd>
-<dt>Fingerprints</dt><dd class="mono">${g.fps.map(t).join(' ')}</dd>
-${first?.selector ? `<dt>Element</dt><dd class="mono">${t(clip(first.selector, 300))}</dd>` : ''}
+<dt>Fingerprints</dt><dd class="mono">${g.fps.map(x => t(x)).join(' ')}</dd>
+${first?.selector ? `<dt>Element</dt><dd class="mono">${t(first.selector, 300)}</dd>` : ''}
 ${Array.isArray(first?.box) ? `<dt>Box</dt><dd class="mono">${first.box.slice(0, 2).map(Number).join(',')} · ${Number(first.box[2])}×${Number(first.box[3])}</dd>` : ''}
-${first?.inside ? `<dt>Inside</dt><dd class="mono">${t(clip(first.inside, 200))}</dd>` : ''}
+${first?.inside ? `<dt>Inside</dt><dd class="mono">${t(first.inside, 200)}</dd>` : ''}
 ${first ? evidenceList(first) : ''}
 <dt>History</dt><dd>first seen in run ${t(row.firstSeen)} · last seen in run ${t(row.lastSeen)}${row.regressedAt ? ` · came back in run ${t(row.regressedAt)}` : ''}</dd>
 </dl></details>
@@ -417,10 +480,10 @@ function screensView(m) {
     else if (!fs.length) { badge = 'Clean'; kind = 'clean'; note = 'Nothing found'; }
     else if (!act.length) { badge = 'Nothing open'; kind = 'clean'; note = `${plural(fs.length, 'finding')}, all decided`; }
     else { badge = sevs.slice(0, 2).map(k => `${by[k]} ${k}`).join(' · '); kind = sevs[0]; note = act.length === 1 ? groupOf.get(act[0].group)?.headline || '' : plural(act.length, 'open finding'); }
-    const thumb = s.img ? `<div class="thumb thumb-${s.viewport} i-${s.img.key}" aria-hidden="true"></div>` : '<div class="thumb thumb-none" aria-hidden="true">No screenshot</div>';
+    const thumb = s.img ? `<div class="thumb thumb-${vpCls(s.viewport)} i-${s.img.key}" aria-hidden="true"></div>` : '<div class="thumb thumb-none" aria-hidden="true">No screenshot</div>';
     return `<li class="card" data-sid="${s.hid}" data-vp="${t(s.viewport)}" data-who="${t(s.person)}" data-state="${t(s.state)}"><a href="#${s.hid}">
 <span class="thumb-wrap">${thumb}<span class="badge badge-${kind}">${t(badge)}</span></span>
-<span class="card-body"><span class="card-name">${t(clip(s.h1 || s.route, 60))}</span><span class="mono muted small">${t(s.route)}</span><span class="small muted">${sceneLabel(s)}</span><span class="small ${kind === 'dark' ? 'warn' : 'muted'}">${t(clip(note, 80))}</span></span></a></li>`;
+<span class="card-body"><span class="card-name">${t(s.h1 || s.route, 60)}</span><span class="mono muted small">${t(s.route)}</span><span class="small muted">${sceneLabel(s)}</span><span class="small ${kind === 'dark' ? 'warn' : 'muted'}">${t(note, 80)}</span></span></a></li>`;
   };
   const panel = s => {
     const fs = (onScene.get(s.id) || []).slice().sort((a, b) => SEV[a.severity] - SEV[b.severity] || cmp(groupOf.get(a.group)?.headline || '', groupOf.get(b.group)?.headline || '') || cmp(a.fp, b.fp));
@@ -430,10 +493,10 @@ function screensView(m) {
     const sibs = m.scenes.filter(o => o.route === s.route && o.id !== s.id);
     const g = f => groupOf.get(f.group);
     return `<section id="${s.hid}" class="screen-panel" data-view="screens" tabindex="-1" aria-labelledby="h-${s.hid}">
-<div class="sp-head"><div><h2 id="h-${s.hid}">${t(clip(s.h1 || s.route, 80))}</h2><p class="muted small"><span class="mono">${t(s.route)}</span> · ${sceneLabel(s)}</p></div><a href="#screens">Close</a></div>
-${s.img ? shot(s, { boxes, label: `Screenshot of ${s.route}, ${sceneLabel(s)}${boxes.length ? `, ${plural(boxes.length, 'finding')} outlined and numbered` : ''}`, cls: `shot-${s.viewport}` }) : `<p class="pad muted">Not seen: ${t(s.reason || s.status)}.</p>`}
+<div class="sp-head"><div><h2 id="h-${s.hid}">${t(s.h1 || s.route, 80)}</h2><p class="muted small"><span class="mono">${t(s.route)}</span> · ${sceneLabel(s)}</p></div><a href="#screens">Close</a></div>
+${s.img ? shot(s, { boxes, label: `Screenshot of ${s.route}, ${sceneLabelText(s)}${boxes.length ? `, ${plural(boxes.length, 'finding')} outlined and numbered` : ''}`, cls: `shot-${vpCls(s.viewport)}` }) : `<p class="pad muted">Not seen: ${t(s.reason || s.status)}.</p>`}
 ${s.reason && /^redirected/.test(s.reason) ? `<p class="pad small muted">Redirected to <span class="mono">${t(redactUrl(s.finalPath || ''))}</span>.</p>` : ''}
-${items.length ? `<ol class="sp-list">${items.map(({ f, d, n }) => `<li><a href="#${g(f)?.hid || ''}"><span class="numb${n ? '' : ' numb-none'}">${n || '–'}</span><span class="sp-text"><span class="sp-what">${t(clip(g(f)?.headline || titleOf(f.rule), 120))}</span><span class="small">${SEV_LABEL[f.severity]} · ${f.source === 'ai' ? 'AI' : 'Rule'} · ${STATUS_LABEL[statusOf(f)] || 'Open'}${n ? '' : ` · not outlined: ${d.why}`}</span></span></a></li>`).join('')}</ol>` : s.img ? '<p class="pad muted">Nothing found on this screen.</p>' : ''}
+${items.length ? `<ol class="sp-list">${items.map(({ f, d, n }) => `<li><a href="#${g(f)?.hid || ''}"><span class="numb${n ? '' : ' numb-none'}">${n || '–'}</span><span class="sp-text"><span class="sp-what">${t(g(f)?.headline || titleOf(f.rule), 120)}</span><span class="small">${SEV_LABEL[f.severity]} · ${f.source === 'ai' ? 'AI' : 'Rule'} · ${STATUS_LABEL[statusOf(f)] || 'Open'}${n ? '' : ` · not outlined: ${d.why}`}</span></span></a></li>`).join('')}</ol>` : s.img ? '<p class="pad muted">Nothing found on this screen.</p>' : ''}
 ${sibs.length ? `<details class="sp-sibs small"><summary>Same page, ${plural(sibs.length, 'other screen')}</summary><p>${sibs.map(o => `<a href="#${o.hid}">${sceneLabel(o)}</a>`).join(' ')}</p></details>` : ''}
 </section>`;
   };
@@ -626,7 +689,7 @@ export function renderHtml(m, { imageUrl }) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <meta name="referrer" content="no-referrer">
-<meta name="generator" content="nunchi export --html">
+${GENERATOR}
 <title>nunchi · ${t(runLabel)}</title>
 <style>
 ${css(m, imageUrl)}</style>
@@ -657,24 +720,77 @@ ${screensView(m)}
 `;
 }
 
+// ---- writing ---------------------------------------------------------------------------------------------
+
+export const GENERATOR = '<meta name="generator" content="nunchi export --html">';
+export const MARKER = '.nunchi-export';                 // img/.nunchi-export: the files the last export wrote there
+const IMG_NAME = /^[0-9a-f]{16}\.jpg$/;
+const refuse = msg => { throw Object.assign(new Error(msg), { code: 'EXPORT_TARGET' }); };
+const lstatOr = p => { try { return lstatSync(p); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } };
+
+// A path with every existing part resolved through symlinks (the rest kept as written), so a check on it cannot be
+// bypassed by a link; compared without case where the file system usually ignores it.
+function realish(p) {
+  let cur = resolve(p); const rest = [];
+  while (!lstatOr(cur)) { const up = dirname(cur); if (up === cur) break; rest.unshift(basename(cur)); cur = up; }
+  let real = cur; try { real = realpathSync(cur); } catch {}
+  return join(real, ...rest);
+}
+export function within(parent, child) {
+  const fold = process.platform === 'win32' || process.platform === 'darwin' ? x => x.toLowerCase() : x => x;
+  const r = relative(fold(realish(parent)), fold(realish(child)));
+  return r === '' || (!r.startsWith('..') && !isAbsolute(r));
+}
+
 // Writes <outDir>/index.html and <outDir>/img/<hash>.jpg (copied, byte for byte). With `inline`, the images are
-// data URIs inside index.html and no img/ folder is written. Only index.html and img/ are touched in outDir.
+// data URIs inside index.html and no image is written. Nothing else in outDir is touched, and nothing is replaced
+// that an earlier export did not write: an index.html without the generator marker, a symlink, or an img/ folder
+// with files of the user's own is refused before anything changes.
 export function exportHtml({ runDir, nunchiDir, outDir, inline = false }) {
+  if (within(join(nunchiDir, 'runs'), outDir)) refuse('write the page outside .nunchi/runs (runs are evidence and are never edited)');
+  if (within(runDir, outDir)) refuse('write the page outside the run folder');
   const m = buildModel({ runDir, nunchiDir });
   const imageUrl = inline
     ? key => `"data:image/jpeg;base64,${readFileSync(m.images.get(key).file).toString('base64')}"`
     : key => `"img/${key}.jpg"`;
   const html = renderHtml(m, { imageUrl });
-  mkdirSync(outDir, { recursive: true });
-  rmSync(join(outDir, 'img'), { recursive: true, force: true });
-  let bytes = Buffer.byteLength(html);
-  if (!inline) {
-    mkdirSync(join(outDir, 'img'));
-    for (const key of [...m.images.keys()].sort()) { copyFileSync(m.images.get(key).file, join(outDir, 'img', `${key}.jpg`)); bytes += m.images.get(key).bytes; }
+
+  // check everything first
+  const out = lstatOr(outDir);
+  if (out && !out.isDirectory() && !(out.isSymbolicLink() && lstatOr(realish(outDir))?.isDirectory())) refuse(`${outDir} is not a folder`);
+  const index = join(outDir, 'index.html'), img = join(outDir, 'img'), marker = join(img, MARKER);
+  const ix = lstatOr(index);
+  if (ix && !ix.isFile()) refuse(`${index} is a ${ix.isSymbolicLink() ? 'symlink' : 'folder'}; not replacing it`);
+  if (ix && !readFileSync(index, 'utf8').includes(GENERATOR)) refuse(`${index} was not written by nunchi export; not replacing it (pick an empty folder)`);
+  const im = lstatOr(img);
+  if (im && (im.isSymbolicLink() || !im.isDirectory())) refuse(`${img} is not a plain folder; not writing into it`);
+  let ours = [];
+  if (im) {
+    const mk = lstatOr(marker);
+    if (mk && !mk.isFile()) refuse(`${marker} is not a file`);
+    if (mk) ours = readFileSync(marker, 'utf8').split('\n').filter(n => IMG_NAME.test(n));
+    else if (readdirSync(img).length) refuse(`${img} holds files nunchi export did not write; not touching it (pick an empty folder)`);
   }
-  writeFileSync(join(outDir, 'index.html'), html);
+  const keys = inline ? [] : [...m.images.keys()].sort();
+  const mine = new Set(ours);
+  for (const key of keys) if (!mine.has(`${key}.jpg`) && lstatOr(join(img, `${key}.jpg`))) refuse(`${join(img, `${key}.jpg`)} exists and was not written by nunchi export`);
+
+  // then write: remove only what the last export listed (a link is removed as a link, never followed)
+  mkdirSync(outDir, { recursive: true });
+  for (const n of ours) { const f = join(img, n); const st = lstatOr(f); if (st && (st.isFile() || st.isSymbolicLink())) unlinkSync(f); }
+  if (im && lstatOr(marker)) unlinkSync(marker);
+  let bytes = Buffer.byteLength(html);
+  if (keys.length || (!inline && m.images.size === 0)) {
+    if (!lstatOr(img)) mkdirSync(img);
+    for (const key of keys) { copyFileSync(m.images.get(key).file, join(img, `${key}.jpg`), FS.COPYFILE_EXCL); bytes += m.images.get(key).bytes; }
+    writeFileSync(marker, keys.map(k => `${k}.jpg\n`).join(''), { flag: 'wx' });
+  } else if (lstatOr(img) && !readdirSync(img).length) rmdirSync(img);
+  // a new file renamed over index.html: a symlink put there in the meantime is replaced, never written through
+  const tmp = join(outDir, `.index.html.${process.pid}.tmp`);
+  writeFileSync(tmp, html, { flag: 'wx' });
+  renameSync(tmp, index);
   return {
-    out: join(outDir, 'index.html'), run: m.runId, inline, bytes, images: inline ? 0 : m.images.size,
+    out: index, run: m.runId, inline, bytes, images: keys.length,
     scenes: m.scenes.length, groups: m.groups.length, open: m.groups.filter(g => g.active).length, inLedger: m.inLedger,
   };
 }

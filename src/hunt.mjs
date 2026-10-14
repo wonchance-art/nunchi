@@ -275,9 +275,19 @@ const DEFECT_KEYS = ['scene', 'selector', 'source', 'claim', 'severity'];
 const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const clip = (v, n = 200) => (typeof v === 'string' ? (v.length > n ? v.slice(0, n) + '…' : v) : undefined);
 
+// A scene's folder in a run, or null when the id is not one plain path segment (a manifest is data: an id like
+// `../../x` must never reach outside the run). Real ids never hold `/`, `\`, `:` or NUL (sceneId escapes them).
+export function sceneDir(runDir, sceneId) {
+  if (typeof sceneId !== 'string' || !sceneId || sceneId === '.' || sceneId === '..' || /[/\\:\0]/.test(sceneId)) return null;
+  const p = join(runDir, sceneId);
+  return relative(runDir, p) === sceneId ? p : null;
+}
+
 // Where a scene's selectors live. Exact string match: the hunter copies a selector from the evidence.
 export function sceneIndex(runDir, sceneId) {
-  const read = (n, fallback) => { try { return JSON.parse(readFileSync(join(runDir, sceneId, n), 'utf8')); } catch { return fallback; } };
+  const dir = sceneDir(runDir, sceneId);
+  if (!dir) return { idx: new Map(), ariaNodes: new Set() };
+  const read = (n, fallback) => { try { return JSON.parse(readFileSync(join(dir, n), 'utf8')); } catch { return fallback; } };
   const idx = new Map();
   // First file wins, except that an entry with a box (controls, measure) replaces one without (styles, links).
   const put = (file, rows) => {
@@ -295,7 +305,7 @@ export function sceneIndex(runDir, sceneId) {
   for (const k of ['clipped', 'images', 'scrollers', 'hiddenControls']) put('measure.json', m[k]);
   // aria.yml nodes are addressed as `aria=<the node line without "- ">`, e.g. aria=button "Delete garden"
   let aria = '';
-  try { aria = readFileSync(join(runDir, sceneId, 'aria.yml'), 'utf8'); } catch {}
+  try { aria = readFileSync(join(dir, 'aria.yml'), 'utf8'); } catch {}
   const ariaNodes = new Set();
   for (const line of aria.split('\n')) {
     const m2 = /^\s*-\s+(.*?):?\s*$/.exec(line);
