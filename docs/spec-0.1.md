@@ -1076,8 +1076,15 @@ terminal and no browser is opened (`--no-browser`); run by an agent, the output 
 and nothing secret. The server never writes a link to its stdout (which carries `{"port"}` only): `nunchi open`
 hands it an extra pipe as fd 3 and asks for the link with `--link-to-parent`, and the link goes over that pipe (a
 file or terminal on fd 3 gets nothing). Started any other way, the server hands out no link: it opens the browser
-itself, or nothing (tested by running the script directly). The browser opener is `xdg-open`, `/usr/bin/open` or
-`cmd /c start`, given only a URL that matches a board link.
+itself, or nothing (tested by running the script directly). The browser opener is an absolute path from a fixed
+list (`/usr/bin/xdg-open`, `/usr/local/bin/xdg-open`, `/bin/xdg-open`, `/run/current-system/sw/bin/xdg-open`;
+`/usr/bin/open`; `C:\Windows\System32\cmd.exe /d /s /c start`), never PATH, `$BROWSER` or `ComSpec`, given only a URL
+that matches a board link, with an allow-listed environment: the desktop session's `DISPLAY`, `WAYLAND_DISPLAY`,
+`DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR` and `XDG_CURRENT_DESKTOP` (macOS `TMPDIR`; Windows `SystemRoot`,
+`windir`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`, `PATHEXT`), `HOME` from the account (not the
+variable) and a fixed system `PATH`. The detached server gets an allow-listed environment too (PATH and the user's
+config for git, `XDG_STATE_HOME` / `LOCALAPPDATA` for the answer keys, locale, temp folders, the desktop session):
+never `NODE_*`, `LD_*`, `DYLD_*`, `BROWSER` or `GIT_*` (tested on `/proc/<pid>/environ`).
 
 **Security (§3.2; `test/board-security.test.mjs` has a test per check).**
 - *Bind* 127.0.0.1 only. *Host* must be exactly `127.0.0.1:<port>`, or 421 (also without a Host header: node's own

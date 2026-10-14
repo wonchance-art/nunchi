@@ -82,16 +82,40 @@ function limiter(max, ms) {
   return { hit(now = Date.now()) { times = times.filter(t => now - t < ms); if (times.length >= max) return false; times.push(now); return true; }, reset() { times = []; } };
 }
 
-// The browser opener of this platform. The link is checked first: only a board link with a launch code is opened.
-export function openerCommand(url, platform = process.platform) {
+// The browser opener of this platform, by absolute path from a fixed list (never PATH, never $BROWSER or ComSpec), or
+// null when none is installed. The link is checked first: only a board link with a launch code is opened.
+const XDG_OPEN = ['/usr/bin/xdg-open', '/usr/local/bin/xdg-open', '/bin/xdg-open', '/run/current-system/sw/bin/xdg-open'];
+const WINDOWS = 'C:\\Windows';
+const winRoot = (env = process.env) => (typeof env.SystemRoot === 'string' && /^[A-Za-z]:\\[^"%&|<>^\n]*$/.test(env.SystemRoot) ? env.SystemRoot.replace(/\\+$/, '') : WINDOWS);
+export function openerCommand(url, platform = process.platform, { exists = existsSync, env = process.env } = {}) {
   if (!/^http:\/\/127\.0\.0\.1:\d{1,5}\/#t=[0-9a-f]{64}$/.test(url)) throw new Error('not a board link');
-  if (platform === 'darwin') return { cmd: '/usr/bin/open', args: [url] };
-  if (platform === 'win32') return { cmd: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', `start "" "${url}"`], opts: { windowsVerbatimArguments: true } };
-  return { cmd: 'xdg-open', args: [url] };
+  if (platform === 'darwin') return exists('/usr/bin/open') ? { cmd: '/usr/bin/open', args: [url] } : null;
+  if (platform === 'win32') {
+    const cmd = [`${WINDOWS}\\System32\\cmd.exe`, `${winRoot(env)}\\System32\\cmd.exe`].find(exists);
+    return cmd ? { cmd, args: ['/d', '/s', '/c', `start "" "${url}"`], opts: { windowsVerbatimArguments: true } } : null;
+  }
+  const cmd = XDG_OPEN.find(exists);
+  return cmd ? { cmd, args: [url] } : null;
+}
+// The opener's environment: what it needs to reach the person's desktop session, and nothing else (no PATH of the
+// caller, no BROWSER, no LD_* / DYLD_* / NODE_*). HOME is the account's own (the password database), not the variable.
+const OPENER_ENV = {
+  linux: ['DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS', 'XDG_RUNTIME_DIR', 'XDG_CURRENT_DESKTOP'],
+  darwin: ['TMPDIR'],
+  win32: ['USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'PATHEXT'],
+};
+export function openerEnv(platform = process.platform, env = process.env) {
+  const out = {};
+  for (const k of OPENER_ENV[platform] || OPENER_ENV.linux) if (typeof env[k] === 'string' && env[k]) out[k] = env[k];
+  if (platform === 'win32') { const root = winRoot(env); return { ...out, SystemRoot: root, windir: root, PATH: `${root}\\System32;${root}` }; }
+  let home = null;
+  try { home = userInfo().homedir; } catch {}
+  return { ...out, ...(home ? { HOME: home } : {}), PATH: platform === 'darwin' ? '/usr/bin:/bin:/usr/sbin:/sbin' : '/usr/local/bin:/usr/bin:/bin:/run/current-system/sw/bin' };
 }
 function openInBrowser(url) {
-  const { cmd, args, opts = {} } = openerCommand(url);
-  try { const c = spawn(cmd, args, { stdio: 'ignore', detached: true, windowsHide: true, ...opts }); c.on('error', () => {}); c.unref(); return true; } catch { return false; }
+  const o = openerCommand(url);
+  if (!o) return false;
+  try { const c = spawn(o.cmd, o.args, { stdio: 'ignore', detached: true, windowsHide: true, env: openerEnv(), ...(o.opts || {}) }); c.on('error', () => {}); c.unref(); return true; } catch { return false; }
 }
 
 // Where the control socket lives (design §3.1: a local socket, mode 0600, through which a second `nunchi open` asks

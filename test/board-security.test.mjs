@@ -9,8 +9,8 @@ import { join } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
-import { startBoard, CSP, SECURITY_HEADERS, MAX_BODY, LIMITS, MAX_STREAMS, openerCommand, sameSecret, CODE_TTL_MS } from '../src/board/server.mjs';
-import { openBoard, stopBoards } from '../src/board/launch.mjs';
+import { startBoard, CSP, SECURITY_HEADERS, MAX_BODY, LIMITS, MAX_STREAMS, openerCommand, openerEnv, sameSecret, CODE_TTL_MS } from '../src/board/server.mjs';
+import { openBoard, stopBoards, serverEnv } from '../src/board/launch.mjs';
 import { smallProject, jpeg, writeRun } from './fixtures/board-project.mjs';
 
 const POSIX = process.platform !== 'win32';
@@ -421,10 +421,45 @@ test('§3.1 the link never reaches stdout: the server started directly, with any
   } finally { await stopBoards(stateDir, p.root); }
 });
 
-test('§3.1 the browser opener: only a board link with a launch code, by absolute path or the platform\'s own opener', () => {
+test('§3.1 the browser opener: only a board link with a launch code, by an absolute path from a fixed list (never PATH, $BROWSER or ComSpec)', () => {
   const url = `http://127.0.0.1:4321/#t=${'a'.repeat(64)}`;
-  assert.deepEqual(openerCommand(url, 'linux'), { cmd: 'xdg-open', args: [url] });
-  assert.deepEqual(openerCommand(url, 'darwin'), { cmd: '/usr/bin/open', args: [url] });
-  assert.equal(openerCommand(url, 'win32').args.at(-1), `start "" "${url}"`);
+  const only = (...ok) => ({ exists: p => ok.includes(p), env: { ComSpec: 'C:\\evil\\cmd.exe', SystemRoot: 'C:\\Windows', BROWSER: '/tmp/evil', PATH: '/tmp/evil' } });
+  assert.deepEqual(openerCommand(url, 'linux', only('/usr/bin/xdg-open')), { cmd: '/usr/bin/xdg-open', args: [url] });
+  assert.deepEqual(openerCommand(url, 'linux', only('/usr/local/bin/xdg-open')), { cmd: '/usr/local/bin/xdg-open', args: [url] });
+  assert.equal(openerCommand(url, 'linux', only('/tmp/evil/xdg-open')), null, 'not on the list: no opener');
+  assert.deepEqual(openerCommand(url, 'darwin', only('/usr/bin/open')), { cmd: '/usr/bin/open', args: [url] });
+  const win = openerCommand(url, 'win32', only('C:\\Windows\\System32\\cmd.exe'));
+  assert.equal(win.cmd, 'C:\\Windows\\System32\\cmd.exe', 'never ComSpec');
+  assert.equal(win.args.at(-1), `start "" "${url}"`);
   for (const bad of ['http://evil.example/#t=' + 'a'.repeat(64), `http://127.0.0.1:4321/#t=${'a'.repeat(64)}&x`, 'file:///etc/passwd', `http://127.0.0.1:4321/x`]) assert.throws(() => openerCommand(bad, 'linux'));
+});
+
+test('§3.1 the opener and the detached server get an allow-listed environment: no BROWSER, PATH of the caller, LD_*, DYLD_* or NODE_*', { timeout: 60000 }, async () => {
+  const hostile = { PATH: '/tmp/evil:/usr/bin', BROWSER: '/tmp/evil/browser', LD_PRELOAD: '/tmp/evil.so', LD_LIBRARY_PATH: '/tmp/evil', DYLD_INSERT_LIBRARIES: '/tmp/evil.dylib',
+    NODE_OPTIONS: '--require /tmp/evil.js', NODE_PATH: '/tmp/evil', HOME: '/tmp/evil-home', DISPLAY: ':7', WAYLAND_DISPLAY: 'wayland-1', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1/bus', XDG_RUNTIME_DIR: '/run/user/1', GIT_DIR: '/tmp/evil' };
+  const lx = openerEnv('linux', hostile);
+  assert.deepEqual(Object.keys(lx).sort(), ['DBUS_SESSION_BUS_ADDRESS', 'DISPLAY', 'HOME', 'PATH', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR']);
+  assert.ok(!lx.PATH.includes('/tmp/evil') && lx.HOME !== '/tmp/evil-home', 'a fixed PATH; HOME from the account, not the variable');
+  const mac = openerEnv('darwin', hostile);
+  assert.ok(!('BROWSER' in mac) && !('DYLD_INSERT_LIBRARIES' in mac) && mac.PATH === '/usr/bin:/bin:/usr/sbin:/sbin');
+  const w = openerEnv('win32', { ...hostile, SystemRoot: 'C:\\Windows', USERPROFILE: 'C:\\Users\\a', ComSpec: 'C:\\evil.exe' });
+  assert.deepEqual(Object.keys(w).sort(), ['PATH', 'SystemRoot', 'USERPROFILE', 'windir']);
+  const s = serverEnv({ ...hostile, LANG: 'C.UTF-8', XDG_STATE_HOME: '/x/state' });
+  for (const k of ['BROWSER', 'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'NODE_OPTIONS', 'NODE_PATH', 'GIT_DIR']) assert.ok(!(k in s), k);
+  for (const k of ['PATH', 'HOME', 'LANG', 'XDG_STATE_HOME']) assert.ok(k in s, `${k} is kept (git and the answer keys need it)`);
+  // the detached process itself, through nunchi open's launcher
+  if (process.platform !== 'linux') return;
+  const p = smallProject();
+  const stateDir = join(p.nunchi, 'state');
+  const saved = { BROWSER: process.env.BROWSER, NODE_PATH: process.env.NODE_PATH, LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH };
+  Object.assign(process.env, { BROWSER: '/tmp/evil/browser', NODE_PATH: '/tmp/evil', LD_LIBRARY_PATH: '/tmp/evil-lib' });
+  let r;
+  try { r = await openBoard({ projectDir: p.root, stateDir, browser: false, idleMs: 20000 }); }
+  finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+  try {
+    const rec = JSON.parse(readFileSync(join(stateDir, 'boards', readdirSync(join(stateDir, 'boards')).find(n => n.endsWith('.json'))), 'utf8'));
+    const env = readFileSync(`/proc/${rec.pid}/environ`, 'utf8').split('\0').map(x => x.split('=')[0]);
+    for (const k of ['BROWSER', 'NODE_PATH', 'LD_LIBRARY_PATH']) assert.ok(!env.includes(k), `the server has no ${k}`);
+    assert.ok(env.includes('PATH'));
+  } finally { await stopBoards(stateDir, p.root); }
 });

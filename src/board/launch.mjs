@@ -12,6 +12,16 @@ import { fileURLToPath } from 'node:url';
 import { boardsDir } from './server.mjs';
 
 const SERVER = fileURLToPath(new URL('./server.mjs', import.meta.url));
+
+// The detached server's environment, allow-listed: what git (PATH, the user's config), the answer keys
+// (XDG_STATE_HOME, LOCALAPPDATA) and the browser opener need. Never NODE_* (NODE_OPTIONS can load code into it),
+// LD_* / DYLD_*, BROWSER, GIT_* or anything else of the caller's.
+const SERVER_ENV = /^(PATH|HOME|USER|LOGNAME|USERNAME|LANG|LANGUAGE|LC_[A-Z]+|TZ|TMPDIR|TEMP|TMP|XDG_STATE_HOME|XDG_CONFIG_HOME|XDG_RUNTIME_DIR|XDG_CURRENT_DESKTOP|DISPLAY|WAYLAND_DISPLAY|DBUS_SESSION_BUS_ADDRESS|USERPROFILE|HOMEDRIVE|HOMEPATH|APPDATA|LOCALAPPDATA|SYSTEMROOT|SYSTEMDRIVE|WINDIR|COMSPEC|PATHEXT)$/i;
+export function serverEnv(env = process.env) {
+  const out = {};
+  for (const [k, v] of Object.entries(env)) if (SERVER_ENV.test(k) && typeof v === 'string') out[k] = v;
+  return out;
+}
 const real = p => { try { return realpathSync(p); } catch { return resolve(p); } };
 
 // One request over the control socket: → the parsed reply, or null (no answer within `ms`).
@@ -69,7 +79,7 @@ export async function openBoard({ projectDir, stateDir, mode = 'board', labeller
   const args = [SERVER, '--project', resolve(projectDir), '--mode', mode, ...(port ? ['--port', String(port)] : []), ...(browser ? ['--open'] : []),
     ...(wantLink ? ['--link-to-parent'] : []), ...(labeller ? ['--labeller', labeller] : []), ...(idleMs ? ['--idle-ms', String(idleMs)] : [])];
   // stdout carries the port only; the link, when this terminal is to print it, comes over a pipe of its own (fd 3)
-  const child = spawn(process.execPath, args, { cwd: resolve(projectDir), detached: true, stdio: ['ignore', 'pipe', 'ignore', ...(wantLink ? ['pipe'] : [])], windowsHide: true });
+  const child = spawn(process.execPath, args, { cwd: resolve(projectDir), detached: true, stdio: ['ignore', 'pipe', 'ignore', ...(wantLink ? ['pipe'] : [])], windowsHide: true, env: serverEnv() });
   let line, link = null;
   try {
     line = parse(await firstLine(child.stdout, 20000));
