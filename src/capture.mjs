@@ -19,6 +19,11 @@ const require = createRequire(import.meta.url);
 const AXE_SOURCE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
 const AXE_RULES = ['color-contrast', 'button-name', 'link-name', 'image-alt', 'label', 'duplicate-id-aria', 'select-name', 'input-button-name'];
 
+// A sign-in page by its path, query and fragment ignored: /sign-in?next=%2Fbilling is one, /signing-tips is not.
+export function isSignInPath(p) {
+  return /(^|\/)(log-?in|sign-?in|auth)(\/|$)/i.test(String(p || '').split(/[?#]/)[0]);
+}
+
 export const VIEWPORTS = { m: { width: 390, height: 844 }, d: { width: 1280, height: 800 } };
 const DEFAULT_CLOCK = Date.UTC(2026, 0, 15, 9, 0, 0);
 export const STATES = ['normal', 'empty', 'error', 'slow', 'offline'];
@@ -246,7 +251,7 @@ async function captureOne(browser, base, scene, opts) {
   writeStable(join(dir, 'console.json'), { pageErrors: seenErrors, nativeDialogs: seenDialogs, errors });
   // A redirected scene shows another route's page: that page is judged in its own scene. What a
   // redirect itself says is judged here: a signed-in person bounced to a sign-in page lost the session.
-  const bounced = ev.redirected && scene.person === 'signed-in' && /(^|\/)(log-?in|sign-?in|auth)(\/|$)/i.test(finalPath || '');
+  const bounced = ev.redirected && scene.person === 'signed-in' && isSignInPath(finalPath);
   const raw = !measure ? [] : ev.redirected
     ? (bounced ? [{ lens: 'L3', rule: 'signed-in-bounced', severity: 'high', scene: scene.id, route: scene.route, viewport: scene.vp, selector: null, box: null, evidence: { finalPath } }] : [])
     : ruleFindings(ev);

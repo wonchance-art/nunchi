@@ -8,7 +8,7 @@ import { createServer } from 'node:http';
 import { readFileSync, readdirSync, statSync, mkdtempSync, writeFileSync, cpSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, extname } from 'node:path';
-import { capture, launch } from '../src/capture.mjs';
+import { capture, launch, isSignInPath } from '../src/capture.mjs';
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript' };
 let server, base, site, browserOk = true;
@@ -130,4 +130,9 @@ test('signed-in scenes without a saved login fail loudly instead of capturing as
     capture({ baseUrl: 'http://127.0.0.1:9', scenes: [{ route: '/', path: '/', person: 'signed-in' }], out: mkdtempSync(join(tmpdir(), 'nunchi-x-')), storageState: '/nope/auth.json' }),
     e => e.code === 'NO_AUTH',
   );
+});
+
+test('a sign-in page is recognised by its path, whatever the query or fragment', () => {
+  for (const p of ['/login', '/sign-in?next=%2Faccount%2Fbilling', '/auth/callback#state=x', '/app/signin?r=1', '/log-in/']) assert.ok(isSignInPath(p), p);
+  for (const p of ['/signing-tips', '/designs?from=login', '/blog/how-to-sign-in-faster', '/authors', '/billing#login', null]) assert.ok(!isSignInPath(p), String(p));
 });
