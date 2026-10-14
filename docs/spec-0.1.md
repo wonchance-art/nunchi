@@ -474,8 +474,9 @@ unreadable one by one). Built in `src/ledger.mjs`:
   v1 one (a contract test pins v1 values). The evidence of a secret is `{url, kind}`: v1's `masked` (four characters
   of the value) is gone. **Migration:** a v1 `ledger.json` is migrated on read: secret items get their v2 fingerprint
   and group from what they stored (rule, route, selector, evidence), items that now share one (two builds of one
-  bundle) merge (first seen is the earliest), `masked` is dropped, and `aliases` (old → new) is kept in the state. A
-  decision made under v1 follows its item: through `aliases`, or, for one from another machine, by the v1
+  bundle) merge without making the defect easier to call fixed (first seen is the earliest; the cells and
+  whole-app coverage of both; open if either was open; looked at when both were), `masked` is dropped, and
+  `aliases` (old → new) is kept in the state. A decision made under v1 follows its item: through `aliases`, or, for one from another machine, by the v1
   fingerprint of what the state holds now. When a merged item's old decisions disagree (one dismissed, another to
   fix, hold or reopen), the dismissal does not carry over: open beats dismissed. The decision file is never
   rewritten; the view moves its target and keeps its id (`targetWas`), and its approval and first-seen time stay

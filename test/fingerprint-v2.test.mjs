@@ -162,3 +162,38 @@ test('fp v2 migration: two secrets are never merged into one dismissal; merged i
   assert.equal(view(merged, conflicting, approve(conflicting), NOW)[0].status, 'to-fix', 'open beats dismissed');
   assert.equal(view(merged, conflicting.slice(1), approve(conflicting.slice(1)), NOW)[0].status, 'dismissed', 'one decision, no conflict: it carries over');
 });
+
+test('fp v2 migration: merging two builds of one bundle keeps what each sighting still needs (coverage, cells, open)', () => {
+  const origin = 'http://127.0.0.1:1';
+  const cell = (route, c) => `${route}|${c}`;
+  // Seen in run 0001, whose screens included /b signed in; the rebuild seen in run 0002, which looked at guests only.
+  const older = { ...storedV1(secret('/assets/index-Ab12Cd34.js')), origin, cells: [], coverage: 'cov-1', lookedAt: '0001' };
+  const newer = { ...storedV1(secret('/assets/index-Ef56Gh78.js')), origin, cells: [], coverage: 'cov-2', firstSeen: '0002', lastSeen: '0002', lookedAt: '0002' };
+  const v1 = {
+    schema: 1, fingerprintVersion: 1, runs: ['0001', '0002'], seenRoutes: ['/a', '/b'], items: { [older.fp]: older, [newer.fp]: newer },
+    coverage: { 'cov-1': [cell('/a', 'guest.normal.m'), cell('/b', 'signed-in.normal.m')], 'cov-2': [cell('/a', 'guest.normal.m'), cell('/b', 'guest.normal.m')] },
+  };
+  const st = ledger.migrateState(v1);
+  const [item] = Object.values(st.items);
+  assert.equal(Object.keys(st.items).length, 1);
+  assert.deepEqual(st.coverage[item.coverage], [cell('/a', 'guest.normal.m'), cell('/b', 'guest.normal.m'), cell('/b', 'signed-in.normal.m')], 'the coverage of both sightings');
+  assert.deepEqual(Object.keys(st.coverage), [item.coverage], 'only the sets an item names are kept');
+  assert.equal(item.firstSeen, '0001');
+  assert.equal(item.lookedAt, '0001', 'looked at when both were');
+  // A whole-app run that looks at every route, guests only, has not looked where run 0001 saw the secret.
+  const scenes = list => list.map(([route, c]) => { const [person, state, viewport] = c.split('.'); return { id: `${route.slice(1)}.${c}`, route, person, state, viewport, status: 'captured', reason: null, httpStatus: 200 }; });
+  const run = (id, list) => ({ id, scope: { routes: ['/a', '/b'] }, wholeApp: true, origin, scenes: scenes(list), findings: [] });
+  const everything = [['/a', 'guest.normal.m'], ['/b', 'guest.normal.m'], ['/b', 'signed-in.normal.m']];
+  assert.equal(ledger.foldRun(st, run('0003', everything.slice(0, 2))).items[item.fp].goneAt, null, 'not fixed by a run that did not look at /b signed in');
+  assert.equal(ledger.foldRun(st, run('0003', everything)).items[item.fp].goneAt, '0003', 'fixed once a run looked at everything both sightings were seen with');
+  // One build's item fixed, the other's still open: the merged item is open.
+  const fixedNewer = { ...v1, items: { [older.fp]: older, [newer.fp]: { ...newer, goneAt: '0002' } } };
+  assert.equal(view(ledger.migrateState(fixedNewer), [], new Set(), NOW)[0].status, 'open', 'open beats fixed');
+  const bothFixed = { ...v1, runs: ['0001', '0002', '0003'], items: { [older.fp]: { ...older, goneAt: '0003' }, [newer.fp]: { ...newer, goneAt: '0003' } } };
+  assert.equal(view(ledger.migrateState(bothFixed), [], new Set(), NOW)[0].status, 'fixed');
+  // A coverage set the state no longer holds stays named: no run can call the merged item fixed.
+  const lost = ledger.migrateState({ ...v1, coverage: { 'cov-2': v1.coverage['cov-2'] } });
+  const lostItem = Object.values(lost.items)[0];
+  assert.equal(lostItem.coverage, 'cov-1');
+  assert.equal(ledger.foldRun(lost, run('0003', everything)).items[lostItem.fp].goneAt, null);
+});

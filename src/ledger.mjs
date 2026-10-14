@@ -95,26 +95,54 @@ export function fingerprintOf(f, version = FINGERPRINT_VERSION) {
 }
 
 // v1 → v2 on read. Items of a rule whose recipe changed get their fingerprint and group recomputed from what
-// they stored (lens, rule, route, selector, evidence); items that now share a fingerprint merge (the latest
-// seen one stays, first seen is the earliest); `aliases` keeps old → new so decisions made under v1 keep
-// applying. The characters of a secret that v1 stored (`evidence.masked`) are dropped.
-const SEEN_ORDER = (a, b) => (a.lastSeen > b.lastSeen ? -1 : a.lastSeen < b.lastSeen ? 1 : !a.goneAt !== !b.goneAt ? (a.goneAt ? 1 : -1) : a.fp < b.fp ? -1 : 1);
+// they stored (lens, rule, route, selector, evidence); items that now share a fingerprint merge (mergeSightings);
+// `aliases` keeps old → new so decisions made under v1 keep applying. The characters of a secret that v1 stored
+// (`evidence.masked`) are dropped.
+const SEEN_ORDER = (a, b) => -byRun(String(a.lastSeen ?? ''), String(b.lastSeen ?? '')) || (!a.goneAt !== !b.goneAt ? (a.goneAt ? 1 : -1) : a.fp < b.fp ? -1 : 1);
 export function migrateState(state) {
   if (!state || !state.items || (state.fingerprintVersion || 1) >= FINGERPRINT_VERSION) return state;
   const aliases = { fp: { ...(state.aliases?.fp || {}) }, group: { ...(state.aliases?.group || {}) } };
   const items = {};
+  const sets = { ...(state.coverage || {}) };
   for (const old of Object.values(state.items).sort(SEEN_ORDER)) {
     if (recipeOf(old.rule, FINGERPRINT_VERSION) === recipeOf(old.rule, state.fingerprintVersion || 1)) { items[old.fp] = old; continue; }
     const { masked, ...evidence } = old.evidence || {};
     const { fp, group, inputs } = fingerprintOf({ ...old, evidence });
     if (fp !== old.fp) aliases.fp[old.fp] = fp;
     if (group !== old.group) aliases.group[old.group] = group;
-    const have = items[fp];
-    const union = k => [...new Set([...(have?.[k] || []), ...(old[k] || [])])].sort();
-    items[fp] = !have ? { ...old, fp, group, evidence, inputs }
-      : { ...have, firstSeen: old.firstSeen < have.firstSeen ? old.firstSeen : have.firstSeen, persons: union('persons'), viewports: union('viewports'), states: union('states') };
+    items[fp] = items[fp] ? mergeSightings(items[fp], old, sets) : { ...old, fp, group, evidence, inputs };
   }
-  return { ...state, fingerprintVersion: FINGERPRINT_VERSION, items, aliases };
+  const out = { ...state, fingerprintVersion: FINGERPRINT_VERSION, items, aliases };
+  if (state.coverage) {                                   // the coverage sets an item still names
+    const used = new Set(Object.values(items).map(i => i.coverage).filter(Boolean));
+    out.coverage = Object.fromEntries(Object.entries(sets).filter(([h]) => used.has(h)));
+  }
+  return out;
+}
+
+// Two v1 items that are one v2 defect (two builds of one bundle). The later sighting (`have`) keeps its evidence
+// and examples; nothing either one still needs is dropped, so the merge never makes the defect easier to call
+// fixed: the cells and whole-app coverage of both (a coverage set that cannot be found stays named, so the item
+// can never be fixed, as foldRun treats it), fixed only when both were (open beats fixed), and looked at when
+// both were.
+function mergeSightings(have, old, sets) {
+  const union = k => [...new Set([...(have[k] || []), ...(old[k] || [])])].sort();
+  const out = { ...have, firstSeen: minRun(have.firstSeen, old.firstSeen), persons: union('persons'), viewports: union('viewports'), states: union('states') };
+  if (have.cells || old.cells) out.cells = union('cells');
+  if (have.coverage || old.coverage) {
+    const lost = [have.coverage, old.coverage].find(c => c && !sets[c]);
+    if (lost) out.coverage = lost;
+    else {
+      const keys = [...new Set([...(sets[have.coverage] || []), ...(sets[old.coverage] || [])])].sort();
+      out.coverage = setId(keys);
+      sets[out.coverage] = keys;
+    }
+  }
+  if (have.lookedAt || old.lookedAt) out.lookedAt = minRun(have.lookedAt || have.lastSeen, old.lookedAt || old.lastSeen);
+  const open = [have, old].filter(i => !i.goneAt);
+  if (!open.length) Object.assign(out, { goneAt: maxRun(have.goneAt, old.goneAt), regressedAt: have.regressedAt ?? null });
+  else Object.assign(out, { goneAt: null, regressedAt: open[0].regressedAt ?? null });
+  return out;
 }
 
 // A decision names the fingerprint or group it was made on. One made under an older version follows its item:
