@@ -32,7 +32,7 @@ import { probeView, probeProblems, judgeRules, judgeAi, MAX_ATTEMPTS, FLAKY } fr
 import { diffPolicy, depsOf, rootCauseFiles } from './policy.mjs';
 import { fixBrief } from './brief.mjs';
 import { runChecks as runChecksReal, compareChecks } from './run.mjs';
-import { snapshotRecordings, snapshotIntact, proveByFile, serveApp, captureProbe, recaptureScenes, cameBack, measureDrift, readProbe, controlsReader, sweepProbeFiles } from './probe.mjs';
+import { snapshotRecordings, snapshotIntact, proveByFile, serveApp, captureProbe, recaptureScenes, measureDrift, readProbe, controlsReader, sweepProbeFiles } from './probe.mjs';
 
 const out = (code, lines, json = {}) => ({ code, lines: [].concat(lines).filter(x => x !== null && x !== undefined), json });
 const refuse = (lines, json = {}) => out(1, lines, { refused: true, ...json });
@@ -540,14 +540,17 @@ async function judgeAttempt(ctx, rec, { g, title, said, p, harDir, base }) {
   const pick = fps => rows.filter(r => fps.includes(r.fp)).map(r => ({ fp: r.fp, rule: r.rule, route: r.route, cells: r.cells || [] }));
   const group = { rule: pick(rec.fps.rule), ai: pick(rec.fps.ai) };
   const known = new Set(ctx.rows.filter(r => !r.goneAt).map(r => r.fp));
-  // flaky rules: their would-be regressions are captured once more before they count
-  const flakyCands = p1.all.filter(x => FLAKY.has(x.f.rule) && p0.looks.has(`${x.id.route}|${x.id.cell}`) && !p0.all.some(o => o.f.fp === x.f.fp)).map(x => x.f);
-  let flakyConfirmed = () => true;
-  if (flakyCands.length && ctx.deps.capture) {
+  // flaky rules (design §4.5): a would-be regression, and the group's own defect where P1 shows it gone, are captured
+  // once more before they count
+  const flakyCands = p1.all.filter(x => FLAKY.has(x.f.rule) && p0.looks.has(`${x.id.route}|${x.id.cell}`) && !p0.all.some(o => o.f.fp === x.f.fp)).map(x => x.f.scene);
+  const ownFlaky = group.rule.filter(it => FLAKY.has(it.rule) && !p1.all.some(x => x.f.fp === it.fp))
+    .flatMap(it => p0.all.filter(o => o.f.fp === it.fp).map(o => p1.looks.get(`${o.id.route}|${o.id.cell}`)?.id)).filter(Boolean);
+  let again = () => undefined;
+  const second = [...new Set([...flakyCands, ...ownFlaky])].sort();
+  if (second.length && ctx.deps.capture) {
     let allowBaseHosts = []; try { allowBaseHosts = readConfig(ctx.nunchiDir).allowHosts; } catch {}
     const byId = new Map(p1.scenes.map(s => [s.id, s]));
-    const again = await recaptureScenes({ capture: ctx.deps.capture, scenes: [...new Set(flakyCands.map(f => f.scene))].map(id => byId.get(id)).filter(Boolean), url: base || rec.url, samplePaths: rec.samplePaths || {}, harDir, storageState: join(ctx.nunchiDir, 'auth.json'), allowHosts: rec.allowHosts || [], allowBaseHosts, browserPath: ctx.deps.browserPath });
-    flakyConfirmed = cameBack(again);
+    again = await recaptureScenes({ capture: ctx.deps.capture, scenes: second.map(id => byId.get(id)).filter(Boolean), url: base || rec.url, samplePaths: rec.samplePaths || {}, harDir, storageState: join(ctx.nunchiDir, 'auth.json'), allowHosts: rec.allowHosts || [], allowBaseHosts, browserPath: ctx.deps.browserPath });
   }
   // the group's boxes on each screen, before and after (they are what the fix changes)
   const p1Controls = controlsReader(p1Dir);
@@ -564,7 +567,7 @@ async function judgeAttempt(ctx, rec, { g, title, said, p, harDir, base }) {
     return out;
   };
   const drift = measureDrift({ p0Dir, p1Dir, p0Scenes: p0.scenes.filter(s => s.route && rec.scope.routes.includes(s.route)), p1Scenes: p1.scenes, boxesOf });
-  const verdict = judgeRules({ group, p0, p1, known, flakyConfirmed, proof: !!p.proof?.ok, drift });
+  const verdict = judgeRules({ group, p0, p1, known, again, proof: !!p.proof?.ok, drift });
   rec = update(ctx.stateDir, rec, { verdict: { ...verdict, drift: drift.scenes.length ? drift : undefined }, screens: p1.looks.size }, gen(ctx));
   if (verdict.outcome !== 'recheck') return finish(ctx, rec, verdict, { title, said });
   // AI items: a re-check from a fresh context (design §2.4, §4.5 row 5) on P1, P0 as the screens before

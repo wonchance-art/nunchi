@@ -800,3 +800,11 @@ test('a second look that does not see the screen says nothing: inconclusive (nee
   assert.match(v.lines[0], /^Couldn't re-check 'Tap target smaller than 24px'/);
   assert.deepEqual([latest(p).phase, latest(p).outcome.needsYou, latest(p).verdict.reasons[0].why], ['needs-you', 'c', 'recapture-failed']);
 });
+
+test('a route only P1 has, showing a defect the ledger already holds open, is no new finding: fixed (the `known` wiring)', async () => {
+  const p = await fixProject({ files: { 'components/panel.jsx': 'export default function Panel() { return <section>Shelf panel HELPDEFECT</section>; }\n' } });
+  assert.ok(p.rows.some(r => r.route === '/help' && r.rule === 'clipped-text'), 'the sweep saw it');
+  const { v } = await attempt(p, { change: ['TINY', 'ROOMY'], extraEdit: root => edit(root, 'components/panel.jsx', 'HELPDEFECT', 'HELPDEFECT ') });
+  assert.deepEqual(latest(p).p1.scope.routes, ['/help', '/settings']);
+  assert.match(v.lines.at(-1), /^Fixed 'Tap target smaller than 24px'/);
+});

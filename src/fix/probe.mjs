@@ -165,9 +165,7 @@ export async function recaptureScenes({ capture, scenes, url, samplePaths, harDi
   } finally { rmSync(out, { recursive: true, force: true }); }
   return id => again.get(id);
 }
-// Whether a flaky rule's finding came back on its scene's second look: true, false, or null (the second look did not
-// see the screen). A finding whose scene was not captured again counts as it is.
-export const cameBack = again => f => { const a = again(f.scene); return a === undefined ? true : a === null ? null : a.some(x => x.rule === f.rule && (x.fp === f.fp || x.selector === f.selector)); };
+
 
 // Visual drift between P0 and P1 on the screens both captured (design §4.5 row 4), the group's boxes left out.
 // `boxesOf(sceneId)`: the group's boxes on that screen, before and after. → { share, moved, scenes: [{ scene, share, moved }] }

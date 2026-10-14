@@ -53,6 +53,17 @@ export function sameDefect(a, b) {
   if (a.norm && a.norm === b.norm && !(a.name && b.name && a.name !== b.name)) return true;
   return !!a.tag && a.tag === b.tag && !!a.name && a.name === b.name && iou(a.box, b.box) >= IOU_MIN;
 }
+// A defect another group had before the fix, seen again after it (M3 review): the fix may wrap it in a <div> (another
+// selector), rename the element, or leave it unnamed. The same rule and cell, and the same element by its normalised
+// selector or tag, overlapping (IoU ≥ 0.5), is the same defect, whatever the names say.
+export function sameOldDefect(o, x) {
+  if (sameDefect(o, x)) return true;
+  if (o.rule !== x.rule || o.route !== x.route || o.cell !== x.cell) return false;
+  return ((!!o.norm && o.norm === x.norm) || (!!o.tag && o.tag === x.tag)) && iou(o.box, x.box) >= IOU_MIN;
+}
+// Whether a flaky rule's finding came back on its scene's second look (`again(sceneId)`: findings, null when the second
+// look did not see the screen, undefined when it was not captured again): true, false, or null (nothing can be said).
+export const cameBack = again => f => { const a = again(f.scene); return a === undefined ? true : a === null ? null : a.some(x => x.rule === f.rule && (x.fp === f.fp || (!!f.selector && x.selector === f.selector))); };
 
 // One probe as the judge reads it: its scenes (by route|cell) and its findings with identities. `controlsOf(scene)`:
 // that scene's controls.json rows.
@@ -83,12 +94,13 @@ export function probeProblems(v) {
 // - group: { rule: [{ fp, rule, route, cells }], ai: [{ fp, route, cells }] } (the group's ledger rows, not fixed);
 // - p0, p1: probeView() of the two probes; scope0: the route|cell keys P0 looked at;
 // - known: fingerprints the ledger already holds (open), for routes P1 added (no baseline there);
-// - flakyConfirmed(f): a flaky rule's finding was there again when its scene was captured once more (true/false), or
-//   null when that second look did not see the screen (inconclusive: nothing can be said);
+// - again(sceneId): P1 scenes captured once more (flaky rules, design §4.5): their findings, null when the second look
+//   did not see the screen, undefined when not captured again. flakyConfirmed(f) (derived from it unless given): a
+//   flaky rule's finding came back (true/false), or null (inconclusive: nothing can be said);
 // - proof: the served code was shown to be the commit's (design §4.4); drift: { share, moved, scenes } or null.
 // → { outcome, reason, … } with outcome one of inconclusive | regression | not-fixed | unbaselined | drift | fixed |
 //   recheck (rule items gone, AI items wait for the re-check).
-export function judgeRules({ group, p0, p1, known = new Set(), flakyConfirmed = () => true, proof = true, drift = null }) {
+export function judgeRules({ group, p0, p1, known = new Set(), again = () => undefined, flakyConfirmed = cameBack(again), proof = true, drift = null }) {
   // 1. inconclusive
   const bad = [];
   if (!proof) bad.push({ why: 'no-proof', text: 'nothing showed the app at --url serves this commit' });
@@ -97,33 +109,55 @@ export function judgeRules({ group, p0, p1, known = new Set(), flakyConfirmed = 
   const lost = [...p0.looks.keys()].filter(k => !p1.looks.has(k)).sort();
   const groupCells = [...group.rule, ...group.ai].flatMap(it => (it.cells || []).map(c => `${it.route}|${c}`));
   const lostGroup = [...new Set(groupCells)].filter(k => !p1.looks.has(k)).sort();
-  if (lost.length || lostGroup.length) bad.push({ why: 'scene-failed', text: `${[...new Set([...lost, ...lostGroup])].length} screen(s) did not load or were redirected`, cells: [...new Set([...lost, ...lostGroup])].sort() });
+  // a screen of P1 itself that did not load (a route only P1 has, the fix may have broken it): nothing is judged there
+  const lostP1 = p1.scenes.filter(s => !looked(s)).map(s => `${s.route}|${cellOf(s)}`);
+  const lostAll = [...new Set([...lost, ...lostGroup, ...lostP1])].sort();
+  if (lostAll.length) bad.push({ why: 'scene-failed', text: `${lostAll.length} screen(s) did not load or were redirected`, cells: lostAll, routes: [...new Set(lostAll.map(k => k.split('|')[0]))].sort(), before: lostAll.filter(k => p0.looks.has(k)) });
   if (bad.length) return { outcome: 'inconclusive', needsYou: 'c', reasons: bad };
   // 2. caused-regression: a new defect in a cell P0 looked at (flaky rules count only when they came back)
   const mine = new Set(group.rule.map(i => i.fp));
   const before = k => p0.all.filter(x => `${x.id.route}|${x.id.cell}` === k);
   const isGroups = x => mine.has(x.f.fp) || group.rule.some(it => p0.all.some(o => o.f.fp === it.fp && sameDefect(o.id, x.id)));
   const regressions = [], unbaselined = [], unsure = [];
+  const fresh = new Map();                                   // route|cell → P1 findings with no match before the fix
   for (const x of p1.all) {
     if (isGroups(x)) continue;
     const k = `${x.id.route}|${x.id.cell}`;
     if (p0.looks.has(k)) {
-      if (before(k).some(o => sameDefect(o.id, x.id))) continue;
+      if (before(k).some(o => sameOldDefect(o.id, x.id))) continue;
       if (FLAKY.has(x.f.rule)) { const back = flakyConfirmed(x.f); if (back === null) { unsure.push(x.f.scene); continue; } if (!back) continue; }
-      regressions.push(x.f);
+      if (!fresh.has(k)) fresh.set(k, []);
+      fresh.get(k).push(x);
     } else if (!known.has(x.f.fp)) unbaselined.push(x.f);
+  }
+  // an old defect that moved past every element test (a wrapper's padding pushed it off its box): per cell and rule,
+  // as many new findings as old ones of other groups that vanished are the old ones moved, not new ones
+  for (const [k, xs] of fresh) {
+    const gone = before(k).filter(o => !isGroups(o) && !p1.all.some(x => sameOldDefect(o.id, x.id)));
+    const left = new Map();
+    for (const o of gone) left.set(o.f.rule, (left.get(o.f.rule) || 0) + 1);
+    for (const x of xs) { const n = left.get(x.f.rule) || 0; if (n > 0) left.set(x.f.rule, n - 1); else regressions.push(x.f); }
   }
   if (unsure.length) return { outcome: 'inconclusive', needsYou: 'c', reasons: [{ why: 'recapture-failed', text: `${new Set(unsure).size} screen(s) captured again for a flaky rule did not load`, cells: [...new Set(unsure)].sort() }] };
   if (regressions.length) return { outcome: 'regression', regressions: regressions.map(brief) };
-  // 3. not-fixed: the defect matched in any cell
-  const still = [];
+  // 3. not-fixed: the defect matched in any cell P1 looked at, not only the cells the ledger lists (a sweep of one
+  // viewport, a fix that moves the defect to another cell): its fingerprint anywhere, or the same element where P0 had it.
+  // A flaky rule's defect that P1 shows gone is captured once more before it counts as gone (design §4.5).
+  const still = [], unsureOwn = [];
   for (const it of group.rule) {
-    const cells = new Set((it.cells || []).map(c => `${it.route}|${c}`));
     const was = p0.all.filter(o => o.f.fp === it.fp);
-    const hit = p1.all.find(x => cells.has(`${x.id.route}|${x.id.cell}`) && x.f.rule === it.rule && (x.f.fp === it.fp || was.some(o => sameDefect(o.id, x.id))));
-    if (hit) still.push({ fp: it.fp, ...brief(hit.f) });
+    const hit = p1.all.find(x => x.f.rule === it.rule && (x.f.fp === it.fp || was.some(o => sameDefect(o.id, x.id))));
+    if (hit) { still.push({ fp: it.fp, ...brief(hit.f) }); continue; }
+    if (!FLAKY.has(it.rule)) continue;
+    for (const o of was) {
+      const s = p1.looks.get(`${o.id.route}|${o.id.cell}`);
+      const back = s ? cameBack(again)({ ...o.f, scene: s.id }) : true;
+      if (back === null) unsureOwn.push(s.id);
+      else if (back && again(s.id) !== undefined) { still.push({ fp: it.fp, ...brief({ ...o.f, scene: s.id }) }); break; }
+    }
   }
   if (still.length) return { outcome: 'not-fixed', still };
+  if (unsureOwn.length) return { outcome: 'inconclusive', needsYou: 'c', reasons: [{ why: 'recapture-failed', text: `${new Set(unsureOwn).size} screen(s) captured again for a flaky rule did not load`, cells: [...new Set(unsureOwn)].sort() }] };
   // 4. what only a person can judge: a new finding on a route P1 added (no baseline), or visual drift
   const driftHit = drift && (drift.share > DRIFT_PIXELS || drift.moved > 0);
   if (group.ai.length) return { outcome: 'recheck', pending: { unbaselined: unbaselined.map(brief), drift: driftHit ? drift : null } };

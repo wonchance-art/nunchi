@@ -176,3 +176,74 @@ test('the brief: the engine\'s words frame it, every app string is quoted JSON a
   assert.deepEqual(parseTrailers(fixTrailers({ group: 'abcabcabcabc', attempt: 2, decision: 'lx-abc123;rm' }).join('\n')), { 'Nunchi-Fix': ['abcabcabcabc'], 'Nunchi-Attempt': ['2'], 'Nunchi-Decision': ['lx-abc123rm'] });
   assert.throws(() => fixTrailers({ group: 'x\nNunchi-Fix: y', attempt: 1 }));
 });
+
+// ---- M3 review: the judge's gaps ---------------------------------------------------------------------------------------
+
+const D = scene('/a', 'd'), M = scene('/a', 'm'), B = scene('/b', 'd');
+const G = (cells = ['guest.normal.d']) => ({ rule: [{ fp: 'GROUPFP00000', rule: 'clipped-text', route: '/a', cells }], ai: [] });
+const gf = (sc, extra = {}) => fnd('clipped-text', sc, 'main > p.title', { fp: 'GROUPFP00000', evidence: { text: 'Hello' }, ...extra });
+
+test('not fixed: the defect is looked for in every cell P1 saw, not only the ledger\'s (a one-viewport sweep; a fix that moves it)', () => {
+  // the ledger saw it on desktop only; P0 shows it on d and m; P1 still on m
+  assert.equal(J.judgeRules({ group: G(['guest.normal.d']), p0: view([D, M], [gf(D), gf(M)]), p1: view([D, M], [gf(M)]) }).outcome, 'not-fixed');
+  // the fix moves the same fingerprint from m to d
+  assert.equal(J.judgeRules({ group: G(['guest.normal.m']), p0: view([D, M], [gf(M)]), p1: view([D, M], [gf(D)]) }).outcome, 'not-fixed');
+  assert.equal(J.judgeRules({ group: G(['guest.normal.m']), p0: view([D, M], [gf(M)]), p1: view([D, M], []) }).outcome, 'fixed');
+});
+
+test('a P1 screen that did not load (a route only P1 has: the fix may have broken it) is inconclusive, never fixed', () => {
+  for (const extra of [{ status: 'capture-failed' }, { httpStatus: 500 }, { redirected: true }]) {
+    const v = J.judgeRules({ group: G(), p0: view([D], [gf(D)]), p1: view([D, { ...B, ...extra }], []) });
+    assert.deepEqual([v.outcome, v.reasons[0].why, v.reasons[0].routes], ['inconclusive', 'scene-failed', ['/b']], JSON.stringify(extra));
+  }
+  // the group's own cells lost count even when P0 did not look there
+  const v = J.judgeRules({ group: G(['guest.normal.d', 'guest.normal.m']), p0: view([D], [gf(D)]), p1: view([D], []) });
+  assert.deepEqual([v.outcome, v.reasons[0].cells], ['inconclusive', ['/a|guest.normal.m']]);
+});
+
+test('another group\'s old defect the fix wrapped, renamed or shifted is no regression; a really new one is', () => {
+  // wrapped: another selector, no name, the same box
+  const o0 = fnd('image-alt', D, 'main > img.hero', { fp: 'IMGALT000000' });
+  const o1 = fnd('image-alt', D, 'main > div.wrap > img.hero', { fp: 'IMGALT111111' });
+  assert.equal(J.judgeRules({ group: G(), p0: view([D], [gf(D), o0]), p1: view([D], [o1]) }).outcome, 'fixed');
+  // shifted by a wrapper's padding (IoU < 0.5): the old one vanished, one new of the same rule appeared in that cell
+  const ctl0 = { 'a.guest.normal.d': [{ selector: 'main > button.save', tag: 'button', name: 'Save', box: [10, 10, 40, 20] }] };
+  const ctl1 = { 'a.guest.normal.d': [{ selector: 'main > div > button.save', tag: 'button', name: 'Save', box: [10, 30, 40, 20] }] };
+  const t0 = fnd('target-size-min', D, 'main > button.save', { fp: 'TS0000000000', box: [10, 10, 40, 20] });
+  const t1 = fnd('target-size-min', D, 'main > div > button.save', { fp: 'TS1111111111', box: [10, 30, 40, 20] });
+  assert.equal(J.judgeRules({ group: G(), p0: view([D], [gf(D), t0], ctl0), p1: view([D], [t1], ctl1) }).outcome, 'fixed');
+  // renamed (same selector and box, another name)
+  const r0 = fnd('target-size-min', D, 'main > button.go', { fp: 'TS0000000000', evidence: { name: 'Go' } });
+  const r1 = fnd('target-size-min', D, 'main > button.go', { fp: 'TS1111111111', evidence: { name: 'Continue' } });
+  assert.equal(J.judgeRules({ group: G(), p0: view([D], [gf(D), r0]), p1: view([D], [r1]) }).outcome, 'fixed');
+  // a second one of that rule, the old one still there: a regression
+  const t2 = fnd('target-size-min', D, 'main > a.more', { fp: 'TS2222222222', box: [300, 300, 20, 20] });
+  assert.equal(J.judgeRules({ group: G(), p0: view([D], [gf(D), t0], ctl0), p1: view([D], [t0, t2], ctl0) }).outcome, 'regression');
+});
+
+test('IoU at exactly 0.5 is the same element; just under is not', () => {
+  const a = { rule: 'r', route: '/a', cell: 'c', norm: 'x', tag: 'button', name: 'Save', box: [0, 0, 30, 10] };
+  const b = { ...a, norm: 'y', box: [10, 0, 30, 10] };
+  assert.equal(J.iou(a.box, b.box), 0.5);
+  assert.equal(J.sameDefect(a, b), true);
+  const c = { ...a, norm: 'y', box: [10.01, 0, 30, 10] };
+  assert.ok(J.iou(a.box, c.box) < 0.5);
+  assert.equal(J.sameDefect(a, c), false);
+});
+
+test('flaky rules: the group\'s own flaky defect gone in P1 is looked at once more; back → not fixed; unseen → inconclusive', () => {
+  const g = { rule: [{ fp: 'LS0000000000', rule: 'layout-shift', route: '/a', cells: ['guest.normal.d'] }], ai: [] };
+  const ls = fnd('layout-shift', D, null, { fp: 'LS0000000000' });
+  const p0 = view([D], [ls]), p1 = view([D], []);
+  assert.equal(J.judgeRules({ group: g, p0, p1 }).outcome, 'fixed', 'not captured again: as P1 says');
+  assert.equal(J.judgeRules({ group: g, p0, p1, again: id => (id === D.id ? [ls] : undefined) }).outcome, 'not-fixed');
+  assert.equal(J.judgeRules({ group: g, p0, p1, again: id => (id === D.id ? [] : undefined) }).outcome, 'fixed');
+  assert.equal(J.judgeRules({ group: g, p0, p1, again: id => (id === D.id ? null : undefined) }).outcome, 'inconclusive');
+  // a would-be regression of a flaky rule: back only when the same rule fires again on that scene
+  const g2 = G();
+  const pe = fnd('page-error', D, null, { fp: 'PE0000000000' });
+  const p1b = view([D], [pe]);
+  assert.equal(J.judgeRules({ group: g2, p0: view([D], [gf(D)]), p1: p1b, again: () => [fnd('layout-shift', D, null, { fp: 'PE0000000000' })] }).outcome, 'fixed', 'another rule is not "back"');
+  assert.equal(J.judgeRules({ group: g2, p0: view([D], [gf(D)]), p1: p1b, again: () => [pe] }).outcome, 'regression');
+  assert.equal(J.judgeRules({ group: g2, p0: view([D], [gf(D)]), p1: p1b, again: () => null }).outcome, 'inconclusive');
+});
