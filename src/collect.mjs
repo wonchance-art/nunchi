@@ -157,6 +157,76 @@ export function collect() {
     styles.push({ ...row, selector: sel(el) });
   }
 
+  // Paint: the colours the page paints that the text rows above miss (they keep only elements with their
+  // own text or controls). Kept apart from `styles` so the L4 inventory and its fingerprints do not move.
+  //   surfaces  non-transparent background-color of a visible element at least 256 px² in area and 2 px on
+  //             its short side (smaller fills are dots and hairlines, not surfaces), plus the page: <html>
+  //             and <body>, or the browser's white canvas when both are transparent (light scheme only).
+  //             kind: page | canvas | control (link, button, field) | band (≥ 90% of the viewport wide) | box
+  //   borders   visible border sides (width > 0, style not none/hidden, colour not transparent), one row per
+  //             colour with the sides it is on (t r b l), and outlines (sides: outline)
+  //   on        (surfaces and borders) the background the colour is seen against: for a surface the nearest
+  //             ancestor's, for a border the element's own or else its ancestor's; the canvas at the top.
+  //             A colour and what it is on must stay two tokens, or the card or the line disappears.
+  //   svg       fill and stroke of visible inline SVG shapes (none and url(#gradient) paints left out)
+  // Deduplicated like `styles`: the first element in document order with a given row keeps its selector.
+  const clear = c => !c || c === 'transparent' || /,\s*0\)$/.test(c) || /\/\s*0\)$/.test(c);
+  const paint = { surfaces: [], borders: [], svg: [] };
+  const paintSeen = new Set();
+  const addPaint = (part, el, row) => {
+    const list = paint[part];
+    const key = JSON.stringify([part, row]);
+    if (list.length >= MAX || paintSeen.has(key)) return;
+    paintSeen.add(key);
+    list.push({ ...row, selector: sel(el) });
+  };
+  const SVG_SHAPES = new Set(['path', 'circle', 'rect', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'use']);
+  const roots = [doc, document.body].filter(e => !clear(getComputedStyle(e).backgroundColor));
+  for (const e of roots) addPaint('surfaces', e, { background: getComputedStyle(e).backgroundColor, radius: '0px', kind: 'page' });
+  const lightCanvas = !/^dark$/.test(getComputedStyle(doc).colorScheme.trim());
+  if (!roots.length && lightCanvas) addPaint('surfaces', doc, { background: 'rgb(255, 255, 255)', radius: '0px', kind: 'canvas' });
+  const canvas = roots.length ? getComputedStyle(roots[0]).backgroundColor : lightCanvas ? 'rgb(255, 255, 255)' : null;
+  const behind = el => {
+    for (let a = el.parentElement; a; a = a.parentElement) { const b = getComputedStyle(a).backgroundColor; if (!clear(b)) return b; }
+    return canvas;
+  };
+  for (const el of document.querySelectorAll('body *')) {
+    if (paint.surfaces.length >= MAX && paint.borders.length >= MAX && paint.svg.length >= MAX) break;
+    const shape = el instanceof SVGElement && el.localName !== 'svg';
+    if (shape) {
+      if (!SVG_SHAPES.has(el.localName) || el.closest('defs,symbol,clipPath,mask,marker,pattern')) continue;
+      if (!el.getClientRects().length) continue;
+      const r = el.getBoundingClientRect();
+      if (!(r.width > 0 || r.height > 0)) continue;
+      if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+      const cs = getComputedStyle(el);
+      const usable = v => v && v !== 'none' && !/^url\(/.test(v) && !clear(v);
+      const fill = usable(cs.fill) && cs.fillOpacity !== '0' ? cs.fill : null;
+      const stroke = usable(cs.stroke) && cs.strokeOpacity !== '0' && parseFloat(cs.strokeWidth) > 0 ? cs.stroke : null;
+      if (fill || stroke) addPaint('svg', el, { fill, stroke });
+      continue;
+    }
+    if (!vis(el)) continue;
+    const cs = getComputedStyle(el);
+    if (!clear(cs.backgroundColor)) {
+      const r = el.getBoundingClientRect();
+      if (r.width * r.height >= 256 && Math.min(r.width, r.height) >= 2) {
+        const kind = el.matches('a[href],button,[role="button"],input,select,textarea,summary') ? 'control' : r.width >= 0.9 * innerWidth ? 'band' : 'box';
+        addPaint('surfaces', el, { background: cs.backgroundColor, radius: cs.borderTopLeftRadius, kind, on: behind(el) });
+      }
+    }
+    const sides = new Map();
+    for (const [s, S] of [['t', 'Top'], ['r', 'Right'], ['b', 'Bottom'], ['l', 'Left']]) {
+      const c = cs[`border${S}Color`];
+      if (!(parseFloat(cs[`border${S}Width`]) > 0) || /^(none|hidden)$/.test(cs[`border${S}Style`]) || clear(c)) continue;
+      if (!sides.has(c)) sides.set(c, { sides: '', width: cs[`border${S}Width`] });
+      sides.get(c).sides += s;
+    }
+    const on = sides.size || cs.outlineStyle !== 'none' ? (clear(cs.backgroundColor) ? behind(el) : cs.backgroundColor) : null;
+    for (const [color, v] of sides) addPaint('borders', el, { color, sides: v.sides, width: v.width, on });
+    if (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0 && !clear(cs.outlineColor)) addPaint('borders', el, { color: cs.outlineColor, sides: 'outline', width: cs.outlineWidth, on: behind(el) });
+  }
+
   const clipped = [];
   for (const el of document.querySelectorAll('body *')) {
     if (clipped.length >= 50) break;
@@ -210,6 +280,6 @@ export function collect() {
     mainText: (main.innerText || '').replace(/ /g, ' '),
     // code samples and keyboard text: documentation quoting an error is not the app showing one
     codeLines: [...new Set([...document.querySelectorAll('pre,code,kbd,samp')].flatMap(e => (e.innerText || '').split('\n').map(l => l.trim()).filter(Boolean)))].slice(0, 2000),
-    controls, hiddenControls, styles, clipped, images, links, fonts, fields, scrollers,
+    controls, hiddenControls, styles, paint, clipped, images, links, fonts, fields, scrollers,
   };
 }

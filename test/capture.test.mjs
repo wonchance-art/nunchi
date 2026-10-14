@@ -58,7 +58,7 @@ test('captures seeded defects, keeps the clean page clean, writes the evidence p
   assert.ok(!readFileSync(join(out, 'findings.json'), 'utf8').includes('Zz9Yy8'), 'secret value must not be written');
 
   const scene = files(join(out, m));
-  assert.deepEqual(scene, ['aria.yml', 'console.json', 'controls.json', 'full.jpg', 'links.json', 'measure.json', 'network.json', 'styles.json', 'text.txt', 'top.jpg', 'volatile.json']);
+  assert.deepEqual(scene, ['aria.yml', 'console.json', 'controls.json', 'full.jpg', 'links.json', 'measure.json', 'network.json', 'paint.json', 'styles.json', 'text.txt', 'top.jpg', 'volatile.json']);
   assert.equal(r.manifest.scenes.length, 4);
   for (const img of ['top.jpg', 'full.jpg']) {
     const bytes = readFileSync(join(out, m, img));

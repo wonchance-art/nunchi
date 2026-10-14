@@ -81,6 +81,9 @@ Usage:
                                             Check the hunter's answers (every item answered, every defect
                                             grounded in a selector of the scene or a file:line under --root)
                                             and write ai-findings.json and coverage.json into the run
+  nunchi tokens [--run <id>] [--json]      Tidy: cluster the colours (text, backgrounds, borders, SVG), radii and
+                                            font sizes the screens use into a token proposal with roles and WCAG
+                                            contrast → tokens.json and tokens.css in the run (never your code)
   nunchi --version
   nunchi --help
 
@@ -516,6 +519,18 @@ if (cmd === 'setup') {
       if (r.verify.suspect) console.log(`SUSPECT: ${r.verify.suspectReason}. This run's verifications are marked suspect; verify again in a fresh context.`);
     }
   } else { console.error('nunchi verify: use --plan, or --record <verdicts.json>'); process.exit(1); }
+} else if (cmd === 'tokens') {
+  // Design supporter, Stage 0 (Tidy): a token proposal from the run's evidence. Writes into the run only.
+  const { buildTokens, readRunScenes, formatTokens } = await import('./tokens.mjs');
+  const { writeStable, stableJson } = await import('./stable.mjs');
+  const dir = runDirOf(args, 'tokens');
+  const scenes = readRunScenes(dir);
+  if (!scenes.length) { console.error(`nunchi tokens: ${dir} has no captured screens to measure`); process.exit(1); }
+  const report = buildTokens({ scenes });
+  writeStable(join(dir, 'tokens.json'), report);
+  writeStable(join(dir, 'tokens.css'), report.css);
+  if (args.json) process.stdout.write(stableJson(report));
+  else console.log(formatTokens(report, [join(dir, 'tokens.json'), join(dir, 'tokens.css')]));
 } else if (cmd === 'gc') {
   const r = gcRuns(resolve('.nunchi/runs'), { keep: Number.isInteger(args.keep) && args.keep > 0 ? args.keep : 5 });
   console.log(args.json ? JSON.stringify(r, null, 2) : `kept ${r.kept.join(', ') || 'nothing'} · removed ${r.removed.join(', ') || 'nothing'}`);

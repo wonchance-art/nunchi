@@ -238,6 +238,7 @@ async function captureOne(browser, base, scene, opts) {
   if (measure) {
     writeStable(join(dir, 'text.txt'), redactText(measure.text) + '\n');
     writeStable(join(dir, 'styles.json'), measure.styles);
+    writeStable(join(dir, 'paint.json'), { schema: 1, ...measure.paint });
     writeStable(join(dir, 'controls.json'), measure.controls);
     writeStable(join(dir, 'links.json'), measure.links);
   }

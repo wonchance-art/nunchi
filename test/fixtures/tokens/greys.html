@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kettle Notes</title>
+<style>
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #111827; background: #ffffff; }
+  main { padding: 16px; max-width: 720px; margin: 0 auto; }
+  .card { padding: 12px; margin: 0 0 12px; }
+  /* near-duplicate greys, as a codebase grows them: three card fills, three borders, two text colours */
+  .one   { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; }
+  .two   { background: #fafafa; border: 1px solid #e4e4e7; border-radius: 7px; }
+  .three { background: #f8f9fa; border: 1px solid #e5e5e5; border-radius: 9px; color: #18181b; font-size: 15px; }
+  .muted { color: #6b7280; font-size: 14px; }
+  .muted2 { color: #71717a; font-size: 14px; }
+  button { min-height: 40px; padding: 0 16px; border: 0; border-radius: 6px; background: #2563eb; color: #ffffff; font: inherit; }
+  button.again { background: #2463eb; }
+  .dot { display: inline-block; width: 8px; height: 8px; background: #ff0000; }
+  .hidden { display: none; width: 200px; height: 200px; background: #00ff00; }
+  .none-border { border: 3px none #0000ff; padding: 4px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Kettle Notes</h1>
+  <div class="card one"><p>Buy loose-leaf tea for the office tin</p><p class="muted">Tuesday</p></div>
+  <div class="card two"><p>Descale the kettle before the weekend</p><p class="muted2">Friday</p></div>
+  <div class="card three"><p>Sort the mug shelf by colour</p></div>
+  <p class="none-border">Nothing borders this line <span class="dot"></span></p>
+  <div class="hidden">never shown</div>
+  <button type="button">Add note</button>
+  <button type="button" class="again">Save</button>
+  <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+    <defs><linearGradient id="g"><stop offset="0" stop-color="#ff00ff"/><stop offset="1" stop-color="#00ffff"/></linearGradient>
+      <rect id="unused" width="10" height="10" fill="#ff8800"/></defs>
+    <path d="M4 4h16v16H4z" fill="#6b7280" stroke="#737373" stroke-width="2"/>
+    <circle cx="12" cy="12" r="4" fill="url(#g)"/>
+  </svg>
+</main>
+</body>
+</html>
