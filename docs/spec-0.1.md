@@ -100,7 +100,9 @@ in place without a run (tests, scripts).
 `run.json` (metadata, not compared between runs): id, parent run, git commit, `dirty` and a `tree` hash of the
 working tree (uncommitted and untracked edits included, `.nunchi/` excluded) — so *evidence is from the code you
 have now* holds without the user committing — scope (routes, persons, viewports, states, `--changed-since`),
-network mode per person, run health.
+`wholeApp` (no `--routes` and no `--changed-since`: whole-app detectors judged every route), network mode per
+person, run health. Every file of a run is written to a temp file in the same folder and renamed into place, so
+files written into a complete run later (hunt, verify, canary score) are never seen half written.
 
 **Run health** — whole-run failures are reported once instead of as one finding per screen, judged from the
 evidence only: *login-expired* (≥2 and ≥half of signed-in screens bounced to a sign-in page: every signed-in scene
@@ -399,16 +401,34 @@ unreadable one by one). Built in `src/ledger.mjs`:
 - **Decisions** are append-only files, `.nunchi/decisions/<group-…|fp-…>/<id>.json` (committed; two people
   never edit the same file): `fix`, `keep` (reason `intended` | `out-of-scope`), `false-positive` (reason
   `not-a-problem` | `wrong-place`), `hold`, `reopen`; who and when (KST). The latest decision on the fingerprint
-  or its group wins; a group decision covers screens found later.
-- **Provenance (N1):** decisions made with `nunchi decide` on this machine are recorded in
-  `.nunchi/state/approved.json` (git-ignored). Anything else came through git: it is shown, but it cannot dismiss
-  a blocker or an L9 (safety/secret) finding, and the fix loop will not act on an unapproved `fix` until
-  `nunchi approve`.
+  or its group wins; a group decision covers screens found later. Written to a temp file, synced and renamed into
+  place; a file that is torn, is not a decision, or does not match its place (file name = id, folder = target) is
+  an error naming the file (exit 2), never skipped.
+- **Provenance (N1; hardened in 0.1-c M1a):** decisions made with `nunchi decide` on this machine are recorded in
+  `.nunchi/state/approved.json` (git-ignored) by id **and content** (`<id>:<hash of the record>`), before the
+  decision file is written, under a lock. A file that reuses an approved id with other content is not approved;
+  approvals written before (bare ids) are bound once to the one file with that id, and an id two files share binds
+  to neither. Anything not approved came through git: it is shown, but it cannot dismiss a blocker or an L9
+  (safety/secret) finding, and the fix loop will not act on an unapproved `fix` until `nunchi approve`. A decision
+  dated more than 5 minutes ahead of the clock does not count (it would outrank every later one). An
+  `approved.json` that cannot be read is an error and is never replaced by an empty one.
 - **Status is computed, never committed:** each complete run is folded into `.nunchi/state/ledger.json`:
-  `open` → `fixed` when a run that looked again (the route in scope, the same persons, the app reachable, the
-  login working) no longer finds it → `regressed` when it comes back. With decisions: `to-fix`, `kept`,
-  `dismissed`, `held`. `fingerprintVersion` and each fingerprint's inputs are stored so a future v2 can migrate
-  decisions instead of orphaning them.
+  `open` → `fixed` when a run that looked again no longer finds it → `regressed` when it comes back. With
+  decisions: `to-fix`, `kept`, `dismissed`, `held`. `fingerprintVersion` and each fingerprint's inputs are stored
+  so a future v2 can migrate decisions instead of orphaning them. Since 0.1-c M1a:
+  - *like for like:* each item keeps the cells it was seen in (`person.state.viewport` on its route). It is `fixed`
+    only when the run captured every one of them (captured, not redirected, not an error page, not a canary copy),
+    with the other side of a comparison too (parity: the desktop; `error-looks-empty`: the empty state;
+    `no-offline-notice`: normal), and the app was reachable, the recording current and, for signed-in cells, the
+    login working. Whole-app findings (route-less secrets, `unreachable-route`, `link-to-missing-route`, L4
+    one-offs) also need a `wholeApp` run with at least the persons, states and viewports of the run that last saw
+    them. `--states`, `--viewports`, `--routes` and `--changed-since` fix nothing they did not look at.
+  - *monotonic:* a run older than the newest folded one only adds what it saw: it never marks anything fixed,
+    never moves `lastSeen` back, and brings an item back only if it saw it after the run that found it gone.
+  - *catch-up:* every ledger command (and `capture`, `gc`) first folds the complete runs not folded yet, in run
+    order, under a lock (`<file>.lock.d`, a folder; a dead or 30-s-silent holder is taken over), so a crash
+    between a run completing and its fold leaves nothing unfolded. A ledger or run file that cannot be read is an
+    error (exit 2), never "empty".
 - **CLI:** `nunchi findings` (one row per kind; `--rule <rule>` lists its groups; `--status`, `--all`, `--json`),
   `nunchi decide <id…> <decision> [--reason] [--note]`, `nunchi approve <id…>|--all`, `nunchi trust`.
 
