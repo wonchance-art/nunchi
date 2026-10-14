@@ -1070,7 +1070,8 @@ puts the images in `index.html` as data URIs instead (one file; pegroom: 8 MB ag
 The live version of §7.1's page, where the person decides (`src/board/`). The look, the strings table and the
 screenshot geometry are the export's: one stylesheet (`src/board/look.mjs`, inlined by the export, served by the
 board), one pure module for words, keys, crop and box geometry and the decision clock (`src/board/shared.mjs`,
-imported by the engine and served to the page). The export's bytes did not change. The page builds its DOM from
+imported by the engine and served to the page). The export's bytes did not change in M2, until the review of PR #29
+(2026-10-15 KST) moved rules into the shared stylesheet on purpose (Deviations, below). The page builds its DOM from
 data with `textContent` only (no markup is ever parsed from data; a test checks the script has no `innerHTML`), so
 the export's string renderers cannot be reused as they are; what is shared is the view model's inputs, the words,
 the geometry and the CSS classes.
@@ -1322,8 +1323,8 @@ trust, run the agent in a container or as a separate user.
 - Approvals of `nunchi approve` record their channel instead of being refused when run by the agent: a `cli-agent`
   approval of a dismissal counts for status but not for "Ready to ship" until confirmed, which keeps the chat path
   (Codex) working; the hook denies the command in Claude Code.
-- Primary buttons have dark text in dark mode on the board (the export's white on the dark accent is 2.6:1; the
-  export is unchanged here).
+- Primary buttons have dark text in dark mode (white on the dark accent is 2.6:1), in the shared stylesheet since the
+  review of PR #29, so the export has it too: the export's bytes changed there on purpose.
 
 **Measured (2026-10-15 00:32–00:49 KST).** Pebble `node bench/run.mjs --twice` is unchanged: rule recall 34/34, 0 false
 positives on 8 clean scenes, determinism identical (1,141 files; `origin/main` gives the same 1,141 on this machine,

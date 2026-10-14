@@ -8,9 +8,10 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { execFile } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 import { startBoard } from '../src/board/server.mjs';
+import { exportHtml } from '../src/export-html.mjs';
 import * as P from '../src/project.mjs';
 import { smallProject, withAi, writeRun, HOSTILE } from './fixtures/board-project.mjs';
 
@@ -295,6 +296,27 @@ test('board a11y: non-text contrast of 3:1 or more — field, button, decision b
       assert.deepEqual(low(await ratios('#toast .b:focus-visible', 'ring')), [], `${scheme}: the focus ring in the toast`);
       assert.equal((await ratios('#toast .b:focus-visible', 'ring')).length, 1);
     } finally { await s.close(); }
+  }
+});
+
+test('export a11y: the static page\'s primary button reads in dark mode too (the shared stylesheet, 4.5:1 or more)', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = smallProject();
+  const out = join(p.root, 'export');
+  exportHtml({ runDir: p.run, nunchiDir: p.nunchi, outDir: out });
+  for (const scheme of ['light', 'dark']) {
+    const context = await browser.newContext({ colorScheme: scheme, viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    try {
+      await page.goto(pathToFileURL(join(out, 'index.html')).href);
+      const r = await page.$eval('.btn-primary', e => {
+        const rgb = c => (c.match(/[\d.]+/g) || []).map(Number).slice(0, 3).map(v => v / 255).map(v => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+        const lum = c => { const [r, g, b] = rgb(c); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+        const cs = getComputedStyle(e), [x, y] = [lum(cs.color), lum(cs.backgroundColor)].sort((m, n) => n - m);
+        return (x + 0.05) / (y + 0.05);
+      });
+      assert.ok(r >= 4.5, `${scheme}: ${r.toFixed(2)}:1`);
+    } finally { await context.close(); }
   }
 });
 
