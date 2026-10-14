@@ -28,6 +28,8 @@ export const CONTROL_PATHS = [
   [/(^|\/)[^/]*\.config\.[^/]+$/, 'a config file'],
 ];
 export const FRAME_FILE = /(^|\/)(layout|template|loading|error|not-found|global-error|_app|_document|__root|middleware)\.[cm]?[jt]sx?$/;
+// endings that name a file, not a top-level domain (a protocol-relative "//notes.md" is a path)
+const FILE_EXT = new Set(['txt', 'md', 'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'json', 'css', 'scss', 'html', 'htm', 'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico', 'pdf', 'xml', 'csv', 'yml', 'yaml', 'map', 'woff', 'woff2', 'ttf', 'mp4', 'webm', 'mp3', 'wav', 'zip', 'log', 'lock', 'env', 'sh', 'bak']);
 // namespaces and well-known identifiers written as URLs, never fetched
 const NOT_OUTBOUND = new Set(['www.w3.org', 'w3.org', 'schema.org', 'json-schema.org', 'example.com', 'example.org', 'example.net']);
 const URL_RE = /\b(?:https?|wss?):\/\/([^\s'"`)<>\\/:?#]+)/gi;
@@ -69,13 +71,17 @@ export function diffPolicy({ files = [], patch = '', allowed = [], deps = new Se
     }
     if (/<script\b/i.test(text)) flagged.push({ file, why: 'adds a script tag' });
     if (/createElement\(\s*['"`]script['"`]/i.test(text)) flagged.push({ file, why: 'adds a script (createElement)' });
-    // protocol-relative URLs: "//cdn.example.net/x.js" in a string, src= or url(…), never a // comment
+    // protocol-relative URLs: "//cdn.example.net/x.js" in a string, src= or url(…), never a // comment; the host has a
+    // dot and ends in a label that looks like a top-level domain, not a file extension ("//note.txt" is a path)
     for (const m of text.matchAll(/["'`(=]\s*\/\/([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?=[/:'"`)\s?#]|$)/gi)) {
       const host = m[1].toLowerCase();
+      const tld = host.split('.').pop();
+      if (!/^[a-z]{2,24}$/.test(tld) || FILE_EXT.has(tld)) continue;
       if (!isLocalHost(host) && !NOT_OUTBOUND.has(host)) flagged.push({ file, why: `adds an outbound URL (${host})` });
     }
     // the closing line of a multi-line import or re-export: `} from 'pkg'`
-    const tail = /^\s*\}?\s*from\s+['"]([^'"\n]+)['"]/.exec(text);
+    // only import/export syntax: `} from 'pkg'` closing a statement (JSX text `from "Lisbon" to the coast` is not one)
+    const tail = /^\s*\}\s*from\s+['"]([^'"\n]+)['"]\s*;?\s*$/.exec(text);
     if (tail) { const pkg = packageOf(tail[1]); if (pkg && !deps.has(pkg) && !aliases.some(a => tail[1] === a || tail[1].startsWith(a.endsWith('/') ? a : `${a}/`))) flagged.push({ file, why: `adds a dependency (${pkg})` }); }
     for (const re of IMPORT_RE) for (const m of text.matchAll(re)) {
       const pkg = packageOf(m[1]);

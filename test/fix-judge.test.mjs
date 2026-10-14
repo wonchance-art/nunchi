@@ -154,6 +154,11 @@ test('diff policy: each rule has a case that triggers it and one that does not',
     assert.equal(r.ok, false, why);
     assert.ok(r.flagged.some(f => f.why === why), `${why}: ${JSON.stringify(r.flagged)}`);
   }
+  // what does not trigger them (M3 review, round 2): JSX text that says "from", a path written //like.this
+  assert.equal(diffPolicy({ files: ['app/settings/page.jsx'], patch: '+++ b/app/settings/page.jsx\n+  from "Lisbon" to the coast.\n+<Field label="//note.txt" />\n+<a href="//docs/readme.md">', allowed, deps: new Set(['react']) }).ok, true);
+  // …and what still does: the closing line of a multi-line import, a protocol-relative host with a domain
+  assert.equal(diffPolicy({ files: ['app/settings/page.jsx'], patch: "+++ b/app/settings/page.jsx\n+} from 'lisbon-maps';", allowed, deps: new Set(['react']) }).flagged[0]?.why, 'adds a dependency (lisbon-maps)');
+  assert.equal(diffPolicy({ files: ['app/settings/page.jsx'], patch: '+++ b/app/settings/page.jsx\n+<script src="//cdn.tracker.example.dev/t.js">', allowed, deps: new Set() }).flagged.some(f => f.why === 'adds an outbound URL (cdn.tracker.example.dev)'), true);
   // what does not trigger them: a declared package's multi-line import, a // comment, a script word in text
   assert.equal(diffPolicy({ files: ['app/settings/page.jsx'], patch: "+++ b/app/settings/page.jsx\n+} from 'react';\n+// see //docs.example.dev for why\n+const label = 'Run the script';", allowed, deps: new Set(['react']) }).ok, true);
   // an alias is not a package; a prefix maps the app's paths to the repository's
