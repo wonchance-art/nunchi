@@ -14,6 +14,7 @@ import * as P from '../src/project.mjs';
 import { readMetrics, decisionTimes, metricsPath } from '../src/metrics.mjs';
 import { smallProject, withAi, writeRun, HOSTILE } from './fixtures/board-project.mjs';
 import { slugLabeller, LABELLER } from '../src/labels.mjs';
+import { readGeneration } from '../src/state.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const cli = (cwd, ...a) => new Promise(res => execFile('node', [CLI, ...a], { cwd, encoding: 'utf8' }, (err, stdout, stderr) => res({ code: err ? err.code : 0, stdout, stderr })));
@@ -42,6 +43,17 @@ function aiProject() {
   ]);
   return { ...p, ai };
 }
+
+test('decisions bump the generation after the decision files exist (a reader that saw the approval\'s bump first looks again)', () => {
+  const p = smallProject();
+  const led = P.loadLedger(p.nunchi, { root: p.root });
+  const gen = led.st.files.generation;
+  const g0 = readGeneration(gen);
+  const { rows, groups } = P.ledgerView(led);
+  const made = P.recordDecisions(led, { targets: P.resolveTargets(rows, groups, [gid(p, 'dead-href')], { prefix: false }), decision: 'fix', by: 'fixture', channel: 'cli-agent' });
+  assert.equal(made.length, 1);
+  assert.equal(readGeneration(gen), g0 + 2, 'one bump for the approval, and one after the decision files');
+});
 
 test('api: Copy path copies the whole path, never the clipped one shown; a path with a control character is shown marked and not copied or linked', async () => {
   const p = smallProject();
@@ -212,6 +224,12 @@ test('api: /api/decide records through the ledger functions with channel board; 
     assert.equal(secret.status, 409);
     assert.equal(secret.json.confirm.text, 'Mark 1 group Not a problem? 1 is a blocker, 1 is a safety or secret finding.');
     assert.equal(decisions(p.nunchi).length, 1, 'nothing written before the answer');
+    // only a real true skips the question: "yes", 1, "true", [] or {} do not
+    for (const confirmed of ['yes', 1, 'true', [], {}]) {
+      const r = await call('/api/decide', { targets: [gid(p, 'secret-in-client-bundle')], decision: 'false-positive', reason: 'not-a-problem', confirmed });
+      assert.equal(r.status, 409, `confirmed: ${JSON.stringify(confirmed)}`);
+    }
+    assert.equal(decisions(p.nunchi).length, 1, 'still nothing written');
     assert.equal((await call('/api/decide', { targets: [gid(p, 'secret-in-client-bundle')], decision: 'false-positive', reason: 'not-a-problem', confirmed: true })).status, 200);
     // fixing a claim nobody double-checked asks first
     const claimed = p.ai.find(i => i.verification.status === 'claimed');

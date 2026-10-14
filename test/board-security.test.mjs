@@ -364,13 +364,30 @@ test('§3.2 live stream: needs the key, sends the version, and is capped', async
   } finally { await b.close(); }
 });
 
-test('§3.2 the board stops after the idle time, and says so to an open stream', async () => {
+test('§3.2 the board stops after the idle time, and says so to an open stream; the stream and polling do not keep it up, the person does', async () => {
   const p = smallProject();
   let exited = null;
   const b = await startBoard({ projectDir: p.root, idleMs: 1200, onExit: why => { exited = why; } });
-  for (let i = 0; i < 80 && !exited; i++) await new Promise(r => setTimeout(r, 100));
-  assert.equal(exited, 'idle');
+  const code = b.newLink().split('#t=')[1];
+  const token = (await raw(b.port, { method: 'POST', path: '/api/session', headers: { 'content-type': 'application/json', origin: b.origin }, body: JSON.stringify({ code }) })).json.token;
+  // a stream held open the whole time, and the polling fallback every 200 ms: neither is the person doing something
+  let said = '';
+  const req = request({ host: '127.0.0.1', port: b.port, path: '/api/live', headers: { host: `127.0.0.1:${b.port}`, 'x-nunchi-token': token } }, r => { r.setEncoding('utf8'); r.on('data', d => { said += d; }); r.on('error', () => {}); });
+  req.on('error', () => {});
+  req.end();
+  const t0 = Date.now();
+  for (let i = 0; i < 80 && !exited; i++) { await raw(b.port, { path: '/api/generation', headers: auth(token) }).catch(() => {}); await new Promise(r => setTimeout(r, 200)); }
+  assert.equal(exited, 'idle', 'stopped although the stream was open and the page polled');
+  assert.ok(Date.now() - t0 < 6000);
+  assert.match(said, /event: bye\ndata: \{"why":"idle"\}/, 'the open stream is told');
   await assert.rejects(raw(b.port), /ECONNREFUSED|ECONNRESET|socket hang up/);
+  // the person's requests do keep it up
+  let gone = null;
+  const c = await startBoard({ projectDir: p.root, idleMs: 1200, onExit: why => { gone = why; } });
+  const ct = (await raw(c.port, { method: 'POST', path: '/api/session', headers: { 'content-type': 'application/json', origin: c.origin }, body: JSON.stringify({ code: c.newLink().split('#t=')[1] }) })).json.token;
+  for (let i = 0; i < 15; i++) { await raw(c.port, { path: '/api/summary', headers: auth(ct) }); await new Promise(r => setTimeout(r, 200)); }
+  assert.equal(gone, null, 'still up after 3 s of the person\'s requests');
+  await c.close();
 });
 
 test('§3.1 nunchi open: detached, returns at once; the key and the link never reach a non-terminal stdout or a file; reuse and --stop', { timeout: 60000 }, async () => {
