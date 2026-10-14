@@ -119,7 +119,7 @@ test('visual drift: the defect is gone but other pixels changed → needs you (a
   const p = await fixProject();
   const { v } = await attempt(p, { change: ['TINY', 'ROOMY SHIFT'] });
   assert.equal(v.lines.length, 1);
-  assert.match(v.lines[0], /^'Tap target smaller than 24px' is gone, but the fix also changed other parts of this screen \((\d+)%\)\. It needs you: look at it in the board \(before and after are side by side\)\.$/);
+  assert.match(v.lines[0], /^'Tap target smaller than 24px' is gone, but the fix also changed other parts of this screen \((\d+)%\)\. It needs you: look at it in the board \(before and after, with a slider\)\.$/);
   const rec = latest(p);
   assert.deepEqual([rec.phase, rec.outcome.needsYou, rec.outcome.defectGone, git(p.root, 'rev-parse', 'HEAD')], ['needs-you', 'a', true, rec.commit], 'commit kept');
   assert.ok(rec.outcome.share > 0.01);

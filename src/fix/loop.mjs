@@ -13,7 +13,7 @@
 // and the ledger first, and resumes what a command that died left half done (records.mjs: a phase is written before
 // every side effect). Functions here return { code, lines, json }: the CLI prints the lines (the chat lines the skill
 // relays: one per outcome) and exits with the code; nothing here prints or exits.
-import { join, basename, dirname, relative, sep } from 'node:path';
+import { join, basename, dirname, relative, sep, resolve } from 'node:path';
 import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import * as P from '../project.mjs';
 import { titleOf, latestRunOf, foldFix, unfoldFix, commitFix, byRun, looked } from '../ledger.mjs';
@@ -245,7 +245,7 @@ export function planFixes(ctx, { url = null } = {}) {
   return out(0, lines, { plan: items, branch, dirty: dirty ? dirty.length : null, checks: { names: checks, approved, hash: profile?.hash ?? null }, url: base });
 }
 function writeChecksRequest(ctx, profile) {
-  try { writeStable(checksRequestPath(ctx.stateDir), { schema: 1, note: 'the fix loop asks a person to approve the check profile (board card or nunchi fix --approve-checks)', hash: profile.hash, at: kst(ctx.deps.now()) }); } catch {}
+  try { writeStable(checksRequestPath(ctx.stateDir), { schema: 1, note: 'the fix loop asks a person to approve the check profile (board card or nunchi fix --approve-checks)', hash: profile.hash, root: resolve(ctx.root), at: kst(ctx.deps.now()) }); } catch {}
 }
 // The branch the fix goes on (design §4.2): the nunchi/fix branch HEAD is on already; else nunchi/fixes-<MMDD> (KST),
 // or nunchi/fix-<group> in a linked worktree (design §7: a per-group branch when several agents work).
@@ -702,7 +702,7 @@ function finish(ctx, rec, verdict, { title, said = [] }) {
   if (verdict.outcome === 'drift' || verdict.outcome === 'unbaselined') {
     const pct = verdict.drift ? `${Math.max(1, Math.round(verdict.drift.share * 100))}%` : null;
     const line = verdict.outcome === 'drift'
-      ? `'${title}' is gone, but the fix also changed other parts of this screen (${pct}). It needs you: look at it in the board (before and after are side by side).`
+      ? `'${title}' is gone, but the fix also changed other parts of this screen (${pct}). It needs you: look at it in the board (before and after, with a slider).`
       : `'${title}' is gone, but ${where(verdict.unbaselined)} (a screen the fix reaches, with nothing to compare against) now shows '${titleOf(verdict.unbaselined[0].rule)}'. It needs you: look at it in the board.`;
     closeWith(ctx, rec, 'needs-you', { kind: 'needs-you', needsYou: verdict.outcome === 'drift' ? 'a' : 'unbaselined', defectGone: true, commit: rec.commit, share: verdict.drift?.share ?? null, line });
     return out(0, [...said, line], { outcome: 'needs-you', needsYou: verdict.outcome === 'drift' ? 'a' : 'unbaselined', share: verdict.drift?.share ?? null });
@@ -822,6 +822,9 @@ export function acceptDrift(ctx, group, { attempt, by }) {
   const rec = latestRecord(ctx.stateDir, group);
   if (!rec || rec.attempt !== attempt || rec.phase !== 'needs-you' || rec.outcome?.needsYou !== 'a') return { ok: false, status: 409, error: 'this fix no longer waits for you' };
   if (rec.outcome?.defectGone !== true) return { ok: false, status: 409, error: 'the defect itself is not gone: "Looks fine" cannot mark it fixed' };
+  // only while the Fix decision the attempt was made for stands: a newer one ("Try again with a note…") or a Keep answered it
+  const d = ctx.rows.filter(r => r.group === group).map(r => r.decision).filter(Boolean).sort((a, b) => cmp(a.at || '', b.at || '') || cmp(a.id, b.id)).pop();
+  if (d?.decision !== 'fix' || (rec.decision?.id && d.id !== rec.decision.id)) return { ok: false, status: 409, error: 'this fix no longer waits for you: a newer decision answered it' };
   const r = setPhase(ctx.stateDir, rec, 'folding', { accepted: { channel: 'board', by: String(by || '').slice(0, 80), at: kst(ctx.deps.now()) },
     outcome: { kind: 'fixed', accepted: true, commit: rec.commit, line: `Fixed '${rec.title || group}': you looked at the before and after and marked it fixed.` } }, gen(ctx));
   applyFold(ctx, r);

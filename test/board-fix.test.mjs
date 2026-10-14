@@ -86,7 +86,7 @@ test('board: needs you (b) clears once the person keeps it (or says Later); (c) 
   const { b: b2, call: call2 } = await board(q);
   try {
     const s = (await call2('/api/summary')).json;
-    assert.ok(s.now.some(l => /^Claude Code is fixing Tap target smaller than 24px · \d+ min$/.test(l)), s.now.join('\n'));
+    assert.ok(s.now.some(l => /^Claude Code is fixing Tap target smaller than 24px · just started$/.test(l)), s.now.join('\n'));
     assert.deepEqual((await call2(`/api/groups/${q.group}`)).json.fixing, { agent: 'Claude Code', minutes: 0 });
     const ask = await call2('/api/decide', { targets: [q.group], decision: 'false-positive', reason: 'not-a-problem' });
     assert.deepEqual([ask.status, ask.json.confirm.text], [409, 'Claude Code is fixing this right now. Stop and mark Not a problem?']);
@@ -98,6 +98,110 @@ test('board: needs you (b) clears once the person keeps it (or says Later); (c) 
     const g = (await call2(`/api/groups/${q.group}`)).json;
     assert.deepEqual([g.fix.needs, g.needsYou.reason, g.fixing], ['c', 'fix-c', null]);
   } finally { await b2.close(); }
+});
+
+// ---- M3 review: the board's fix states ------------------------------------------------------------------------------------
+
+test('board: before/after shows the screen the fix changed most (drift is measured over the whole scope), and names its route', async () => {
+  const { compareOf } = await import('../src/board/model.mjs');
+  const sc = (run, route, vp) => ({ run, id: `${route.slice(1)}.guest.normal.${vp}`, route, person: 'guest', state: 'normal', viewport: vp, status: 'captured', img: { w: 10, h: 10, dpr: 1, vh: 10, file: 'full.jpg', thumb: 'top.jpg' } });
+  const ev = run => { const scenes = ['/settings', '/help'].flatMap(r => ['d', 'm'].map(v => sc(run, r, v))); return { scenes, sceneById: new Map(scenes.map(s => [s.id, s])) }; };
+  const model = { evidenceOf: run => ev(run) };
+  const g = { fix: { before: '0002', after: '0003', drift: ['help.guest.normal.d'] }, _rows: [{ route: '/settings' }] };
+  const c = compareOf(model, g);
+  assert.deepEqual(c.map(x => [x.viewport, x.route, x.after.id]), [['d', '/help', 'help.guest.normal.d'], ['m', '/settings', 'settings.guest.normal.m']]);
+});
+
+test('board: "Try again with a note…" answers needs you (a): the card goes, and "Looks fine" can no longer mark it fixed', async () => {
+  const p = await fixProject();
+  await attempt(p, ['TINY', 'ROOMY SHIFT']);
+  const rec = R.latestRecord(P.stateOf(p.nunchi).root.dir, p.group);
+  const { b, call } = await board(p);
+  try {
+    assert.equal((await call(`/api/groups/${p.group}`)).json.fix.needs, 'a');
+    assert.equal((await call('/api/decide', { targets: [p.group], decision: 'fix', reason: null, note: 'keep the panel where it was', confirmed: true })).status, 200);
+    const g = (await call(`/api/groups/${p.group}`)).json;
+    assert.deepEqual([g.fix.needs, g.needsYou], [null, null]);
+    assert.equal(g.fix.landed, true, 'the kept commit is still on the branch: the undo sentence stays');
+    assert.equal((await call('/api/fix-accept', { group: p.group, attempt: rec.attempt })).status, 409);
+  } finally { await b.close(); }
+});
+
+test('board: Keep after needs you (a) still shows how to undo the commit left on the branch; (b)\'s after reads "Attempt 2 (undone)"', async () => {
+  const p = await fixProject();
+  await attempt(p, ['TINY', 'ROOMY SHIFT']);
+  const { b, call } = await board(p);
+  try {
+    assert.equal((await call('/api/decide', { targets: [p.group], decision: 'keep', reason: 'intended', confirmed: true })).status, 200);
+    const g = (await call(`/api/groups/${p.group}`)).json;
+    assert.deepEqual([g.fix.needs, g.fix.landed], [null, true]);
+  } finally { await b.close(); }
+  const q = await fixProject();
+  await attempt(q, ['TINY', 'WRAP']);
+  await attempt(q, ['TINY', 'WRAP']);
+  const { b: b2, call: call2 } = await board(q);
+  try {
+    const g = (await call2(`/api/groups/${q.group}`)).json;
+    assert.deepEqual([g.fix.needs, g.fix.afterLabel, g.fix.landed], ['b', 'Attempt 2 (undone)', false]);
+  } finally { await b2.close(); }
+});
+
+test('board: the other needs-you kinds show the engine\'s own line and the sentence that undoes the fix (never a dead end)', async () => {
+  const p = await fixProject();
+  assert.equal((await F.startFix(ctxOf(p), p.group)).code, 0);
+  edit(p.root, 'app/settings/page.jsx', 'TINY', 'ROOMY');
+  edit(p.root, 'app/page.jsx', 'Plant shelf', 'Plant shelf!');            // a file outside the finding's own
+  commitWith(p.root, (await F.checkFix(ctxOf(p), p.group)).json.trailers);
+  await F.verifyFix(ctxOf(p), p.group);
+  const { b, call } = await board(p);
+  try {
+    const g = (await call(`/api/groups/${p.group}`)).json;
+    assert.deepEqual([g.fix.needs, g.fix.kind, g.fix.landed], ['other', 'diff', true]);
+    assert.match(g.fix.line, /^The fix of 'Tap target smaller than 24px' \(commit [0-9a-f]{7}\) touched what only you can approve:/);
+  } finally { await b.close(); }
+});
+
+test('board: deciding against a live claim asks about the claim inside the dismissal\'s question, not never', async () => {
+  const p = await fixProject({ world: { secret: true } });
+  assert.equal((await F.startFix(ctxOf(p), p.group, { agent: 'Claude Code' })).code, 0);
+  const secret = p.groups.find(g => g.rule === 'secret-in-client-bundle').group;
+  const { b, call } = await board(p);
+  try {
+    const ask = await call('/api/decide', { targets: [p.group, secret], decision: 'false-positive', reason: 'not-a-problem' });
+    assert.equal(ask.status, 409);
+    assert.match(ask.json.confirm.text, /^Mark 2 groups Not a problem\? 1 is a blocker.*Claude Code is fixing one of them right now: this stops that\.$/);
+    assert.equal(ask.json.confirm.ok, 'Stop and mark');
+  } finally { await b.close(); }
+});
+
+test('handoff: a group whose fix waits for the person is not "to fix" for the AI; Decisions and findings count it apart', async () => {
+  const p = await fixProject();
+  await attempt(p, ['TINY', 'WRAP']);
+  await attempt(p, ['TINY', 'WRAP']);
+  const { buildBoardModel } = await import('../src/board/model.mjs');
+  const s = buildBoardModel({ nunchiDir: p.nunchi, projectDir: p.root }).summary;
+  assert.deepEqual([s.toFix, s.fixNeedsYou, s.handoff], [0, 1, null]);
+  const { execFileSync } = await import('node:child_process');
+  const out = execFileSync(process.execPath, [new URL('../src/cli.mjs', import.meta.url).pathname, 'findings'], { cwd: p.root, encoding: 'utf8' });
+  assert.match(out, /1 group\(s\) to fix need you: their fix waits for you in the board \(nunchi open\), not for your AI/);
+});
+
+test('board: the check profile shown and approved is the one of the folder the fix loop asked for (--root)', async () => {
+  const p = await fixProject();
+  const web = join(p.root, 'web');
+  const { mkdirSync, writeFileSync } = await import('node:fs');
+  mkdirSync(web);
+  writeFileSync(join(web, 'package.json'), JSON.stringify({ name: 'web', scripts: { test: 'vitest run' } }));
+  mkdirSync(join(P.stateOf(p.nunchi).root.dir), { recursive: true });
+  writeFileSync(join(P.stateOf(p.nunchi).root.dir, 'checks-request.json'), JSON.stringify({ schema: 1, hash: 'x', root: web }));
+  const { b, call } = await board(p);
+  try {
+    const s = (await call('/api/summary')).json;
+    assert.deepEqual(Object.keys(s.checks.profile.scripts), ['test']);
+    assert.equal((await call('/api/approve-checks', { profile: s.checks.profile.hash })).status, 200);
+    const { checkProfile, approvedProfiles, scriptsApprovedPath } = await import('../src/checks.mjs');
+    assert.ok(approvedProfiles(scriptsApprovedPath(P.stateOf(p.nunchi).root.dir)).has(checkProfile(web).hash));
+  } finally { await b.close(); }
 });
 
 // ---- in a real browser -------------------------------------------------------------------------------------------------
@@ -119,7 +223,7 @@ async function page(p, viewport = { width: 1280, height: 900 }) {
   return { b, pg, errors, close: async () => { await context.close(); await b.close(); } };
 }
 
-test('board e2e: needs you (a) in Detail — the text and exactly its three actions, before/after side by side with a slider (←/→) for both viewports, the undo sentence, Looks fine', { timeout: 120000 }, async t => {
+test('board e2e: needs you (a) in Detail — the text and exactly its three actions, before/after with a slider (←/→) for both viewports, the undo sentence, Looks fine', { timeout: 120000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = await fixProject();
   await attempt(p, ['TINY', 'ROOMY SHIFT']);
@@ -151,9 +255,20 @@ test('board e2e: needs you (a) in Detail — the text and exactly its three acti
     const moved = await pg.evaluate(() => ({ v: document.querySelector('.fix-compare input[type=range]').value, clip: document.querySelector('.cmp .cmp-after').style.clipPath, url: location.hash }));
     assert.deepEqual([moved.v, moved.clip], ['60', 'inset(0px 0px 0px 60%)'], '→ moves the slider; the keys never leave the field');
     await pg.click('.fix-compare .seg-b button:nth-child(2)');
-    const phone = await pg.evaluate(() => ({ pressed: document.querySelector('.fix-compare .seg-b button[aria-pressed=true]').textContent, label: document.querySelector('.fix-compare .cmp .shot').getAttribute('aria-label'), m: document.querySelector('.fix-compare .cmp .shot').classList.contains('shot-m') }));
+    const phone = await pg.evaluate(() => ({ pressed: document.querySelector('.fix-compare .seg-b button[aria-pressed=true]').textContent, label: document.querySelector('.fix-compare .cmp .shot').getAttribute('aria-label'), m: document.querySelector('.fix-compare .cmp .shot').classList.contains('shot-m'),
+      focus: document.activeElement?.id, group: document.querySelector('.fix-compare .seg-b').getAttribute('aria-label'), needsH: document.querySelector('.needs h2')?.textContent, route: document.querySelector('.cmp-route')?.textContent }));
     assert.deepEqual([phone.pressed, phone.m], ['Phone', true]);
+    assert.equal(phone.focus, 'cmp-vp-m', 'the redraw gives the focus back to the toggle, not the heading');
+    assert.deepEqual([phone.group, phone.needsH, phone.route], ['Before/after width', 'Needs you', 'Before and after on /settings']);
     assert.match(phone.label, /Phone/);
+    // the row says it needs you (to a screen reader too)
+    await pg.evaluate(() => { location.hash = '#/findings'; });
+    await pg.click('[role=tab]:has-text("To fix")');
+    await pg.waitForSelector('.row');
+    const aria = await pg.evaluate(id => document.getElementById(`row-${id}`)?.getAttribute('aria-label'), p.group);
+    assert.match(aria, /, Needs you$/);
+    await pg.evaluate(id => { location.hash = `#/finding/${id}`; }, p.group);
+    await pg.waitForSelector('.needs button');
     // [Undo this fix] shows the sentence to say
     await pg.click('.needs button:nth-child(2)');
     const say = await pg.evaluate(() => document.querySelector('#dialog code').textContent);

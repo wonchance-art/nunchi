@@ -361,6 +361,7 @@ function renderProgress(focus = false) {
       s.health.problems.map(p => h('li', { class: 'warn' }, `Run problem: ${p.status} (${p.scenes}/${p.of} screens) — ${WHY[p.status] || ''}`))));
   const counts = h('section', { class: 'panel-box', 'aria-labelledby': 'h-status' }, h('h2', { id: 'h-status' }, 'Decisions'),
     h('ul', { class: 'statuses' }, W.FILTERS.filter(([k]) => k !== 'all').map(([k, label]) => h('li', null, h('span', { class: `st st-${k}` }, label), ' ', h('b', null, String(s.byStatus[k] || 0))))),
+    s.fixNeedsYou ? h('p', { class: 'warn small' }, `${s.fixNeedsYou} to fix ${s.fixNeedsYou === 1 ? 'needs' : 'need'} you: ${s.fixNeedsYou === 1 ? 'its fix waits' : 'their fixes wait'} for you here, not for your AI.`) : null,
     s.warnings.length ? h('ul', { class: 'facts muted small' }, s.warnings.map(w => h('li', null, w))) : null);
   show(h('div', { id: 'progress', class: 'view' },
     h('div', { class: 'stack' }, hero, confirm, checks, h('div', { class: 'two' }, since, health), counts)));
@@ -440,14 +441,14 @@ function rowEl(g) {
 }
 function fillRow(row, g) {
   const tags = [g.notLookedAt ? h('span', { class: 'tag tag-warn' }, `Not looked at since run ${g.notLookedAt}`) : null,
-    g.fixing ? h('span', { class: 'tag tag-ai' }, `${g.fixing.agent} is fixing${g.fixing.minutes !== null ? ` · ${g.fixing.minutes} min` : ''}`) : null,
+    g.fixing ? h('span', { class: 'tag tag-ai' }, W.fixingText(g.fixing)) : null,
     g.needsYou ? h('span', { class: 'tag tag-warn' }, 'Needs you') : null, decisionTag(g), sourceTag(g), ...statusChips(g)];
   row.replaceChildren(h('span', { class: 'tick', 'aria-hidden': 'true' }, '✓'),
     h('span', { class: 'row-main' }, h('span', { class: 'row-what' }, g.source === 'ai' ? g.headline : whereText(g)),
       h('span', { class: 'row-where' }, g.source === 'ai' ? whereText(g) : g.gist)),
     // grouped by kind, the section names the severity; grouped otherwise, each row does
     h('span', { class: 'row-tags' }, S.params.group !== 'kind' ? sevChip(g.severity) : null, tags));
-  row.setAttribute('aria-label', `${g.source === 'ai' ? g.headline : `${g.kindTitle}: ${whereText(g)}`}, ${W.SEV_LABEL[sevOf(g.severity)]}, ${statusText(g.status)}`);
+  row.setAttribute('aria-label', `${g.source === 'ai' ? g.headline : `${g.kindTitle}: ${whereText(g)}`}, ${W.SEV_LABEL[sevOf(g.severity)]}, ${statusText(g.status)}${g.needsYou ? ', Needs you' : ''}${g.fixing ? `, ${g.fixing.agent} is fixing` : ''}`);
 }
 function updateRowsInPlace() {
   for (const row of main().querySelectorAll('.row[data-id]')) { const g = S.list.groups[row.getAttribute('data-id')]; if (g) fillRow(row, g); }
@@ -770,7 +771,7 @@ function renderDetail(focus = false) {
   const needs = fixNeeds || (g.needsYou ? h('div', { class: 'needs', role: 'note' }, h('b', null, 'Needs you'),
     g.needsYou.reason === 'recheck-insufficient' ? h('span', null, 'The re-check could not tell whether this is gone. Look at the screen, then decide; or tell your AI “re-check it”.') : h('span', null, 'nunchi could not finish this one on its own.')) : null);
   const compare = compareBox(g);
-  const fixing = g.fixing ? h('p', { class: 'banner' }, `${g.fixing.agent} is fixing this${g.fixing.minutes !== null ? ` · ${g.fixing.minutes} min` : ''}`) : null;
+  const fixing = g.fixing ? h('p', { class: 'banner' }, W.fixingText(g.fixing)) : null;
   const facts = h('dl', { class: 'facts-dl' },
     codeLine ? [h('dt', null, 'Code'), h('dd', null, h('span', { class: 'mono' }, codeLine), ' ', codeCopy ? copyButton(codeCopy, 'Copy path') : null, ' ', g.code.link ? h('a', { class: 'b b-quiet', href: g.code.link }, 'Open in VS Code') : null)] : null,
     g.secret ? [h('dt', null, 'Where'), h('dd', { class: 'mono' }, g.secret.where), h('dt', null, 'Kind'), h('dd', null, g.secret.kind)] : null,
@@ -809,13 +810,21 @@ function renderDetail(focus = false) {
 // [Try again with a note…] [Keep] [Later]; (c) it could not be re-checked → the sentence to say.
 function fixNeedsBox(g) {
   const k = g.fix?.needs;
-  if (!['a', 'b', 'c'].includes(k)) return null;
+  if (!k) return null;
   const F = W.FIX_WORDS;
   const btn = (label, fn) => { const b = h('button', { type: 'button', class: 'b' }, label); b.addEventListener('click', fn); return b; };
+  const head = h('h2', { class: 'needs-h' }, F.needs);
+  // the other kinds (the change touched files only you can approve, a screen with nothing to compare against, an
+  // attempt interrupted, an undo that could not run): the engine's own line, and the sentence that undoes the fix
+  if (k === 'other') {
+    const say = g.fix.landed ? F.undoSay(g.kindTitle, g.id) : null;
+    return h('div', { class: 'needs', role: 'note' }, head, g.fix.line ? h('span', null, g.fix.line) : null,
+      say ? h('span', null, 'To undo it, tell your AI: ', h('code', null, say), ' ', copyButton(say)) : null);
+  }
   const text = k === 'a' ? F.a(W.pctText(g.fix.share)) : k === 'b' ? F.b : F.c;
   const actions = k === 'a' ? [btn(F.looksFine, () => looksFine(g)), btn(F.undo, () => undoSentence(g)), btn(F.tryAgain, () => tryAgain(g))]
     : k === 'b' ? [btn(F.tryAgain, () => tryAgain(g)), btn(F.keep, () => decide([g.id], 'keep', 'intended')), btn(F.later, () => decide([g.id], 'hold', null))] : [];
-  return h('div', { class: 'needs', role: 'note' }, h('b', null, 'Needs you'), h('span', null, text), k === 'c' ? h('span', null, F.cThen) : null,
+  return h('div', { class: 'needs', role: 'note' }, head, h('span', null, text), k === 'c' ? h('span', null, F.cThen) : null,
     actions.length ? h('div', { class: 'actions' }, actions) : null);
 }
 async function looksFine(g) {
@@ -855,17 +864,20 @@ function compareBox(g) {
   const c = g.compare.find(x => x.viewport === vp);
   const first = sc => ({ ...sc, img: { ...sc.img, url: sc.img.thumb, h: sc.img.vh } });       // the first view (top.jpg)
   const cls = vp === 'm' ? 'shot-m' : '';
+  const afterWord = g.fix?.afterLabel || W.FIX_WORDS.after;
   const before = shot(first(c.before), [], { label: `${W.FIX_WORDS.before}: ${c.before.route}, ${c.before.label}`, cls });
-  const after = shot(first(c.after), [], { label: `${W.FIX_WORDS.after}: ${c.after.route}, ${c.after.label}`, cls: `${cls} cmp-after`.trim() });
+  const after = shot(first(c.after), [], { label: `${afterWord}: ${c.after.route}, ${c.after.label}`, cls: `${cls} cmp-after`.trim() });
   const at = Number.isFinite(D.cmpAt) ? D.cmpAt : 50;
-  const slider = h('input', { type: 'range', class: 'cmp-slider', min: '0', max: '100', step: '5', value: String(at), 'aria-label': W.FIX_WORDS.slider });
-  const set = v => { after.style.clipPath = `inset(0 0 0 ${v}%)`; D.cmpAt = v; slider.setAttribute('aria-valuetext', `${W.FIX_WORDS.before} ${v}%, ${W.FIX_WORDS.after} ${100 - v}%`); };
+  // ids: a live redraw or the width toggle gives the focus back to the same control (show())
+  const slider = h('input', { type: 'range', id: 'cmp-slider', class: 'cmp-slider', min: '0', max: '100', step: '5', value: String(at), 'aria-label': W.FIX_WORDS.slider });
+  const set = v => { after.style.clipPath = `inset(0 0 0 ${v}%)`; D.cmpAt = v; slider.setAttribute('aria-valuetext', `${W.FIX_WORDS.before} ${v}%, ${afterWord} ${100 - v}%`); };
   slider.addEventListener('input', () => set(Number(slider.value)));
   set(at);
-  const toggle = vps.length > 1 ? h('div', { class: 'seg-b', role: 'group', 'aria-label': 'Width' }, vps.map(v => { const b = h('button', { type: 'button', 'aria-pressed': v === vp ? 'true' : 'false' }, W.WIDTH[v] || v); b.addEventListener('click', () => { D.cmpVp = v; renderDetail(); }); return b; })) : null;
-  return h('div', { class: 'fig fix-compare', role: 'group', 'aria-label': `${W.FIX_WORDS.slider}, ${W.WIDTH[vp] || vp}` },
+  const toggle = vps.length > 1 ? h('div', { class: 'seg-b', role: 'group', 'aria-label': W.FIX_WORDS.width }, vps.map(v => { const b = h('button', { type: 'button', id: `cmp-vp-${v}`, 'aria-pressed': v === vp ? 'true' : 'false' }, W.WIDTH[v] || v); b.addEventListener('click', () => { D.cmpVp = v; renderDetail(); }); return b; })) : null;
+  return h('div', { class: 'fig fix-compare', role: 'group', 'aria-label': `${W.FIX_WORDS.slider}, ${c.route || c.after.route}, ${W.WIDTH[vp] || vp}` },
     toggle ? h('div', { class: 'fig-tools' }, toggle) : null,
-    h('div', { class: 'cmp-labels', 'aria-hidden': 'true' }, h('span', null, W.FIX_WORDS.before), h('span', null, W.FIX_WORDS.after)),
+    h('p', { class: 'small cmp-route' }, `${W.FIX_WORDS.slider} on ${c.route || c.after.route}`),
+    h('div', { class: 'cmp-labels', 'aria-hidden': 'true' }, h('span', null, W.FIX_WORDS.before), h('span', null, afterWord)),
     h('div', { class: 'cmp' }, before, after), slider);
 }
 

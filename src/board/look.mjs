@@ -214,6 +214,8 @@ dialog h2{font-size:17px;margin:0 0 10px}.dialog-actions{display:flex;flex-wrap:
 .history li{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
 .needs{padding:14px 16px;border-radius:10px;background:var(--high-soft);color:var(--high-ink);display:flex;flex-direction:column;gap:8px}
 .needs .actions{display:flex;flex-wrap:wrap;gap:8px}
+.needs .needs-h{font-size:1rem;margin:0}
+.cmp-route{margin:0}
 .cmp{position:relative}
 .cmp .cmp-after{position:absolute;inset:0;margin:0 auto}
 .cmp-labels{display:flex;justify-content:space-between;font-size:14px}

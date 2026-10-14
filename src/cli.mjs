@@ -510,12 +510,12 @@ if (cmd === 'setup') {
     const staleAi = gs.filter(g => g.status === 'stale').length;
     const needsYou = rows.filter(r => r.needsYou && !r.goneAt).length;
     // the board's Progress summary (one function for both, design §3.3)
-    const { summary } = await import('./summary.mjs');
+    const { summary, fixNeedsOf } = await import('./summary.mjs');
     let runner = null; try { runner = gitRunner(process.cwd()); } catch {}
     // the fix loop's attempts that wait for the person count as "needs you", as the board counts them
     const { latestRecords } = await import('./fix/records.mjs');
     let fixNeeds = new Set();
-    try { fixNeeds = new Set([...latestRecords(st.root.dir)].filter(([, r]) => r.phase === 'needs-you').map(([g]) => g)); } catch {}
+    try { fixNeeds = fixNeedsOf(latestRecords(st.root.dir), rows); } catch {}
     const sum = summary({ state, rows, groups: gs, stream: st.root.stream, runsDir: st.runsDir, git: runner, fixNeeds });
     if (args.json) console.log(JSON.stringify({ run: latest, blind, kinds: kinds.map(k => ({ ...k, routes: [...k.routes].sort() })), groups: shown, ...(collapsed.length ? { notDoubleChecked: collapsed.map(g => g.group) } : {}), summary: sum }, null, 2));
     else {
@@ -536,6 +536,7 @@ if (cmd === 'setup') {
         if (!kinds.length && !collapsed.length) console.log(want ? 'nothing open — `nunchi findings --all` lists everything' : 'no findings');
         if (staleAi && want) console.log(`${staleAi} AI group(s) stale: ${STALE_HUNTS} later hunts saw their screens and did not claim them — nunchi findings --status stale`);
         if (needsYou) console.log(`${needsYou} AI finding(s) need you: the re-check could not tell whether they are gone`);
+        if (sum.fixNeedsYou) console.log(`${sum.fixNeedsYou} group(s) to fix need you: their fix waits for you in the board (nunchi open), not for your AI`);
         if (sum.confirm.length) console.log(`${sum.confirm.length} decision(s) recorded by the AI or from git wait for you to confirm them in the board (nunchi open); until then they do not count for "ready to ship"`);
       }
       for (const g of args.rule ? shown : []) {

@@ -37,10 +37,13 @@ export const FIX_WORDS = {
   cThen: 'Start your app, then tell your AI “retry”.',
   looksFine: 'Looks fine, mark fixed', undo: 'Undo this fix', tryAgain: 'Try again with a note…', keep: 'Keep', later: 'Later',
   note: 'A note for your AI (what to do differently)', send: 'Try again',
-  before: 'Before', after: 'After', slider: 'Before and after',
+  before: 'Before', after: 'After', slider: 'Before and after', width: 'Before/after width', needs: 'Needs you',
   undoSay: (title, id) => `undo the fix of “${title}” (nunchi fix --undo ${id})`,
   landed: commit => `Fixed by your AI in commit ${commit}. To undo it, tell your AI:`,
 };
+// "Claude Code is fixing · 4 min" (design §3.4), "just started" under a minute.
+export const fixingMinutes = minutes => (minutes === null || minutes === undefined ? 'just started' : minutes < 1 ? 'just started' : `${minutes} min`);
+export const fixingText = c => `${c.agent} is fixing · ${fixingMinutes(c.minutes)}`;
 export const pctText = share => `${Math.max(1, Math.round((Number(share) || 0) * 100))}%`;
 export const REASON_LABEL = { intended: 'intended', 'out-of-scope': 'out of scope', 'not-a-problem': 'nothing wrong here', 'wrong-place': 'right issue, wrong spot' };
 // The decision bar's buttons: label and permanent sub-label (design §3.4).

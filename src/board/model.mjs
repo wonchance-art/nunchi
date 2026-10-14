@@ -18,6 +18,7 @@ import { scrubSecrets } from '../rules.mjs';
 import { redactText, redactUrl } from '../network.mjs';
 import { SEV, STATUS_LABEL, PERSONS, VPS, STATES, human, plural, drawable, sceneLabelText } from './shared.mjs';
 import { claimLive, claimMinutes } from '../fix/claims.mjs';
+import { fixNeedsOf } from '../summary.mjs';
 import { latestRecords } from '../fix/records.mjs';
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -169,7 +170,7 @@ export function buildBoardModel({ nunchiDir, projectDir, warn = () => {} }) {
   // shows nothing (the CLI says why)
   let records = new Map();
   try { records = latestRecords(st.root.dir); } catch { records = new Map(); }
-  const fixNeeds = new Set([...records].filter(([, r]) => r.phase === 'needs-you').map(([g]) => g));
+  const fixNeeds = fixNeedsOf(records, rows);
   const sum = summary({ state, rows, groups, stream: st.root.stream, runsDir: st.runsDir, git, fixNeeds });
   const latest = latestRunOf(state, st.root.stream);
   const aliases = state.aliases || {};
@@ -208,7 +209,11 @@ export function buildBoardModel({ nunchiDir, projectDir, warn = () => {} }) {
     const decision = mine.map(r => r.decision).find(Boolean) || null;
     const screens = new Set(inst.map(f => f.scene && `${f.run}/${f.scene}`).filter(Boolean)).size;
     const files = [...new Set(inst.map(f => codeOf(f)?.file).filter(Boolean).concat(ai && mine[0]?.identity?.component?.file ? [mine[0].identity.component.file] : []))].sort();
-    const fix = fixOut(records.get(g.group), { waiting: mine.some(r => r.status === 'to-fix' && !r.goneAt) });
+    const rec = records.get(g.group);
+    // still on the branch: a kept or landed fix whose commit HEAD still has (a Keep or Later after (a) leaves it there)
+    let reachable = false;
+    if (rec?.commit && git && /^[0-9a-f]{40,64}$/.test(String(rec.commit))) { try { git(['merge-base', '--is-ancestor', String(rec.commit), 'HEAD']); reachable = true; } catch {} }
+    const fix = fixOut(rec, { waiting: fixNeeds.has(g.group) && mine.some(r => r.status === 'to-fix' && !r.goneAt), reachable });
     const needsYou = fix?.needs ? { reason: `fix-${fix.needs}`, run: fix.after } : mine.find(r => r.needsYou && !r.goneAt)?.needsYou || null;
     const claim = claims.get(g.group) || null;
     const verification = ai ? mine.map(r => r.verification).find(Boolean) || null : null;
@@ -241,21 +246,28 @@ export function buildBoardModel({ nunchiDir, projectDir, warn = () => {} }) {
 
 // A fix record as the board shows it (design §3.4): which attempt, its phase, the *needs you* kind — (a) the fix also
 // changed other parts of the screen, (b) the AI couldn't fix it in 2 tries, (c) it could not be re-checked; any other
-// kind shows the general "needs you" — and the probes before and after. Only words the engine wrote, and run ids and
-// a commit checked for their shape.
+// kind shows the general "needs you" with the engine's own line — and the probes before and after. Only words the
+// engine wrote, and run ids and a commit checked for their shape.
 const NEEDS = new Set(['a', 'b', 'c']);
-function fixOut(rec, { waiting = true } = {}) {
+function fixOut(rec, { waiting = true, reachable = false } = {}) {
   if (!rec || typeof rec !== 'object') return null;
-  // needs you only while the group is still to fix (a person who chose Keep or Later after (b) has answered it)
+  // needs you only while the group is still to fix with the Fix decision the attempt was made for (a Keep, a Later,
+  // or a new "Try again with a note…" answers it)
   const k = rec.phase === 'needs-you' && waiting ? String(rec.outcome?.needsYou || '') : null;
   const run = v => (RUN_ID.test(String(v ?? '')) ? String(v) : null);
   const commit = /^[0-9a-f]{7,64}$/.test(String(rec.commit || '')) ? String(rec.commit).slice(0, 7) : null;
+  const drift = Array.isArray(rec.verdict?.drift?.scenes) ? rec.verdict.drift.scenes.filter(x => x && typeof x.scene === 'string').sort((a, b) => (Number(b.share) || 0) - (Number(a.share) || 0) || (Number(b.moved) || 0) - (Number(a.moved) || 0)).map(x => x.scene) : [];
+  const attempt = Number.isInteger(rec.try) ? rec.try : Number.isInteger(rec.attempt) ? rec.attempt : null;
   return {
-    attempt: Number.isInteger(rec.try) ? rec.try : Number.isInteger(rec.attempt) ? rec.attempt : null, record: Number.isInteger(rec.attempt) ? rec.attempt : null,
-    phase: safe(rec.phase, 20), needs: k === null ? null : NEEDS.has(k) ? k : 'other', share: Number.isFinite(rec.outcome?.share) ? rec.outcome.share : null,
-    defectGone: rec.outcome?.defectGone === true, commit, before: run(rec.p0?.run), after: run(rec.p1?.run),
-    // a fix that landed (the loop said fixed, or kept it for the person): undone by the AI's `fix --undo` (design §3.4)
-    landed: !!commit && (rec.phase === 'fixed' || (rec.phase === 'needs-you' && k === 'a')),
+    attempt, record: Number.isInteger(rec.attempt) ? rec.attempt : null,
+    phase: safe(rec.phase, 20), needs: k === null ? null : NEEDS.has(k) ? k : 'other', kind: k ? safe(k, 20) : null, line: k && !NEEDS.has(k) && rec.outcome?.line ? safe(rec.outcome.line, 600) : null,
+    share: Number.isFinite(rec.outcome?.share) ? rec.outcome.share : null,
+    defectGone: rec.outcome?.defectGone === true, commit, before: run(rec.p0?.run), after: run(rec.p1?.run), drift: drift.slice(0, 20),
+    // the after of an attempt that was undone (b): its screens are that attempt's, not the code now
+    afterLabel: rec.outcome?.revert || rec.revert ? `Attempt ${attempt ?? '?'} (undone)` : null,
+    // a fix whose commit is still on the branch, not undone (fixed, or kept for the person, whatever was decided since):
+    // undone by the AI's `fix --undo` (design §3.4)
+    landed: !!commit && reachable && !rec.outcome?.revert && !rec.revert && (rec.phase === 'fixed' || rec.phase === 'needs-you'),
   };
 }
 
@@ -372,16 +384,19 @@ export function groupDetail(model, id) {
 }
 
 // Before and after a fix (design §3.4), for both viewports: the probes P0 and P1 of the group's latest attempt, the same
-// screen of each (the group's own route, its normal state first). → [{ viewport, before, after }] or [].
-function compareOf(model, g) {
+// screen of each — the screen where the fix changed the most (drift is measured over every route of the scope), else
+// the group's own route, its normal state first. → [{ viewport, route, before, after }] or [].
+export function compareOf(model, g) {
   if (!g.fix?.before || !g.fix?.after) return [];
   const a = model.evidenceOf(g.fix.before), b = model.evidenceOf(g.fix.after);
   const routes = new Set(g._rows.map(r => r.route).filter(Boolean));
+  const drift = g.fix.drift || [];
   const out = [];
   for (const vp of VPS) {
-    const cands = b.scenes.filter(s => s.viewport === vp && routes.has(s.route) && s.img && a.sceneById.get(s.id)?.img)
-      .sort((x, y) => rank(STATES, x.state) - rank(STATES, y.state) || cmp(x.id, y.id));
-    if (cands.length) out.push({ viewport: vp, before: sceneOut(a.sceneById.get(cands[0].id)), after: sceneOut(cands[0]) });
+    const both = b.scenes.filter(s => s.viewport === vp && s.img && a.sceneById.get(s.id)?.img);
+    const changed = drift.map(id => both.find(s => s.id === id)).filter(Boolean);
+    const cands = changed.length ? changed : both.filter(s => routes.has(s.route)).sort((x, y) => rank(STATES, x.state) - rank(STATES, y.state) || cmp(x.id, y.id));
+    if (cands.length) out.push({ viewport: vp, route: safe(cands[0].route, 200), before: sceneOut(a.sceneById.get(cands[0].id)), after: sceneOut(cands[0]) });
   }
   return out;
 }
