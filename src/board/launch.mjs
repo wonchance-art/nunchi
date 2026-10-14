@@ -23,7 +23,9 @@ export function serverEnv(env = process.env) {
   for (const [k, v] of Object.entries(env)) if (SERVER_ENV.test(k) && typeof v === 'string') out[k] = v;
   return out;
 }
-const real = p => { try { return realpathSync(p); } catch { return resolve(p); } };
+// The real path as the file system has it: `.native` gives macOS's own case and Windows' long names, so one project
+// typed two ways is one project (the JS realpath keeps the case it was given).
+export const real = p => { try { return realpathSync.native(p); } catch { return resolve(p); } };
 
 // One request over the control socket: → the parsed reply, or null (no answer within `ms`).
 export function ask(socket, cmd, ms = 1500) {

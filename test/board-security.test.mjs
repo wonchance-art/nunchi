@@ -10,7 +10,7 @@ import { networkInterfaces } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
 import { startBoard, CSP, SECURITY_HEADERS, MAX_BODY, LIMITS, MAX_STREAMS, openerCommand, openerEnv, sameSecret, CODE_TTL_MS } from '../src/board/server.mjs';
-import { openBoard, stopBoards, serverEnv } from '../src/board/launch.mjs';
+import { openBoard, stopBoards, serverEnv, real } from '../src/board/launch.mjs';
 import { smallProject, jpeg, writeRun } from './fixtures/board-project.mjs';
 
 const POSIX = process.platform !== 'win32';
@@ -481,6 +481,16 @@ test('§3.1 nunchi open twice at once starts one board (a launch lock); a runnin
     assert.match(cli, new RegExp(`--port ${c.portIgnored} is ignored: the running board keeps port ${a.port}`));
     assert.ok(!readdirSync(join(stateDir, 'boards')).some(n => n.startsWith('launch.lock.d')), 'the lock is given back');
   } finally { await stopBoards(stateDir, p.root); }
+});
+
+test('§3.1 nunchi open compares projects by the file system\'s own real path (macOS case, Windows long names)', { skip: !POSIX && 'symlinks need privileges on Windows' }, () => {
+  const p = smallProject();
+  const link = join(p.root, '..', `${p.root.split(/[\\/]/).pop()}-link`);
+  symlinkSync(p.root, link);
+  assert.equal(real(link), realpathSync.native(p.root));
+  assert.equal(real(join(p.root, 'not-there')), join(p.root, 'not-there'), 'a path that does not exist is itself');
+  // the native call (a JS realpath keeps the case it was given, so on macOS one project typed two ways was two)
+  assert.match(readFileSync(fileURLToPath(new URL('../src/board/launch.mjs', import.meta.url)), 'utf8'), /export const real = p => \{ try \{ return realpathSync\.native\(p\);/);
 });
 
 test('§3.1 the browser opener: only a board link with a launch code, by an absolute path from a fixed list (never PATH, $BROWSER or ComSpec)', () => {
