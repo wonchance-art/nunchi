@@ -481,8 +481,10 @@ if (cmd === 'setup') {
     const sum = summary({ state, rows, groups: gs, stream: st.root.stream, runsDir: st.runsDir, git: runner });
     if (args.json) console.log(JSON.stringify({ run: latest, blind, kinds: kinds.map(k => ({ ...k, routes: [...k.routes].sort() })), groups: shown, ...(collapsed.length ? { notDoubleChecked: collapsed.map(g => g.group) } : {}), summary: sum }, null, 2));
     else {
-      const count = st => rows.filter(r => r.status === st).length;
-      console.log(`run ${latest} · ${rows.length} unique defects in ${gs.length} groups · open ${count('open') + count('regressed')} · to fix ${count('to-fix')} · fixed ${count('fixed')} · kept ${count('kept')} · dismissed ${count('dismissed')}`);
+      // groups by status, as the board's Decisions panel counts them (summary.byStatus: a group with rows in two
+      // statuses counts in both; "came back" counts as open)
+      const b = sum.byStatus;
+      console.log(`run ${latest} · ${rows.length} unique defects in ${gs.length} groups · groups open ${b.open} · to fix ${b['to-fix']} · later ${b.held} · fixed ${b.fixed} · kept ${b.kept} · not a problem ${b.dismissed}`);
       console.log(`ready to ship? ${sum.verdict.text}`);
       const blindWhy = { 'app-unreachable': 'the app did not load', 'recording-stale': 'the recording no longer had the data', 'one-page': 'most screens showed one and the same page (another app or an error page at that address?)' };
       if (blind) console.log(`run ${latest} marked nothing fixed: ${blindWhy[blind] || blind}`);

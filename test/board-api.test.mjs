@@ -120,6 +120,22 @@ test('api: a live claim is part of the version: written, it shows; expired by th
   } finally { await b.close(); }
 });
 
+test('words: the Decisions panel, the tab counts and the findings header count the same thing (groups by status)', async () => {
+  const p = smallProject();
+  assert.equal((await cli(p.root, 'decide', gid(p, 'dead-href'), 'fix')).code, 0);
+  assert.equal((await cli(p.root, 'decide', gid(p, 'raw-error-text'), 'keep', '--reason', 'intended')).code, 0);
+  assert.equal((await cli(p.root, 'decide', gid(p, 'target-size-min'), 'later')).code, 0);
+  const { b, call } = await board(p);
+  try {
+    const s = (await call('/api/summary')).json, tabs = (await call('/api/groups?status=all')).json.counts;
+    for (const k of ['open', 'to-fix', 'held', 'kept', 'dismissed', 'fixed']) assert.equal(s.byStatus[k], tabs[k] || 0, `${k}: panel and tab agree`);
+    const head = (await cli(p.root, 'findings')).stdout.split('\n')[0];
+    const b2 = s.byStatus;
+    assert.match(head, new RegExp(`groups open ${b2.open} · to fix ${b2['to-fix']} · later ${b2.held} · fixed ${b2.fixed} · kept ${b2.kept} · not a problem ${b2.dismissed}$`), head);
+    assert.deepEqual([b2['to-fix'], b2.kept, b2.held], [1, 1, 1]);
+  } finally { await b.close(); }
+});
+
 test('api: /api/summary is the summary findings --json carries (one function)', async () => {
   const p = smallProject();
   const { b, call } = await board(p);

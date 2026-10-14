@@ -66,13 +66,15 @@ export function summary({ state, rows, groups, stream = 'main', runsDir, git = n
   const notSeen = scenes.filter(s => s.status !== 'captured');
   const problems = (Array.isArray(manifest.health?.problems) ? manifest.health.problems : []).map(p => ({ status: String(p.status), scenes: Number(p.scenes) || 0, of: Number(p.of) || 0 }));
 
-  // groups, by severity and by status (a group "came back" counts as open), and why each stands in the way
+  // groups, by severity and by status, and why each stands in the way. Groups, never rows, and counted as the board's
+  // tabs count them: a group with rows in two statuses counts in both; "came back" and stale count as open
   const bySeverity = { blocker: 0, high: 0, medium: 0, low: 0 };
   const byStatus = { open: 0, 'to-fix': 0, held: 0, kept: 0, dismissed: 0, fixed: 0, stale: 0 };
   const standing = {};
   for (const x of STANDING) standing[x] = { blocker: 0, high: 0, medium: 0, low: 0 };
   for (const g of groups) {
     const keys = new Set(Object.keys(g.statuses).map(s => (s === 'regressed' ? 'open' : s)));
+    if (keys.has('stale')) keys.add('open');
     for (const k of keys) if (Object.hasOwn(byStatus, k)) byStatus[k]++;
     if ([...keys].some(k => ACTIVE.has(k))) bySeverity[g.severity] = (bySeverity[g.severity] || 0) + 1;
     const why = standingOf(g, rows);
