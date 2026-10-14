@@ -447,7 +447,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     if (confirmed !== true) {                                   // only a real true skips the questions
       const flat = mine.flat().filter(r => !r.goneAt);
       // a live claim on one of them: asked once, in the same question as a dismissal's (never skipped by it)
-      const claims = decision !== 'fix' && decision !== 'reopen' ? model().claims : new Map();
+      const claims = decision !== 'fix' && decision !== 'reopen' ? readClaims(claimsDir, now()) : new Map();
       const fixing = mine.map(rs => claims.get(rs[0]?.group)).find(Boolean);
       if (DISMISS[decision]) {
         const blocker = mine.filter(rs => rs.some(r => protectOf(r) === 'blocker')).length, l9 = mine.filter(rs => rs.some(r => r.lens === 'L9')).length;
