@@ -525,7 +525,8 @@ async function decideNow(ids, decision, reason, { confirmed = false, ms: given }
     if (e.status !== 401) announce(`Not recorded: ${e.message}`);
     return;
   }
-  S.undo = { ids, decision, reason, batch: r.batch, decided: r.decided };
+  // what Z undoes: these decisions, by id (the server reopens exactly their targets, if nothing was decided since)
+  S.undo = decision === 'reopen' ? null : { ids, decisions: r.made.map(m => m.id), decision, reason, batch: r.batch, decided: r.decided };
   S.selection.clear();
   // the rows take their new status at once; the list keeps its order and members
   const st = { fix: 'to-fix', keep: 'kept', 'false-positive': 'dismissed', hold: 'held', reopen: 'open' }[decision];
@@ -546,10 +547,12 @@ async function undo() {
   if (inflight) await inflight.catch(() => {});
   const u = S.undo;
   if (!u) return announce('Nothing to undo');
-  S.undo = null;
   hideToast();
-  try { await api('/api/decide', { method: 'POST', body: { targets: u.ids, decision: 'reopen', reason: null, ms: null, confirmed: true } }); }
-  catch (e) { return announce(`Not undone: ${e.message}`); }
+  try { await api('/api/undo', { method: 'POST', body: { decisions: u.decisions } }); }
+  catch (e) {
+    if (e.status === 409) { announce('Not undone: it was decided again since'); await loadList(); return renderFindings(true); }
+    return announce(`Not undone: ${e.message}`);
+  }
   for (const id of u.ids) { const g = S.list?.groups[id]; if (g) S.list.groups[id] = { ...g, status: 'open', statuses: { open: 1 }, decision: null }; }
   if (S.route.view === 'findings') { updateRowsInPlace(); setFocus(u.ids[0]); }
   announce(`Undone: ${W.plural(u.ids.length, 'group')} back to open`);
@@ -573,7 +576,8 @@ function toast(text, act) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(hideToast, 6000);
 }
-function hideToast() { $('toast').hidden = true; clearTimeout(toastTimer); }
+// Undo lasts as long as its toast: once the toast is gone, Z has nothing to undo.
+function hideToast() { $('toast').hidden = true; clearTimeout(toastTimer); S.undo = null; }
 
 // A question that cannot misfire: the safe choice has the focus.
 function ask(text, ok = 'Yes') {

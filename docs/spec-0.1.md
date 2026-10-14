@@ -1142,9 +1142,9 @@ sections; and every group of the ledger by id, so the page can update rows it sh
 `GET /api/groups/:id` (instances with their screen, box and whether it can be drawn; screens with evidence
 addresses; evidence details; decisions on the group or its fingerprints with how each was made; code location),
 `GET /api/screens` (the latest run's screens with the export's badges and numbered findings),
-`GET /evidence/…`, `POST /api/decide`, `POST /api/confirm`, `POST /api/approve-checks`, `GET /api/live`, and
-`GET /api/generation` (the polling fallback). Added to the design's table: `POST /api/session`, `/api/screens`,
-`/api/generation`. In label mode only `/api/label/pool`, `/api/label/item/:id`, `POST /api/label`, the evidence and
+`GET /evidence/…`, `POST /api/decide`, `POST /api/undo`, `POST /api/confirm`, `POST /api/approve-checks`,
+`GET /api/live`, and `GET /api/generation` (the polling fallback). Added to the design's table: `POST /api/session`,
+`/api/screens`, `/api/generation`, `/api/undo`. In label mode only `/api/label/pool`, `/api/label/item/:id`, `POST /api/label`, the evidence and
 the live endpoints answer (the others 404, so nothing unblinds).
 - *Live updates:* the server watches the state folder (not recursively, 200 ms debounce) and polls every 3 s; what it
   compares is the generation **plus a signature of `.nunchi/decisions`** (names and times of its folders), because a
@@ -1202,7 +1202,11 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   the previous full check, labelled "Since last full check (run 0007)" (that run), or "First full check (run N)".
 - *Keys:* F, W, Shift+W, X, Shift+X, S, always with an explicit reason; after each decision a 6-second toast with the
   other reason and Undo (Z); Z writes `reopen` for the last decision or batch (as the design says; restoring an
-  earlier decision would write the agent's dismissal back as the board's). Buttons carry the permanent sub-labels.
+  earlier decision would write the agent's dismissal back as the board's), and only while its toast shows. The page
+  sends the ids of the decisions it made (`POST /api/undo {decisions}`); the server reopens exactly their targets (the
+  fingerprints of a group decided on its fingerprints), only for decisions approved with channel `board`, and answers
+  409 unless each target still shows that decision (decided again since, here, in the terminal or through git:
+  nothing is undone). Buttons carry the permanent sub-labels.
 - *Frozen list:* while Findings or Detail is open, order and members stay; rows take new statuses in place; a banner
   says "Updated: 2 new, 1 fixed · Show (R)". Decisions target group ids.
 - *Batches:* group by kind (default), root-cause file (the grounded file of an AI item, else "No file known"),

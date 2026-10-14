@@ -29,7 +29,7 @@ import { buildBoardModel, groupList, groupDetail, screenWall, safe, readClaims, 
 import { BASE_CSS, BOARD_CSS } from './look.mjs';
 import { decidedText, CAP_MS } from './shared.mjs';
 import * as P from '../project.mjs';
-import { DECISIONS, protectOf, newId } from '../ledger.mjs';
+import { DECISIONS, protectOf, newId, approvalKey } from '../ledger.mjs';
 import { listRuns, workTree } from '../runs.mjs';
 import { readGeneration } from '../state.mjs';
 import { readManifest, sceneDir } from '../hunt.mjs';
@@ -324,6 +324,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     if (get && gm) { const d = groupDetail(model(), gm[1]); return d ? send(res, 200, d) : fail(res, 404, 'no such group'); }
     if (get && path === '/api/screens') return send(res, 200, screenWall(model()));
     if (post && path === '/api/decide') return decide(res, await readJsonBody(req));
+    if (post && path === '/api/undo') return undoDecisions(res, await readJsonBody(req));
     if (post && path === '/api/confirm') return confirm(res, await readJsonBody(req));
     if (post && path === '/api/approve-checks') return approveChecks(res, await readJsonBody(req));
     return fail(res, 404, 'not found');
@@ -458,6 +459,28 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
       try { recordDecisionTime(metricsPath(stateDir), { id: batch || made[0].id, ms, size: ids.length, later: decision === 'hold' }); } catch {}
     }
     return send(res, 200, { ok: true, batch, made: made.map(d => ({ id: d.id, target: d.target, decision: d.decision, reason: d.reason })), decided: decidedText(decision, reason) });
+  }
+
+  // Undo (Z): the decisions named by id, made in the board, are reopened on exactly their targets, only while each is
+  // still what its target shows; anything decided since (here, in the terminal, through git) makes it 409.
+  const DECISION_ID = /^[0-9a-z]{1,16}-[0-9a-f]{6}$/;
+  function undoDecisions(res, body) {
+    const ids = body.decisions;
+    if (!Array.isArray(ids) || !ids.length || ids.length > 1000 || !ids.every(x => typeof x === 'string' && DECISION_ID.test(x)) || new Set(ids).size !== ids.length) return fail(res, 400, 'decisions: the ids of the decisions to undo');
+    const led = P.loadLedger(nunchiDir, { root: project, warn: w => warnings.add(w) });
+    const { rows } = P.ledgerView(led);
+    const made = [];
+    for (const id of ids) {
+      const same = led.decisions.filter(d => d.id === id);
+      // made here in the board: its approval says so (a file's own channel field could have come through git)
+      const d = same.length === 1 && same[0].decision !== 'reopen' && led.channels.get(approvalKey(same[0])) === 'board' && led.approved.has(approvalKey(same[0])) ? same[0] : null;
+      const mine = d ? rows.filter(r => (d.target.group ? r.group === d.target.group : r.fp === d.target.fp)) : [];
+      if (!d || !mine.length || !mine.every(r => r.decision?.id === id)) return fail(res, 409, 'decided again since: nothing was undone', { stale: true });
+      made.push(d);
+    }
+    const out = P.recordDecisions(led, { targets: made.map(d => d.target), decision: 'reopen', by, channel: 'board', batch: made.length > 1 ? newId() : null });
+    cache = null;
+    return send(res, 200, { ok: true, made: out.map(d => ({ id: d.id, target: d.target, decision: d.decision })) });
   }
 
   function confirm(res, body) {

@@ -86,6 +86,15 @@ test('board e2e: the one-time link opens it, a key decides, Z undoes — the led
     assert.deepEqual([row.status, row.decision], ['open', null], 'reopened in the ledger');
     const metrics = JSON.parse(readFileSync(join(p.nunchi, 'state', 'metrics.json'), 'utf8'));
     assert.equal(Object.keys(metrics.singles).length, 1, 'the decision time was kept (the undo is not a decision)');
+    // undo lasts as long as its toast: once it is gone, Z undoes nothing
+    await page.focus(`#row-${raw}`);
+    await page.keyboard.press('w');
+    await until(() => decisions(p.nunchi).length === 3);
+    await page.waitForSelector('#toast[hidden]', { state: 'attached', timeout: 9000 });
+    await page.keyboard.press('z');
+    assert.equal(await until(async () => (await page.textContent('#announce')) === 'Nothing to undo' && 'Nothing to undo'), 'Nothing to undo');
+    await new Promise(r => setTimeout(r, 400));
+    assert.equal(decisions(p.nunchi).length, 3, 'nothing written');
     // app text is data: the hostile claim is text, never markup
     await page.click('a[data-nav=findings]');
     await page.evaluate(() => { for (const d of document.querySelectorAll('details')) d.open = true; });

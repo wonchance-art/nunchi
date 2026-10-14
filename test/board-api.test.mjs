@@ -292,6 +292,39 @@ test('decide parity: a group holding an AI finding nobody double-checked is deci
   assert.deepEqual(decisions(one.nunchi).map(strip).sort((a, b) => (a.target.fp < b.target.fp ? -1 : 1)), decisions(two.nunchi).map(strip).sort((a, b) => (a.target.fp < b.target.fp ? -1 : 1)));
 });
 
+test('api: /api/undo reopens exactly the targets of the decisions named, only while each is still what its target shows', async () => {
+  const p = smallProject();
+  const ai = withAi(p, [
+    { lens: 'L6', rule: 'L6.vague-error', scene: p.scenes[3], selector: 'main p.err', box: [40, 300, 400, 24], claim: 'one', status: 'claimed', file: 'app/garden/page.tsx', line: 12 },
+    { lens: 'L6', rule: 'L6.vague-error', scene: p.scenes[0], selector: 'main p.note', box: [40, 500, 400, 24], claim: 'two', status: 'claimed', file: 'app/garden/page.tsx', line: 30 },
+  ]);
+  const { b, call } = await board(p);
+  const status = () => P.ledgerView(P.loadLedger(p.nunchi, { root: p.root })).rows.filter(r => r.group === ai[0].group).map(r => r.status);
+  try {
+    // an unchecked AI group, decided on its fingerprints: undo reopens those fingerprints (a group reopen would not)
+    const r = await call('/api/decide', { targets: [ai[0].group], decision: 'fix', reason: null, confirmed: true });
+    assert.deepEqual(status(), ['to-fix', 'to-fix']);
+    const u = await call('/api/undo', { decisions: r.json.made.map(m => m.id) });
+    assert.equal(u.status, 200);
+    assert.deepEqual(u.json.made.map(m => m.target), r.json.made.map(m => m.target), 'the same targets');
+    assert.deepEqual(status(), ['open', 'open']);
+    assert.equal((await call('/api/undo', { decisions: r.json.made.map(m => m.id) })).status, 409, 'undone already');
+    // decided again since (in the terminal): Z must not reopen that newer decision
+    const g = gid(p, 'dead-href');
+    const k = await call('/api/decide', { targets: [g], decision: 'keep', reason: 'intended' });
+    assert.equal((await cli(p.root, 'decide', g, 'fix')).code, 0);
+    const late = await call('/api/undo', { decisions: k.json.made.map(m => m.id) });
+    assert.deepEqual([late.status, late.json.stale], [409, true]);
+    assert.equal(P.ledgerView(P.loadLedger(p.nunchi, { root: p.root })).rows.find(r => r.group === g).status, 'to-fix', 'the terminal\'s decision stands');
+    // only decisions made in the board, by id
+    const cliMade = decisions(p.nunchi).find(d => d.channel === 'cli-agent');
+    assert.equal((await call('/api/undo', { decisions: [cliMade.id] })).status, 409, 'a decision from the terminal is not undone here');
+    for (const bad of [{}, { decisions: [] }, { decisions: ['../x'] }, { decisions: [g] }]) assert.equal((await call('/api/undo', bad)).status, 400, JSON.stringify(bad));
+  } finally { await b.close(); }
+  const js = readFileSync(fileURLToPath(new URL('../src/board/assets/board.js', import.meta.url)), 'utf8');
+  assert.match(js, /function hideToast\(\) \{[^}]*S\.undo = null;/, 'undo lasts as long as its toast');
+});
+
 test('decide parity: the board and nunchi decide write the same decision through the same functions; only who-and-how differ', async () => {
   const one = smallProject(), two = smallProject();
   const g = gid(one, 'raw-error-text');
