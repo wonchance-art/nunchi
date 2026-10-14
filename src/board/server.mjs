@@ -51,8 +51,8 @@ export const CODE_TTL_MS = 120e3;
 export const IDLE_MS = 2 * 3600e3;
 export const MAX_SESSIONS = 32, MAX_STREAMS = 8;
 // rate limits: [events, per milliseconds] — wrong keys or links (then a minute's wait for requests without a key),
-// all requests, writes, link exchanges
-export const LIMITS = { fail: [30, 60e3], req: [600, 10e3], write: [60, 10e3], session: [20, 60e3] };
+// requests and writes with the key, failed link trades, requests without a key (a budget of their own)
+export const LIMITS = { fail: [30, 60e3], req: [600, 10e3], write: [60, 10e3], session: [20, 60e3], anon: [60, 10e3] };
 const EVIDENCE_FILES = { 'full.jpg': 'image/jpeg', 'top.jpg': 'image/jpeg' };
 const EVIDENCE_MAX = 32 * 1024 * 1024;
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -245,39 +245,47 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     if (req.method === 'OPTIONS') return fail(res, 405, 'no CORS here', { allow: 'GET, POST' });
     if (req.method !== 'GET' && req.method !== 'POST') return fail(res, 405, 'only GET and POST');
     const t = now();
-    // after too many requests with a wrong key or link, requests without a valid key wait a minute (a valid key is
-    // never locked out, so another process cannot shut the person out of their board)
-    const keyed = tokenOk(req);
-    if (!keyed && t < lockedUntil) return fail(res, 429, 'too many requests without a valid key; wait a minute');
-    if (!limits.req.hit(t)) return fail(res, 429, 'too many requests');
     let u;
     try { u = new URL(`${origin}${req.url}`); } catch { return fail(res, 400, 'bad request target'); }
     if (u.origin !== origin) return fail(res, 400, 'bad request target');
     const path = u.pathname;
     if (req.method === 'GET' && Number(req.headers['content-length'] || 0) > 0) return fail(res, 413, 'a GET has no body');
 
-    // the page shell: no data, no token
+    // the page shell: no data, no token, and never locked out or limited (the same bytes for everyone), so a flood of
+    // requests without a key cannot keep the person from loading their board
     if (req.method === 'GET' && files[path] && !u.search) return send(res, files[path].status || 200, files[path].body, files[path].type);
 
     if (req.method === 'POST') {
-      if (path !== '/api/session' && !limits.write.hit(t)) return fail(res, 429, 'too many changes at once');
       const ct = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
       if (ct !== 'application/json') return fail(res, 415, 'writes are application/json');
       if (req.headers.origin !== origin) return fail(res, 403, 'writes come from the board itself only');
     }
-    // the one route without a token: trading a launch code for one
+    // the one route without a token: trading a launch code for one. The code is tried first, so a fresh link always
+    // works; only failed trades are limited (and, after too many, wait out the lockout)
     if (req.method === 'POST' && path === '/api/session') {
-      if (!limits.session.hit(t)) return fail(res, 429, 'too many attempts');
       const body = await readJsonBody(req);
-      if (!spendCode(body.code)) { if (!limits.fail.hit(t)) lockedUntil = t + 60e3; return fail(res, 401, 'this link was used already or has expired: run nunchi open for a fresh one'); }
-      const token = randomBytes(32).toString('hex');
-      sessions.push(token);
-      while (sessions.length > MAX_SESSIONS) sessions.shift();
-      lastActive = t;
-      return send(res, 200, { token, mode, ...(mode === 'label' ? { labeller } : {}) });
+      if (spendCode(body.code)) {
+        const token = randomBytes(32).toString('hex');
+        sessions.push(token);
+        while (sessions.length > MAX_SESSIONS) sessions.shift();
+        lastActive = t;
+        return send(res, 200, { token, mode, ...(mode === 'label' ? { labeller } : {}) });
+      }
+      if (t < lockedUntil || !limits.session.hit(t)) return fail(res, 429, 'too many attempts; wait a minute');
+      if (!limits.fail.hit(t)) lockedUntil = t + 60e3;
+      return fail(res, 401, 'this link was used already or has expired: run nunchi open for a fresh one');
     }
-    // a wrong key counts towards the lockout; a request with no key at all (what a browser fetches by itself) does not
-    if (!keyed) { if (req.headers['x-nunchi-token'] !== undefined && !limits.fail.hit(t)) lockedUntil = t + 60e3; return fail(res, 401, 'no key: open the board with nunchi open'); }
+    // without a valid key: a budget of their own (they never use up the person's), the lockout after too many wrong
+    // keys, and a wrong key counts towards it; a request with no key at all (what a browser fetches by itself) does not
+    if (!tokenOk(req)) {
+      if (t < lockedUntil) return fail(res, 429, 'too many requests without a valid key; wait a minute');
+      if (!limits.anon.hit(t)) return fail(res, 429, 'too many requests without a key');
+      if (req.headers['x-nunchi-token'] !== undefined && !limits.fail.hit(t)) lockedUntil = t + 60e3;
+      return fail(res, 401, 'no key: open the board with nunchi open');
+    }
+    // with the key: the person's budget for requests and writes (a valid key is never locked out)
+    if (!limits.req.hit(t)) return fail(res, 429, 'too many requests');
+    if (req.method === 'POST' && !limits.write.hit(t)) return fail(res, 429, 'too many changes at once');
     // the live stream and its polling fallback are not the person doing something: they do not keep the board up
     if (path !== '/api/live' && path !== '/api/generation') lastActive = t;
     return route(req, res, u, path);

@@ -1112,8 +1112,11 @@ never `NODE_*`, `LD_*`, `DYLD_*`, `BROWSER` or `GIT_*` (tested on `/proc/<pid>/e
   it starts like a JPEG (415 otherwise). No listing, no SVG, nothing else.
 - *Rate limits:* 30 wrong keys or links a minute, then a minute in which requests **without** a valid key get 429 (a
   valid key is never locked out, so another process cannot shut the person out); a request with no key at all (what
-  the browser fetches by itself) is refused but not counted; 600 requests and 60 writes per 10 s; 20 link trades a
-  minute; 8 live streams.
+  the browser fetches by itself) is refused but not counted as a guess. Requests without a key have a budget of their
+  own (60 per 10 s), so they never use up the person's: 600 requests and 60 writes per 10 s, counted only for
+  requests with a valid key. The page shell is never limited or locked out (the same bytes for everyone). A link
+  trade tries the code first, so a fresh link always works; failed trades are limited to 20 a minute and wait out the
+  lockout. 8 live streams.
 - *Strings:* every string the board's code did not write (app text, selectors, claims, decision `by` and `note`, lens
   text, URLs) is redacted (credential URL parts and query values, then secret shapes) and clipped on the server, and
   set with `textContent` on the page. Secret findings show location and kind only. App URLs are never links; the

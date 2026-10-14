@@ -266,6 +266,31 @@ test('§3.2 rate limits: wrong keys lock out requests without a key (never the p
   } finally { await second.b.close(); }
 });
 
+test('§3.2 rate limits: requests without a key have a budget of their own, never lock the person out of the page shell, and never stop a fresh link', async () => {
+  const { b, origin, code } = await board();
+  const trade = c => raw(b.port, { method: 'POST', path: '/api/session', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: c }) });
+  try {
+    // wrong keys until locked out: the page shell is still served and a fresh link still opens the board
+    for (let i = 0; i < LIMITS.fail[0] + 1; i++) await raw(b.port, { path: '/api/summary', headers: auth('1'.repeat(64)) });
+    assert.equal((await raw(b.port, { path: '/api/summary', headers: auth('1'.repeat(64)) })).status, 429, 'locked out');
+    for (const path of ['/', '/assets/board.js', '/assets/shared.mjs', '/assets/board.css']) assert.equal((await raw(b.port, { path })).status, 200, `${path} is served during a lockout`);
+    assert.equal((await trade(code())).status, 200, 'a fresh link opens the board during a lockout');
+    // failed trades are limited; a good one never is
+    const failed = [];
+    for (let i = 0; i < LIMITS.session[0] + 5; i++) failed.push((await trade('3'.repeat(64))).status);
+    assert.ok(failed.every(s => s === 429), 'link guessing waits out the lockout');
+    assert.equal((await trade(code())).status, 200, 'a fresh link still works');
+  } finally { await b.close(); }
+  // a flood without a key: refused on its own budget; the person's requests go through
+  const s = await board();
+  try {
+    let n429 = 0;
+    for (let i = 0; i < LIMITS.req[0] + 50; i++) if ((await raw(s.b.port, { path: '/api/generation' })).status === 429) n429++;
+    assert.ok(n429 >= LIMITS.req[0] + 50 - LIMITS.anon[0], `requests without a key are capped at ${LIMITS.anon[0]} per 10 s (${n429} refused)`);
+    assert.equal((await raw(s.b.port, { path: '/api/generation', headers: auth(s.token) })).status, 200, 'the person\'s budget is untouched');
+  } finally { await s.b.close(); }
+});
+
 test('§3.2 rate limits: what a browser fetches by itself (the favicon, on every move within the page) never locks a fresh link out', async () => {
   const { b, origin, code } = await board();
   try {
