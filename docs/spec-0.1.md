@@ -956,7 +956,8 @@ else is derived from those, the same whatever order the folds come in:
 - *Group decisions* (view): one covers an AI item only when the item is double-checked (confirmed, not suspect, not
   from a run with too few decoys) or
   the decision came after its latest verification (`verification.at`, when that verdict was folded; a claimed-only
-  item has none); on a blocker or L9 item never a fingerprint first folded after the decision (`addedAt`). Otherwise
+  item has none, and a verification from a run with too few decoys counts as none either, since it is no double-check:
+  M3, 2026-10-15 KST); on a blocker or L9 item never a fingerprint first folded after the decision (`addedAt`). Otherwise
   the row's `note` says why. A decision on the fingerprint applies as for rule items.
 - *Fixed* only from a re-check (§4.1): a capture's silence never fixes an AI item, and the rule fold never touches
   one. `lastSeen` moves with a claim, a `still-there` or an `unchanged`; `lookedAt` is the last hunt or re-check.

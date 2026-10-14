@@ -971,8 +971,10 @@ export function view(state, decisions, approved = new Set(), { now = Date.now(),
       if (serious && !approved.has(keyOfDecision(x)) && (x.decision === 'keep' || x.decision === 'false-positive')) { note ||= `a ${x.decision} decision came through git and needs approval on this machine`; continue; }
       if (ai && !x.target.fp) {
         if (serious && Number.isFinite(item.addedAt) && timeOf(x) < item.addedAt) { note ||= `a group ${x.decision} decision made before this AI finding was first seen does not cover it (blocker or L9)`; continue; }
-        const at = item.verification?.at;
-        if (!checkedAi(item) && !(Number.isFinite(at) && timeOf(x) >= at)) { note ||= `a group ${x.decision} decision does not cover an AI finding that was not double-checked when it was made`; continue; }
+        // a verification from a run with too few decoys to check the checker is no double-check (verify.mjs): a group
+        // decision made after it covers the finding no more than one made after a bare claim does
+        const at = item.verification?.tooFewDecoys ? null : item.verification?.at;
+        if (!checkedAi(item) && !(Number.isFinite(at) && timeOf(x) >= at)) { note ||= item.verification?.tooFewDecoys ? `a group ${x.decision} decision does not cover an AI finding verified with too few decoys to check the checker (not double-checked)` : `a group ${x.decision} decision does not cover an AI finding that was not double-checked when it was made`; continue; }
       }
       d = x;
     }
