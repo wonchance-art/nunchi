@@ -1031,7 +1031,13 @@ puts the images in `index.html` as data URIs instead (one file; pegroom: 8 MB ag
   (`https://user:pass@`) are redacted (`redactText`), then secret shapes are replaced by `[secret-shaped: <kind>]`,
   then it is clipped, then HTML-escaped. `scrubSecrets` (`src/rules.mjs`) is the one scrubber for capture and export
   alike: whole private key blocks of every kind, Stripe secret and restricted keys, AWS access key ids and secret keys,
-  GitHub, Slack, Google, Anthropic and OpenAI keys, `Authorization:`/`Bearer` values that hold a digit, any JWT (also
+  GitHub, Slack, Google, Anthropic and OpenAI keys, `Authorization:` values after a scheme (`Basic`, `Bearer`, `Token`,
+  `Digest`, `Negotiate`: any value, a digitless base64 `user:password` included) or holding a digit, `Bearer` values
+  that hold a digit, cookie headers with a `name=value` pair (`Cookie:`, `Set-Cookie:`, `document.cookie =`: the whole
+  value, `cookie`), headers named like a key or token (`x-api-key`, `api_key`, `apiKey`, `X-Auth-Token`,
+  `x-csrf-token`, `private-token`, `client_secret` …: a value with a digit or of 20+ characters, `api-key`), a URL path
+  segment of 24+ characters mixing lower case, upper case and digits or of 32+ hex digits (`url-path-token`; review of
+  PR #29, 2026-10-15 KST), any JWT (also
   split across lines), each after no letter or digit; `selector-secrets.mjs` runs it first and then the same kinds
   with no boundary at all, plus `long-token`. It is wider than the L9 bundle scan, which it does not change. Objects
   and arrays are redacted leaf by leaf before they are serialised. URLs are never links; secret findings show

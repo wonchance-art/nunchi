@@ -174,17 +174,31 @@ export const SCRUB_PATTERNS = [
 const SCRUB_JWT = new RegExp(`${NB}eyJ[A-Za-z0-9_-]{8,}\\s*\\.\\s*eyJ[A-Za-z0-9_-]{8,}\\s*\\.\\s*[A-Za-z0-9_-]{8,}`, 'g');
 // Values after a credential's name: `aws_secret_access_key = …`, `Authorization: Bearer …`, a bare `Bearer …`.
 // A credential value holds a digit somewhere; page text like "Authorization: required" is left alone.
+// After a scheme (`Authorization: Basic …`) the value is a credential whatever it holds: base64 of user:password often
+// has no digit.
+// A cookie header (`Cookie:`, `Set-Cookie:`, `document.cookie =`) with a name=value pair: the whole value, every pair.
+// A header named like a key or token (`x-api-key`, `api_key`, `X-Auth-Token`, `x-csrf-token`, `private-token`): its
+// value, when it has a digit or is 20 characters or more.
+const TOKEN_HEADER = '(?<![A-Za-z0-9])(?:x-)?(?:[a-z0-9]{1,24}[-_]){0,4}(?:api[-_]?key|apikey|auth[-_]?token|access[-_]?token|refresh[-_]?token|session[-_]?(?:id|token|key)|csrf[-_]?token|xsrf[-_]?token|private[-_]?token|security[-_]?token|client[-_]?secret|secret[-_]?key)';
 const NAMED = [
   { kind: 'aws-secret-access-key', re: /(aws_secret_access_key|aws_session_token)(\s*["']?\s*[=:]\s*["']?)[A-Za-z0-9/+=]{16,}/gi },
-  { kind: 'authorization', re: /(authorization["']?\s*[:=]\s*["']?(?:(?:bearer|basic|token|digest)\s+)?)(?=[A-Za-z._~+/=-]*\d)[A-Za-z0-9._~+/=-]{8,}/gi },
+  { kind: 'authorization', re: /(authorization["']?\s*[:=]\s*["']?(?:bearer|basic|token|digest|negotiate)\s+)[A-Za-z0-9._~+/=-]{8,}/gi },
+  { kind: 'authorization', re: /(authorization["']?\s*[:=]\s*["']?)(?=[A-Za-z._~+/=-]*\d)[A-Za-z0-9._~+/=-]{8,}/gi },
   { kind: 'bearer-token', re: /((?<![A-Za-z0-9])bearer\s+)(?=[A-Za-z._~+/-]*\d)[A-Za-z0-9._~+/-]{16,}=*/gi },
+  { kind: 'cookie', re: /((?<![A-Za-z0-9-])(?:set-)?cookie["']?\s*[:=]\s*["']?)(?=[^\r\n"'=;]+=)[^\r\n"']+/gi },
+  { kind: 'api-key', re: new RegExp(`(${TOKEN_HEADER}["']?\\s*[:=]\\s*["']?)(?:(?=[A-Za-z._~+/=-]*\\d)[A-Za-z0-9._~+/=-]{8,}|[A-Za-z0-9._~+/=-]{20,})`, 'gi') },
 ];
+// A long random-looking segment of a URL path (`/reset/9f8e…`, `/invite/AbC1…`): 24 characters or more of letters,
+// digits, - and _, with lower case, upper case and digits, or 32 or more hex digits with a letter and a digit.
+const PATH_TOKEN = /(?<=\/)[A-Za-z0-9_-]{24,}(?=[/?#\s"'<>)\]]|$)/g;
+const randomish = s => (/[a-z]/.test(s) && /[A-Z]/.test(s) && /\d/.test(s)) || (/^[0-9a-f]{32,}$/i.test(s) && /\d/.test(s) && /[a-f]/i.test(s));
 export function scrubSecrets(text) {
   if (typeof text !== 'string') return text;
   let out = text;
   for (const p of SCRUB_PATTERNS) out = out.replace(p.re, `[secret-shaped: ${p.kind}]`);
   out = out.replace(SCRUB_JWT, m => `[secret-shaped: ${jwtRole(m.replace(/\s+/g, '')) === 'service_role' ? 'supabase-service-role-jwt' : 'jwt'}]`);
   for (const p of NAMED) out = out.replace(p.re, (all, name, sep = '') => `${name}${typeof sep === 'string' ? sep : ''}[secret-shaped: ${p.kind}]`);
+  out = out.replace(PATH_TOKEN, m => (randomish(m) ? '[secret-shaped: url-path-token]' : m));
   return out;
 }
 
