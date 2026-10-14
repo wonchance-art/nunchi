@@ -15,9 +15,9 @@
 // Denied as writes (reading them is fine: they are committed files): `.nunchi/decisions/**`, `.nunchi/labels/**`,
 // `.nunchi/lenses/**`, `.nunchi/lenses.lock.json`, `.nunchi/config.json` (allowHosts is the user's to write, D10).
 // Denied commands: `nunchi … approve`, `nunchi … label` / `--label`, `nunchi fix --approve-checks` (human channels
-// only), nunchi run under a pseudo-terminal wrapper (`script`, `unbuffer`, `expect`, a Python pty): that would pass
-// for the person's own terminal (the `cli-tty` channel); and the board's script run directly, or asked for its link
-// (`--link-to-parent`).
+// only), nunchi (`npx nunchi@<version>` too) under a pseudo-terminal (`script`, `unbuffer`, `expect`, tmux, screen,
+// dtach, abduco, zellij, a pty module): that would pass for the person's own terminal (the `cli-tty` channel); and
+// the board's script run directly, or asked for its link (`--link-to-parent`).
 //
 // How a Bash command is read: split into segments (also at `$(`, backticks and parentheses), words joined as a shell
 // joins them (`.nu"nchi"`), `cd` followed, globs and braces expanded against the file system, pieces of words checked
@@ -132,8 +132,11 @@ export function pathRule(p, prot, { write = false } = {}) {
 
 // ---- Bash ------------------------------------------------------------------------------------------------------------
 
-const NUNCHI = /(^|[\s;&|(`'"/])(nunchi|cli\.mjs)(?=[\s;&|)`'"]|$)/;
-const PTY = /(^|[\s;&|(`])(script|unbuffer|expect|ptyexec|socat)\s|\bpty\.spawn\b|\bimport\s+pty\b|\bopenpty\b/;
+// nunchi by name (`npx nunchi@latest`, `npx -y nunchi@0.1.0` too) or by its CLI file
+const NUNCHI = /(^|[\s;&|(`'"/])(nunchi(@[\w.^~<>=*-]+)?|cli\.mjs)(?=[\s;&|)`'"]|$)/;
+// what gives a command a pseudo-terminal: terminal multiplexers and detachers, script/expect-style wrappers, a pty
+// module of any language (Python's pty and pexpect, node-pty, Windows' winpty/ConPTY)
+const PTY = /(^|[\s;&|(`'"])(script|unbuffer|expect|ptyexec|socat|tmux|screen|dtach|abduco|zellij|winpty)(?=[\s;&|)`'"]|$)|\bpty\b|\b(pexpect|ptyprocess|forkpty|openpty|conpty)\b/i;
 const READ_ONLY = new Set(['cat', 'ls', 'head', 'tail', 'less', 'more', 'wc', 'grep', 'egrep', 'fgrep', 'rg', 'stat', 'file', 'diff', 'tree', 'jq', 'du']);
 const GIT_READ = new Set(['diff', 'log', 'show', 'status', 'add', 'commit', 'blame', 'ls-files', 'grep']);
 // The board is started by `nunchi open` only: run directly, or asked for its link, it could hand a session to the agent.

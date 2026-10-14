@@ -94,12 +94,20 @@ test('deny hook: the human-only commands, and nunchi under a pseudo-terminal, ar
     'node src/cli.mjs open --label', 'nunchi label', 'nunchi fix --start --approve-checks',
     'script -q /dev/null node src/cli.mjs decide abc keep --reason intended', 'unbuffer nunchi decide abc keep --reason intended',
     'python3 -c "import pty; pty.spawn([\'nunchi\', \'decide\', \'abc\', \'fix\'])"', 'expect -c "spawn nunchi open --no-browser"',
+    // review B6: multiplexers and detachers, pty modules in other spellings, nunchi by package version
+    'tmux new-session -d "nunchi decide abc keep --reason intended"', 'tmux send-keys -t s "nunchi decide abc keep --reason intended" Enter',
+    'screen -dm nunchi decide abc keep --reason intended', 'dtach -n /tmp/s nunchi decide abc keep --reason intended', 'abduco -c s nunchi open --no-browser',
+    'zellij run -- nunchi decide abc keep --reason intended', 'python3 -c "import os, pty; os.execvp(\'nunchi\', [\'nunchi\', \'decide\', \'abc\', \'keep\'])"',
+    'python -c "from pty import spawn; spawn([\'node\', \'src/cli.mjs\', \'decide\', \'abc\', \'keep\'])"', 'python3 -c "import pexpect; pexpect.spawn(\'nunchi decide abc keep\')"',
+    'node -e "require(\'node-pty\').spawn(\'nunchi\', [\'decide\', \'abc\', \'keep\'])"', 'npx nunchi@latest approve --all', 'npx -y nunchi@0.1.0 approve --all',
+    'npx -y nunchi@0.1.0 open --label', 'tmux new -d npx nunchi@latest decide abc keep',
   ]) assert.ok(call(r, 'Bash', { command }), command);
   for (const command of [
     'node "${CLAUDE_SKILL_DIR}/../../src/cli.mjs" findings --json', 'node src/cli.mjs decide abc fix', 'node src/cli.mjs decide abc not-a-problem --from-chat',
     'node src/cli.mjs open', 'nunchi open --no-browser', 'nunchi open --stop', 'node src/cli.mjs hunt --plan', 'node src/cli.mjs capture --url http://127.0.0.1:3000',
     'npm run build && npm test', 'cat .nunchi/runs/0001/hunt-plan.json', 'ls .nunchi/runs/0001/home.guest.normal.d', 'git log --oneline',
     'curl -s http://127.0.0.1:3000/api/health', 'echo "a script to approve"',
+    'npx nunchi@latest findings --json', 'npx -y nunchi@0.1.0 capture --url http://127.0.0.1:3000', 'tmux ls', 'nunchi capture --url http://127.0.0.1:3000 --screens home',
   ]) assert.equal(call(r, 'Bash', { command }), null, command);
 });
 
