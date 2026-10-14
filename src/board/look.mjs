@@ -138,13 +138,16 @@ main{padding:16px 16px 40px}.panel-box{padding:18px 16px}.hero h1{font-size:22px
 // switched off here. Every control is at least 44 px high; motion is off when the person asks for less of it.
 export const BOARD_CSS = `
 [hidden]{display:none!important}
+/* the edge of a control (field, button, decision button, tick box): 3:1 or more against the panel, the ground and
+   the selected row, light and dark (WCAG 1.4.11) */
+:root{--control:#7A7F88}
 /* the static page marks its view by :target; the board by aria-current only */
 .board .nav a[data-nav]:not([aria-current="page"]){background:transparent!important;color:var(--ink)!important;font-weight:400!important}
 .board .nav a[data-nav]:not([aria-current="page"]):hover{background:var(--soft)!important}
 .board .view{display:block}.board .detail{display:block}
 .board h1[tabindex="-1"]:focus,.board h2[tabindex="-1"]:focus{outline:none}
 button{font:inherit;color:inherit}
-.b{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;min-width:44px;padding:0 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);font-size:14px;cursor:pointer;text-decoration:none}
+.b{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;min-width:44px;padding:0 14px;border:1px solid var(--control);border-radius:8px;background:var(--panel);color:var(--ink);font-size:14px;cursor:pointer;text-decoration:none}
 .b:hover{background:var(--soft)}.b[disabled]{opacity:.55;cursor:not-allowed}
 .b-primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}.b-primary:hover{background:var(--accent);filter:brightness(.92);color:#fff}
 .b-quiet{border-color:transparent;background:transparent;color:var(--accent)}.b-quiet:hover{background:var(--accent-soft)}
@@ -156,7 +159,7 @@ button{font:inherit;color:inherit}
 .tabs .cnt{color:var(--muted);font-weight:400}
 .controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 .field{display:inline-flex;align-items:center;gap:8px;font-size:14px;color:var(--ink-2)}
-.field select,.field input{min-height:44px;padding:0 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink);font:inherit;font-size:14px}
+.field select,.field input{min-height:44px;padding:0 10px;border:1px solid var(--control);border-radius:8px;background:var(--panel);color:var(--ink);font:inherit;font-size:14px}
 .field input{min-width:220px}
 .banner{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;padding:8px 16px;border-radius:10px;background:var(--accent-soft);color:var(--accent-ink);font-size:14px}
 .banner-warn{background:var(--high-soft);color:var(--high-ink)}
@@ -168,7 +171,7 @@ button{font:inherit;color:inherit}
 .board .row:hover{background:var(--soft)}
 .board .row[aria-selected=true]{background:var(--accent-soft);box-shadow:inset 4px 0 0 var(--accent)}
 .board .row:focus{outline:3px solid var(--accent);outline-offset:-3px}
-.row .tick{flex:none;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:2px solid var(--line);border-radius:5px;color:transparent;font-size:14px;line-height:1}
+.row .tick{flex:none;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:2px solid var(--control);border-radius:5px;color:transparent;font-size:14px;line-height:1}
 .row[aria-selected=true] .tick{border-color:var(--accent);background:var(--accent);color:#fff}
 .tag-human{background:var(--good-soft);color:var(--good)}
 /* the dock: the decision bar, and the undo toast right above it, kept at the bottom of the window as one; focus and
@@ -177,12 +180,12 @@ html{scroll-padding-bottom:calc(var(--dock-h,0px) + 12px)}
 .dock{position:sticky;bottom:0;z-index:5;display:flex;flex-direction:column;gap:8px}
 .toolbar{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:0 -2px 10px rgba(27,29,33,.08)}
 .toolbar .tb-label{align-self:center;padding:0 6px;font-size:13px;color:var(--muted)}
-.dbtn{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0;min-height:52px;min-width:44px;padding:4px 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);cursor:pointer;text-align:left}
+.dbtn{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0;min-height:52px;min-width:44px;padding:4px 14px;border:1px solid var(--control);border-radius:8px;background:var(--panel);cursor:pointer;text-align:left}
 .dbtn:hover{background:var(--soft)}.dbtn b{font-size:14px}.dbtn small{font-size:12px;color:var(--muted)}
 .dbtn .kbd{margin-left:6px}
 .dbtn-fix{border-color:var(--accent)}
 .toast{position:fixed;left:50%;bottom:16px;z-index:20;transform:translateX(-50%);display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;max-width:min(680px,calc(100vw - 32px));padding:8px 8px 8px 18px;border-radius:12px;background:#1B1D21;color:#fff;box-shadow:0 6px 24px rgba(0,0,0,.25);transition:opacity .2s}
-.toast .b{background:transparent;border-color:#4A4E57;color:#fff}.toast .b:hover{background:#2C2F35}
+.toast .b{background:transparent;border-color:#858A93;color:#fff}.toast .b:hover{background:#2C2F35}.toast :focus-visible{outline-color:#FFFFFF}
 .toast[hidden]{display:none}
 .dock>.toast{position:static;transform:none;align-self:center;max-width:100%}
 /* the numbered markers sit half outside their box: room for them inside the panel */
@@ -209,13 +212,15 @@ dialog h2{font-size:17px;margin:0 0 10px}.dialog-actions{display:flex;flex-wrap:
 .lost{max-width:640px;margin:10vh auto;padding:28px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
 .label-banner{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;padding:12px 18px;border-radius:12px;background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
 .label-keys{display:flex;flex-wrap:wrap;gap:8px}
-.board .card{list-style:none}.board .card button{display:block;width:100%;height:100%;padding:0;border:0;background:var(--panel);border-radius:12px;overflow:hidden;box-shadow:0 0 0 1px var(--line);color:var(--ink);text-align:left;cursor:pointer}
+.board .card{list-style:none}.board .card button{display:block;width:100%;height:100%;padding:0;border:0;background:var(--panel);border-radius:12px;overflow:hidden;box-shadow:0 0 0 1px var(--control);color:var(--ink);text-align:left;cursor:pointer}
 .board .card button:hover,.board .card button[aria-pressed=true]{box-shadow:0 0 0 3px var(--accent)}
 .board .panels .screen-panel{display:block}
 .empty-note{margin:0;padding:16px 20px;color:var(--muted)}
 .loading{padding:24px;color:var(--muted)}
 @media (max-width:760px){.board .side-foot{display:flex;flex-wrap:wrap;align-items:center;padding:0}.board .side-foot p{margin:0}.board .side-foot p:first-child{display:none}
 .board .side-foot button{min-width:44px;font-size:14px}.field input{min-width:0;width:100%}.toolbar{gap:6px;padding:6px}.toolbar .tb-label{display:none}.dbtn{flex:1 1 40%;min-height:48px;padding:2px 10px}}
-@media (prefers-color-scheme:dark){.board .btn-primary,.board .btn-primary:hover,.b-primary,.b-primary:hover{color:#141518}}
+@media (prefers-color-scheme:dark){.board .btn-primary,.board .btn-primary:hover,.b-primary,.b-primary:hover{color:#141518}
+/* the toast is light on the dark board, so it stands out from the panel and the ground (3:1 or more) */
+.toast{background:#ECEDEF;color:#141518}.toast .b{color:#141518;border-color:#6B7079}.toast .b:hover{background:#D9DBDF}.toast :focus-visible{outline-color:#141518}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
 `;

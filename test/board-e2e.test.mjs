@@ -249,6 +249,55 @@ test('board e2e: on a phone the Keys dialog and "More views in 0.2" are in the h
   } finally { await s.close(); }
 });
 
+test('board a11y: non-text contrast of 3:1 or more — field, button, decision button and tick edges, the toast against the page, its buttons and its focus ring (light and dark)', { timeout: 120000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = project();
+  for (const scheme of ['light', 'dark']) {
+    const s = await open(p, { colorScheme: scheme });
+    const { page } = s;
+    try {
+      await page.waitForSelector('#h-progress');
+      await page.click('a[data-nav=findings]');
+      await page.waitForSelector('#h-findings');
+      await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
+      // `edge`: the border against the element's own background and what is behind it; `ring`: the outline against
+      // what is behind; `surface`: the background against what is behind and the page
+      const ratios = (sel, kind = 'edge') => page.$$eval(sel, (els, kind) => {
+        const rgb = c => (c.match(/[\d.]+/g) || []).map(Number);
+        const clear = c => c === 'transparent' || rgb(c)[3] === 0;
+        const lum = c => { const [r, g, b] = rgb(c).slice(0, 3).map(v => v / 255).map(v => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+        const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+        const behind = e => { for (let n = e.parentElement; n; n = n.parentElement) { const c = getComputedStyle(n).backgroundColor; if (!clear(c)) return c; } return 'rgb(255, 255, 255)'; };
+        const page = getComputedStyle(document.body).backgroundColor;
+        return els.filter(e => e.offsetParent !== null).map(e => {
+          const cs = getComputedStyle(e), own = clear(cs.backgroundColor) ? behind(e) : cs.backgroundColor;
+          const r = kind === 'ring' ? ratio(cs.outlineColor, own)
+            : kind === 'surface' ? Math.min(ratio(cs.backgroundColor, behind(e)), ratio(cs.backgroundColor, page))
+              : Math.min(ratio(cs.borderTopColor, own), ratio(cs.borderTopColor, behind(e)));
+          return { e: e.outerHTML.slice(0, 60), r };
+        });
+      }, kind);
+      const low = list => list.filter(x => x.r < 3).map(x => `${x.e} ${x.r.toFixed(2)}`);
+      for (const sel of ['#search', '#group-by', '.dbtn', '.row .tick']) {
+        const list = await ratios(sel);
+        assert.ok(list.length, `${sel} is there`);
+        assert.deepEqual(low(list), [], `${scheme}: ${sel}`);
+      }
+      await page.keyboard.press('j');
+      await page.keyboard.press('w');
+      await page.waitForSelector('#toast:not([hidden])');
+      assert.deepEqual(low(await ratios('#toast', 'surface')), [], `${scheme}: the toast against the dock and the page`);
+      assert.deepEqual(low(await ratios('#toast .b')), [], `${scheme}: the toast's buttons`);
+      // reached by the keyboard (Shift+Tab from the decision bar), so the focus ring shows
+      await page.focus('.toolbar .dbtn[tabindex="0"]');
+      await page.keyboard.press('Shift+Tab');
+      assert.equal(await page.evaluate(() => document.getElementById('toast').contains(document.activeElement)), true, 'the toast is next to the bar in the tab order');
+      assert.deepEqual(low(await ratios('#toast .b:focus-visible', 'ring')), [], `${scheme}: the focus ring in the toast`);
+      assert.equal((await ratios('#toast .b:focus-visible', 'ring')).length, 1);
+    } finally { await s.close(); }
+  }
+});
+
 test('board e2e: keys by their place — F on a Korean layout fixes, W with Caps Lock keeps as intended', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = project();

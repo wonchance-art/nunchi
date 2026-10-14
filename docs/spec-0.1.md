@@ -1242,7 +1242,10 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   high, 4 screens"; the Now line is announced at most every 10 s; single-character shortcuts can be turned off in
   the keys dialog (`?`), and keys are off in text fields (`/` searches); severity is a word beside its dot; every
   control is at least 44 px; reduced motion stops all transitions; dark mode; no sideways scroll at 390 px. Tested
-  with axe (no violation) on each view, light at 1280 px and dark at 390 px.
+  with axe (no violation) on each view, light at 1280 px and dark at 390 px. Non-text contrast (WCAG 1.4.11): the
+  edge of a field, button, decision button, tick box and screen card is `--control` (#7A7F88, 3.4:1 or more against
+  the panel, the ground and a selected row, light and dark); the toast's buttons and focus ring are 3:1 or more on
+  the toast, and in dark mode the toast is light so that it stands out from the panel (tested in both schemes).
 - *The dock:* the decision bar and the undo toast right above it are one sticky dock at the bottom of the window,
   on a phone too (2 × 2 buttons there), so the toast never covers the bar whatever its height; the page measures the
   dock (`--dock-h`) and `scroll-padding-bottom` keeps the focused row clear of it (WCAG 2.4.11), also when the
