@@ -300,3 +300,25 @@ test('CLI canaries --score: per-lens hit rate, canary-score.json, coverage.json 
   assert.equal(JSON.parse(readFileSync(join(run, 'coverage.json'), 'utf8')).cells[0].status, 'not-seen');
   assert.equal(JSON.parse(readFileSync(join(run, 'canary-score.json'), 'utf8')).planted, 3);
 });
+
+test('canary blank-state: never where the message is the main area\'s only text (that is the blank-state rule)', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const { r, changed } = await mutate('lonely.html', ['blank-state']);
+  assert.equal(r, null);
+  assert.equal(changed, false, 'the message is put back');
+});
+
+test('canary score: a fixed bar is hit by a claim of its item anywhere on the copy, other kinds stay located', () => {
+  const file = { schema: 1, planted: [
+    { scene: 't.guest.normal.d.canary-1', of: 't.guest.normal.d', kind: 'fixed-cover', lens: 'L10', checklist: 'L10.fixed-covers-content', selector: 'body > div:nth-of-type(2)', box: [0, 640, 1280, 160] },
+    { scene: 'p.guest.error.d.canary-2', of: 'p.guest.error.d', kind: 'vague-error', lens: 'L6', checklist: 'L6.vague-error', selector: 'main > p', box: [16, 200, 900, 24] },
+  ] };
+  // the hunter cites the footer link the bar hides once the page is scrolled: far below the first-view band
+  const footer = ai('t.guest.normal.d.canary-1', 'L10', 'footer > nav > a', [16, 989, 60, 20], 'L10.fixed-covers-content');
+  assert.deepEqual(scoreCanaries(file, [footer]).results.map(x => x.hit), [true, false]);
+  assert.equal(scoreCanaries(file, [{ ...footer, rule: 'L10.primary-not-in-first-view' }]).results[0].hit, false, 'another item is not the bar');
+  const far = ai('p.guest.error.d.canary-2', 'L6', 'footer > p', [16, 900, 300, 20], 'L6.vague-error');
+  assert.equal(scoreCanaries(file, [far]).results[1].hit, false, 'a located kind still needs the planted element');
+  const shared = scoreCanaries(file, [footer, { ...footer, scene: 't.guest.normal.d' }]);
+  assert.deepEqual(shared.ambiguous?.map(x => x.kind), ['fixed-cover'], 'the original has the same claim: ambiguous');
+});

@@ -6,6 +6,7 @@
   "method": "ai",
   "scenes": { "states": ["normal"] },
   "evidence": ["top.jpg", "styles.json", "controls.json"],
+  "reference": "nearest",
   "checklist": [
     { "id": "L4.same-component-different-look", "question": "Do two controls or blocks that do the same job (two primary buttons, two cards of one list, two text inputs) look different on this screen or against the reference screen (height, radius, colour, weight, padding in styles.json)? Claim it only where the look is the odd one out: if this screen matches the app and only the reference differs, answer none." },
     { "id": "L4.near-duplicate-color", "question": "Does styles.json use two colours or backgrounds for the same role that differ only slightly (two near-identical blues on links or primary buttons), where one was clearly meant?" },

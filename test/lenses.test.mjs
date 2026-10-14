@@ -47,6 +47,8 @@ test('schema: `source` is an optional boolean, replaced by an extends overlay', 
   assert.deepEqual(lensProblems(lens({ source: false }), 'p'), []);
   assert.ok(lensProblems(lens({ source: 'inventory.json' }), 'p').some(p => /source: true or false/.test(p)));
   assert.ok(lensProblems(lens({ source: { file: 'x' } }), 'p').some(p => /source: true or false/.test(p)));
+  assert.deepEqual(lensProblems(lens({ reference: 'nearest' }), 'p'), []);
+  assert.ok(lensProblems(lens({ reference: 'closest' }), 'p').some(p => /reference: "nearest" or "spread"/.test(p)));
   assert.equal(mergeLens(lens({ source: true }), { id: 'L6', extends: 'L6', source: false }).source, false);
   assert.equal(mergeLens(lens({ source: true }), { id: 'L6', extends: 'L6', name: 'x' }).source, true);
 });

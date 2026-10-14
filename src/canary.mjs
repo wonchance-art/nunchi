@@ -16,7 +16,8 @@ export const CANARY_KINDS = [
   { kind: 'template-copy', lens: 'L7', checklist: 'L7.template-copy', what: 'a paragraph of copy was replaced by scaffold text' },
   { kind: 'blank-state', lens: 'L2', checklist: 'L2.what-happened', what: 'the message that explains an empty, error, loading or offline state is blank' },
   { kind: 'remove-confirm', lens: 'L9', checklist: 'L9.destructive-without-confirm', what: 'a destructive control lost its confirm step (dialog cue or ellipsis)' },
-  { kind: 'fixed-cover', lens: 'L10', checklist: 'L10.fixed-covers-content', what: 'a fixed bar covers content in the first view' },
+  // a fixed bar covers different content at each scroll position: a claim of its item anywhere on the copy counts
+  { kind: 'fixed-cover', lens: 'L10', checklist: 'L10.fixed-covers-content', what: 'a fixed bar covers content in the first view', anywhere: true },
 ];
 const BY_KIND = Object.fromEntries(CANARY_KINDS.map(k => [k.kind, k]));
 export const kindInfo = kind => BY_KIND[kind] || null;
@@ -252,11 +253,14 @@ export function canaryMutate({ kinds }) {
       return null;
     },
     // L2: the line that tells the user what state the screen is in is gone (a blank line is left, so
-    // the element keeps its box).
+    // the element keeps its box). Not where it was the main area's only text: a blank main area is the
+    // blank-state rule's finding, which the hunter is told not to repeat.
     'blank-state': () => {
+      const main = document.querySelector('main') || document.body;
       for (const el of messages(STATE, 200)) {
         const t = text(el);
         el.textContent = '\u00a0';
+        if (!(main.innerText || '').replace(/\u00a0/g, ' ').trim()) { el.textContent = t; continue; }
         return { el, before: t, after: '' };
       }
       return null;
@@ -339,12 +343,13 @@ export function scoreCanaries(canaryFile, aiFindings, coverage = null) {
   // something both share, and the copy cannot tell a planted defect from one the screen already had: such a
   // canary is *ambiguous*, listed apart and left out of the rate, like a canary nobody hunted.
   const unlocated = f => !f.box && (!f.selector || f.selector.startsWith('aria='));
+  const byItemOk = (c, f) => f.rule === c.checklist && (unlocated(f) || kindInfo(c.kind)?.anywhere === true);
   const ambiguous = [];
   const results = [];
   for (const c of all.filter(hunted)) {
     const mine = aiFindings.filter(f => f.scene === c.scene && f.lens === c.lens);
     const placed = mine.filter(f => sameLocation(f, c));
-    const byItem = mine.filter(f => unlocated(f) && f.rule === c.checklist);
+    const byItem = mine.filter(f => byItemOk(c, f));
     const shared = aiFindings.some(g => g.scene === c.of && g.lens === c.lens && g.rule === c.checklist);
     if (!placed.length && byItem.length && shared) { ambiguous.push({ scene: c.scene, of: c.of, kind: c.kind, lens: c.lens, reason: 'the original has the same claim' }); continue; }
     const hits = [...placed, ...byItem];

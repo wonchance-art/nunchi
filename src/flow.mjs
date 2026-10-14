@@ -65,6 +65,15 @@ export function codeNavigations(root, sourceMap) {
   return out.sort((a, b) => cmp(a.from, b.from) || cmp(a.to, b.to) || cmp(a.file, b.file) || a.line - b.line);
 }
 
+// A scene that ended on another route's page. Manifests written before entries carried `redirected` have
+// only reason, path and finalPath: derived from them the way capture decides it (the path parts differ).
+const pathPart = p => String(p).split(/[?#]/)[0];
+export function isRedirected(e) {
+  if (typeof e.redirected === 'boolean') return e.redirected;
+  if (typeof e.reason === 'string' && e.reason.startsWith('redirected to ')) return true;
+  return !!(e.path && e.finalPath) && pathPart(e.finalPath) !== pathPart(e.path);
+}
+
 const ASSET = /\.(?!html?$)[a-z0-9]{1,5}$/i;
 const LANDMARK = new Set(['nav', 'header', 'footer']);
 
@@ -74,7 +83,7 @@ const LANDMARK = new Set(['nav', 'header', 'footer']);
 export function buildFlow({ entries, sceneLinks, routes, complete, wholeApp = complete, code = [] }) {
   const match = routeMatcher(routes);
   const findings = [];
-  const seen = entries.filter(e => e.status === 'captured' && e.state === 'normal' && !e.redirected);
+  const seen = entries.filter(e => e.status === 'captured' && e.state === 'normal' && !isRedirected(e));
   // Order the walk by what a visitor meets first: guest before signed-in, desktop before phone.
   const rank = e => (e.person === 'guest' ? 0 : 1) * 2 + (e.viewport === 'd' ? 0 : 1);
   const ordered = [...seen].sort((a, b) => rank(a) - rank(b) || (a.id < b.id ? -1 : 1));
@@ -158,7 +167,7 @@ export function buildFlow({ entries, sceneLinks, routes, complete, wholeApp = co
   }
   for (const r of [...routes].sort()) if (!done.has(r)) order.push(r);
 
-  const redirectTargets = new Set(entries.filter(e => e.redirected && e.finalPath).map(e => match(e.finalPath)).filter(Boolean));
+  const redirectTargets = new Set(entries.filter(e => isRedirected(e) && e.finalPath).map(e => match(e.finalPath)).filter(Boolean));
   const inbound = new Map();
   for (const ed of edges.values()) { if (!inbound.has(ed.to)) inbound.set(ed.to, new Set()); inbound.get(ed.to).add(ed.via); }
   const reach = r => (r === entry ? 'entry' : inbound.get(r)?.has('link') ? 'link' : inbound.get(r)?.has('code') ? 'code' : redirectTargets.has(r) ? 'redirect' : null);
