@@ -113,7 +113,7 @@ test('deny hook: requests to a running board, its socket and its process are den
   }
   assert.ok(call(r, 'WebFetch', { url: 'http://127.0.0.1:47123/api/summary', prompt: 'x' }));
   assert.ok(call(r, 'WebFetch', { url: 'http://localhost:47123/', prompt: 'x' }));
-  assert.ok(call(r, 'Read', { file_path: '/proc/4242/cmdline' }));
+  if (POSIX) assert.ok(call(r, 'Read', { file_path: '/proc/4242/cmdline' }), 'the board\'s process (no /proc on Windows)');
   assert.equal(call(r, 'WebFetch', { url: 'http://127.0.0.1:3000/', prompt: 'x' }), null, 'the app under test');
   assert.equal(call(r, 'WebFetch', { url: 'https://example.com/docs', prompt: 'x' }), null);
   assert.equal(call(r, 'Bash', { command: 'curl -s http://localhost:3000/' }), null);

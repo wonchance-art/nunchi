@@ -251,7 +251,8 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
       return send(res, 200, { token, mode, ...(mode === 'label' ? { labeller } : {}) });
     }
     if (!keyed) { if (!limits.fail.hit(t)) lockedUntil = t + 60e3; return fail(res, 401, 'no key: open the board with nunchi open'); }
-    if (path !== '/api/live') lastActive = t;
+    // the live stream and its polling fallback are not the person doing something: they do not keep the board up
+    if (path !== '/api/live' && path !== '/api/generation') lastActive = t;
     return route(req, res, u, path);
   };
 
@@ -345,6 +346,14 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     try { approved = !!profile && approvedProfiles(scriptsApprovedPath(stateDir)).has(profile.hash); } catch {}
     const requested = existsSync(checksRequestPath(stateDir));
     const running = listRuns(runsDir).partial.map(p => p.replace(/\.partial$/, '')).filter(x => RUN_ID.test(x));
+    // the AI hunt's coverage of the latest run (coverage.json), with cells the budget cut said in the board's words
+    let coverage = null;
+    if (s.run && RUN_ID.test(s.run)) {
+      try {
+        const c = JSON.parse(readFileSync(join(runsDir, s.run, 'coverage.json'), 'utf8'))?.summary;
+        if (c && Number.isFinite(c.cells)) coverage = { cells: c.cells, seen: Number(c.seen) || 0, budget: Number(c.notSeen?.budget) || 0 };
+      } catch {}
+    }
     const nowLines = [...running.map(r => `Capture running · run ${r}`), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)}${c.minutes !== null ? ` · ${c.minutes} min` : ''}`)];
     return {
       version: version(), mode, project: safe(basename(project), 80), run: s.run, kind: s.kind, commit: s.commit ? safe(String(s.commit).slice(0, 7), 7) : null, dirty: s.dirty,
@@ -354,7 +363,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
         note: c.note ? safe(c.note, 500) : null, group: c.group, title: safe(c.title, 160), severity: c.severity })),
       health: { problems: s.health.problems.map(p => ({ status: safe(p.status, 40), scenes: p.scenes, of: p.of })), blind: s.health.blind ? safe(s.health.blind, 40) : null,
         scenes: { ...s.health.scenes, reasons: s.health.scenes.reasons.map(r => safe(r, 80)) } },
-      ai: s.ai, now: nowLines,
+      ai: { ...s.ai, coverage }, now: nowLines,
       checks: profile ? { requested, approved, profile: { hash: profile.hash, scripts: Object.fromEntries(Object.entries(profile.scripts).map(([k, v]) => [safe(k, 40), safe(v, 400)])), files: Object.fromEntries(Object.entries(profile.files).map(([k, v]) => [safe(k, 120), v ? safe(v, 64) : null])), packageManager: profile.packageManager ? safe(profile.packageManager, 80) : null } } : null,
       counts: { groups: m.groups.length, screens: m.latestEv?.scenes.length || 0 },
       treeChanged: !!(runTree && now && now !== runTree),
@@ -378,7 +387,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     let targets;
     try { targets = P.resolveTargets(rows, groups, ids, { prefix: false }); } catch (e) { if (e.code !== 'BAD_TARGET') throw e; return fail(res, 409, 'the list changed: one of these groups is gone', { stale: true }); }
     const mine = targets.map(t => rows.filter(r => (t.group ? r.group === t.group : r.fp === t.fp)));
-    if (!confirmed) {
+    if (confirmed !== true) {                                   // only a real true skips the questions
       const flat = mine.flat().filter(r => !r.goneAt);
       if (DISMISS[decision]) {
         const blocker = mine.filter(rs => rs.some(r => protectOf(r) === 'blocker')).length, l9 = mine.filter(rs => rs.some(r => r.lens === 'L9')).length;

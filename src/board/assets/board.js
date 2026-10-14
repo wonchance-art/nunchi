@@ -146,11 +146,17 @@ async function boot() {
   const s = await r.json();
   S.token = s.token; S.mode = s.mode; S.labeller = s.labeller || null;
   wireGlobal();
-  if (S.mode === 'label') { await labelBoot(); return live(); }
-  history.replaceState(null, '', '/#/progress');
-  addEventListener('hashchange', router);
-  await refreshSummary();
-  await router();
+  try {
+    if (S.mode === 'label') { await labelBoot(); return live(); }
+    history.replaceState(null, '', '/#/progress');
+    addEventListener('hashchange', router);
+    await refreshSummary();
+    await router();
+  } catch (e) {
+    // the ledger could not be read (another nunchi holds it, a file is torn): said, with the way out nunchi gives
+    if (e.status !== 401) main().replaceChildren(h('section', { class: 'lost', 'aria-labelledby': 'err-h' }, h('h1', { id: 'err-h' }, 'The board could not read nunchi’s state'),
+      h('p', null, e.message), h('p', { class: 'muted small' }, 'Run nunchi findings in your terminal for the same message; the board updates once it is fixed.')));
+  }
   live();
 }
 
@@ -273,12 +279,13 @@ function renderProgress(focus = false) {
   const meter = h('div', { class: 'meter', 'aria-hidden': 'true' }, h('span'));
   meter.firstChild.style.width = `${sc.total ? Math.round((sc.checked / sc.total) * 100) : 0}%`;
   const WHY = { 'login-expired': 'the saved login no longer worked', 'app-unreachable': 'most screens did not load at all', 'recording-stale': 'most screens asked for data the recording does not have' };
-  const ai = s.ai.ran ? `${W.plural(s.ai.groups, 'group')}, ${s.ai.doubleChecked} double-checked${s.ai.notDoubleChecked ? `, ${s.ai.notDoubleChecked} not double-checked` : ''}${s.ai.suspect ? ' · verification suspect' : ''}` : 'not run (rules and computed checks only)';
+  const ai = s.ai.ran ? `${W.plural(s.ai.groups, 'group')}, ${s.ai.doubleChecked} double-checked${s.ai.notDoubleChecked ? `, ${s.ai.notDoubleChecked} not double-checked` : ''}${s.ai.coverage ? ` · ${s.ai.coverage.seen}/${s.ai.coverage.cells} cells seen` : ''}${s.ai.suspect ? ' · verification suspect' : ''}` : 'not run (rules and computed checks only)';
   const health = h('section', { class: 'panel-box', 'aria-labelledby': 'h-health' }, h('h2', { id: 'h-health' }, s.run ? `Run ${s.run}` : 'No run yet'),
     h('div', { class: 'meter-row' }, h('span', null, 'Screens checked'), h('a', { href: '#/screens' }, `${sc.checked} of ${sc.total}`)), meter,
     h('ul', { class: 'facts' }, h('li', null, `AI review: ${ai}`),
       s.health.blind ? h('li', { class: 'warn' }, `This run could not tell what was fixed (${s.health.blind}). Nothing was marked fixed by it.`) : null,
       sc.notSeen ? h('li', null, `${W.plural(sc.notSeen, 'screen')} not seen: ${sc.reasons.join(', ')}`) : null,
+      s.ai.coverage?.budget ? h('li', null, `${W.plural(s.ai.coverage.budget, 'cell')} ${W.WORDS['not-seen-budget'].replace(/^Not checked/, 'not checked')}`) : null,
       s.ai.needsYou ? h('li', { class: 'warn' }, `${W.plural(s.ai.needsYou, 'AI finding')} need you: the re-check could not tell whether they are gone`) : null,
       s.health.problems.map(p => h('li', { class: 'warn' }, `Run problem: ${p.status} (${p.scenes}/${p.of} screens) — ${WHY[p.status] || ''}`))));
   const counts = h('section', { class: 'panel-box', 'aria-labelledby': 'h-status' }, h('h2', { id: 'h-status' }, 'Decisions'),

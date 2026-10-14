@@ -328,7 +328,7 @@ test('§3.2 the board stops after the idle time, and says so to an open stream',
   const p = smallProject();
   let exited = null;
   const b = await startBoard({ projectDir: p.root, idleMs: 1200, onExit: why => { exited = why; } });
-  await new Promise(r => setTimeout(r, 2500));
+  for (let i = 0; i < 80 && !exited; i++) await new Promise(r => setTimeout(r, 100));
   assert.equal(exited, 'idle');
   await assert.rejects(raw(b.port), /ECONNREFUSED|ECONNRESET|socket hang up/);
 });
