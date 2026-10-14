@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { annotate } from '../../src/ledger.mjs';
+import { annotate, foldRun, foldAi, runForFold, emptyState, fingerprintOf } from '../../src/ledger.mjs';
 import { stableJson } from '../../src/stable.mjs';
 
 // A JPEG header with a SOF0 segment is all the engine reads of a screenshot (jpegSize); a browser shows it as broken,
@@ -53,6 +53,24 @@ export function writeRun(root, id, { scenes, findings = [], parent = null, whole
 }
 
 export const HOSTILE = '<script>alert(1)</script>"><img src=x onerror=alert(2)>';
+
+// AI findings folded into the project's ledger (.nunchi/state/ledger.json) as `hunt --record` / `verify --record`
+// would leave them: `list` of { lens, rule, scene (a scene()), selector, box, claim, file, line, status, severity }.
+export function withAi(p, list, { run = '0001' } = {}) {
+  const st0 = foldRun(emptyState(), { ...runForFold(join(p.nunchi, 'runs', run)), stream: 'main' });
+  const findings = list.map(x => {
+    const f = { source: 'ai', lens: x.lens, rule: x.rule, route: x.scene.route, scene: x.scene.id, selector: x.selector ?? null, severity: x.severity || 'high',
+      evidence: { claim: x.claim, ...(x.file ? { file: x.file, line: x.line ?? 1 } : {}) } };
+    const { fp, group, inputs } = fingerprintOf(f);
+    return { fp, group, inputs, lens: f.lens, rule: f.rule, route: f.route, scene: f.scene, cell: `${x.scene.person}.${x.scene.state}.${x.scene.viewport}`, selector: f.selector,
+      box: x.box ?? null, evidence: f.evidence, identity: null, status: x.status || 'claimed', claimedSeverity: f.severity, verdictSeverity: x.status === 'confirmed' ? f.severity : null,
+      by: x.status && x.status !== 'claimed' ? 'same-model check' : null, vendor: null, suspect: !!x.suspect, sceneHash: { top: 't', full: 'f', textHash: 'x' } };
+  });
+  const st = foldAi(st0, { run, stream: 'main', key: `fixture:${run}`, findings, seen: [], now: 1_700_000_000_000 });
+  mkdirSync(join(p.nunchi, 'state'), { recursive: true });
+  writeFileSync(join(p.nunchi, 'state', 'ledger.json'), stableJson(st));
+  return Object.values(st.items).filter(i => i.source === 'ai');
+}
 
 // A small project: two pages, phone and desktop, a blocker secret, a high raw error (with hostile text), two medium
 // dead links on one component, a low tap target. → { root, nunchi, run, findings, scenes }
