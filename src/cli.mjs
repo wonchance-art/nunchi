@@ -7,7 +7,7 @@ import { discover } from './discover.mjs';
 import { buildSourceMap, affectedRoutes } from './sourcemap.mjs';
 import { startRun, finishRun, gcRuns, latestRun, workTree, ensureGitignore } from './runs.mjs';
 import { codeNavigations } from './flow.mjs';
-import { updateState, readState, readDecisions, writeDecision, readApproved, addApproved, view, groups as groupRows, titleOf, DECISIONS } from './ledger.mjs';
+import { syncLedger, readDecisions, buildDecision, saveDecision, readApproved, bindApproved, addApproved, approvalKey, view, groups as groupRows, titleOf, DECISIONS } from './ledger.mjs';
 import { execFileSync } from 'node:child_process';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
@@ -153,6 +153,12 @@ function runDirOf(args, cmdName) {
   return p;
 }
 const readJson = p => JSON.parse(readFileSync(p, 'utf8'));
+// A ledger file that cannot be read, or held by another nunchi process: said plainly, exit 2, nothing written.
+const LEDGER_ERRORS = ['CORRUPT', 'LOCKED'];
+const ledgerGuard = fn => {
+  try { return fn(); }
+  catch (e) { if (!LEDGER_ERRORS.includes(e.code)) throw e; console.error('nunchi: ' + e.message); process.exit(2); }
+};
 const aiFindingsOf = (dir, cmdName) => {
   const p = join(dir, 'ai-findings.json');
   if (!existsSync(p)) { console.error(`nunchi ${cmdName}: ${p} does not exist yet: the AI hunt writes it`); process.exit(1); }
@@ -260,6 +266,8 @@ if (cmd === 'setup') {
   const runMeta = {
     schema: 1, id: run?.id ?? null, parent: run?.parent ?? null, ...workTree(root),
     scope: { routes: [...new Set(all.map(s => s.route))].sort(), persons, viewports, states, changedSince: args.changedSince || null },
+    // every route the source has, so whole-app detectors (secrets, the link graph, one-offs) judged the app
+    wholeApp: !args.routes && !args.changedSince,
   };
   // L3 knows every route of the app when they come from the source, and the navigations the source names.
   let flow = {};
@@ -297,8 +305,12 @@ if (cmd === 'setup') {
       }
     }
     const final = run ? finishRun(runsDir, run.id) : out;
-    // fold the run into the local ledger state (what is open, fixed, back again)
-    if (run) updateState(join(nunchiDir, 'state', 'ledger.json'), { id: run.id, scope: runMeta.scope, health: r.manifest.health, findings: r.findings });
+    // fold the run into the local ledger state (what is open, fixed, back again), with any complete run a
+    // crash left unfolded; if this fails, the next ledger command folds it
+    if (run) {
+      try { syncLedger(join(nunchiDir, 'state', 'ledger.json'), runsDir); }
+      catch (e) { if (!LEDGER_ERRORS.includes(e.code)) throw e; console.error(`warning: run ${run.id} is complete but not in the ledger yet (${e.message})`); }
+    }
     const misses = r.manifest.scenes.reduce((n, x) => n + (x.replayMisses || 0), 0);
     const canaryCount = r.canaries ? r.canaries.planted.length : 0;
     const summary = { out: final, run: run?.id ?? null, health: r.manifest.health, scenes: r.manifest.scenes.length - canaryCount, canaries: canaryCount, network: r.run.network, replayMisses: misses, skipped, findings: by, seconds: Math.round(r.totalMs / 100) / 10 };
@@ -331,8 +343,16 @@ if (cmd === 'setup') {
   const stateFile = join(nunchiDir, 'state', 'ledger.json');
   const decisionsDir = join(nunchiDir, 'decisions');
   const approvedFile = join(nunchiDir, 'state', 'approved.json');
-  const state = readState(stateFile);
-  const rows = view(state, readDecisions(decisionsDir), readApproved(approvedFile));
+  const { state, decisions, approved } = ledgerGuard(() => {
+    const state = syncLedger(stateFile, join(nunchiDir, 'runs'));      // complete runs a crash left unfolded
+    const decisions = readDecisions(decisionsDir);
+    const raw = readApproved(approvedFile);
+    const approved = bindApproved(raw, decisions);
+    // approvals from before content binding (bare ids): written down bound to the decision each names, once
+    if ([...approved].some(k => !raw.has(k))) addApproved(approvedFile, [], decisions);
+    return { state, decisions, approved };
+  });
+  const rows = view(state, decisions, approved);
   const gs = groupRows(rows);
   if (!Object.keys(state.items).length && cmd !== 'approve') { console.error('nunchi: nothing captured yet (run nunchi capture first)'); process.exit(1); }
   if (cmd === 'findings') {
@@ -376,22 +396,28 @@ if (cmd === 'setup') {
       const g = gs.filter(x => x.group.startsWith(id)), f = rows.filter(x => x.fp.startsWith(id));
       if (g.length + f.length !== 1) { console.error(`nunchi: "${id}" matches ${g.length + f.length} groups/fingerprints; give more characters`); process.exit(1); }
       const target = g.length ? { group: g[0].group } : { fp: f[0].fp };
-      try { made.push(writeDecision(decisionsDir, { target, decision, reason: args.reason || null, note: args.note || null, by })); }
+      try { made.push(buildDecision({ target, decision, reason: args.reason || null, note: args.note || null, by })); }
       catch (e) { console.error('nunchi: ' + e.message); process.exit(1); }
     }
-    addApproved(approvedFile, made.map(d => d.id));
+    // the approval first: a crash in between leaves an approval of nothing, never this user's own decision
+    // looking as if it came through git
+    ledgerGuard(() => addApproved(approvedFile, made.map(approvalKey), decisions));
+    for (const d of made) saveDecision(decisionsDir, d);
     console.log(args.json ? JSON.stringify(made, null, 2) : made.map(d => `${d.decision} → ${d.target.group ? 'group ' + d.target.group : 'fingerprint ' + d.target.fp} (${d.id})`).join('\n'));
   } else if (cmd === 'approve') {
-    const all = readDecisions(decisionsDir);
-    const approved = readApproved(approvedFile);
-    const pending = all.filter(d => !approved.has(d.id));
-    const ids = args.all ? pending.map(d => d.id) : args._.slice(1).filter(id => pending.some(d => d.id === id));
-    if (!ids.length) { console.log(pending.length ? `${pending.length} decision(s) from git wait for approval: nunchi approve <id…> or --all\n` + pending.map(d => `  ${d.id}  ${d.decision} ${d.target.group || d.target.fp} by ${d.by} at ${d.at}`).join('\n') : 'no decisions waiting for approval'); process.exit(0); }
-    addApproved(approvedFile, ids);
-    console.log(`approved ${ids.length} decision(s)`);
+    const pending = decisions.filter(d => !approved.has(approvalKey(d)));
+    const chosen = args.all ? pending : [];
+    if (!args.all) for (const id of args._.slice(1)) {
+      const same = pending.filter(d => d.id === id);
+      if (same.length > 1) { console.error(`nunchi: ${same.length} decision files share the id ${id} (one was copied or forged): ${same.map(d => `${d.target.group ? 'group-' + d.target.group : 'fp-' + d.target.fp}/${id}.json`).join(', ')}; remove the one you did not make, then approve`); process.exit(1); }
+      chosen.push(...same);
+    }
+    if (!chosen.length) { console.log(pending.length ? `${pending.length} decision(s) from git wait for approval: nunchi approve <id…> or --all\n` + pending.map(d => `  ${d.id}  ${d.decision} ${d.target.group || d.target.fp} by ${d.by} at ${d.at}`).join('\n') : 'no decisions waiting for approval'); process.exit(0); }
+    ledgerGuard(() => addApproved(approvedFile, chosen.map(approvalKey), decisions));
+    console.log(`approved ${chosen.length} decision(s)`);
   } else {
     const { trust } = await import('./ledger.mjs');
-    const t = trust(rows, readDecisions(decisionsDir));
+    const t = trust(rows, decisions);
     if (args.json) console.log(JSON.stringify(t, null, 2));
     else for (const [lens, x] of Object.entries(t)) console.log(`${lens.padEnd(4)} precision ${x.precision === null ? '—' : Math.round(x.precision * 100) + '%'} (${x.fix} fix · ${x.falsePositive} false positive of the last ${x.window})${x.suspect ? '  SUSPECT: new findings need a closer look' : ''}  · fixed ${x.fixed}/${x.decidedFix}`);
   }
@@ -402,8 +428,9 @@ if (cmd === 'setup') {
   if (args.json) console.log(JSON.stringify(r, null, 2));
   else {
     for (const id of r.complete) {
-      let m = {};
+      let m = null;
       try { m = JSON.parse(readFileSync(join(dir, id, 'run.json'), 'utf8')); } catch {}
+      if (!m) { console.log(`${id}${id === r.latest ? ' (latest)' : ''}  run.json cannot be read (torn or removed): fix or remove this run`); continue; }
       console.log(`${id}${id === r.latest ? ' (latest)' : ''}  ${m.commit ? m.commit.slice(0, 7) : 'no git'}${m.dirty ? ' + edits' : ''}  health ${m.health?.status ?? '?'}  ${m.scope?.routes?.length ?? '?'} routes`);
     }
     for (const p of r.partial) console.log(`${p}  (incomplete: still running, or interrupted; removed by nunchi gc after an hour)`);
@@ -517,6 +544,9 @@ if (cmd === 'setup') {
     }
   } else { console.error('nunchi verify: use --plan, or --record <verdicts.json>'); process.exit(1); }
 } else if (cmd === 'gc') {
+  // a run is folded before it can be removed
+  try { syncLedger(resolve('.nunchi/state/ledger.json'), resolve('.nunchi/runs')); }
+  catch (e) { if (!LEDGER_ERRORS.includes(e.code)) throw e; console.error(`warning: the ledger was not brought up to date before gc (${e.message})`); }
   const r = gcRuns(resolve('.nunchi/runs'), { keep: Number.isInteger(args.keep) && args.keep > 0 ? args.keep : 5 });
   console.log(args.json ? JSON.stringify(r, null, 2) : `kept ${r.kept.join(', ') || 'nothing'} · removed ${r.removed.join(', ') || 'nothing'}`);
 } else {
