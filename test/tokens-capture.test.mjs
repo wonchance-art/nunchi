@@ -9,14 +9,22 @@ import { readFileSync, existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { capture, launch } from '../src/capture.mjs';
+import { collect } from '../src/collect.mjs';
 import { buildTokens, readRunScenes } from '../src/tokens.mjs';
 import { stableJson } from '../src/stable.mjs';
 
 const SITE = fileURLToPath(new URL('./fixtures/tokens', import.meta.url));
+// Built at test time so no secret-shaped string is ever committed.
+const KEY = 'sk_' + 'live_' + 'Kettle0000000000' + 'Zz9';
+const DYNAMIC = {
+  '/secret.html': `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Kettle Notes</title></head><body><main><h1>Kettle Notes</h1><div id="sess_${KEY}" style="width:120px;height:40px;background:rgb(229, 231, 235)"></div></main></body></html>`,
+};
 let server, base, browserOk = true;
 before(async () => {
   server = createServer((req, res) => {
-    const file = join(SITE, new URL(req.url, 'http://x').pathname);
+    const path = new URL(req.url, 'http://x').pathname;
+    if (DYNAMIC[path]) { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end(DYNAMIC[path]); }
+    const file = join(SITE, path);
     if (!file.startsWith(SITE) || !existsSync(file) || !file.endsWith('.html')) { res.writeHead(404); return res.end(); }
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     res.end(readFileSync(file));
@@ -79,4 +87,63 @@ test('tokens from a capture: near-duplicate greys cluster; an already tidy page 
   assert.equal(tidy.radii.length, 1);
   assert.deepEqual(tidy.keptApart, []);
   assert.equal(stableJson(tidy), stableJson(buildTokens({ scenes: readRunScenes(await run('tidy.html')) })), 'deterministic end to end');
+});
+
+const paintOf = (out, page, vp = 'd') => JSON.parse(readFileSync(join(out, `${page}.guest.normal.${vp}`, 'paint.json'), 'utf8'));
+
+test('paint.json: black, red and yellow are colours, not transparency (a blue channel of 0 is not an alpha of 0)', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const out = await run('black.html');
+  const paint = paintOf(out, 'black.html');
+  assert.deepEqual(paint.surfaces.map(s => [s.kind, s.background, s.on ?? null]), [
+    ['page', 'rgb(0, 0, 0)', null],
+    ['box', 'rgb(255, 0, 0)', 'rgb(0, 0, 0)'],
+    ['box', 'rgb(255, 255, 0)', 'rgb(0, 0, 0)'],
+    ['field', 'rgb(255, 255, 255)', 'rgb(0, 0, 0)'],
+  ], 'a black page is recorded, not a white canvas; the input is a field, not a control');
+  assert.deepEqual(paint.borders.map(b => [b.color, b.sides, b.on]), [
+    ['rgb(0, 0, 0)', 'trbl', 'rgb(255, 0, 0)'],
+    ['rgb(255, 0, 0)', 'outline', 'rgb(0, 0, 0)'],
+    ['rgb(255, 0, 0)', 'trbl', 'rgb(255, 255, 255)'],
+  ]);
+  assert.deepEqual(paint.svg.map(x => [x.fill, x.stroke]), [['rgb(0, 0, 0)', 'rgb(255, 0, 0)']], 'the default black SVG fill');
+  const r = buildTokens({ scenes: readRunScenes(out) });
+  assert.equal(r.roles.find(x => x.role === 'background').value, 'rgb(0, 0, 0)');
+  const c = r.contrast.find(x => x.fg === 'text' && x.bg === 'background');
+  assert.ok(c.ratio > 16 && c.aa, JSON.stringify(c));
+});
+
+test('paint.json: a dark colour scheme with transparent html and body has no white canvas', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const paint = paintOf(await run('dark.html'), 'dark.html');
+  assert.deepEqual(paint.surfaces.map(s => [s.kind, s.background, s.on ?? null]), [['band', 'rgb(40, 44, 52)', null]]);
+});
+
+test('paint.json: a secret-shaped id in a container selector is redacted', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const out = await run('secret.html');
+  const text = readFileSync(join(out, 'secret.html.guest.normal.d', 'paint.json'), 'utf8');
+  assert.ok(!text.includes(KEY) && !text.includes('Kettle0000'), text);
+  assert.ok(JSON.parse(text).surfaces.some(s => s.selector === 'div#sess_REDACTED'), text);
+});
+
+test('paint walk stays linear: the background behind each element is looked up once per ancestor', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const browser = await launch();
+  try {
+    const page = await browser.newPage();
+    const depth = 150, leaves = 600;
+    const html = '<div>'.repeat(depth) + '<p>Kettle</p>' + '<i style="display:block;width:20px;height:20px;background:rgb(229, 231, 235)"></i>'.repeat(leaves) + '</div>'.repeat(depth);
+    await page.setContent(`<!doctype html><html><body>${html}</body></html>`);
+    await page.evaluate(() => {
+      const g = window.getComputedStyle;
+      window.__calls = 0;
+      window.getComputedStyle = function (...a) { window.__calls++; return g.apply(this, a); };
+    });
+    const m = await page.evaluate(collect);
+    const calls = await page.evaluate(() => window.__calls);
+    const elements = depth + leaves + 1;
+    assert.equal(m.paint.surfaces.filter(s => s.kind === 'box').length, 1, 'identical leaves are one row');
+    assert.ok(calls < 20 * elements, `${calls} getComputedStyle calls for ${elements} elements`);
+  } finally { await browser.close(); }
 });

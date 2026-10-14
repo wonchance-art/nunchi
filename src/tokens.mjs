@@ -1,24 +1,27 @@
 // Design supporter, Stage 0 ("Tidy"): the look the app already has, consolidated into a token proposal.
 // Computed from a run's evidence (styles.json and paint.json per scene), no AI, deterministic.
 //
-// Colours. Every colour a screen paints (text, page and container backgrounds, control fills, borders and
-// outlines, SVG fills and strokes) is a member; its weight is the number of distinct style rows that use it
-// (the evidence keeps one row per distinct look), counted once per screen (route × person) however many
-// viewports and states showed it. Members are
-// clustered in OKLab by leader clustering: in order of weight (then screens, then value), each colour joins
-// the nearest existing cluster whose leader is within ΔE_OK ≤ MERGE_DE and whose alpha is within
-// ALPHA_TOLERANCE, else it leads a new cluster. A colour never joins a cluster holding a colour it is seen
-// against (paint.json `on`: a card and the page under it, a border and its background): merging those would
-// make the card or the line disappear, however close they are. A cluster's proposed value is its leader, the most-used
-// member, so adopting the token changes no pixel of that colour and moves the others by at most ΔE_OK 0.03
-// (about one just-noticeable difference). Nothing is random; ties fall back to string order.
+// Colours. Every colour a screen paints (text, page and container backgrounds, control and field fills,
+// borders and outlines, SVG fills and strokes) is a member. Its weight is the number of distinct style rows
+// that use it (the evidence keeps one row per distinct look), counted once per screen (route × person)
+// however many viewports and states showed it. Members are clustered in OKLab by leader clustering: in
+// order of weight (then screens, then value), each colour joins the nearest cluster leader within
+// ΔE_OK ≤ MERGE_DE whose alpha is within ALPHA_TOLERANCE, else it leads a new cluster. A cluster's proposed
+// value is its leader, the most-used member, so adopting the token changes no pixel of that colour and moves
+// the others by at most ΔE_OK 0.03 (about one just-noticeable difference).
+// Figure and ground keep their separation: for every pair of colours seen against each other (paint.json
+// `on`: a card and the page under it, a border and its background), the proposed values are at least as far
+// apart as min(their own ΔE, MERGE_DE). A colour never joins a cluster holding a colour it is seen against,
+// and a post-pass splits off any member whose move would still bring such a pair closer.
 // Radii and font sizes are clustered the same way in one dimension (tolerances below).
 // Roles (background, surface, border, text, muted text, accent, accent foreground, danger, success,
-// warning) are inferred from where each cluster is used, each with a confidence (the share of that usage the
-// cluster holds among the clusters eligible for the role × how many screens it is seen on, up to 3), and the text/background
-// pairs are checked for WCAG 2.x contrast. The engine never edits the app: the CSS is a proposal file.
+// warning) are inferred from where each cluster is used, each with a confidence: the share of that usage the
+// cluster holds among the clusters eligible for the role × screen coverage (seen on 3 screens or more = 1).
+// Text/background pairs are checked for WCAG 2.x contrast. The engine never edits the app: the CSS is a
+// proposal file. Nothing is random; ties fall back to string order.
 import { join } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
+import { redactSelector } from './selector-secrets.mjs';
 
 export const MERGE_DE = 0.03;          // OKLab distance under which two colours are one token
 export const ALPHA_TOLERANCE = 0.1;    // translucent and opaque colours never merge
@@ -26,6 +29,7 @@ export const NEUTRAL_CHROMA = 0.05;    // OKLCh chroma under which a colour is a
 export const RADIUS_TOL = { px: 2, ratio: 0.2 };     // radii within max(2px, 20% of the larger) are one token
 export const FONT_TOL = { px: 0.5, ratio: 0.07 };    // font sizes within max(0.5px, 7% of the larger)
 export const PILL_PX = 500;            // radii this large are "fully rounded" whatever the number
+export const FULL_COVERAGE_SCREENS = 3;
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const round = (x, n = 4) => { const f = 10 ** n; const r = Math.round(x * f) / f; return Object.is(r, -0) ? 0 : r; };
@@ -59,6 +63,10 @@ function labToLinear([L, a, b]) {
 }
 const polar = (L, C, h) => [L, C * Math.cos((h * Math.PI) / 180), C * Math.sin((h * Math.PI) / 180)];
 
+// One number token of a computed colour: a plain or percentage number, or `none`. Nothing else (no units, no
+// trailing text) is read, so a tampered style file cannot carry CSS through a colour value.
+const NUMBER = /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?%?$/;
+
 // Computed-style colour strings → { lin: linear-light sRGB (may be out of gamut), alpha }, or null when the
 // syntax is one nunchi does not read (reported under `unparsed`, never guessed).
 export function parseColor(input) {
@@ -70,18 +78,18 @@ export function parseColor(input) {
     const n = [0, 2, 4, 6].map(i => (i < h.length ? parseInt(h.slice(i, i + 2), 16) / 255 : 1));
     return { lin: n.slice(0, 3).map(toLinear), alpha: n[3] };
   }
-  m = /^([a-z-]+)\((.*)\)$/.exec(s);
+  m = /^([a-z]+)\(([^()]*)\)$/.exec(s);
   if (!m) return null;
   const fn = m[1];
   let body = m[2].trim();
   let space = null;
   if (fn === 'color') { const sp = /^([a-z0-9-]+)\s+(.*)$/.exec(body); if (!sp) return null; space = sp[1]; body = sp[2]; }
   let alphaPart = null;
-  if (body.includes('/')) { [body, alphaPart] = body.split('/').map(x => x.trim()); }
+  if (body.includes('/')) { const p = body.split('/'); if (p.length !== 2) return null; [body, alphaPart] = p.map(x => x.trim()); }
   let parts = body.includes(',') ? body.split(',').map(x => x.trim()) : body.split(/\s+/);
   if ((fn === 'rgba' || fn === 'rgb') && parts.length === 4 && alphaPart === null) { alphaPart = parts[3]; parts = parts.slice(0, 3); }
-  if (parts.length !== 3) return null;
-  const num = (x, pct = 1) => { if (x === 'none') return 0; const v = parseFloat(x); if (!Number.isFinite(v)) return NaN; return x.endsWith('%') ? (v / 100) * pct : v; };
+  if (parts.length !== 3 || ![...parts, ...(alphaPart === null ? [] : [alphaPart])].every(x => x === 'none' || NUMBER.test(x))) return null;
+  const num = (x, pct = 1) => { if (x === 'none') return 0; const v = parseFloat(x); return x.endsWith('%') ? (v / 100) * pct : v; };
   const alpha = alphaPart === null ? 1 : num(alphaPart, 1);
   let lin;
   if (fn === 'rgb' || fn === 'rgba') lin = parts.map(x => toLinear(num(x, 255) / 255));
@@ -106,8 +114,10 @@ export const oklabOf = c => linearToOklab(c.lin);
 export const deltaE = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 export const oklchOf = lab => [lab[0], Math.hypot(lab[1], lab[2]), ((Math.atan2(lab[2], lab[1]) * 180) / Math.PI + 360) % 360];
 
-// Hue families for counting and role hints, by OKLCh hue angle (degrees).
-const FAMILIES = [[45, 'red'], [80, 'orange'], [120, 'yellow'], [175, 'green'], [230, 'cyan'], [285, 'blue'], [320, 'purple'], [345, 'pink'], [360, 'red']];
+// Hue families for counting and role hints, by OKLCh hue angle (degrees). Pink spans the 0° seam (Tailwind
+// pink-600 sits at ~1°, pink-500 at ~354°), red starts at 12° (rose ~17°, red ~25–29°), and purple runs
+// to 340° (CSS purple and fuchsia ~322–328°).
+const FAMILIES = [[12, 'pink'], [45, 'red'], [80, 'orange'], [120, 'yellow'], [175, 'green'], [230, 'cyan'], [285, 'blue'], [340, 'purple'], [360, 'pink']];
 export function familyOf(lab) {
   const [, C, h] = oklchOf(lab);
   if (C < NEUTRAL_CHROMA) return 'grey';
@@ -132,12 +142,13 @@ export function contrastRatio(fgColor, bgColor) {
 function leaderCluster(members, distance, tie, allowed = () => true) {
   const order = [...members].sort((a, b) => b.uses - a.uses || b.screens.size - a.screens.size || tie(a, b));
   const clusters = [];
-  for (const m of order) {
+  order.forEach((m, rank) => {
+    m.rank = rank;
     let best = null, bestD = Infinity;
     for (const c of clusters) { const d = distance(m, c.leader); if (d < bestD && allowed(m, c)) { best = c; bestD = d; } }
     if (best) best.members.push({ ...m, distance: bestD });
     else clusters.push({ leader: m, members: [{ ...m, distance: 0 }] });
-  }
+  });
   return clusters;
 }
 
@@ -158,7 +169,7 @@ function usage() {
       const v = map.get(value);
       v.uses++; v.screens.add(screen);
       v.contexts[context] = (v.contexts[context] || 0) + 1;
-      if (v.examples.length < 3 && !v.examples.some(x => x.screen === screen)) v.examples.push({ screen, scene, selector, context });
+      if (v.examples.length < 3 && !v.examples.some(x => x.screen === screen)) v.examples.push({ screen, scene, selector: redactSelector(selector), context });
       return true;
     },
   };
@@ -166,6 +177,7 @@ function usage() {
 
 const TRANSPARENT = c => { const p = parseColor(c); return !p || p.alpha === 0; };
 const TEXT_ROLES = /^(text|h[1-6])$/;
+const SURFACE_CONTEXT = { page: 'page', canvas: 'page', control: 'fill', field: 'field', band: 'band', box: 'surface' };
 
 // scenes: [{ id, screen, styles: styles.json rows, paint: paint.json or null }], in any order.
 export function buildTokens({ scenes }) {
@@ -188,16 +200,16 @@ export function buildTokens({ scenes }) {
         if (!f.has(r.color)) f.set(r.color, new Set());
         f.get(r.color).add(`${s.screen}|${r.selector}`);
         // runs captured before paint.json existed: the text rows' own backgrounds are all there is
-        if (!P) colors.add(r.background, r.role === 'button' || r.role === 'link' || r.role === 'input' ? 'fill' : 'surface', s.id, r.selector, s.screen);
+        if (!P) colors.add(r.background, r.role === 'input' ? 'field' : r.role === 'button' || r.role === 'link' ? 'fill' : 'surface', s.id, r.selector, s.screen);
       }
       if (r.radius && r.radius !== '0px') radii.add(r.radius, TEXT_ROLES.test(r.role) ? 'text' : 'control', s.id, r.selector, s.screen);
       if (r.fontSize) sizes.add(r.fontSize, r.role, s.id, r.selector, s.screen);
     }
     if (!P) continue;
     for (const x of P.surfaces || []) {
-      colors.add(x.background, x.kind === 'page' || x.kind === 'canvas' ? 'page' : x.kind === 'control' ? 'fill' : x.kind === 'band' ? 'band' : 'surface', s.id, x.selector, s.screen);
+      colors.add(x.background, SURFACE_CONTEXT[x.kind] || 'surface', s.id, x.selector, s.screen);
       keepApart(x.background, x.on);
-      if (x.radius && x.radius !== '0px') radii.add(x.radius, x.kind === 'control' ? 'control' : 'surface', s.id, x.selector, s.screen);
+      if (x.radius && x.radius !== '0px') radii.add(x.radius, x.kind === 'control' || x.kind === 'field' ? 'control' : 'surface', s.id, x.selector, s.screen);
     }
     for (const x of P.borders || []) { colors.add(x.color, x.sides === 'outline' ? 'outline' : 'border', s.id, x.selector, s.screen, x.sides); keepApart(x.color, x.on); }
     for (const x of P.svg || []) { colors.add(x.fill, 'svg-fill', s.id, x.selector, s.screen); colors.add(x.stroke, 'svg-stroke', s.id, x.selector, s.screen); }
@@ -212,11 +224,36 @@ export function buildTokens({ scenes }) {
     if (c.alpha === 0) continue;
     members.push({ ...v, color: c, lab: oklabOf(c) });
   }
-  const labOf = new Map(members.map(m => [m.value, m.lab]));
+  const byValue = new Map(members.map(m => [m.value, m]));
   const near = (m, l) => Math.abs(m.color.alpha - l.color.alpha) <= ALPHA_TOLERANCE && deltaE(m.lab, l.lab) <= MERGE_DE;
-  const blocked = [];
   const colorClusters = leaderCluster(members, (m, l) => (near(m, l) ? deltaE(m.lab, l.lab) : Infinity), (a, b) => cmp(a.value, b.value),
-    (m, c) => { const x = c.members.find(y => apart.has(`${m.value}|${y.value}`)); if (x) blocked.push([m.value, c.leader.value, x.value]); return !x; });
+    (m, c) => !c.members.some(y => apart.has(`${m.value}|${y.value}`)));
+  // Figure/ground post-pass: the proposed values of a pair seen against each other must stay at least
+  // min(their own ΔE, MERGE_DE) apart. Otherwise the member that moved (the lighter one when both did) is split
+  // off to stand as its own token, unchanged. Each split adds a cluster, so the loop ends.
+  const clusterOfValue = new Map();
+  for (const c of colorClusters) for (const m of c.members) clusterOfValue.set(m.value, c);
+  const pairs = [...apart].map(k => k.split('|')).filter(([a, b]) => a < b && byValue.has(a) && byValue.has(b)).sort((x, y) => cmp(x[0], y[0]) || cmp(x[1], y[1]));
+  const split = new Set();
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const [x, y] of pairs) {
+      const cx = clusterOfValue.get(x), cy = clusterOfValue.get(y);
+      const own = deltaE(byValue.get(x).lab, byValue.get(y).lab);
+      const now = cx === cy ? 0 : deltaE(cx.leader.lab, cy.leader.lab);
+      if (now + 1e-12 >= Math.min(own, MERGE_DE)) continue;
+      const moved = [x, y].filter(v => clusterOfValue.get(v).leader.value !== v).sort((a, b) => byValue.get(b).rank - byValue.get(a).rank);
+      if (!moved.length) continue;
+      const v = moved[0];
+      const from = clusterOfValue.get(v);
+      from.members = from.members.filter(m => m.value !== v);
+      const nc = { leader: byValue.get(v), members: [{ ...byValue.get(v), distance: 0 }] };
+      colorClusters.push(nc);
+      clusterOfValue.set(v, nc);
+      split.add(`${x}|${y}`);
+      changed = true;
+    }
+  }
   const clusterOf = new Map();
   const palette = colorClusters.map(c => {
     const leader = c.leader;
@@ -230,7 +267,7 @@ export function buildTokens({ scenes }) {
       spread: round(Math.max(...c.members.map(m => m.distance))),
       members: c.members.map(m => ({ value: m.value, uses: m.uses, screens: m.screens.size, deltaE: round(m.distance), contexts: sortObj(m.contexts), examples: m.examples.map(({ scene, selector, context }) => ({ scene, selector, context })) }))
         .sort((a, b) => b.uses - a.uses || b.screens - a.screens || cmp(a.value, b.value)),
-      _color: leader.color, _lab: leader.lab, _screensByCtx: {},
+      _color: leader.color, _lab: leader.lab, _chroma: oklchOf(leader.lab)[1], _screensByCtx: {},
     };
     // screens per context, for coverage: a role seen on most screens is a surer guess than one seen once
     for (const m of c.members) {
@@ -247,32 +284,24 @@ export function buildTokens({ scenes }) {
     cls.forEach((cl, i) => { cl.token = `--${fam}-${i + 1}`; });
   }
   palette.sort((a, b) => cmp(a.family, b.family) || b._lab[0] - a._lab[0] || b.alpha - a.alpha || cmp(a.value, b.value));
-  // near-duplicates left as two tokens because one is seen against the other
-  const keptApart = [];
-  const kSeen = new Set();
-  for (const [m, leader, against] of blocked) {
-    const a = clusterOf.get(m), b = clusterOf.get(leader);
-    if (!a || !b || a === b) continue;
-    const k = [a.token, b.token].sort().join('|');
-    if (kSeen.has(k)) continue;
-    kSeen.add(k);
-    keptApart.push({ colors: [a.token, b.token].sort(), values: [m, leader].sort(), deltaE: round(deltaE(labOf.get(m), labOf.get(leader))), seenAgainst: against });
-  }
-  keptApart.sort((a, b) => cmp(a.colors.join('|'), b.colors.join('|')));
+  // pairs seen against each other that the clustering would otherwise have merged, or that were split apart
+  const keptApart = pairs.filter(([x, y]) => split.has(`${x}|${y}`) || near(byValue.get(x), byValue.get(y)))
+    .map(([x, y]) => ({ a: { token: clusterOf.get(x).token, value: x }, b: { token: clusterOf.get(y).token, value: y }, deltaE: round(deltaE(byValue.get(x).lab, byValue.get(y).lab)) }));
 
   // ── roles ──
   const allScreens = new Set(list.map(s => s.screen));
   const ctxUses = (cl, ctxs) => ctxs.reduce((n, k) => n + (cl.contexts[k] || 0), 0);
   const ctxScreens = (cl, ctxs) => new Set(ctxs.flatMap(k => [...(cl._screensByCtx[k] || [])])).size;
-  const pick = (ctxs, filter = () => true) => {
+  const coverageOf = screens => Math.min(1, screens / FULL_COVERAGE_SCREENS);
+  // tie-break after uses: screens, then value (never the token name, which carries the family)
+  const byScreens = ctxs => (a, b) => ctxScreens(b, ctxs) - ctxScreens(a, ctxs) || cmp(a.value, b.value);
+  const pick = (ctxs, filter = () => true, tie = byScreens(ctxs)) => {
     const cands = palette.filter(cl => ctxUses(cl, ctxs) > 0 && filter(cl));
     if (!cands.length) return null;
-    cands.sort((a, b) => ctxUses(b, ctxs) - ctxUses(a, ctxs) || ctxScreens(b, ctxs) - ctxScreens(a, ctxs) || cmp(a.token, b.token));
+    cands.sort((a, b) => ctxUses(b, ctxs) - ctxUses(a, ctxs) || tie(a, b));
     const best = cands[0];
     const total = cands.reduce((n, cl) => n + ctxUses(cl, ctxs), 0);   // share among the eligible clusters
-    const share = ctxUses(best, ctxs) / total;
-    const coverage = Math.min(1, ctxScreens(best, ctxs) / Math.max(1, Math.min(3, allScreens.size)));
-    return { cluster: best, share, coverage, uses: ctxUses(best, ctxs), screens: ctxScreens(best, ctxs) };
+    return { cluster: best, share: ctxUses(best, ctxs) / total, coverage: coverageOf(ctxScreens(best, ctxs)), uses: ctxUses(best, ctxs), screens: ctxScreens(best, ctxs) };
   };
   const roles = [];
   const level = c => (c >= 0.6 ? 'high' : c >= 0.3 ? 'medium' : 'low');
@@ -300,7 +329,14 @@ export function buildTokens({ scenes }) {
       return c < textC && c >= 1.5;
     }), 'secondary text (grey, less contrast than the text colour)');
   }
-  const accent = addRole('accent', pick(['fill'], cl => cl !== bg && cl !== surface) || pick(['link'], cl => cl.family !== 'grey'), 'control fills (filled buttons, links styled as buttons)');
+  // Accent: a control fill (buttons, links styled as buttons; never a form field) other than the background and
+  // the surface. When any such fill has a hue, greys (a secondary button, a white outline button) are not the
+  // accent. Ties go to the more saturated colour, then screens, then value.
+  const fillCands = palette.filter(cl => ctxUses(cl, ['fill']) > 0 && cl !== bg && cl !== surface);
+  const chromaticFill = fillCands.some(cl => cl.family !== 'grey');
+  const byChroma = ctxs => (a, b) => b._chroma - a._chroma || ctxScreens(b, ctxs) - ctxScreens(a, ctxs) || cmp(a.value, b.value);
+  const accent = addRole('accent', pick(['fill'], cl => cl !== bg && cl !== surface && (!chromaticFill || cl.family !== 'grey'), byChroma(['fill']))
+    || pick(['link'], cl => cl.family !== 'grey', byChroma(['link'])), 'control fills (filled buttons, links styled as buttons)');
   if (accent) {
     // the text colour most often set on the accent fill
     const on = new Map();   // text cluster → Set of "screen|selector" on an accent fill
@@ -313,16 +349,17 @@ export function buildTokens({ scenes }) {
         for (const x of set) on.get(cl).add(x);
       }
     }
-    const cands = [...on].sort((a, b) => b[1].size - a[1].size || cmp(a[0].token, b[0].token));
+    const screensOf = set => new Set([...set].map(x => x.split('|')[0])).size;
+    const cands = [...on].sort((a, b) => b[1].size - a[1].size || screensOf(b[1]) - screensOf(a[1]) || cmp(a[0].value, b[0].value));
     if (cands.length) {
       const [cl, set] = cands[0];
       const total = cands.reduce((n, [, s]) => n + s.size, 0);
-      const screens = new Set([...set].map(x => x.split('|')[0])).size;
-      addRole('accent-foreground', { cluster: cl, share: set.size / total, coverage: Math.min(1, screens / Math.max(1, Math.min(3, allScreens.size))), uses: set.size, screens }, 'text on the accent fill');
+      const screens = screensOf(set);
+      addRole('accent-foreground', { cluster: cl, share: set.size / total, coverage: coverageOf(screens), uses: set.size, screens }, 'text on the accent fill');
     }
   }
   // Status colours are guessed from hue alone, so they never claim more than medium confidence.
-  const ALL = ['text', 'link', 'control-text', 'on-fill', 'fill', 'surface', 'band', 'border', 'outline', 'svg-fill', 'svg-stroke'];
+  const ALL = ['text', 'link', 'control-text', 'on-fill', 'fill', 'field', 'surface', 'band', 'border', 'outline', 'svg-fill', 'svg-stroke'];
   for (const [role, fams] of [['danger', ['red']], ['success', ['green']], ['warning', ['orange', 'yellow']]]) {
     addRole(role, pick(ALL, cl => fams.includes(cl.family) && cl !== accent), `the most-used ${fams.join(' or ')} colour (hue only)`, 0.5);
   }
@@ -330,16 +367,23 @@ export function buildTokens({ scenes }) {
   const contrast = [];
   for (const [fg, bgr] of [['text', 'background'], ['text', 'surface'], ['text-muted', 'background'], ['text-muted', 'surface'], ['accent-foreground', 'accent'], ['accent', 'background'], ['danger', 'background']]) {
     const a = roleOf(fg), b = roleOf(bgr);
-    if (!a || !b || a.ref === b.ref || contrast.some(c => c.refs[0] === a.ref && c.refs[1] === b.ref)) continue;   // same pair of colours once
-    const ratio = round(contrastRatio(palette.find(c => c.token === a.ref)._color, palette.find(c => c.token === b.ref)._color), 2);
+    if (!a || !b || contrast.some(c => c.refs[0] === a.ref && c.refs[1] === b.ref)) continue;   // the same pair of colours once
+    // two roles on one token: the text would be invisible on that background
+    const ratio = a.ref === b.ref ? 1 : round(contrastRatio(palette.find(c => c.token === a.ref)._color, palette.find(c => c.token === b.ref)._color), 2);
     contrast.push({ fg, bg: bgr, refs: [a.ref, b.ref], ratio, aa: ratio >= 4.5, aaLarge: ratio >= 3 });
   }
 
-  // ── radii and font sizes ──
-  const px = v => { const m = /^(-?[\d.]+)px/.exec(v); return m ? parseFloat(m[1]) : null; };
+  // ── radii and font sizes ── strict values only: `<number>px`, or `<number>%` for radii
+  const px = v => { const m = /^(\d+(?:\.\d+)?)px$/.exec(v); return m ? parseFloat(m[1]) : null; };
+  const pct = v => (/^\d+(?:\.\d+)?%$/.test(v) ? v : null);
   const rank = c => (!c.special ? 0 : c.special === 'full' ? 1 : 2);   // numbers, then fully rounded, then percentages
   const oneD = (u, tol, special) => {
-    const mem = [...u.map.values()].map(v => ({ ...v, n: px(v.value), special: special(v.value) })).filter(v => v.n !== null || v.special);
+    const mem = [];
+    for (const v of [...u.map.values()].sort((a, b) => cmp(a.value, b.value))) {
+      const n = px(v.value), sp = special(v.value, n);
+      if (n === null && !sp) { unparsed.push({ value: v.value, uses: v.uses }); continue; }
+      mem.push({ ...v, n, special: sp });
+    }
     const close = (a, b) => (a.special || b.special ? (a.special && a.special === b.special ? 0 : Infinity) : (Math.abs(a.n - b.n) <= Math.max(tol.px, tol.ratio * Math.max(a.n, b.n)) ? Math.abs(a.n - b.n) : Infinity));
     return leaderCluster(mem, close, (a, b) => (a.n ?? Infinity) - (b.n ?? Infinity) || cmp(a.value, b.value)).map(c => ({
       value: c.leader.value, n: c.leader.n, special: c.leader.special, uses: c.members.reduce((n, m) => n + m.uses, 0), screens: new Set(c.members.flatMap(m => [...m.screens])).size,
@@ -347,16 +391,18 @@ export function buildTokens({ scenes }) {
         .sort((a, b) => b.uses - a.uses || b.screens - a.screens || cmp(a.value, b.value)),
     })).sort((a, b) => rank(a) - rank(b) || (a.n ?? 0) - (b.n ?? 0) || cmp(a.value, b.value));
   };
-  const radiusClusters = oneD(radii, RADIUS_TOL, v => (/%/.test(v) ? 'percent:' + v : (px(v) ?? 0) >= PILL_PX ? 'full' : null));
+  const radiusClusters = oneD(radii, RADIUS_TOL, (v, n) => (pct(v) ? 'percent:' + v : n !== null && n >= PILL_PX ? 'full' : null));
   let ri = 0;
-  for (const r of radiusClusters) r.token = r.special === 'full' ? '--radius-full' : r.special ? `--radius-${r.value.replace(/[^0-9a-z]+/gi, '')}pct` : `--radius-${++ri}`;
+  for (const r of radiusClusters) r.token = r.special === 'full' ? '--radius-full' : r.special ? `--radius-${r.value.replace(/[^0-9]+/g, '')}pct` : `--radius-${++ri}`;
   const sizeClusters = oneD(sizes, FONT_TOL, () => null);
   sizeClusters.forEach((c, i) => { c.token = `--font-size-${i + 1}`; });
   // body size: the most-used size of plain text; a tie goes to the size nearer the browser default (16px)
   const textUses = c => c.members.reduce((n, m) => n + (m.contexts.text || 0), 0);
   const bodySize = [...sizeClusters].sort((a, b) => textUses(b) - textUses(a) || Math.abs(a.n - 16) - Math.abs(b.n - 16) || a.n - b.n)[0];
   if (bodySize && bodySize.members.some(m => m.contexts.text)) bodySize.role = 'body';
-  const strip = ({ n, special, ...rest }) => rest;
+  // CSS values are re-serialised from the parsed numbers, never copied from the evidence
+  const strip = ({ n, special, ...rest }) => ({ ...rest, css: special ? (special === 'full' ? `${n}px` : rest.value) : `${n}px` });
+  unparsed.sort((a, b) => cmp(a.value, b.value));
 
   // ── summary ──
   const fam = [...byFamily].map(([f, cls]) => ({ family: f, before: cls.reduce((n, c) => n + c.members.length, 0), after: cls.length }))
@@ -366,40 +412,45 @@ export function buildTokens({ scenes }) {
   const radiiBefore = radiusClusters.reduce((n, c) => n + c.members.length, 0);
   const sizesBefore = sizeClusters.reduce((n, c) => n + c.members.length, 0);
   const line = [...fam.map(f => `${f.before} ${plural[f.family]} → ${f.after}`), `${radiiBefore} radii → ${radiusClusters.length}`, `${sizesBefore} font sizes → ${sizeClusters.length}`].join(' · ');
-  const report = {
+  return {
     schema: 1,
     method: {
       colorSpace: 'OKLab', mergeDeltaE: MERGE_DE, alphaTolerance: ALPHA_TOLERANCE, neutralChroma: NEUTRAL_CHROMA,
-      keptApart: 'a colour never merges with one it is seen against (a surface and what it sits on, a border and its background)',
+      keptApart: 'colours seen against each other (a surface and what it sits on, a border and its background) never share a token, and their proposed values stay at least min(their own ΔE, mergeDeltaE) apart',
       clustering: 'leader: by weight (uses, then screens, then value), each value joins the nearest leader within tolerance, else leads a new cluster; the leader is the proposed value',
       radius: `same token when |a − b| ≤ max(${RADIUS_TOL.px}px, ${RADIUS_TOL.ratio * 100}% of the larger); ≥ ${PILL_PX}px is fully rounded; percentages stand alone`,
       fontSize: `same token when |a − b| ≤ max(${FONT_TOL.px}px, ${FONT_TOL.ratio * 100}% of the larger)`,
       uses: 'distinct style rows per screen (route × person): identical elements on one screen count once, and a screen seen at two widths or in several states counts once',
+      confidence: `share among the clusters eligible for the role × screen coverage (${FULL_COVERAGE_SCREENS} screens or more = 1)`,
       contrast: 'WCAG 2.x relative luminance; AA 4.5:1, large text 3:1',
     },
     scenes: list.length, screens: allScreens.size, measured: withPaint === list.length ? 'paint' : withPaint ? 'mixed' : 'styles-only',
     summary: { line, colors: { before: colorsBefore, after: palette.length }, families: fam, radii: { before: radiiBefore, after: radiusClusters.length }, fontSizes: { before: sizesBefore, after: sizeClusters.length } },
-    colors: palette.map(({ _color, _lab, _screensByCtx, ...rest }) => rest),
-    roles, contrast, keptApart,
+    colors: palette.map(({ _color, _lab, _chroma, _screensByCtx, ...rest }) => rest),
+    roles, contrast: contrast.map(({ refs, ...c }) => c), keptApart,
     radii: radiusClusters.map(strip), fontSizes: sizeClusters.map(strip),
     unparsed,
   };
-  report.css = tokensCss(report);
-  return report;
 }
 
 function sortObj(o) { const out = {}; for (const k of Object.keys(o).sort()) out[k] = o[k]; return out; }
 
-// The proposal as CSS custom properties. nunchi never writes it into the app (design §4.1).
+// The proposal as CSS custom properties (tokens.css). nunchi never writes it into the app (design §4.1).
+// Colour values reach this file only after parseColor read every token of them; anything else is left out.
+const SAFE_VALUE = /^[a-z0-9#(),.%/ +-]+$/i;
 export function tokensCss(report) {
   const lines = ['/* nunchi tokens: a proposal measured from your screens. nunchi does not apply it. */', ':root {', '  /* palette: one value per cluster, the most-used member */'];
-  for (const c of report.colors) lines.push(`  ${c.token}: ${c.value};${c.members.length > 1 ? ` /* merges ${c.members.length - 1} near-duplicate(s), ΔE ≤ ${c.spread} */` : ''}`);
+  for (const c of report.colors) {
+    if (!parseColor(c.value) || !SAFE_VALUE.test(c.value)) continue;
+    lines.push(`  ${c.token}: ${c.value};${c.members.length > 1 ? ` /* merges ${c.members.length - 1} near-duplicate(s), ΔE ≤ ${Number(c.spread)} */` : ''}`);
+  }
   if (report.roles.length) lines.push('  /* roles */');
   for (const r of report.roles) lines.push(`  ${r.token}: var(${r.ref}); /* confidence ${r.level} */`);
+  const safe = list => list.filter(x => SAFE_VALUE.test(x.css) && /^(\d+(\.\d+)?)(px|%)$/.test(x.css));
   if (report.radii.length) lines.push('  /* radii */');
-  for (const r of report.radii) lines.push(`  ${r.token}: ${r.value};`);
+  for (const r of safe(report.radii)) lines.push(`  ${r.token}: ${r.css};`);
   if (report.fontSizes.length) lines.push('  /* font sizes */');
-  for (const f of report.fontSizes) lines.push(`  ${f.token}: ${f.value};`);
+  for (const f of safe(report.fontSizes)) lines.push(`  ${f.token}: ${f.css};`);
   const body = report.fontSizes.find(f => f.role === 'body');
   if (body) lines.push(`  --font-size-body: var(${body.token});`);
   lines.push('}');
@@ -407,16 +458,24 @@ export function tokensCss(report) {
 }
 
 // Reads a run folder: captured scenes only (framework error pages, redirected scenes and canary copies left out).
+// An unreadable file is a BAD_RUN error naming it, never a stack trace.
+const readJsonFile = path => {
+  try { return JSON.parse(readFileSync(path, 'utf8')); }
+  catch (e) { throw Object.assign(new Error(`${path} is not readable JSON (${String(e.message).split('\n')[0]})`), { code: 'BAD_RUN' }); }
+};
 export function readRunScenes(runDir) {
-  const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+  const manifest = readJsonFile(join(runDir, 'manifest.json'));
+  if (!manifest || !Array.isArray(manifest.scenes)) throw Object.assign(new Error(`${join(runDir, 'manifest.json')} has no scenes list`), { code: 'BAD_RUN' });
   const out = [];
-  for (const e of manifest.scenes || []) {
-    if (e.status !== 'captured' || e.redirected || e.httpStatus >= 400 || e.canary !== undefined) continue;
+  for (const e of manifest.scenes) {
+    if (!e || e.status !== 'captured' || e.redirected || e.httpStatus >= 400 || e.canary !== undefined) continue;
+    // scene ids name folders inside the run: nothing that could climb out of it
+    if (typeof e.id !== 'string' || !e.id || /[/\\]|^\.\.?$/.test(e.id)) continue;
     const at = f => join(runDir, e.id, f);
     if (!existsSync(at('styles.json'))) continue;
-    const styles = JSON.parse(readFileSync(at('styles.json'), 'utf8'));
-    const paint = existsSync(at('paint.json')) ? JSON.parse(readFileSync(at('paint.json'), 'utf8')) : null;
-    out.push({ id: e.id, screen: e.person === 'guest' ? e.route : `${e.route} (${e.person})`, styles, paint });
+    const styles = readJsonFile(at('styles.json'));
+    const paint = existsSync(at('paint.json')) ? readJsonFile(at('paint.json')) : null;
+    out.push({ id: e.id, screen: e.person === 'guest' ? e.route : `${e.route} (${e.person})`, styles: Array.isArray(styles) ? styles : [], paint: paint && typeof paint === 'object' ? paint : null });
   }
   return out;
 }
@@ -427,7 +486,7 @@ export function formatTokens(report, files) {
   out.push(report.summary.line);
   for (const r of report.roles) out.push(`  ${r.token.padEnd(26)} ${r.ref.padEnd(12)} ${r.value.padEnd(24)} ${r.level} (${r.confidence})`);
   for (const c of report.contrast) out.push(`  contrast ${c.fg} on ${c.bg}: ${c.ratio.toFixed(2)}:1 ${c.aa ? 'AA' : c.aaLarge ? 'AA large text only' : 'FAILS AA'}`);
-  if (report.unparsed.length) out.push(`  ${report.unparsed.length} colour value(s) in a syntax nunchi does not read: ${report.unparsed.map(u => u.value).slice(0, 3).join(', ')}`);
+  if (report.unparsed.length) out.push(`  ${report.unparsed.length} value(s) in a syntax nunchi does not read, left out: ${report.unparsed.slice(0, 3).map(u => JSON.stringify(String(u.value).slice(0, 40))).join(', ')}`);
   if (files) out.push(`wrote ${files.join(', ')} (a proposal: nothing in your code was changed)`);
   return out.join('\n');
 }

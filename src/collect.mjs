@@ -162,7 +162,8 @@ export function collect() {
   //   surfaces  non-transparent background-color of a visible element at least 256 px² in area and 2 px on
   //             its short side (smaller fills are dots and hairlines, not surfaces), plus the page: <html>
   //             and <body>, or the browser's white canvas when both are transparent (light scheme only).
-  //             kind: page | canvas | control (link, button, field) | band (≥ 90% of the viewport wide) | box
+  //             kind: page | canvas | control (link, button) | field (input, select, textarea) |
+  //             band (≥ 90% of the viewport wide) | box
   //   borders   visible border sides (width > 0, style not none/hidden, colour not transparent), one row per
   //             colour with the sides it is on (t r b l), and outlines (sides: outline)
   //   on        (surfaces and borders) the background the colour is seen against: for a surface the nearest
@@ -170,7 +171,12 @@ export function collect() {
   //             A colour and what it is on must stay two tokens, or the card or the line disappears.
   //   svg       fill and stroke of visible inline SVG shapes (none and url(#gradient) paints left out)
   // Deduplicated like `styles`: the first element in document order with a given row keeps its selector.
-  const clear = c => !c || c === 'transparent' || /,\s*0\)$/.test(c) || /\/\s*0\)$/.test(c);
+  // transparent: alpha 0, read from `rgba(r, g, b, a)` or a `/ a` slash alpha (never from a blue channel of 0)
+  const clear = c => {
+    if (!c || c === 'transparent') return true;
+    const m = /^rgba\([^,()]+,[^,()]+,[^,()]+,\s*([-\d.e]+%?)\s*\)$/.exec(c) || /\/\s*([-\d.e]+%?)\s*\)$/.exec(c);
+    return !!m && parseFloat(m[1]) === 0;
+  };
   const paint = { surfaces: [], borders: [], svg: [] };
   const paintSeen = new Set();
   const addPaint = (part, el, row) => {
@@ -186,9 +192,19 @@ export function collect() {
   const lightCanvas = !/^dark$/.test(getComputedStyle(doc).colorScheme.trim());
   if (!roots.length && lightCanvas) addPaint('surfaces', doc, { background: 'rgb(255, 255, 255)', radius: '0px', kind: 'canvas' });
   const canvas = roots.length ? getComputedStyle(roots[0]).backgroundColor : lightCanvas ? 'rgb(255, 255, 255)' : null;
+  // the background an element is seen against, memoised per ancestor so the walk stays linear in the DOM
+  const effective = new Map();
   const behind = el => {
-    for (let a = el.parentElement; a; a = a.parentElement) { const b = getComputedStyle(a).backgroundColor; if (!clear(b)) return b; }
-    return canvas;
+    const chain = [];
+    let a = el.parentElement, found = canvas;
+    for (; a; a = a.parentElement) {
+      if (effective.has(a)) { found = effective.get(a); break; }
+      const b = getComputedStyle(a).backgroundColor;
+      if (!clear(b)) { found = b; effective.set(a, b); break; }
+      chain.push(a);
+    }
+    for (const x of chain) effective.set(x, found);
+    return found;
   };
   for (const el of document.querySelectorAll('body *')) {
     if (paint.surfaces.length >= MAX && paint.borders.length >= MAX && paint.svg.length >= MAX) break;
@@ -211,7 +227,7 @@ export function collect() {
     if (!clear(cs.backgroundColor)) {
       const r = el.getBoundingClientRect();
       if (r.width * r.height >= 256 && Math.min(r.width, r.height) >= 2) {
-        const kind = el.matches('a[href],button,[role="button"],input,select,textarea,summary') ? 'control' : r.width >= 0.9 * innerWidth ? 'band' : 'box';
+        const kind = el.matches('input,select,textarea') ? 'field' : el.matches('a[href],button,[role="button"],summary') ? 'control' : r.width >= 0.9 * innerWidth ? 'band' : 'box';
         addPaint('surfaces', el, { background: cs.backgroundColor, radius: cs.borderTopLeftRadius, kind, on: behind(el) });
       }
     }

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kettle Notes</title>
+<style>
+  /* colours whose blue channel is 0: black, red, yellow; none of them is transparent */
+  body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: rgb(240, 240, 240); background: rgb(0, 0, 0); }
+  main { padding: 16px; max-width: 720px; margin: 0 auto; }
+  .card { padding: 12px; margin: 0 0 12px; background: rgb(255, 0, 0); border: 2px solid rgb(0, 0, 0); border-radius: 8px; color: rgb(0, 0, 0); }
+  .warn { padding: 12px; background: rgb(255, 255, 0); color: rgb(0, 0, 0); outline: 2px solid rgb(255, 0, 0); }
+  input { background: rgb(255, 255, 255); color: rgb(0, 0, 0); border: 1px solid rgb(255, 0, 0); height: 32px; width: 200px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Kettle Notes</h1>
+  <div class="card"><p>Descale the kettle before the weekend</p></div>
+  <div class="warn"><p>The filter is due for a change</p></div>
+  <label>Note <input type="text"></label>
+  <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M4 4h16v16H4z" stroke="rgb(255, 0, 0)" stroke-width="2"/>
+  </svg>
+</main>
+</body>
+</html>

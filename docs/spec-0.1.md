@@ -258,15 +258,19 @@ selector. Each list holds at most 400 rows.
 
 | List | Row | Recorded when |
 |---|---|---|
-| `surfaces` | `background`, `radius`, `kind`, `on`, `selector` | `<html>` and `<body>` with a background (`kind: page`); when both are transparent, the browser's white canvas (`canvas`, light scheme only). Any other visible element whose `background-color` is not transparent and whose box is ≥ 256 px² with a short side ≥ 2 px (smaller fills are dots and hairlines). `kind`: `control` (link, button, field), `band` (≥ 90% of the viewport wide) or `box` |
+| `surfaces` | `background`, `radius`, `kind`, `on`, `selector` | `<html>` and `<body>` with a background (`kind: page`); when both are transparent, the browser's white canvas (`canvas`, light scheme only). Any other visible element whose `background-color` is not transparent and whose box is ≥ 256 px² with a short side ≥ 2 px (smaller fills are dots and hairlines). `kind`: `control` (link, button), `field` (input, select, textarea), `band` (≥ 90% of the viewport wide) or `box`. Transparent means alpha 0, read from the alpha component only |
 | `borders` | `color`, `sides` (`trbl` subset, or `outline`), `width`, `on`, `selector` | a visible border side with width > 0, a style other than none or hidden, and a colour that is not transparent; one row per colour; outlines likewise |
 | `svg` | `fill`, `stroke`, `selector` | a visible inline SVG shape (`path`, `circle`, `rect`, `ellipse`, `line`, `polyline`, `polygon`, `text`, `use`) outside `<defs>`, `<symbol>`, masks and patterns; `none`, `url(#…)` paints and zero opacity are left out |
 
 `on` is the background the colour is seen against: for a surface, the nearest ancestor's background; for a border,
-the element's own background, else its ancestor's; the canvas at the top.
+the element's own background, else its ancestor's; the canvas at the top. The lookup is memoised per ancestor, so the
+walk stays linear in the size of the DOM. Selectors in `paint.json` and in token examples have secret-shaped `id` and
+`data-testid` values replaced by `REDACTED` (the bundle scanner's shapes, plus any 40+ character token mixing letters
+and digits).
 
 **Proposal (`nunchi tokens [--run <id>] [--json]`).** It reads captured scenes only (framework error pages, redirected
-scenes and canary copies are left out) and writes `tokens.json` and `tokens.css` into the run.
+scenes and canary copies are left out) and writes `tokens.json` and `tokens.css` into the run. An unreadable run
+file is a one-line error with exit code 2.
 - *Uses.* A use is a distinct style row on a screen (route × person). A screen seen at two widths or in several states
   counts once.
 - *Colours.* Text colours come from `styles.json`. Backgrounds, borders and SVG paint come from `paint.json`; a run
@@ -274,26 +278,41 @@ scenes and canary copies are left out) and writes `tokens.json` and `tokens.css`
   - Colours are clustered in OKLab by leader clustering. In order of uses, then screens, then value, each colour joins
     the nearest cluster leader within ΔE_OK ≤ 0.03 (about one just-noticeable difference) whose alpha is within 0.1.
     Otherwise it leads a new cluster.
-  - A colour never joins a cluster that holds a colour it is seen against. Otherwise a card on the page, or a
-    line on a card, would vanish. Such near pairs are listed under `keptApart`.
+  - Figure and ground keep their separation. For every pair of colours seen against each other (a card and the page,
+    a line and its card), the proposed values stay at least min(their own ΔE, 0.03) apart; otherwise the card or the
+    line would fade. A colour never joins a cluster holding a colour it is seen against, and a post-pass splits off any
+    member whose move would still bring such a pair closer (the one that moved, the lighter one when both did).
+    Such pairs are listed under `keptApart` as `{a: {token, value}, b: {token, value}, deltaE}`, with the ΔE between
+    the two colours themselves.
   - A cluster's proposed value is its leader, the most-used member, so that colour does not change. Each member
     lists its uses, its screens, its ΔE from the leader, the contexts it is used in and up to three examples
     (scene, selector).
-  - Families: OKLCh chroma < 0.05 is grey; otherwise the family comes from the hue angle (red, orange, yellow, green,
-    cyan, blue, purple, pink). Tokens are `--<family>-<n>`, lightest first.
+  - Families: OKLCh chroma < 0.05 is grey. Otherwise the family comes from the hue angle: pink below 12° and from
+    340°, red to 45°, orange to 80°, yellow to 120°, green to 175°, cyan to 230°, blue to 285°, purple to 340°.
+    So Tailwind pink is pink, rose and red are red, and CSS purple and fuchsia are purple. Tokens are
+    `--<family>-<n>`, lightest first.
+  - Values are parsed strictly: every number of a colour, and `<number>px` or `<number>%` for radii and sizes.
+    Anything else is listed under `unparsed` and left out, so a tampered evidence file cannot put CSS into
+    `tokens.css`. Radii and sizes are written back from the parsed numbers.
 - *Roles,* inferred from usage, each with a confidence: the share of that usage the cluster holds among the clusters
-  eligible for the role × screen coverage (seen on 3 screens or more = 1). High is ≥ 0.6 and medium ≥ 0.3.
+  eligible for the role × screen coverage (screens ÷ 3, at most 1, so a one-screen run is never above 0.33). High is
+  ≥ 0.6 and medium ≥ 0.3. Ties go to the colour seen on more screens, then to the value; the token name is never used.
   - `background`: page records.
   - `surface`: the most-used container fill. It may equal the background, as with white cards on a white page.
   - `border`.
   - `text`.
   - `text-muted`: a grey on the same side of the background as the text, with less contrast but ≥ 1.5:1.
-  - `accent`: control fills other than the background and the surface, else a coloured link colour.
+  - `accent`: a control fill (button, link styled as a button; never a form field) other than the background and the
+    surface. When any such fill has a hue, greys (secondary and outline buttons) are not candidates. Ties go to the
+    more saturated colour. Without control fills, the accent is the most-used coloured link colour.
   - `accent-foreground`: the text colour most often set on the accent.
   - `danger`, `success`, `warning`: the most-used red, green, or orange/yellow. These are guessed from hue only, so
     their confidence is capped at 0.5.
 - *Contrast* (WCAG 2.x, hand-written): text and muted text on the background and the surface, accent foreground on
   the accent, accent and danger on the background. Each pair reports its ratio, AA (4.5:1) and AA for large text (3:1).
+  Two roles on one token (dark cards in the text colour) are reported at 1:1, failing.
+- *Files.* `tokens.json` holds the data. `tokens.css` holds the proposal as custom properties; it is not repeated in
+  the JSON.
 - *Radii* are one token when |a − b| ≤ max(2 px, 20% of the larger). Values ≥ 500 px are `--radius-full`, and
   percentages stand alone.
 - *Font sizes* are one token when |a − b| ≤ max(0.5 px, 7% of the larger). The most-used plain-text size is
@@ -320,7 +339,10 @@ Further caveats:
 *Measured (2026-10-14 KST, real-data sanity check, thresholds not tuned to either app).* Capture time is unchanged
 (Pebble 124.5 s against 125.1 s before). `styles.json`, `measure.json`, `findings.json` and `design-system.json` are
 byte-identical to a capture without `paint.json`. Pebble `--twice` stays 34/34 and identical (1,140 files), and
-fingerprints are 52/52.
+fingerprints are 52/52. After the review fixes (14:01 KST) it is again 34/34, identical and 52/52 (129.7 s), and
+both summaries below are unchanged. pegroom's accent confidence rose from 0.81 to 0.93, because form fields no longer
+count as accent candidates. On a synthetic page with 10,000 filled leaves at depth 300, `collect()` takes 660 ms with
+the memoised lookup, against 2,643 ms before.
 
 | App | Scenes · screens | `nunchi tokens` summary | Roles |
 |---|---|---|---|

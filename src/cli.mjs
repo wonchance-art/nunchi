@@ -521,14 +521,16 @@ if (cmd === 'setup') {
   } else { console.error('nunchi verify: use --plan, or --record <verdicts.json>'); process.exit(1); }
 } else if (cmd === 'tokens') {
   // Design supporter, Stage 0 (Tidy): a token proposal from the run's evidence. Writes into the run only.
-  const { buildTokens, readRunScenes, formatTokens } = await import('./tokens.mjs');
+  const { buildTokens, readRunScenes, formatTokens, tokensCss } = await import('./tokens.mjs');
   const { writeStable, stableJson } = await import('./stable.mjs');
   const dir = runDirOf(args, 'tokens');
-  const scenes = readRunScenes(dir);
+  let scenes;
+  try { scenes = readRunScenes(dir); }
+  catch (e) { if (e.code !== 'BAD_RUN') throw e; console.error(`nunchi tokens: ${e.message}`); process.exit(2); }
   if (!scenes.length) { console.error(`nunchi tokens: ${dir} has no captured screens to measure`); process.exit(1); }
   const report = buildTokens({ scenes });
   writeStable(join(dir, 'tokens.json'), report);
-  writeStable(join(dir, 'tokens.css'), report.css);
+  writeStable(join(dir, 'tokens.css'), tokensCss(report));
   if (args.json) process.stdout.write(stableJson(report));
   else console.log(formatTokens(report, [join(dir, 'tokens.json'), join(dir, 'tokens.css')]));
 } else if (cmd === 'gc') {

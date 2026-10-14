@@ -6,7 +6,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { parseColor, oklabOf, oklchOf, deltaE, contrastRatio, familyOf, buildTokens, readRunScenes, MERGE_DE } from '../src/tokens.mjs';
+import { parseColor, oklabOf, oklchOf, deltaE, contrastRatio, familyOf, buildTokens, readRunScenes, tokensCss, MERGE_DE } from '../src/tokens.mjs';
+import { redactSelector } from '../src/selector-secrets.mjs';
 import { stableJson } from '../src/stable.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -61,7 +62,9 @@ test('tidy: near-duplicate greys and blues merge into the most-used member; a co
   assert.equal(tokenOf(r, 'rgb(17, 24, 39)'), tokenOf(r, 'rgb(24, 24, 27)'), 'text colours merge');
   assert.equal(tokenOf(r, 'rgb(37, 99, 235)'), tokenOf(r, 'rgb(36, 99, 235)'), 'blues merge');
   assert.notEqual(tokenOf(r, 'rgb(249, 250, 251)'), tokenOf(r, 'rgb(255, 255, 255)'), `a card on the page stays a token of its own, though ΔE < ${MERGE_DE}`);
-  assert.ok(r.keptApart.some(k => k.values.includes('rgb(255, 255, 255)') && k.deltaE < MERGE_DE && k.seenAgainst), 'and listed as kept apart');
+  const kept = r.keptApart.find(k => k.a.value === 'rgb(249, 250, 251)' && k.b.value === 'rgb(255, 255, 255)');
+  assert.deepEqual(kept, { a: { token: tokenOf(r, 'rgb(249, 250, 251)'), value: 'rgb(249, 250, 251)' }, b: { token: '--grey-1', value: 'rgb(255, 255, 255)' }, deltaE: kept.deltaE }, 'listed as kept apart, a and b each with its own token');
+  assert.equal(kept.deltaE, Math.round(deltaE(oklabOf(parseColor('rgb(249, 250, 251)')), oklabOf(parseColor('rgb(255, 255, 255)'))) * 1e4) / 1e4, 'ΔE between the two colours seen against each other');
   const text = r.colors.find(c => c.token === tokenOf(r, 'rgb(17, 24, 39)'));
   assert.equal(text.value, 'rgb(17, 24, 39)', 'the proposed value is the most-used member, so it changes no pixel of that colour');
   assert.deepEqual(text.members.map(m => [m.value, m.uses, m.screens]), [['rgb(17, 24, 39)', 3, 2], ['rgb(24, 24, 27)', 1, 1]]);
@@ -72,8 +75,8 @@ test('tidy: near-duplicate greys and blues merge into the most-used member; a co
   assert.deepEqual(roles, { background: 'rgb(255, 255, 255)', surface: r.colors.find(c => c.token === tokenOf(r, 'rgb(249, 250, 251)')).value, border: r.colors.find(c => c.token === tokenOf(r, 'rgb(229, 231, 235)')).value,
     text: 'rgb(17, 24, 39)', 'text-muted': 'rgb(107, 114, 128)', accent: 'rgb(37, 99, 235)', 'accent-foreground': 'rgb(255, 255, 255)' });
   assert.ok(r.roles.every(x => x.confidence >= 0 && x.confidence <= 1 && ['high', 'medium', 'low'].includes(x.level)));
-  assert.match(r.css, /--color-text: var\(--grey-\d+\);/);
-  assert.match(r.css, /--radius-1: 8px;/);
+  assert.match(tokensCss(r), /--color-text: var\(--grey-\d+\);/);
+  assert.match(tokensCss(r), /--radius-1: 8px;/);
 });
 
 test('an already tidy page yields no merges', () => {
@@ -84,7 +87,7 @@ test('an already tidy page yields no merges', () => {
   assert.equal(r.summary.colors.before, r.summary.colors.after);
   assert.deepEqual(r.keptApart, []);
   assert.equal(r.summary.line, '5 greys → 5 · 1 blues → 1 · 1 radii → 1 · 3 font sizes → 3');
-  assert.ok(!/merges/.test(r.css));
+  assert.ok(!/merges/.test(tokensCss(r)));
 });
 
 test('determinism: scene order does not matter, and two builds are byte-identical', () => {
@@ -95,7 +98,7 @@ test('determinism: scene order does not matter, and two builds are byte-identica
 });
 
 test('translucent and opaque colours never merge; status colours come from hue with capped confidence; failing contrast is reported', () => {
-  const styles = [row('main > p'), row('main > p.hint', { color: 'rgb(156, 163, 175)' }), row('main > p.err', { color: 'rgb(220, 38, 38)' }), row('main > p.ok', { color: 'rgb(22, 163, 74)' })];
+  const styles = [row('main > p'), row('main > p.two'), row('main > p.hint', { color: 'rgb(156, 163, 175)' }), row('main > p.err', { color: 'rgb(220, 38, 38)' }), row('main > p.ok', { color: 'rgb(22, 163, 74)' })];
   const paint = { schema: 1, surfaces: [page()], borders: [border('main > hr', 'rgba(0, 0, 0, 0.1)', 'rgb(255, 255, 255)'), border('main > div', 'rgb(0, 0, 0)', 'rgb(255, 255, 255)')], svg: [] };
   const r = buildTokens({ scenes: [scene('a', '/a', styles, paint)] });
   assert.notEqual(tokenOf(r, 'rgba(0, 0, 0, 0.1)'), tokenOf(r, 'rgb(0, 0, 0)'));
@@ -117,7 +120,7 @@ test('radii and font sizes: near values share a token, pills and percentages sta
     ['--radius-1', ['6px', '7px', '8px']], ['--radius-2', ['12px']], ['--radius-3', ['16px']], ['--radius-full', ['9999px', '999px']], ['--radius-50pct', ['50%']]]);
   assert.deepEqual(r.fontSizes.map(x => x.members.map(m => m.value).sort()), [['13px'], ['14.4px', '14px'], ['15px', '16px']]);
   assert.equal(r.fontSizes.find(f => f.role === 'body').value, '16px', 'the most-used plain-text size is the body size');
-  assert.match(r.css, /--font-size-body: var\(--font-size-3\);/);
+  assert.match(tokensCss(r), /--font-size-body: var\(--font-size-3\);/);
 });
 
 test('a run captured before paint.json existed still gets a proposal, from the text rows', () => {
