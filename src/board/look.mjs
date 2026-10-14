@@ -171,15 +171,22 @@ button{font:inherit;color:inherit}
 .row .tick{flex:none;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:2px solid var(--line);border-radius:5px;color:transparent;font-size:14px;line-height:1}
 .row[aria-selected=true] .tick{border-color:var(--accent);background:var(--accent);color:#fff}
 .tag-human{background:var(--good-soft);color:var(--good)}
-.toolbar{position:sticky;bottom:0;z-index:5;display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:0 -2px 10px rgba(27,29,33,.08)}
+/* the dock: the decision bar, and the undo toast right above it, kept at the bottom of the window as one; focus and
+   scrolling stay clear of it (its height is --dock-h, measured by the page) */
+html{scroll-padding-bottom:calc(var(--dock-h,0px) + 12px)}
+.dock{position:sticky;bottom:0;z-index:5;display:flex;flex-direction:column;gap:8px}
+.toolbar{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:0 -2px 10px rgba(27,29,33,.08)}
 .toolbar .tb-label{align-self:center;padding:0 6px;font-size:13px;color:var(--muted)}
 .dbtn{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0;min-height:52px;min-width:44px;padding:4px 14px;border:1px solid var(--line);border-radius:8px;background:var(--panel);cursor:pointer;text-align:left}
 .dbtn:hover{background:var(--soft)}.dbtn b{font-size:14px}.dbtn small{font-size:12px;color:var(--muted)}
 .dbtn .kbd{margin-left:6px}
 .dbtn-fix{border-color:var(--accent)}
-.toast{position:fixed;left:50%;bottom:104px;z-index:20;transform:translateX(-50%);display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;max-width:min(680px,calc(100vw - 32px));padding:8px 8px 8px 18px;border-radius:12px;background:#1B1D21;color:#fff;box-shadow:0 6px 24px rgba(0,0,0,.25);transition:opacity .2s}
+.toast{position:fixed;left:50%;bottom:16px;z-index:20;transform:translateX(-50%);display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;max-width:min(680px,calc(100vw - 32px));padding:8px 8px 8px 18px;border-radius:12px;background:#1B1D21;color:#fff;box-shadow:0 6px 24px rgba(0,0,0,.25);transition:opacity .2s}
 .toast .b{background:transparent;border-color:#4A4E57;color:#fff}.toast .b:hover{background:#2C2F35}
 .toast[hidden]{display:none}
+.dock>.toast{position:static;transform:none;align-self:center;max-width:100%}
+/* the numbered markers sit half outside their box: room for them inside the panel */
+.board .screen-panel .shot{width:calc(100% - 24px);margin:12px}
 dialog{max-width:min(560px,calc(100vw - 32px));padding:22px 24px;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--ink)}
 dialog::backdrop{background:rgba(27,29,33,.45)}
 dialog h2{font-size:17px;margin:0 0 10px}.dialog-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:16px}
@@ -207,7 +214,7 @@ dialog h2{font-size:17px;margin:0 0 10px}.dialog-actions{display:flex;flex-wrap:
 .board .panels .screen-panel{display:block}
 .empty-note{margin:0;padding:16px 20px;color:var(--muted)}
 .loading{padding:24px;color:var(--muted)}
-@media (max-width:760px){.toast{bottom:16px}.toolbar{position:static}.field input{min-width:0;width:100%}.dbtn{flex:1 1 40%}}
+@media (max-width:760px){.field input{min-width:0;width:100%}.toolbar{gap:6px;padding:6px}.toolbar .tb-label{display:none}.dbtn{flex:1 1 40%;min-height:48px;padding:2px 10px}}
 @media (prefers-color-scheme:dark){.board .btn-primary,.board .btn-primary:hover,.b-primary,.b-primary:hover{color:#141518}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
 `;

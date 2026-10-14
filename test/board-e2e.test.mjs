@@ -143,6 +143,52 @@ test('board e2e: batches — Space selects, S decides all with one batch id, Z u
   } finally { await s.close(); }
 });
 
+test('board e2e: the decision bar and the toast never cover each other or the focused row; the bar stays reachable on a phone; screen markers stay inside their panel', { timeout: 120000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const overlap = (a, b) => a && b && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  for (const [width, height] of [[1280, 560], [800, 520], [390, 640]]) {
+    const p = project();
+    const s = await open(p, { viewport: { width, height } });
+    const { page } = s;
+    const rect = sel => page.evaluate(q => { const e = document.querySelector(q); if (!e || e.hidden) return null; const r = e.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; }, sel);
+    try {
+      await page.waitForSelector('#h-progress');
+      await page.click('a[data-nav=findings]');
+      await page.waitForSelector('#h-findings');
+      await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
+      assert.equal(await page.$eval('.dock', e => getComputedStyle(e).position), 'sticky', `${width}px: the bar is sticky`);
+      const rows = await page.locator('.row').count();
+      for (let i = 0; i < rows; i++) {
+        const dock = await rect('.dock'), row = await rect('.row:focus');
+        assert.ok(dock.bottom <= height + 1, `${width}px: the bar is in the window`);
+        assert.ok(row.bottom <= dock.top + 1 && row.top >= 0, `${width}px row ${i}: the focused row is not under the bar (${row.top}–${row.bottom} vs ${dock.top})`);
+        await page.keyboard.press('j');
+      }
+      await page.keyboard.press('k');
+      await page.keyboard.press('w');
+      await page.waitForSelector('#toast:not([hidden])');
+      assert.equal(await page.evaluate(() => document.getElementById('toast').parentElement.classList.contains('dock')), true, 'the toast is in the dock');
+      const toast = await rect('#toast'), bar = await rect('.toolbar'), row = await rect('.row:focus');
+      assert.ok(!overlap(toast, bar), `${width}px: the toast is not over the bar`);
+      assert.ok(!overlap(toast, row), `${width}px: the toast is not over the focused row`);
+      if (width === 1280) {
+        await page.click('a[data-nav=screens]');
+        await page.waitForSelector('#h-screens');
+        const cards = await page.locator('.card button').count();
+        let checked = 0;
+        for (let i = 0; i < cards; i++) {
+          await page.locator('.card button').nth(i).click();
+          await page.waitForSelector('#panel-h');
+          const nums = await page.$$eval('.screen-panel .num', els => els.map(e => { const r = e.getBoundingClientRect(); return { left: r.left, top: r.top }; }));
+          const panel = await rect('.panels');
+          for (const n of nums) { assert.ok(n.left >= panel.left - 0.5 && n.top >= panel.top - 0.5, `marker at ${n.left},${n.top} inside the panel from ${panel.left},${panel.top}`); checked++; }
+        }
+        assert.ok(checked > 0, 'some markers were checked');
+      }
+    } finally { await s.close(); }
+  }
+});
+
 test('board e2e: keys by their place — F on a Korean layout fixes, W with Caps Lock keeps as intended', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = project();

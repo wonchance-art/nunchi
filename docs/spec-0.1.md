@@ -1243,6 +1243,12 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   the keys dialog (`?`), and keys are off in text fields (`/` searches); severity is a word beside its dot; every
   control is at least 44 px; reduced motion stops all transitions; dark mode; no sideways scroll at 390 px. Tested
   with axe (no violation) on each view, light at 1280 px and dark at 390 px.
+- *The dock:* the decision bar and the undo toast right above it are one sticky dock at the bottom of the window,
+  on a phone too (2 × 2 buttons there), so the toast never covers the bar whatever its height; the page measures the
+  dock (`--dock-h`) and `scroll-padding-bottom` keeps the focused row clear of it (WCAG 2.4.11), also when the
+  toast makes the dock taller. On a view without a bar the toast sits at the bottom of the window. A screen's
+  numbered markers have room inside the Screens panel (they sit half outside their box). Tested at 1280 × 560,
+  800 × 520 and 390 × 640.
 - *Views:* only Progress, Findings (and Detail) and Screens; "More views in 0.2" lists the commands that show the rest.
 - *Words:* one table (`shared.mjs`), English. Decision times show as relative or local; files keep KST.
 

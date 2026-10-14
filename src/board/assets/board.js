@@ -7,6 +7,26 @@ const d = document;
 d.documentElement.classList.add('js');
 const $ = id => d.getElementById(id);
 const main = () => $('main');
+const TOAST = $('toast');
+// Every view is drawn through here. The undo toast then sits in the view's dock, right above the decision bar and
+// moving with it (never over it, whatever the bar's height), or at the bottom of the window when the view has no bar;
+// and the dock's height keeps focus and scrolling clear of it (scroll-padding-bottom, WCAG 2.4.11).
+let dockObserver = null;
+function show(...nodes) {
+  main().replaceChildren(...nodes);
+  const dock = main().querySelector('.dock');
+  if (dock) dock.prepend(TOAST); else if (TOAST.parentElement !== d.body) d.body.append(TOAST);
+  dockObserver?.disconnect();
+  fitDock();
+  if (dock && 'ResizeObserver' in window) { dockObserver = new ResizeObserver(fitDock); dockObserver.observe(dock); }
+}
+// The dock's height now (it grows while the toast shows), and the focused row brought out from under it.
+function fitDock() {
+  const dock = main().querySelector('.dock');
+  d.documentElement.style.setProperty('--dock-h', `${dock ? Math.ceil(dock.getBoundingClientRect().height) : 0}px`);
+  const f = d.activeElement;
+  if (dock && f instanceof Element && f.closest('.row') && f.getBoundingClientRect().bottom > dock.getBoundingClientRect().top) f.scrollIntoView({ block: 'nearest' });
+}
 const nowMs = () => performance.now();
 const store = { get: k => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
 
@@ -123,7 +143,7 @@ function lost(why) {
     stopped: 'The board stopped.',
     offline: 'The board is not running.',
   }[why] || 'This tab has no key to the board.';
-  main().replaceChildren(h('section', { class: 'lost', 'aria-labelledby': 'lost-h' },
+  show(h('section', { class: 'lost', 'aria-labelledby': 'lost-h' },
     h('h1', { id: 'lost-h' }, text),
     h('p', null, 'Run this in your terminal for a fresh link (or ask your AI to open the board again):'),
     h('p', { class: 'copyline' }, h('code', null, 'nunchi open'), copyButton('nunchi open')),
@@ -150,7 +170,7 @@ async function boot() {
     await router();
   } catch (e) {
     // the ledger could not be read (another nunchi holds it, a file is torn): said, with the way out nunchi gives
-    if (e.status !== 401) main().replaceChildren(h('section', { class: 'lost', 'aria-labelledby': 'err-h' }, h('h1', { id: 'err-h' }, 'The board could not read nunchi’s state'),
+    if (e.status !== 401) show(h('section', { class: 'lost', 'aria-labelledby': 'err-h' }, h('h1', { id: 'err-h' }, 'The board could not read nunchi’s state'),
       h('p', null, e.message), h('p', { class: 'muted small' }, 'Run nunchi findings in your terminal for the same message; the board updates once it is fixed.')));
   }
   live();
@@ -272,7 +292,7 @@ async function router() {
     else if (r.view === 'findings') { if (!S.list || from === 'progress' || from === 'screens') await loadList(); renderFindings(true); }
     else if (r.view === 'detail') await showDetail(r.id);
     else if (r.view === 'screens') { if (!S.screens || from !== 'screens') S.screens = await api('/api/screens'); S.screenSel = r.screen || S.screenSel; renderScreens(true); }
-  } catch (e) { if (e.status !== 401) main().replaceChildren(h('p', { class: 'lost' }, `The board could not load this view: ${e.message}`)); }
+  } catch (e) { if (e.status !== 401) show(h('p', { class: 'lost' }, `The board could not load this view: ${e.message}`)); }
 }
 const go = hash => { if (location.hash === hash) router(); else location.hash = hash; };
 const focusHeading = () => { const hd = main().querySelector('h1'); if (hd) { hd.setAttribute('tabindex', '-1'); hd.focus({ preventScroll: false }); } };
@@ -312,7 +332,7 @@ function renderProgress(focus = false) {
   const counts = h('section', { class: 'panel-box', 'aria-labelledby': 'h-status' }, h('h2', { id: 'h-status' }, 'Decisions'),
     h('ul', { class: 'statuses' }, W.FILTERS.filter(([k]) => k !== 'all').map(([k, label]) => h('li', null, h('span', { class: `st st-${k}` }, label), ' ', h('b', null, String(s.byStatus[k] || 0))))),
     s.warnings.length ? h('ul', { class: 'facts muted small' }, s.warnings.map(w => h('li', null, w))) : null);
-  main().replaceChildren(h('div', { id: 'progress', class: 'view' },
+  show(h('div', { id: 'progress', class: 'view' },
     h('div', { class: 'stack' }, hero, confirm, checks, h('div', { class: 'two' }, since, health), counts)));
   if (focus) focusHeading();
 }
@@ -469,10 +489,10 @@ function renderFindings(focus = false) {
     unchecked.addEventListener('toggle', () => { S.openUnchecked = unchecked.open; });
   }
   const selbar = S.selection.size ? h('div', { class: 'banner', role: 'status' }, h('span', null, `${W.plural(S.selection.size, 'group')} selected`), (() => { const c = h('button', { type: 'button', class: 'b' }, 'Clear'); c.addEventListener('click', () => { S.selection.clear(); renderFindings(); }); return c; })()) : null;
-  main().replaceChildren(h('section', { id: 'findings', class: 'view', 'aria-labelledby': 'h-findings' }, h('div', { class: 'stack' },
+  show(h('section', { id: 'findings', class: 'view', 'aria-labelledby': 'h-findings' }, h('div', { class: 'stack' },
     h('div', { class: 'head-row' }, h('div', null, h('h1', { id: 'h-findings' }, 'Findings'), h('p', { class: 'muted' }, `${W.plural(L.total, 'group')} · worst first; the list holds still while you decide`))),
     h('div', { class: 'controls' }, tabs, h('label', { class: 'field', for: 'group-by' }, 'Group by', groupSel), h('label', { class: 'field', for: 'search' }, 'Search', h('span', { class: 'kbd', 'aria-hidden': 'true' }, '/'), search)),
-    banner, S.summary?.handoff ? h('p', { class: 'handoff' }, S.summary.handoff.text, copyButton(S.summary.handoff.say, 'Copy “fix them”')) : null, selbar, listBox, unchecked, decisionBar(() => targetsNow()))));
+    banner, S.summary?.handoff ? h('p', { class: 'handoff' }, S.summary.handoff.text, copyButton(S.summary.handoff.say, 'Copy “fix them”')) : null, selbar, listBox, unchecked, h('div', { class: 'dock' }, decisionBar(() => targetsNow())))));
   if (focus) { const r = S.focus && $(`row-${S.focus}`); if (r) r.focus(); else focusHeading(); if (S.focus) S.clock.reset(S.focus, nowMs()); }
 }
 async function setStatus(k, { focusTab = false } = {}) {
@@ -583,7 +603,7 @@ async function undo() {
 // The undo toast (design §3.4): 6 seconds, the other reason, Undo (Z).
 let toastTimer = null;
 function toast(text, act) {
-  const el = $('toast');
+  const el = TOAST;
   const kids = [h('span', null, text)];
   if (act && W.OTHER_REASON[act.reason]) {
     const other = W.OTHER_REASON[act.reason];
@@ -594,11 +614,12 @@ function toast(text, act) {
   if (act) { const u = h('button', { type: 'button', class: 'b' }, 'Undo ', h('span', { class: 'kbd' }, 'Z')); u.addEventListener('click', undo); kids.push(u); }
   el.replaceChildren(...kids);
   el.hidden = false;
+  fitDock();
   clearTimeout(toastTimer);
   toastTimer = setTimeout(hideToast, 6000);
 }
 // Undo lasts as long as its toast: once the toast is gone, Z has nothing to undo.
-function hideToast() { $('toast').hidden = true; clearTimeout(toastTimer); S.undo = null; }
+function hideToast() { TOAST.hidden = true; clearTimeout(toastTimer); S.undo = null; }
 
 // A question that cannot misfire: the safe choice has the focus.
 function ask(text, ok = 'Yes') {
@@ -717,7 +738,7 @@ function renderDetail(focus = false) {
   const history = g.history.length ? h('section', { class: 'decide', 'aria-labelledby': 'h-history' }, h('h2', { id: 'h-history' }, 'Decisions'),
     h('ul', { class: 'history' }, g.history.map(x => h('li', null, h('b', null, W.decidedText(x.decision, x.reason)), h('span', { class: 'muted small' }, `${x.by || ''} · ${when(x.at)}${x.channelText ? ` · ${x.channelText}` : ''}`), x.note ? h('span', { class: 'small' }, `“${x.note}”`) : null))),
     reopen ? h('p', null, reopen) : null) : null;
-  main().replaceChildren(h('article', { class: 'view detail', 'aria-labelledby': 'h-detail' },
+  show(h('article', { class: 'view detail', 'aria-labelledby': 'h-detail' },
     h('nav', { class: 'detail-nav', 'aria-label': 'Finding navigation' }, h('a', { href: '#/findings' }, '← All findings'),
       h('span', { class: 'pn' }, prev ? h('a', { href: `#/finding/${prev}`, rel: 'prev' }, 'Previous (K)') : null, next ? h('a', { href: `#/finding/${next}`, rel: 'next' }, 'Next (J)') : null)),
     h('div', { class: 'panel-box detail-box' },
@@ -725,7 +746,7 @@ function renderDetail(focus = false) {
         h('h1', { id: 'h-detail' }, g.headline)),
       fixing, needs, figure || (g.secret || !g.instances.length ? h('p', { class: 'muted' }, 'No screenshot: this finding belongs to the whole app, not one screen.') : h('p', { class: 'muted' }, 'No screenshot of this finding is left (its run was removed).')),
       facts, evidence),
-    history, h('div', { class: 'detail-box' }, decisionBar(() => targetsNow()))));
+    history, h('div', { class: 'detail-box dock' }, decisionBar(() => targetsNow()))));
   if (focus) focusHeading();
 }
 
@@ -775,7 +796,7 @@ function renderScreens(focus = false) {
         h('span', { class: 'sp-text' }, h('span', { class: 'sp-what' }, f.headline), h('span', { class: 'small' }, `${W.SEV_LABEL[sevOf(f.severity)]} · ${f.source === 'ai' ? 'AI' : 'Rule'} · ${f.statusText}${f.n ? '' : ` · not outlined: ${f.why}`}`)))))) : sel.img ? h('p', { class: 'pad muted' }, 'Nothing found on this screen.') : null);
   }
   const withOpen = all.filter(s => s.findings.some(f => ['open', 'regressed', 'to-fix', 'held', 'stale', 'mixed'].includes(f.status))).length;
-  main().replaceChildren(h('section', { id: 'screens', class: 'view', 'aria-labelledby': 'h-screens' }, h('div', { class: 'stack' },
+  show(h('section', { id: 'screens', class: 'view', 'aria-labelledby': 'h-screens' }, h('div', { class: 'stack' },
     h('div', { class: 'head-row' }, h('div', null, h('h1', { id: 'h-screens' }, 'Screens'), h('p', { class: 'muted' }, `${W.plural(new Set(all.map(s => s.route)).size, 'page')}, ${W.plural(all.length, 'screen')} · every one nunchi captured in run ${S.screens.run || '—'}, as it saw it`)),
       h('div', { class: 'filters' }, seg('Width', vps, W.WIDTH, 'vp'), seg('Who', whos, W.WHO, 'who'), seg('State', states, W.STATE_LABEL, 'state'))),
     h('p', { class: 'facts-inline' }, h('span', null, h('b', null, String(withOpen)), ' with open findings'), h('span', null, h('b', null, String(all.filter(s => s.badge === 'Clean').length)), ' clean'), h('span', null, h('b', null, String(shown.length)), ' shown')),
@@ -800,7 +821,7 @@ function onKey(e) {
   const typing = t instanceof Element && !!t.closest('input, textarea, select, [contenteditable=""], [contenteditable=true]');
   if (e.key === 'Escape') {
     if (typing) { t.blur(); return; }
-    if (!$('toast').hidden) return hideToast();
+    if (!TOAST.hidden) return hideToast();
     if (S.selection.size) { S.selection.clear(); return renderFindings(true); }
     if (S.route.view === 'detail') return go('#/findings');
     return;
@@ -864,7 +885,7 @@ async function labelShow(focus = false) {
 function renderLabel(focus = false) {
   const L = S.label, it = L.item, pool = L.pool;
   const banner = h('div', { class: 'label-banner', role: 'status' }, h('span', null, `Labelling for the precision check · ${pool.done}/${pool.total}`), h('span', { class: 'small' }, `Labeller: ${pool.labeller}`));
-  if (!it) { main().replaceChildren(h('section', { class: 'view', 'aria-labelledby': 'h-label' }, h('div', { class: 'stack' }, banner, h('h1', { id: 'h-label' }, pool.total ? 'All labelled' : 'Nothing to label'), h('p', { class: 'muted' }, pool.total ? 'Every item in the pool has your label. You can close this tab.' : 'The pool is empty: the AI review has not claimed anything yet.')))); return; }
+  if (!it) { show(h('section', { class: 'view', 'aria-labelledby': 'h-label' }, h('div', { class: 'stack' }, banner, h('h1', { id: 'h-label' }, pool.total ? 'All labelled' : 'Nothing to label'), h('p', { class: 'muted' }, pool.total ? 'Every item in the pool has your label. You can close this tab.' : 'The pool is empty: the AI review has not claimed anything yet.')))); return; }
   const sk = it.instances.find(f => f.scene && it.scenes[f.scene]?.img)?.scene;
   const sc = sk ? it.scenes[sk] : null;
   const boxes = sc ? it.instances.filter(f => f.scene === sk && f.drawable.ok).map(f => ({ box: f.box })) : [];
@@ -873,7 +894,7 @@ function renderLabel(focus = false) {
     b.addEventListener('click', () => labelSet(v));
     return b;
   }));
-  main().replaceChildren(h('section', { class: 'view', 'aria-labelledby': 'h-label' }, h('div', { class: 'stack' }, banner,
+  show(h('section', { class: 'view', 'aria-labelledby': 'h-label' }, h('div', { class: 'stack' }, banner,
     h('div', { class: 'panel-box' },
       h('p', { class: 'eyebrow' }, `${it.lens.id}${it.lens.name ? ` · ${it.lens.name}` : ''} · item ${L.at + 1} of ${pool.total}`),
       h('h1', { id: 'h-label' }, it.claim || '(no claim text)'),
