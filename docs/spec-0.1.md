@@ -131,8 +131,9 @@ have now* holds without the user committing — scope (routes, persons, viewport
 `wholeApp` (no `--routes`, no `--changed-since` and no dynamic route skipped for a missing sample: whole-app
 detectors judged every route), `unresolved` (paths discover cannot resolve, skipped by every run; they never
 make a run partial, and are listed so they stay visible), network mode per person, run health, and since M1
-(2026-10-14 KST, design 0.1-c §2.1, §7) `kind` (`sweep` for every capture today; `quick` and `fix-probe` come with
-M5 and M3; a run without one is a sweep) and `worktree` (`main`, or `wt:<name>` for a linked git worktree: runs stay
+(2026-10-14 KST, design 0.1-c §2.1, §7) `kind` (`sweep` for a capture; `fix-probe` for the fix loop's probes since
+M3, §6.5; `quick` comes with M5; a run without one is a sweep) and `worktree` (`main`, or `wt:<name>` for a linked git
+worktree: runs stay
 in their worktree's folder, the ledger is shared, §5.1). In a repository the next run id is taken after every id any
 worktree used (a counter in the shared state, under its lock), so ids stay one sequence. Every file of a run is
 written to a temp file in the same folder (created exclusively, keeping the mode of the file it replaces) and
@@ -698,8 +699,9 @@ suspect and said `gone` in every cell it was seen in (`src/recheck.mjs`).
   back*). Recording again with other verdicts replaces that run's re-check. A re-check whose run is older than a
   sighting of the item already folded when the re-check was recorded can say "still there", never "gone".
 - The skill runs the re-checker in a fresh context with only the packets and their files (SKILL.md, re-check).
-- Not done yet: the fix loop's own re-check from a fresh context (`fix --verify --record`, M3); re-check validation
-  sets (§9.4 of the design).
+- The fix loop's own re-check from a fresh context is `fix --verify <group> --record` (M3, §6.1, §6.5): the same
+  packets, controls and keys, on the probe P1 with P0 as the screens before.
+- Not done yet: re-check validation sets (§9.4 of the design).
 
 ## 5. Ledger (0.1-b)
 
@@ -877,7 +879,8 @@ Field app 1 (§9.2) after this: 1,082 findings → 578 unique defects → 99 gro
 **Schema 2** (`ledger.json`, migrated on read; the next ledger command writes it back with `rev`).
 - `folds[]` replaces the bare run list as the record of what was folded: `{run, source, key, stream, kind?}`.
   `source` is `rule` (a capture's findings), `ai` (its verified AI findings) or `recheck` (a re-check's verdicts);
-  `fix` comes with M3. `key` is a hash of the fold's inputs. `stream` is the worktree whose run it was (`main` or
+  `fix` (since M3: a fix probe folded for its own group, §6.5). `key` is a hash of the fold's inputs. `stream` is the
+  worktree whose run it was (`main` or
   `wt:<name>`): run ids are per worktree, so a run of another worktree with the same id is folded, never mistaken
   for one already folded. `runs` stays the sorted list of runs folded as captures, every worktree's. A schema-1
   ledger becomes schema 2 with one `rule` fold per run (`key: null`, its stream) and `source: "rule"` on every item;
@@ -896,8 +899,8 @@ Field app 1 (§9.2) after this: 1,082 findings → 578 unique defects → 99 gro
     worktree captured since.
 - *Kinds* (`run.json` `kind`): only a `sweep` folds as one. A `quick` run is presence-only (adds and brings back,
   never fixes). A `fix-probe`, or a kind this nunchi does not know, is recorded in `folds` and not folded: the fix
-  loop folds a probe for its own group (M3). A run without `kind` is a sweep. In M1 every worktree's capture is a
-  sweep (as a branch switch in one folder is); M3 makes captures on a fix branch probes (design §7).
+  loop folds a probe for its own group (§6.5). A run without `kind` is a sweep. Every worktree's `capture` is a sweep
+  (as a branch switch in one folder is); the fix loop's captures are probes (M3).
 - *Re-folding.* A `(run, source)` folded again with the same key changes nothing; with another key an `ai` or
   `recheck` fold replaces exactly what that run contributed (a re-verify, a re-recorded re-check). A `rule` fold is
   never redone: a complete run's findings do not change, and a different key would mean the run folder was edited;
@@ -966,8 +969,7 @@ else is derived from those, the same whatever order the folds come in:
   makes it open again. `lastHunted` and `silentHunts` are on the item.
 - *Needs you:* a re-check that said `insufficient` and nothing still there (`needsYou: {reason, run}`).
 - *Not done yet:* a different vendor's verifier labelled `cross-vendor` on items (recorded as `by`, M6 for several
-  agents); a lock per person for recordings (their saves are atomic since M1a). (`fix --plan` leaves stale items out
-  since M3, §6; the board's live view of `generation` came with M2.)
+  agents); a lock per person for recordings (their saves are atomic since M1a). (the board's live view of `generation` came with M2.)
 - *Answers name `evidence.file` (M3, 2026-10-15 KST, design §2.5).* A hunter grounds a defect in the source with
   `"evidence": {"file": "app/tasks.tsx", "line": 2}`, the shape recorded findings and fix records already carry
   (`source` on a finding means `rule` or `ai`). An answer written before says `"source": "app/tasks.tsx:2"`: it is read
@@ -989,7 +991,160 @@ else is derived from those, the same whatever order the folds come in:
 5. The agent saying "fixed" changes nothing; only re-capture does.
 6. Guard: on a second occurrence of a kind, or ≥5 instances, propose a rule (e.g. no `*.message` in JSX or
    toast arguments, no `window.confirm`, no `href="#"`, `stylelint-declaration-strict-value` for tokens,
-   `toMatchAriaSnapshot` for structure). Added to the user's repo only with consent.
+   `toMatchAriaSnapshot` for structure). Added to the user's repo only with consent. (M4, not built.)
+
+Built in M3 (2026-10-15 KST, design 0.1-c §4 and §7 minimal) as `nunchi fix`, in `src/fix/`. The engine never edits
+code: the skill edits; the engine plans, checks preconditions, runs the checks, captures and judges. An outcome comes
+only from the engine's probes.
+
+### 6.1 Commands and the chat side
+
+- `fix --plan` lists the groups decided Fix (most serious first) with their root-cause files, attempts used, and
+  what holds one back (a decision that came through git and needs `approve`, an AI item nobody double-checked, a
+  group with no route to re-check: "fix by hand"); the branch ("Fixes go on branch nunchi/fixes-1015; merge it when
+  you're happy."); the checks and whether they are approved (when not, it asks the board: `state/checks-request.json`);
+  on a dirty tree the one choice: commit as "WIP before nunchi fixes" (recommended), stash, or stop. It writes
+  `state/fix-plan.json` (the batch `--summary` reports). The skill shows the plan as one consent (U19).
+- `fix --start <group> [--url <base> | --serve dev|start] [--agent <name>] [--vendor <name>]` → branch, claim, recording
+  snapshot, baseline checks, P0, then the **fix brief**. `--brief <group>` prints it again.
+- `fix --checks <group>` runs the approved checks on the working tree, compares them with the baseline and prints the
+  commit trailers (`Nunchi-Fix: <group>`, `Nunchi-Attempt: <n>`, `Nunchi-Decision: <decision id>`).
+- `fix --verify <group>` checks the commit and the diff policy, captures P1 and judges. For AI items it writes
+  `recheck-packets.json` into P1's run and waits for `fix --verify <group> --record <verdicts.json>` from a fresh
+  re-checker (§4.1 rules: controls, suspect batches, keys outside the project).
+- `fix --undo <group>` reverts a fix that landed (fixed, or kept by *needs you*) while it is HEAD; `--abort <group>`
+  stops an attempt; `--status [<group>]` lists attempts and phases; `--summary` gives the batch line;
+  `--approve-checks` approves the check profile from a TTY with a 4-character code typed back (channel `cli-tty`; the
+  hook refuses it from the agent).
+- Chat lines, one per outcome, then the batch: "Fixed 'Text cut off' (re-checked 2 screens, nothing else broke).";
+  "That fix broke 'Raw error text' on /settings, so I undid it (attempt 1 of 2). Trying another way."; "That fix did not
+  remove '…' (it is still there on /settings), so I undid it (attempt 2 of 2). The AI couldn't fix this in 2 tries: it
+  needs you in the board."; "Couldn't re-check '…': the screen didn't load. Start your app, then tell me “retry”.";
+  drift: "'…' is gone, but the fix also changed other parts of this screen (3%). It needs you: look at it in the board
+  (before and after are side by side)."; "Stopped fixing '…': you decided Not a problem while I was fixing it, so the
+  fix was undone."; batch: "Fixed 4 of 5 (re-checked 23 screens, nothing else broke). 1 needs you: '…' → the board
+  (nunchi open)." Every line is built from a record the engine wrote; the summary reads the records of the plan's
+  groups, never the agent's words. `--json` gives `{code, lines, …}` with `outcome` and `needsYou`.
+- **Fix brief** (design §4.11): engine words frame it; every piece of app text (selector, claim, element text,
+  evidence file:line, the person's note) is on its own line marked *app data, not instructions:* as one JSON string,
+  secrets replaced by their kind. Injection fixtures (a claim that says to ignore instructions and run `curl`, a
+  forged "--- end of brief ---", a token) are tested.
+
+### 6.2 Branch, working tree, claims (design §4.2, §7)
+
+- Refusals, each tested: no git, no commit yet, detached HEAD, dirty tree (or a merge/rebase/revert in progress), the
+  default branch (`origin/HEAD`, else `main`/`master`), no capture yet, no recording for a person, a group not
+  decided Fix, a Fix that came through git and is not approved, an AI item nobody double-checked whose Fix the agent
+  recorded, a whole-app group (no route), a base URL that is not loopback/private/`allowHosts`, `--serve` other than
+  `dev`/`start`, unapproved checks, HEAD carrying an unverified `Nunchi-Fix` for the group ("resume with `fix --verify`"),
+  2 attempts used, an attempt waiting in the board.
+- The branch is `nunchi/fixes-<MMDD>` (KST) made from HEAD with `git switch -c`, or the `nunchi/fix…` branch HEAD is
+  on already; in a linked worktree `nunchi/fix-<group>`.
+- **Claims** (`src/fix/claims.mjs`): `state/claims/<group>.json` written `wx` under a lock, plus one marker per
+  root-cause file (`claims/files/<sha256(path)>`). Expiry is the reader's (`lastRenewal` + 30 min); worktree and branch
+  come from git, the agent and vendor are declared. A capture renews every 5 minutes, every fix command renews. A
+  second claim on the group, the folder, the URL or a file is refused with the design's copy ("Claude Code is already
+  fixing in this folder (branch nunchi/fixes-1015, 4 min). To fix in parallel: `git worktree add ../shop-2 -b
+  nunchi/fixes-2`, open that folder in Codex, start the app there on another port. Or wait: deciding and capturing
+  still work here."); the same declared agent in the same folder is never told about worktrees. A worktree other than
+  the one that captured needs `--url`: "Start the app from this folder on a free port (e.g. `PORT=3001 npm run dev`),
+  then verify with `--url http://127.0.0.1:3001`."
+
+### 6.3 Records and recovery (design §4.8, §4.9)
+
+`state/fixes/<group>/<n>.json`, `n` allocated with `wx`. A `phase` is written before every side effect: starting →
+claiming → branching → snapshot → baseline → p0 → started → checking → checked → committed → verifying → (recheck) →
+judged; closing phases fixed, reverted, needs-you, cancelled, aborted, undone, through reverting, undoing and
+folding. Every `fix` command first reconciles the group's latest record with HEAD, its trailers, revert commits and
+the ledger, and resumes what a command that died left half done (a revert half done → `revert --abort`, *needs you*;
+a fold half done → folded). Cancellation: a decision other than Fix during an open attempt reverts the fix commit when
+it is HEAD (else *needs you*, the commit shown) and releases the claim. Claim expired or `--abort`: before a commit →
+to fix again; after → *needs you* with the commit. The attempt count is the number of commits carrying the group's
+`Nunchi-Fix` and its current `Nunchi-Decision` on any branch (`git log --all`), so it survives
+lost state and works across worktrees; a new Fix decision (*Try again with a note…*) starts a new count.
+
+### 6.4 Checks (design §4.3)
+
+- The check profile (`src/checks.mjs`): the exact `build`, `typecheck`, `lint`, `test` lines and their `pre*`/`post*`
+  lines, the `dev`/`start` lines `--serve` may run, the sha256 of `.npmrc`, `.yarnrc*`, `.yarnrc.yml` (and its
+  `yarnPath` target), `bunfig.toml`, `pnpm-workspace.yaml`, `.pnpmfile.cjs`, and `packageManager`. Approved only through
+  the board or `cli-tty` into `state/scripts-approved.json`; any change has another hash and asks again.
+- Running, verified on this machine (2026-10-15 KST): npm 10.9.4 `npm run --ignore-scripts <name>` runs the line only;
+  pnpm 10.28.0 `pnpm --config.enable-pre-post-scripts=false run <name>` runs the line only (pnpm has no
+  `run --ignore-scripts`: it errors); yarn 1.22.22 and bun 1.4.2 run `pre`/`post` whatever flag is given, so a check
+  with a pre or post line is refused there and said plainly; yarn 2+ runs none. `shell: false` (on Windows the
+  manager's `.cmd` shim through `cmd.exe /d /s /c`, the script name checked to be a plain word); environment
+  `PATH, HOME, LANG, TERM, CI=1, NODE_ENV=test` and corepack's `COREPACK_ENABLE_AUTO_PIN=0`,
+  `COREPACK_ENABLE_NETWORK=0`, `COREPACK_ENABLE_DOWNLOAD_PROMPT=0` (Windows adds `SystemRoot`, `PATHEXT`, `COMSPEC`,
+  `TEMP`, `TMP`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`); a missing manager binary is refused; 10 minutes, then the
+  process tree is killed; output loses colour codes and passes the secret scanner before it is stored or printed.
+- Baseline at `--start`; a check blocks only when it newly fails or its count rises: "lint was already failing before
+  this fix (40 problems) — not blocking; still 40 after."; "no test script — nunchi relies on re-capture."
+- `--checks` records the tree hash it ran on (refusing when the checks themselves changed files); `--verify` requires
+  a passing record whose tree equals the commit's.
+
+### 6.5 Probes, judging and the diff policy (design §4.4–§4.7)
+
+- **P0** at `--start`: the group's routes plus the routes rendering its root-cause files; all persons, both viewports,
+  the baseline's states; strict replay from a snapshot of each person's recording copied into the attempt's folder
+  (`<n>-har/`, sha256 in the record); PNG first views (`top.png`); whole-app detectors off; `run.json` `kind:
+  fix-probe`. A P0 that failed a screen, has a health problem or replay misses aborts the start; a P0 that no longer
+  shows the defect too ("it may be fixed already").
+- **P1** at `--verify`, identical options, scope P0's plus `affectedRoutes(diff base..HEAD)`.
+- **Proof of the served code**: `--serve dev|start` starts the approved script from this folder on a port nobody
+  listened on (`PORT`, plus `--port`/`--hostname 127.0.0.1` for next, vite and similar), or with `--url` a probe file
+  is written into `public/` or `static/`, fetched back and removed. Without proof the outcome is *needs you (c)*.
+- Probe runs are never `latest`, are hidden from `runs` (`runs --all` lists them), are recorded in the ledger's folds
+  and folded only by the fix loop: only the group's fingerprints, only on `fixed` (source `fix`); discarded on revert;
+  `gc` removes probes first and keeps those of an open attempt.
+- **Judging** (`src/fix/judge.mjs`), by precedence: 1 inconclusive → *needs you (c)* (a screen failed or redirected, a
+  health problem, replay misses, no proof); 2 caused-regression (a new defect by `(rule, cell, element identity)` in
+  P0's scope; identity = normalised selector, or the same tag and accessible name with IoU ≥ 0.5; flaky rules
+  `layout-shift`, `font-not-loaded`, `page-error` re-captured once first) → revert, attempt counted; 3 not-fixed (the
+  defect matched in any cell; an AI item still there in the re-check) → revert, attempt counted; 4 visual drift →
+  *needs you (a)*, commit kept (outside the group's boxes a control moved more than 2 px, appeared or went, or more than
+  1% of first-view pixels differ by pixelmatch's YIQ distance, threshold 0.1); 5 fixed (for AI items a non-suspect
+  re-check from a fresh context; too few controls is suspect). A new finding on a route only P1 has → *needs you*
+  (no baseline), never a revert. After 2 attempts → *needs you (b)*.
+- **Diff policy** (`src/fix/policy.mjs`), on `git diff --name-only base HEAD`: *needs you* when a path is `.nunchi/**`,
+  `package.json`, a lockfile, `.npmrc`, `.yarnrc*`, `.env*`, `.github/**`, `.husky/**`, `.git*` or `*.config.*`; when
+  the diff adds an import of a package the project does not depend on (tsconfig path aliases are not packages), a
+  `<script`, or an outbound URL literal; or when it touches a file outside the root-cause files and the source-map files
+  of the group's routes. The flagged paths are printed with the diffstat. Root-cause files: the grounded
+  `evidence.file` (AI), else inventory files whose strings match the finding's text or element name, else the route's
+  page file; never a layout or frame file (layout, template, loading, error, not-found, `_app`, `_document`, a TanStack
+  root, middleware).
+- **Git** (`src/fix/git.mjs`): every call through the hardened runner (`core.fsmonitor`, `core.hooksPath`,
+  `diff.external`, the pager and filter drivers off as `GIT_CONFIG_COUNT` overrides, `--no-optional-locks`, no system
+  config, `GIT_TERMINAL_PROMPT=0`, the caller's `GIT_*` dropped, a timeout; `--no-ext-diff --no-textconv` on diffs). The
+  commit check is `rev-list --parents -n1 HEAD` = `[HEAD, base]`, the `Nunchi-Fix` trailer and a clean tree (`.nunchi/`
+  aside). A revert only when HEAD is the fix commit: `revert --no-commit`, a commit with `Nunchi-Revert: <group> attempt
+  <n>`, hooks off, 60 s; any failure → `revert --abort` and *needs you*; a required signing that fails → *needs you*,
+  never unsigned. Never push, reset or force.
+
+### 6.6 The board's side (design §3.4)
+
+A live claim shows "Claude Code is fixing · 4 min" on the group, and deciding against it asks first. *Needs you* has
+the three kinds with their actions: (a) "The fix also changed other parts of this screen (3%). Is that OK?" with
+[Looks fine, mark fixed] [Undo this fix] [Try again with a note…], and before/after side by side with a slider
+(←/→ in steps of 5, both viewports); (b) "The AI couldn’t fix this in 2 tries." with [Try again with a note…] [Keep]
+[Later]; (c) "Couldn’t re-check: the screen didn’t load. Start your app, then tell your AI “retry”." *Looks fine*
+(`POST /api/fix-accept`) marks fixed only an attempt that is (a) with the defect gone, and folds it as a fix. [Undo
+this fix] and a landed fix show the sentence to tell the AI: "undo the fix of “Text cut off” (nunchi fix --undo
+<group>)". *Try again with a note…* records a new Fix decision whose note the next brief quotes as app data. The
+verdict counts a group waiting in a fix record as *needs you*.
+
+### 6.7 Measured and limits
+
+- Tests: every outcome row, refusal and recovery path above on synthetic git repositories in temp folders with a fake
+  capture (`test/fix-*.test.mjs`), plus one end-to-end run with real Chromium and real git, and the board's fix states
+  in Chromium with axe.
+- The gate harness `bench/fix-gate.mjs` runs the loop on Pebble with recorded fixes (`bench/fixes/pebble.json`); a
+  harness run is not the gate (design §9.4, pre-registered apart).
+- Limits: the drift threshold (1%) is not calibrated yet (the gate does that); `--serve start` serves the build in
+  the folder, which matches the commit only when `build` is one of the checks; the other *needs you* kinds (diff
+  policy, no baseline, an interrupted or half-done revert) show in the verdict and `fix --status` with their line but
+  have no card of their own in the board yet; guards (principle 6) are M4.
 
 ## 7. Progress board and exports (0.1-c)
 
@@ -1084,7 +1239,7 @@ puts the images in `index.html` as data URIs instead (one file; pegroom: 8 MB ag
   text beside its dot, filters as native radio groups, `prefers-color-scheme` honoured; 360 px to wide desktop.
 - *Not done*: page text is shown (claims, evidence text) — the `--include-page-text` default of design §5 applies to
   md/json/sarif, and screenshots carry the same text anyway; no per-run trend; no cropping or downscaling of the
-  images; the verdict does not check "last full check newer than the last fix commit" (the fix loop is not built).
+  images; the verdict does not check "last full check newer than the last fix commit" (not built in M3 either: §10).
   Publishing the page (e.g. as an Artifact) is the skill's job, only with the user's explicit OK, since it sends the
   screenshots off the machine.
 
@@ -1219,13 +1374,14 @@ Parity is tested: the same decision from the CLI and the board gives files that 
 channel and the batch's id (both sides give a group decided on its fingerprints one batch), and the same status. The server asks for a confirmation (409 with the sentence; the page shows it
 with Cancel focused) before a dismissal that includes a blocker (by protected severity), an L9 finding or more than
 10 groups ("Mark 17 groups Not a problem? 2 are high."), before fixing an AI finding nobody double-checked ("This
-hasn't been double-checked. Fix anyway?"), and before deciding against a live claim (claims are the fix loop's,
-M3; the board reads `claims/<group>.json` with the reader-computed 30-minute expiry already).
+hasn't been double-checked. Fix anyway?"), and before deciding against a live claim (the fix loop's
+`claims/<group>.json`, §6.2, read with the reader-computed 30-minute expiry).
 `POST /api/confirm {keys}` confirms the dismissals the agent recorded or that came through git, all at once (the keys
 the summary lists; stale → 409). `POST /api/approve-checks {profile}` approves the check profile shown
 (`src/checks.mjs`: the build, typecheck, lint and test lines and their pre/post lines, the package-manager config
 hashes, `packageManager`) into `state/scripts-approved.json` with channel `board`; a changed profile has another
-hash and asks again. The card appears when the fix loop asks (`state/checks-request.json`, M3).
+hash and asks again. The card appears when the fix loop asks
+(`state/checks-request.json`, §6.4), and lists the `dev`/`start` lines `--serve` may run.
 
 **Channels (design §1).** A decision file names the channel it was written by (`board`, `cli-tty`, `cli-agent`) and
 its batch; `approved.json` keeps the channel per approval key (`channels`) and the keys a person confirmed in the
@@ -1272,8 +1428,8 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
 - *Handoff:* "All decided. 6 to fix. Go back to your AI chat and say “fix them”." [Copy], under the verdict and on
   Findings, once nothing is left to decide (AI findings not double-checked wait for the AI first).
 - *Fix states:* a live claim shows "<agent> is fixing · N min"; *needs you* from a re-check that could not tell
-  ("Look at the screen, then decide; or tell your AI “re-check it”"). The fix loop's kinds (a) and (b), before/after
-  and `fix --undo` come with M3, which writes the records they read.
+  ("Look at the screen, then decide; or tell your AI “re-check it”"). The fix loop's kinds (a), (b) and (c),
+  before/after and `fix --undo` are §6.6 (M3).
 - *Accessibility:* landmarks (nav, main), a skip link; the list is one listbox per section (multi-select, roving
   focus), sections are headings, the status tabs a tablist with arrows, the decision bar a toolbar with arrows; after
   a decision the focus moves to the next row and a polite live region says "Kept (intended). Next: Raw error text,
@@ -1410,9 +1566,9 @@ beside it; 438 tests on Node 22.22.0 and on Node 24.21.0, Chromium included.
 - The decision time is measured by the page and sent as `ms` (0 to 120000, checked): whoever holds the tab's key can
   send any value in that range, so the metric is the person's own record, not a proof.
 
-**Not done in M2:** the fix loop's states (attempts, drift, before/after, `fix --undo`), probe runs hidden from
-`runs`, and Coverage and Screens beyond the wall (M7) are later milestones; label pools from the gate harness (G);
-Korean words (the table is ready).
+**Not done in M2:** the fix loop's states and probe runs hidden from `runs` came with M3 (§6.6); Coverage and
+Screens beyond the wall (M7) are later milestones; label pools from the gate harness (G); Korean words (the table is
+ready).
 
 ## 8. Release gates (0.1)
 
