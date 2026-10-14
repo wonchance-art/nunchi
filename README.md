@@ -54,11 +54,13 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
   mistakes and naive prompt injections. For a repository you don't trust, run the agent in a container or as
   another user
 - **A fix loop** (`nunchi fix`): your AI edits, nunchi does the rest. Fixes go on a branch of their own
-  (`nunchi/fixes-1015`), one commit per finding, after your own build, typecheck, lint and tests pass (scripts you
-  approve once in the board, run without install or pre/post scripts). nunchi captures the affected screens before
-  and after from the same recorded data, and judges: *fixed*, *undone* (it broke something or did not remove the
-  defect; two tries, then it is yours), or *needs you* (it also changed other parts of the screen: the board shows
-  before and after side by side). It never pushes, resets or forces, and an AI saying "fixed" changes nothing
+  (`nunchi/fixes-MMDD`, the day's date), one commit per finding, after your own build, typecheck, lint and tests run
+  (scripts you approve once in the board, run without install or pre/post scripts; a check blocks only when it newly
+  fails, or fails worse than before the fix). nunchi captures the affected screens before and after from the same
+  recorded data, and judges: *fixed*, *undone* (it broke something or did not remove the defect; two tries, then it is
+  yours), or *needs you* (it also changed other parts of the screen: the board shows before and after, with a slider).
+  It never pushes, resets or forces, never mixes your uncommitted work into an undo, and an AI saying "fixed" changes
+  nothing
 - **Runs** you can compare: each capture is its own folder with the commit and working-tree state it came from;
   a login that expired or an app that isn't running is reported once, not as a hundred findings
 
