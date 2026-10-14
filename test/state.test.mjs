@@ -3,7 +3,7 @@
 // Namespace imports, so a function that did not exist before M1 fails its own test, not the whole file.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, realpathSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, realpathSync, statSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
@@ -255,6 +255,22 @@ test('answer keys: under $XDG_STATE_HOME (Windows: %LOCALAPPDATA%), else ~/.loca
   assert.notEqual(St.keysDir(join(project, '.nunchi', 'runs', '0004'), env), St.keysDir(runDir, env), 'one folder per run');
   assert.notEqual(St.keysDir(join(tmp('nunchi-keys-other-'), '.nunchi', 'runs', '0003'), env), St.keysDir(runDir, env), 'and per project folder');
   assert.throws(() => St.writeKey(runDir, 'manifest.json', {}, env), /not an answer key/);
+});
+
+test('answer keys: a run reached through a linked folder has the same key folder, also once the run folder is gone', { skip: !POSIX && 'symbolic links need privileges on Windows' }, () => {
+  const env = { XDG_STATE_HOME: tmp('nunchi-keys-link-xdg-') };
+  const real = tmp('nunchi-keys-real-');
+  const runDir = join(real, '.nunchi', 'runs', '0001');
+  mkdirSync(runDir, { recursive: true });
+  const link = join(tmp('nunchi-keys-linkdir-'), 'project');
+  symlinkSync(real, link);
+  const viaLink = join(link, '.nunchi', 'runs', '0001');
+  assert.equal(St.keysDir(viaLink, env), St.keysDir(runDir, env));
+  St.writeKey(viaLink, 'hunt-key.json', { plan: 'p' }, env);
+  rmSync(runDir, { recursive: true });
+  assert.equal(St.keysDir(viaLink, env), St.keysDir(runDir, env), 'gc computes it after removing the run');
+  St.removeKeys(viaLink, env);
+  assert.ok(!existsSync(St.keysDir(runDir, env)));
 });
 
 test('answer keys: one an older nunchi left inside the run is read once and moved out', () => {

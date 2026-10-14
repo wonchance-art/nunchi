@@ -328,6 +328,18 @@ test('AI fold: a verify --record whose fold could not happen (the ledger was bus
   assert.deepEqual(groups.map(g => [g.rule, g.example.verification.status]), [['L9.destructive-without-confirm', 'confirmed']]);
 });
 
+test('decide: an AI item that is its own group (no component known) is decided on its fingerprint by that one id', async () => {
+  const cwd = project();
+  makeRun(cwd, '0001');
+  assert.equal((await huntAndVerify(cwd, '0001', { source: false })).code, 0);
+  const [g] = await aiGroups(cwd);
+  assert.equal(g.group, g.fps[0], 'no file, no inventory: the group is the fingerprint');
+  const r = await cli(cwd, 'decide', g.group, 'fix', '--json');
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(JSON.parse(r.stdout)[0].target, { fp: g.group });
+  assert.equal((await aiGroups(cwd))[0].status, 'to-fix');
+});
+
 test('AI fold: re-verifying replaces the run\'s contribution; rejected and insufficient never make an item', async () => {
   const cwd = project();
   makeRun(cwd, '0001');

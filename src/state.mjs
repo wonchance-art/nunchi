@@ -222,9 +222,10 @@ export function userStateBase(env = process.env, platform = process.platform) {
 const real = p => { try { return realpathSync(p); } catch { return resolve(p); } };
 // One folder per run: `<base>/<hash of the folder holding the run>/keys/<run folder name>/`. Run ids are numbered per
 // worktree, so the hash names the runs folder (one worktree's `.nunchi/runs`, or the parent of an --out folder).
+// The folder holding the run is resolved to its real path (the run itself may already be gone: gc removes keys after).
 export function keysDir(runDir, env = process.env) {
-  const dir = real(runDir);
-  return join(userStateBase(env), sha(dirname(dir), 16), 'keys', basename(dir));
+  const dir = resolve(runDir);
+  return join(userStateBase(env), sha(real(dirname(dir)), 16), 'keys', basename(dir));
 }
 export const keyPath = (runDir, name, env) => join(keysDir(runDir, env), name);
 const KEY_NAMES = new Set(['hunt-key.json', 'verify-key.json', 'recheck-key.json']);

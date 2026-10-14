@@ -520,7 +520,10 @@ if (cmd === 'setup') {
     try { by = run('git', ['config', 'user.name'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || by; } catch {}
     const made = [];
     for (const id of ids) {
-      const g = gs.filter(x => x.group.startsWith(id)), f = rows.filter(x => x.fp.startsWith(id));
+      let g = gs.filter(x => x.group.startsWith(id));
+      const f = rows.filter(x => x.fp.startsWith(id));
+      // an AI item with no component is its own group (group = fingerprint, §5.1): one id, decided on the fingerprint
+      if (g.length === 1 && f.length === 1 && g[0].group === f[0].fp) g = [];
       if (g.length + f.length !== 1) { console.error(`nunchi: "${id}" matches ${g.length + f.length} groups/fingerprints; give more characters`); process.exit(1); }
       const target = g.length ? { group: g[0].group } : { fp: f[0].fp };
       try { made.push(buildDecision({ target, decision, reason: args.reason || null, note: args.note || null, by })); }

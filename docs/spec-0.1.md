@@ -747,8 +747,9 @@ Field app 1 (§9.2) after this: 1,082 findings → 578 unique defects → 99 gro
   only the times this machine first saw each decision are merged (the earliest wins); approvals are added (both
   lists are this machine's). That worktree's runs are folded again by its next ledger command (below).
 - *Writes* (`updateDoc`): read the document and its `rev`, change it, then under the file's lock commit only if
-  `rev` on disk is still the one read; otherwise read again and redo the change (no lost update, also when a lock
-  was taken over from a holder judged stale). After 4 conflicts the whole read–change–write runs under the lock, so
+  `rev` on disk is still the one read; otherwise read again and redo the change (no lost update; a holder whose lock
+  was taken over as stale finds the `rev` the new holder wrote and reads again, unless both write in the same
+  instant). After 4 conflicts the whole read–change–write runs under the lock, so
   a busy file still makes progress. The commit writes `rev + 1`, keeps the file it replaces as `ledger.json.prev`
   (the ledger only, as the design names; approvals have no `.prev`), writes atomically and synced (§5 *lock*,
   `writeAtomic`), and bumps the state's `generation` file (a counter under its own lock, taken after the
