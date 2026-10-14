@@ -163,6 +163,36 @@ test('board e2e: Z pressed while the decision is still on its way undoes that de
   } finally { await s.close(); }
 });
 
+test('board e2e: live updates outlast a board that does not answer for a while; only 4 misses in a row say it is not running; the stream is tried again', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = smallProject();
+  const b = await startBoard({ projectDir: p.root });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await context.newPage();
+  try {
+    await page.clock.install();
+    let down = true, streams = 0, polls = 0;
+    // the stream never opens here; the polling gets no answer while `down`
+    await page.route('**/api/live', r => { streams++; return r.abort('connectionrefused'); });
+    await page.route('**/api/generation', r => { polls++; return down ? r.abort('connectionrefused') : r.continue(); });
+    await page.goto(b.newLink());
+    await page.waitForSelector('#h-progress');
+    const advance = async (ms, until = () => false) => { for (let i = 0; i < ms / 500 && !until(); i++) { await page.clock.runFor(500); await new Promise(r => setTimeout(r, 30)); } };
+    const lostText = () => page.evaluate(() => document.getElementById('lost-h')?.textContent || null);
+    await advance(20000, () => polls >= 2);
+    assert.ok(polls >= 2, `two polls got no answer (${polls})`);
+    assert.equal(await lostText(), null, 'two misses do not say the board is gone');
+    down = false;
+    const before = streams;
+    await advance(30000, () => streams > before);
+    assert.ok(streams > before, 'once the board answers, the stream is tried again');
+    assert.equal(await lostText(), null);
+    down = true;
+    await advance(90000, () => false);
+    assert.equal(await lostText(), 'The board is not running.', 'four misses in a row say so');
+  } finally { await context.close(); await b.close(); }
+});
+
 test('board e2e: the list holds still while you work; new findings wait behind a banner until R', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = smallProject();

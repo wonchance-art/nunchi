@@ -160,35 +160,60 @@ async function boot() {
   live();
 }
 
-// ---- live updates: a fetch stream, polling when it fails --------------------------------------------------------------
-
-async function live() {
+// ---- live updates: a fetch stream; when it breaks, polling, and the stream again --------------------------------------
+// A request that gets no answer at all (the network, a board restarting, a laptop waking up) is retried with a growing
+// wait; only OFFLINE_AFTER of them in a row say the board is not running. An answer of any status (429, 503) means it is.
+const OFFLINE_AFTER = 4, POLL_MS = 3000, POLL_MAX_MS = 15000, STREAM_MAX_MS = 60000;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+// One stream, read to its end. → 'bye' | 'expired' | 'ended' (it ran, then closed) | 'failed' (it could not open)
+async function stream() {
+  let res;
+  try { res = await fetch('/api/live', { headers: { 'X-Nunchi-Token': S.token }, cache: 'no-store', credentials: 'omit' }); } catch { return 'failed'; }
+  if (res.status === 401) return 'expired';
+  if (!res.ok || !res.body) return 'failed';
   try {
-    const res = await fetch('/api/live', { headers: { 'X-Nunchi-Token': S.token }, cache: 'no-store', credentials: 'omit' });
-    if (res.status === 401) return lost('expired');
-    if (!res.ok || !res.body) throw new Error('no stream');
     const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
     let buf = '';
     for (;;) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) return 'ended';
       buf += value;
       let i;
       while ((i = buf.indexOf('\n\n')) >= 0) {
         const block = buf.slice(0, i); buf = buf.slice(i + 2);
         const ev = /^event: (\w+)$/m.exec(block)?.[1], data = /^data: (.*)$/m.exec(block)?.[1];
-        if (ev === 'bye') return lost('stopped');
+        if (ev === 'bye') return 'bye';
         if (ev === 'generation' && data) { try { changed(JSON.parse(data).version); } catch {} }
       }
     }
-  } catch {}
-  if (!S.stopped) poll();
+  } catch { return 'ended'; }
 }
-function poll() {
-  const t = setInterval(async () => {
-    if (S.stopped) return clearInterval(t);
-    try { const r = await api('/api/generation'); changed(r.version); } catch (e) { if (e.status === 401) clearInterval(t); else { clearInterval(t); lost('offline'); } }
-  }, 3000);
+// Polls the version for at least `ms`, until the board answers. → false when the tab is done (no key, offline).
+async function pollFor(ms) {
+  const until = Date.now() + ms;
+  let misses = 0, wait = POLL_MS;
+  for (;;) {
+    await sleep(wait);
+    if (S.stopped) return false;
+    try { const r = await api('/api/generation'); misses = 0; wait = POLL_MS; changed(r.version); if (Date.now() >= until) return true; }
+    catch (e) {
+      if (e.status === 401) return false;
+      if (e.status) { misses = 0; wait = POLL_MS; if (Date.now() >= until) return true; continue; }   // it answered
+      if (++misses >= OFFLINE_AFTER) { lost('offline'); return false; }
+      wait = Math.min(wait * 2, POLL_MAX_MS);
+    }
+  }
+}
+async function live() {
+  let wait = POLL_MS;                                    // polling before the stream is tried again; grows while it fails
+  while (!S.stopped) {
+    const r = await stream();
+    if (r === 'bye') return lost('stopped');
+    if (r === 'expired') return lost('expired');
+    if (r === 'ended') wait = POLL_MS;
+    if (!(await pollFor(wait))) return;
+    if (r === 'failed') wait = Math.min(wait * 2, STREAM_MAX_MS);
+  }
 }
 let busy = null;
 async function changed(version) {

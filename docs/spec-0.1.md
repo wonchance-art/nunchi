@@ -1152,8 +1152,10 @@ the live endpoints answer (the others 404, so nothing unblinds).
   not expired by the reader's clock), because a claim bumps none either and expires without a write; a cached model
   takes the claims as they are on each request (their minutes too). A change sends `event: generation` with the new version on
   every open stream (a `fetch` stream read with `ReadableStream`, SSE framing, a ping every 15 s); the page then
-  reloads the summary and, in place, the list and detail it shows. A failed stream falls back to polling
-  `/api/generation` every 3 s. `nunchi decide` now bumps the generation after it writes the decision files too (the
+  reloads the summary and, in place, the list and detail it shows. A stream that fails or ends falls back to polling
+  `/api/generation` every 3 s, and is tried again once the board answers (after 3 s of polling, doubling to 60 s while
+  it cannot be opened). A request that gets no answer at all is retried with a growing wait (3, 6, 12, then 15 s);
+  only 4 in a row say "The board is not running"; an answer of any status (429, 503) means it is running. `nunchi decide` now bumps the generation after it writes the decision files too (the
   approvals' bump came before the files existed).
 - The model (`src/board/model.mjs`) is ledger-wide, as `findings` sees it (`view()` through `project.mjs`), not one
   run: a partial latest run does not hide open items. Evidence comes from the run that last saw each item: a rule
