@@ -74,7 +74,8 @@ After step 5, when the user wants the deeper sweep. The engine cuts the work and
    with a `scenes` list applies only to those scenes. A defect names:
    - `scene`: one of the unit's `scenes` (never the reference),
    - `selector`: copied exactly from that scene's controls.json, styles.json, links.json or measure.json, or
-     `aria=<node>` with an aria.yml line minus its leading `- ` (e.g. `aria=button "Delete garden"`), and/or
+     `aria=<node>` with an aria.yml line minus its leading `- ` (e.g. `aria=button "Delete garden"`; a node with text
+     after its name, `group "Week 3": Mon Tue …`, may be cited by role and name: `aria=group "Week 3"`), and/or
    - `source`: `path/to/file.tsx:42` under the app root, when you read the code that causes it (the source
      slice's file:line is a good ground when the defect on screen comes from that line),
    - `claim`: one short sentence, and `severity` (blocker, high, medium, low) from the lens's rubric.

@@ -2,11 +2,15 @@
 // `.nunchi/runs/<id>` only when complete, so a reader never sees half a run and a crash leaves the
 // previous run intact. Ids are sequential numbers (deterministic, no clock). `latest` names the newest
 // complete run and is replaced atomically.
-import { readdirSync, mkdirSync, renameSync, readFileSync, writeFileSync, existsSync, rmSync, statSync, appendFileSync } from 'node:fs';
+import { readdirSync, mkdirSync, readFileSync, existsSync, rmSync, statSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { privateDir, setMode, refuseLink } from './stable.mjs';
+import { writeAtomic, retryBusy, io, privateDir, setMode, refuseLink } from './stable.mjs';
+
+// Windows refuses renames, removals and new folders for a moment while another capture or reader is busy in the
+// same folder (EPERM, EACCES, EBUSY): those are retried with backoff (retryBusy).
+const RM = { recursive: true, force: true, maxRetries: 10, retryDelay: 20 };
 
 const ID = /^\d{4,}$/;
 const PARTIAL = /^(\d{4,})\.partial$/;
@@ -22,14 +26,18 @@ export function listRuns(dir) {
 
 export function latestRun(dir) {
   const f = join(dir, 'latest');
-  if (existsSync(f)) { const id = readFileSync(f, 'utf8').trim(); if (ID.test(id) && existsSync(join(dir, id))) return id; }
+  let id = null;
+  try { id = retryBusy(() => readFileSync(f, 'utf8'), 1000).trim(); } catch {}            // absent, or replaced right now
+  if (id && ID.test(id) && existsSync(join(dir, id))) return id;
   const { complete } = listRuns(dir);
   return complete.length ? complete[complete.length - 1] : null;
 }
 
 // Reserves the next id. mkdir without `recursive` fails if the folder exists, so two captures started
-// at the same moment get different ids. Runs hold screenshots and data of signed-in screens: the runs
-// folder and each run are owner-only (D12) whatever the umask, a runs folder an older version made included.
+// at the same moment get different ids. A capture that finished between the listing and the mkdir has already
+// renamed its `<id>.partial` to `<id>`: the id is taken, so the folder just made is removed and the next id tried.
+// Runs hold screenshots and data of signed-in screens: the runs folder and each run are owner-only (D12) whatever
+// the umask, a runs folder an older version made included.
 export function startRun(dir) {
   privateDir(dir);
   setMode(dir, 0o700);
@@ -39,33 +47,36 @@ export function startRun(dir) {
     const id = String(++n).padStart(4, '0');
     if (existsSync(join(dir, id))) continue;
     const path = join(dir, `${id}.partial`);
-    try { mkdirSync(path, { mode: 0o700 }); setMode(path, 0o700); return { id, path, parent: latestRun(dir) }; }
-    catch (e) { if (e.code !== 'EEXIST') throw e; }
+    try { retryBusy(() => mkdirSync(path, { mode: 0o700 })); } catch (e) { if (e.code !== 'EEXIST') throw e; continue; }
+    if (existsSync(join(dir, id))) { rmSync(path, RM); continue; }
+    setMode(path, 0o700);
+    return { id, path, parent: latestRun(dir) };
   }
 }
 
+// `latest` is a pointer for convenience: replaced atomically, and when several captures finish at once the last
+// write wins; a write that still fails is not fatal (latestRun falls back to the newest complete run).
 export function finishRun(dir, id) {
   const final = join(dir, id);
-  renameSync(join(dir, `${id}.partial`), final);
-  const tmp = join(dir, `latest.${process.pid}.tmp`);
-  writeFileSync(tmp, id + '\n', { mode: 0o600 });
-  setMode(tmp, 0o600);
-  renameSync(tmp, join(dir, 'latest'));
+  retryBusy(() => io.rename(join(dir, `${id}.partial`), final));
+  try { writeAtomic(join(dir, 'latest'), id + '\n', { mode: 0o600 }); } catch {}
   return final;
 }
 
 // Keeps the newest `keep` complete runs (and `latest`); removes older runs and partial folders that
-// nothing has written to for `staleMs`. Runs referenced by open reviews will be kept too (0.1-c).
-export function gcRuns(dir, { keep = 5, staleMs = 3600e3, now = Date.now() } = {}) {
+// nothing has written to for `staleMs`. Runs referenced by open reviews will be kept too (0.1-c). With
+// `folded` (the runs the ledger holds), a complete run the ledger has not folded is never removed.
+export function gcRuns(dir, { keep = 5, staleMs = 3600e3, now = Date.now(), folded = null } = {}) {
   const { complete, partial } = listRuns(dir);
   const latest = latestRun(dir);
   const keepSet = new Set(complete.slice(-keep));
   if (latest) keepSet.add(latest);
+  if (folded) for (const id of complete) if (!folded.has(id)) keepSet.add(id);
   const removed = [];
-  for (const id of complete) if (!keepSet.has(id)) { rmSync(join(dir, id), { recursive: true, force: true }); removed.push(id); }
+  for (const id of complete) if (!keepSet.has(id)) { rmSync(join(dir, id), RM); removed.push(id); }
   for (const p of partial) {
     if (now - statSync(join(dir, p)).mtimeMs < staleMs) continue;
-    rmSync(join(dir, p), { recursive: true, force: true }); removed.push(p);
+    rmSync(join(dir, p), RM); removed.push(p);
   }
   return { kept: [...keepSet].sort(), removed };
 }

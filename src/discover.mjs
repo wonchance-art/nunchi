@@ -130,6 +130,91 @@ function discoverTanstack(root, routesDir, routes, excluded, router) {
   }
 }
 
+// What a React Router route renders, read statically: the components named by its own `element` /
+// `Component` / `lazy` and by those of the layout routes around it, innermost first. The source map
+// starts from these instead of from the config file, which imports every page. Brackets are counted
+// raw (no string parsing): a brace inside a string in a route config is rare, and an apostrophe in JSX
+// text, which string parsing would trip on, is not.
+const JSX_NAMES = text => [...text.matchAll(/<\s*([A-Z][\w.]*)/g)].map(m => m[1]);
+const LAZY_SPECS = text => [...text.matchAll(/\bimport\(\s*['"]([^'"\n]+)['"]\s*\)/g)].map(m => m[1]);
+
+function bracketPairs(src) {
+  const open = { '{': '}', '[': ']', '(': ')' };
+  const stack = []; const pairs = [];
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (open[c]) stack.push([c, i]);
+    else if (c === '}' || c === ']' || c === ')') {
+      while (stack.length && open[stack[stack.length - 1][0]] !== c) stack.pop();
+      const top = stack.pop();
+      if (top) pairs.push({ kind: top[0], start: top[1], end: i });
+    }
+  }
+  return pairs;
+}
+
+// The text of an object at its own depth: nested objects, arrays and calls blanked out.
+function ownText(src, obj, pairs) {
+  const chars = src.slice(obj.start + 1, obj.end).split('');
+  for (const p of pairs) {
+    if (p.kind !== '(' && p.start > obj.start && p.end < obj.end) for (let k = p.start - obj.start; k < p.end - obj.start - 1; k++) chars[k] = ' ';
+  }
+  return chars.join('');
+}
+
+function objectRenders(text) {
+  const out = { components: [], lazy: [] };
+  const el = /\belement\s*:\s*([\s\S]*?)(?=,\s*[A-Za-z_$][\w$]*\s*:|$)/.exec(text);
+  if (el) out.components.push(...JSX_NAMES(el[1]));
+  const comp = /\bComponent\s*:\s*([A-Z][\w.]*)/.exec(text);
+  if (comp) out.components.push(comp[1]);
+  const lazy = /\blazy\s*:\s*([\s\S]*?)(?=,\s*[A-Za-z_$][\w$]*\s*:|$)/.exec(text);
+  if (lazy) out.lazy.push(...LAZY_SPECS(lazy[1]));
+  return out;
+}
+
+function tagRenders(src, tagStart, pairs) {
+  const out = { components: [], lazy: [] };
+  // the tag ends at the first `>` outside braces
+  let end = tagStart; let depth = 0;
+  for (; end < src.length; end++) {
+    const c = src[end];
+    if (c === '{') depth++; else if (c === '}') depth--; else if (c === '>' && depth === 0) break;
+  }
+  const tag = src.slice(tagStart, end + 1);
+  const attr = name => {
+    const at = new RegExp(`\\b${name}\\s*=\\s*\\{`).exec(tag);
+    if (!at) return null;
+    const open = tagStart + at.index + at[0].length - 1;
+    const pair = pairs.find(p => p.start === open);
+    return pair ? src.slice(open + 1, pair.end) : null;
+  };
+  const el = attr('element'); if (el) out.components.push(...JSX_NAMES(el));
+  const comp = attr('Component'); if (comp && /^\s*[A-Z][\w.]*\s*$/.test(comp)) out.components.push(comp.trim());
+  const lazy = attr('lazy'); if (lazy) out.lazy.push(...LAZY_SPECS(lazy));
+  return { ...out, selfClosing: /\/\s*>$/.test(tag), end };
+}
+
+function routeRenders(src, index, pairs) {
+  const out = { components: [], lazy: [] };
+  const add = r => { out.components.push(...r.components); out.lazy.push(...r.lazy); };
+  if (src.startsWith('<Route', index)) {
+    add(tagRenders(src, index, pairs));
+    // open <Route> tags before this one are its layouts, innermost first
+    const stack = [];
+    for (const m of src.slice(0, index).matchAll(/<Route\b|<\/Route\s*>/g)) {
+      if (m[0].startsWith('</')) { stack.pop(); continue; }
+      const t = tagRenders(src, m.index, pairs);
+      if (!t.selfClosing) stack.push(t);
+    }
+    for (const t of stack.reverse()) add(t);
+  } else {
+    const objects = pairs.filter(p => p.kind === '{' && p.start < index && p.end > index).sort((a, b) => b.start - a.start);
+    for (const o of objects) add(objectRenders(ownText(src, o, pairs)));
+  }
+  return { components: [...new Set(out.components)], lazy: [...new Set(out.lazy)] };
+}
+
 // React Router: static scan for `path: "..."` in route objects and `<Route path="...">`.
 // Relative (nested) paths cannot be resolved without evaluating the tree, so they are
 // reported as `needsResolution` for the agent to resolve from the source.
@@ -141,6 +226,7 @@ function discoverReactRouter(root, routes, excluded) {
     if (!CODE_EXT.has(extname(file))) continue;
     const src = readFileSync(file, 'utf8');
     if (!/react-router|createBrowserRouter|<Route\b|RouteObject/.test(src)) continue;
+    const pairs = bracketPairs(src);
     let m;
     while ((m = re.exec(src))) {
       const raw = m[2];
@@ -152,7 +238,13 @@ function discoverReactRouter(root, routes, excluded) {
       const params = [...raw.matchAll(/:([A-Za-z0-9_]+)(\?)?/g)].map(p => ({ name: p[1], kind: p[2] ? 'optional' : 'single' }));
       if (raw.endsWith('/*') || raw === '*') params.push({ name: '*', kind: 'catch-all' });
       const absolute = raw.startsWith('/');
-      routes.push({ path: raw, file: relFile, params, router: 'react-router', ...(absolute ? {} : { needsResolution: 'relative-path' }) });
+      const renders = routeRenders(src, m.index, pairs);
+      routes.push({
+        path: raw, file: relFile, params, router: 'react-router',
+        ...(renders.components.length ? { components: renders.components } : {}),
+        ...(renders.lazy.length ? { lazy: renders.lazy } : {}),
+        ...(absolute ? {} : { needsResolution: 'relative-path' }),
+      });
     }
   }
 }

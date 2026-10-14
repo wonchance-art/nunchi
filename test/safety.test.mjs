@@ -383,6 +383,16 @@ test('D12: the hunt mirror and the ledger state folder are owner-only too', { sk
     await promisify(execFile)('node', [CLI, 'approve', '--all'], { cwd, encoding: 'utf8' });
     assert.ok(existsSync(join(cwd, '.nunchi', 'state', 'approved.json')));
     assert.equal(mode(join(cwd, '.nunchi', 'state')), 0o700);
+    // `nunchi gc` on runs an older version left unfolded: its catch-up fold writes the first ledger file
+    const gcDir = tmp('gc');
+    const run = join(gcDir, '.nunchi', 'runs', '0001');
+    mkdirSync(run, { recursive: true });
+    writeFileSync(join(run, 'run.json'), '{}');
+    writeFileSync(join(run, 'manifest.json'), JSON.stringify({ baseUrl: 'http://127.0.0.1:1', scenes: [] }));
+    writeFileSync(join(run, 'findings.json'), JSON.stringify({ findings: [] }));
+    await promisify(execFile)('node', [CLI, 'gc'], { cwd: gcDir, encoding: 'utf8' });
+    assert.ok(existsSync(join(gcDir, '.nunchi', 'state', 'ledger.json')), 'the run was folded');
+    assert.deepEqual(['runs', 'state'].map(p => mode(join(gcDir, '.nunchi', p))), [0o700, 0o700]);
   } finally { process.umask(old); }
 });
 

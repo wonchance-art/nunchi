@@ -8,6 +8,7 @@ import { readFileSync, existsSync, statSync, realpathSync, readdirSync, mkdirSyn
 import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { stableJson, sha, writeStable, privateDir } from './stable.mjs';
 import { lensHash, lensNumber, SEVERITIES, EVIDENCE_FILES } from './lenses.mjs';
+import { isRedirected } from './flow.mjs';
 
 // Token estimate (documented in spec §4):
 //   text files   ceil(bytes / 4)  — chars/4 for ASCII; UTF-8 text with other scripts is over-estimated, never under
@@ -80,20 +81,29 @@ export function readManifest(runDir) {
 // route's page, which is judged in that route's own scene, as the rule lenses do).
 function huntable(entry) {
   if (entry.status !== 'captured') return { ok: false, reason: entry.reason || entry.status };
-  if (entry.reason && /^redirected/.test(entry.reason)) return { ok: false, reason: 'redirected' };
+  if (isRedirected(entry)) return { ok: false, reason: 'redirected' };
   return { ok: true };
 }
 
 // The reference scene: another route of the same app, same person and viewport, preferably in the same
 // state (how the app handles the same situation elsewhere), else normal; never a canary copy. Chosen by a hash of the group,
-// so references spread over the app and the same group always gets the same one.
-function pickReference(group, scenes) {
+// so references spread over the app and the same group always gets the same one. A lens with
+// `reference: "nearest"` first prefers the route sharing the most leading path segments (/bookings/:id →
+// /bookings), where the same components are most likely to appear; the hash breaks ties.
+const sharedSegments = (a, b) => {
+  const x = a.split('/').filter(Boolean); const y = b.split('/').filter(Boolean);
+  let n = 0;
+  while (n < x.length && n < y.length && x[n] === y[n]) n++;
+  return n;
+};
+function pickReference(group, scenes, mode = 'spread') {
   const first = group[0];
   const pool = scenes.filter(s => s.canary === undefined && s.route !== first.route && s.person === first.person && s.viewport === first.viewport);
   const key = group.map(s => s.id).join('|');
+  const near = s => (mode === 'nearest' ? sharedSegments(first.route, s.route) : 0);
   for (const state of [first.state, 'normal']) {
     const c = pool.filter(s => s.state === state);
-    if (c.length) return c.map(s => ({ s, h: sha(`${key}|${s.id}`) })).sort((a, b) => cmp(a.h, b.h) || cmp(a.s.id, b.s.id))[0].s;
+    if (c.length) return c.map(s => ({ s, n: near(s), h: sha(`${key}|${s.id}`) })).sort((a, b) => b.n - a.n || cmp(a.h, b.h) || cmp(a.s.id, b.s.id))[0].s;
   }
   return null;
 }
@@ -192,7 +202,7 @@ export function planHuntWithKey({ runDir, lenses, lensIds = null, budget = null,
           return { id: item.id, question: item.question, ...(applies.length < group.length ? { scenes: applies } : {}) };
         });
         if (!checklist.length) continue;
-        const reference = pickReference(group, scenes);
+        const reference = pickReference(group, scenes, lens.reference);
         // The scene under review goes last (spec §4): reference files first, then the reviewed scenes.
         const files = []; const missing = []; let tokens = 0;
         const add = (s, names) => {
@@ -293,13 +303,17 @@ function sceneIndex(runDir, sceneId) {
   put('links.json', read('links.json', []));
   const m = read('measure.json', {});
   for (const k of ['clipped', 'images', 'scrollers', 'hiddenControls']) put('measure.json', m[k]);
-  // aria.yml nodes are addressed as `aria=<the node line without "- ">`, e.g. aria=button "Delete garden"
+  // aria.yml nodes are addressed as `aria=<the node line without "- ">`, e.g. aria=button "Delete garden".
+  // A node with inline text (`group "Week 3": Mon Tue …`) is also addressed by its role and name alone.
   let aria = '';
   try { aria = readFileSync(join(runDir, sceneId, 'aria.yml'), 'utf8'); } catch {}
   const ariaNodes = new Set();
   for (const line of aria.split('\n')) {
     const m2 = /^\s*-\s+(.*?):?\s*$/.exec(line);
-    if (m2 && m2[1]) ariaNodes.add(m2[1]);
+    if (!m2 || !m2[1]) continue;
+    ariaNodes.add(m2[1]);
+    const named = /^([a-z]+ "(?:[^"\\]|\\.)*"(?: \[[^\]]*\])*): \S/.exec(m2[1]);
+    if (named) ariaNodes.add(named[1]);
   }
   return { idx, ariaNodes };
 }

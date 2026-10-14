@@ -2,12 +2,16 @@
 // fingerprint ignores the bundle's content hash. v1 state and decisions migrate instead of being orphaned.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { secretFindings, mask } from '../src/rules.mjs';
 import * as ledger from '../src/ledger.mjs';
-const { fingerprintOf, annotate, readState, view, FINGERPRINT_VERSION } = ledger;
+const { fingerprintOf, annotate, readState, view, approvalKey, FINGERPRINT_VERSION } = ledger;
+// Approvals name a decision's content (approvalKey), and a decision counts once this machine has seen it: `now` is
+// fixed after the decisions' dates. A moved v1 decision keeps the approval of the file as written.
+const NOW = { now: Date.parse('2026-10-15T00:00:00+09:00') };
+const approve = list => new Set(list.map(approvalKey));
 const bundleKey = p => ledger.bundleKey(p);
 
 const secret = (url, kind = 'stripe-live-secret-key', extra = {}) => ({ lens: 'L9', rule: 'secret-in-client-bundle', severity: 'blocker', scene: null, route: null, viewport: null, selector: null, box: null, evidence: { url, kind, ...extra } });
@@ -98,7 +102,7 @@ test('fp v2 migration: a v1 ledger is re-keyed on read, its v1 decisions keep ap
     { schema: 1, id: 'd1', target: { fp: items[0].fp }, decision: 'false-positive', reason: 'not-a-problem', by: 'me', at: '2026-10-14T10:00:00.000+09:00', fingerprintVersion: 1 },
     { schema: 1, id: 'd2', target: { group: items[2].group }, decision: 'keep', reason: 'intended', by: 'me', at: '2026-10-14T10:01:00.000+09:00', fingerprintVersion: 1 },
   ];
-  const approved = new Set(['d1', 'd2']);
+  const approved = approve(decisions);
 
   const st = readState(file);
   assert.equal(st.fingerprintVersion, 2);
@@ -112,16 +116,28 @@ test('fp v2 migration: a v1 ledger is re-keyed on read, its v1 decisions keep ap
   // The next build renames the chunk again: same fingerprint, so the next fold updates this item.
   const after = secret('/_next/static/chunks/0x9pqk2mz7abc.js');
   assert.equal(annotate([after])[0].fp, secrets[0].fp);
-  const rows = view(st, decisions, approved);
+  const rows = view(st, decisions, approved, NOW);
   assert.equal(rows.find(r => r.rule === 'secret-in-client-bundle').status, 'dismissed', 'the v1 decision still applies');
+  assert.equal(rows.find(r => r.rule === 'secret-in-client-bundle').decision.verified, true, 'approved by the content of the file as written');
   assert.equal(rows.find(r => r.rule === 'target-size-min').status, 'kept');
-  assert.equal(readState(file).fingerprintVersion, 2, 'reading migrates; the file is rewritten by the next fold');
+  assert.equal(readState(file).fingerprintVersion, 2, 'reading migrates');
+  assert.equal(JSON.parse(readFileSync(file, 'utf8')).fingerprintVersion, 1, 'a read alone writes nothing');
+  // The next ledger command writes the migrated state back, under the lock, with no run to fold.
+  const synced = ledger.syncLedger(file, join(dirname(file), 'runs'));
+  const onDisk = JSON.parse(readFileSync(file, 'utf8'));
+  assert.equal(onDisk.fingerprintVersion, 2);
+  assert.deepEqual(Object.keys(onDisk.items).sort(), Object.keys(st.items).sort());
+  assert.deepEqual(onDisk.aliases, st.aliases);
+  assert.deepEqual(synced.aliases, st.aliases);
+  assert.ok(!readFileSync(file, 'utf8').includes('sk_l'), 'the stored characters are gone from the file too');
 
   // A v1 decision from another machine, about the chunk this machine's (v2) state holds, applies too.
   const v2item = { ...storedV1(after), ...fingerprintOf(after) };
   const fresh = { schema: 1, fingerprintVersion: 2, runs: ['0001'], items: { [v2item.fp]: v2item } };
   const remote = [{ ...decisions[0], id: 'd3', target: { fp: fingerprintOf(after, 1).fp } }];
-  assert.equal(view(fresh, remote, new Set(['d3']))[0].status, 'dismissed');
+  assert.equal(view(fresh, remote, approve(remote), NOW)[0].status, 'dismissed');
+  // Moved or not, a dismissal of a secret that this machine did not approve does not count.
+  assert.equal(view(fresh, remote, new Set(), NOW)[0].status, 'open');
 });
 
 test('fp v2 migration: two secrets are never merged into one dismissal; merged items with conflicting decisions stay open', () => {
@@ -134,7 +150,7 @@ test('fp v2 migration: two secrets are never merged into one dismissal; merged i
   const decisions = [dec('d1', { fp: checkout.fp }, 'fix', null, 1), dec('d2', { fp: payments.fp }, 'false-positive', 'not-a-problem', 2)];
   const st = readState(file);
   assert.equal(Object.keys(st.items).length, 2, 'two bundles stay two items');
-  const rows = view(st, decisions, new Set(['d1', 'd2']));
+  const rows = view(st, decisions, approve(decisions), NOW);
   assert.deepEqual(rows.map(r => [r.evidence.url, r.status]).sort(), [['/js/checkout2.js', 'to-fix'], ['/js/payments2.js', 'dismissed']]);
   // Two builds of one bundle do merge; if their v1 decisions disagree, the merged item is not dismissed.
   const a = storedV1(secret('/assets/index-Ab12Cd34.js')), b = { ...storedV1(secret('/assets/index-Ef56Gh78.js')), lastSeen: '0002' };
@@ -143,6 +159,6 @@ test('fp v2 migration: two secrets are never merged into one dismissal; merged i
   const merged = readState(file2);
   assert.equal(Object.keys(merged.items).length, 1);
   const conflicting = [dec('d1', { fp: a.fp }, 'fix', null, 1), dec('d2', { fp: b.fp }, 'false-positive', 'not-a-problem', 2)];
-  assert.equal(view(merged, conflicting, new Set(['d1', 'd2']))[0].status, 'to-fix', 'open beats dismissed');
-  assert.equal(view(merged, conflicting.slice(1), new Set(['d2']))[0].status, 'dismissed', 'one decision, no conflict: it carries over');
+  assert.equal(view(merged, conflicting, approve(conflicting), NOW)[0].status, 'to-fix', 'open beats dismissed');
+  assert.equal(view(merged, conflicting.slice(1), approve(conflicting.slice(1)), NOW)[0].status, 'dismissed', 'one decision, no conflict: it carries over');
 });

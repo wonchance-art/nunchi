@@ -2,7 +2,7 @@
 // which requests are "data", how they are recorded and replayed, and how forced states
 // (empty, error) rewrite them. Pure functions plus one small Recording class; no I/O at import.
 import { readFileSync, existsSync } from 'node:fs';
-import { writeStableAtomic, sha } from './stable.mjs';
+import { writeStable, sha } from './stable.mjs';
 
 // Base-URL guard (D10). Capture visits every screen and, recording, lets the app's data requests through, so
 // it runs only against a server the user runs: loopback, a private address, `*.local`, or a host the user
@@ -181,7 +181,7 @@ export class Recording {
   }
   // Replaced in one step and owner-only (it holds the app's API responses): a capture reading it, or one that
   // crashes while saving, never sees half a recording.
-  save(path) { writeStableAtomic(path, { schema: 1, note: 'nunchi recording: data responses only, tokens redacted', entries: this.entries }); }
+  save(path) { writeStable(path, { schema: 1, note: 'nunchi recording: data responses only, tokens redacted', entries: this.entries }); }
   loader() {
     const counters = new Map();
     const next = key => { const i = counters.get(key) || 0; counters.set(key, i + 1); return i; };
