@@ -17,6 +17,7 @@ import { loadLenses, BUILTIN_DIR } from '../src/lenses.mjs';
 import { planHuntWithKey, writeHuntMirror, recordHunt, readAnswers } from '../src/hunt.mjs';
 import { scoreCanaries } from '../src/canary.mjs';
 import { writeStable } from '../src/stable.mjs';
+import { writeKey, readKey } from '../src/state.mjs';
 import { scoreAi } from './score.mjs';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -67,7 +68,7 @@ if (args.packets) {
   const lensIds = args.lens ? String(args.lens).split(',').map(x => x.trim().toUpperCase()).filter(Boolean) : null;
   const { plan, key } = planHuntWithKey({ runDir, lenses, lensIds, budget: null, runId: null });
   writeStable(join(runDir, 'hunt-plan.json'), plan);
-  if (key) writeStable(join(runDir, 'hunt-key.json'), key);
+  if (key) writeKey(runDir, 'hunt-key.json', key);            // outside the project, where hunters do not look
   writeHuntMirror(runDir, key);
   const real = a => (key ? key.scenes[a] : a);
   const manifest = readJson(join(runDir, 'manifest.json'));
@@ -103,7 +104,7 @@ if (args.packets) {
 if (args.score) {
   if (!args.answers || !args.root) { console.error('--score needs --answers <dir> and --root <app>'); process.exit(1); }
   const plan = readJson(join(runDir, 'hunt-plan.json'));
-  const key = existsSync(join(runDir, 'hunt-key.json')) ? readJson(join(runDir, 'hunt-key.json')) : null;
+  const key = readKey(runDir, 'hunt-key.json');
   const manifest = readJson(join(runDir, 'manifest.json'));
   const canaries = existsSync(join(runDir, 'canaries.json')) ? readJson(join(runDir, 'canaries.json')) : null;
   const answersDir = resolve(args.answers);

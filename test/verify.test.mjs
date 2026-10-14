@@ -7,8 +7,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { planVerify, recordVerdicts, claimOf, decoyCount, DECOY_TEMPLATES, SAME_MODEL } from '../src/verify.mjs';
+import { keyPath } from '../src/state.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
+// answer keys live in the user's state folder (design §2.2): a private one for these tests, inherited by the CLI
+process.env.XDG_STATE_HOME = mkdtempSync(join(tmpdir(), 'nunchi-verify-state-'));
 
 // Synthetic scene evidence: controls.json rows as collect() writes them.
 const ctl = (selector, name, extra = {}) => ({ selector, tag: 'button', role: null, name, hasText: true, text: name, box: [16, 100 + selector.length, 120, 44], href: null, inline: false, ...extra });
@@ -168,7 +171,9 @@ test('CLI verify --plan / --record on a run folder', () => {
   writeFileSync(join(run, 'ai-findings.json'), JSON.stringify({ schema: 1, findings: [...FINDINGS, claim(11, { scene: '../../outside' })] }));
   assert.match(cli(['verify', '--plan']), /12 packets → .*verify-packets\.json/);
   const packets = JSON.parse(readFileSync(join(run, 'verify-packets.json'), 'utf8'));
-  const key = JSON.parse(readFileSync(join(run, 'verify-key.json'), 'utf8'));
+  // the answer key is kept outside the project (design §2.2), owner-only
+  assert.ok(!existsSync(join(run, 'verify-key.json')), 'no answer key inside the project');
+  const key = JSON.parse(readFileSync(keyPath(run, 'verify-key.json'), 'utf8'));
   assert.equal(key.claims, 9); assert.equal(key.decoys, 3);
   assert.deepEqual(packets.packets.find(p => p.claim.scene === '../../outside').files, []);
   assert.deepEqual(packets.packets.find(p => p.claim.scene === 'pricing.guest.normal.d').files, ['pricing.guest.normal.d/top.jpg', 'pricing.guest.normal.d/controls.json']);
@@ -188,5 +193,5 @@ test('CLI verify --plan / --record on a run folder', () => {
   assert.match(cli(['verify', '--plan']), /no claimed AI findings to verify/);
   writeFileSync(verdicts, JSON.stringify([{ packet: 'p001', verdict: 'maybe', reason: 'x' }]));
   assert.throws(() => cli(['verify', '--record', verdicts]), /verdict must be/);
-  assert.ok(existsSync(join(run, 'verify-key.json')));
+  assert.ok(existsSync(keyPath(run, 'verify-key.json')), 'a refused record keeps the key');
 });

@@ -9,6 +9,7 @@ import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { stableJson, sha, writeStable, privateDir } from './stable.mjs';
 import { lensHash, lensNumber, SEVERITIES, EVIDENCE_FILES } from './lenses.mjs';
 import { isRedirected } from './flow.mjs';
+import { aiIdentity } from './ai-identity.mjs';
 
 // Token estimate (documented in spec §4):
 //   text files   ceil(bytes / 4)  — chars/4 for ASCII; UTF-8 text with other scripts is over-estimated, never under
@@ -329,7 +330,7 @@ export function sceneIndex(runDir, sceneId) {
 }
 
 // A file:line under the app root. Not nunchi's own folder, not dependencies; symlinks must stay inside.
-function checkSource(root, source, cache) {
+export function checkSource(root, source, cache) {
   const m = /^(.+):(\d+)$/.exec(source);
   if (!m) return { error: 'source must look like path/to/file.tsx:42' };
   const rel = m[1].replace(/\\/g, '/'); const line = Number(m[2]);
@@ -385,6 +386,20 @@ export function recordHunt({ runDir, plan, answers, root, key = null }) {
   const findings = [];
   const indexes = new Map();
   const srcCache = new Map();
+  // the identity of each finding (design §2.3: what the ledger's AI fingerprint is made of), taken now, from the
+  // run and the source the hunter read: the grounded line's hash stays the hunt's even if the code changes later
+  const identityCache = new Map(), controlsCache = new Map();
+  let inventory;
+  const controlsOf = scene => {
+    if (!controlsCache.has(scene)) {
+      let rows = [];
+      const d = sceneDir(runDir, scene);
+      try { if (d) rows = JSON.parse(readFileSync(join(d, 'controls.json'), 'utf8')); } catch {}
+      controlsCache.set(scene, Array.isArray(rows) ? rows : []);
+    }
+    return controlsCache.get(scene);
+  };
+  const inventoryOf = () => { if (inventory === undefined) { try { inventory = JSON.parse(readFileSync(join(runDir, 'inventory.json'), 'utf8')); } catch { inventory = null; } } return inventory; };
   const cells = [];
   const ok = new Map();
   for (const unit of plan.units) {
@@ -448,6 +463,7 @@ export function recordHunt({ runDir, plan, answers, root, key = null }) {
             evidence: { claim: d.claim.trim(), unit: unit.id, groundedIn: [where, src ? 'source' : null].filter(Boolean), ...(src ? { file: src.file, line: src.line } : {}) },
             source: 'ai', status: 'claimed',
           };
+          f.identity = aiIdentity({ finding: f, controls: controlsOf(f.scene), inventory: inventoryOf(), root, cache: identityCache });
           const dk = stableJson([f.rule, f.scene, f.selector, src ? `${src.file}:${src.line}` : null]);
           const prev = kept.get(dk);
           if (prev) {
