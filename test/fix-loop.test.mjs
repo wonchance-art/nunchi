@@ -547,6 +547,17 @@ test('git: a revert the repository requires to be signed, and signing fails → 
   assert.deepEqual([latest(p).phase, latest(p).outcome.needsYou], ['needs-you', 'signing']);
 });
 
+test('git: SSH signing that fails ("failed to write commit object", nothing else) is a signing failure too', { skip: process.platform === 'win32' && 'a failing signing program needs a POSIX shell' }, async () => {
+  const p = await fixProject();
+  await attempt(p, { change: ['TINY', 'WRAP'], verify: false });
+  const fail = join(p.root, '..', `failing-ssh-${process.pid}.sh`);
+  writeFileSync(fail, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+  for (const [k, v] of [['commit.gpgsign', 'true'], ['gpg.format', 'ssh'], ['user.signingkey', join(p.root, '..', 'no-key')], ['gpg.ssh.program', fail]]) git(p.root, 'config', k, v);
+  const v = await F.verifyFix(ctxOf(p), p.group);
+  assert.match(v.lines[0], /your repository requires signed commits and signing failed/);
+  assert.deepEqual([latest(p).phase, latest(p).outcome.needsYou], ['needs-you', 'signing']);
+});
+
 // ---- records and recovery (design §4.8) ------------------------------------------------------------------------------
 
 test('records: attempts allocated with wx, a phase before every side effect; attempts counted from git trailers when the records are lost', async () => {

@@ -1,6 +1,6 @@
 // git for the fix loop (design 0.1-c §4.7). Every call goes through runs.mjs gitRunner: the repository's own programs
 // switched off (core.fsmonitor, core.hooksPath, diff.external, the pager and every filter driver's commands, as
-// GIT_CONFIG_COUNT overrides), --no-optional-locks, no system config, no prompt, the caller's GIT_* variables dropped,
+// GIT_CONFIG_COUNT overrides, which outrank the system file it reads), --no-optional-locks, no prompt, the caller's GIT_* variables dropped,
 // a timeout; diffs add --no-ext-diff --no-textconv. The loop never pushes, resets or forces:
 // - the commit check is `rev-list --parents -n1 HEAD` = [HEAD, base], the `Nunchi-Fix: <group>` trailer and a clean
 //   tree (nunchi's own `.nunchi/` aside: decisions made in the board while fixing are not the fix);
@@ -107,7 +107,9 @@ export function fixGit(root) {
       } catch (e) {
         const message = String(e.stderr || e.message || '').trim().split('\n').slice(-3).join(' ').slice(0, 300);
         abort();
-        return { ok: false, reason: /gpg|sign|ssh-keygen|signing/i.test(message) ? 'signing' : 'failed', message };
+        // an SSH signing program that fails says only "failed to write commit object": with signing required, that is it
+        const signs = (tryGit(['config', '--bool', 'commit.gpgsign']) || '').trim() === 'true';
+        return { ok: false, reason: /gpg|sign|ssh-keygen|signing/i.test(message) || (signs && /failed to write commit object/i.test(message)) ? 'signing' : 'failed', message };
       }
       return { ok: true, sha: api.head() };
     },

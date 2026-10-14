@@ -143,6 +143,8 @@ export async function fixProject({ prefix = 'nunchi-fix-', files = {}, decide = 
   git(root, 'config', 'commit.gpgsign', 'false');
   git(root, 'config', 'user.name', 'Tester');
   git(root, 'config', 'user.email', 'tester@example.invalid');
+  // line endings as written, whatever the machine's git says (Git for Windows sets core.autocrlf=true system-wide)
+  write(join(root, '.gitattributes'), '* -text\n');
   for (const [k, v] of Object.entries({ ...FILES, ...files })) if (v !== null) write(join(root, k), v);
   git(root, 'add', '-A');
   git(root, 'commit', '-q', '-m', 'the app');

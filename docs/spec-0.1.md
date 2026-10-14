@@ -150,10 +150,13 @@ written. Two captures started at once never get the same id.
   Redirect hops are not routed, so a scene whose page ends on another origin is not captured: `capture-failed`,
   reason `redirected-off-origin`, with `finalOrigin` in the manifest and nothing collected from that page.
 - **git** runs with the repository's own programs off: `--no-optional-locks`; config overrides
-  `core.fsmonitor=false`, `core.hooksPath=/dev/null`, `diff.external=`, `core.pager=cat`, and every configured filter
+  `core.fsmonitor=false`, `core.hooksPath=/dev/null` (on Windows an empty folder of nunchi's own, since Git for
+  Windows reads `/dev/null` as `C:\dev\null`), `diff.external=`, `core.pager=cat`, and every configured filter
   driver's commands emptied, passed as `GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n` so any filter name works (`a=b`
-  included); `--no-ext-diff --no-textconv --ignore-submodules=dirty` on diffs; the caller's `GIT_*` variables dropped;
-  `GIT_CONFIG_NOSYSTEM=1`, no prompt, a 60 s timeout; `--end-of-options` before a `--changed-since` ref. git older
+  included); `--no-ext-diff --no-textconv --ignore-submodules=dirty` on diffs; the caller's `GIT_*` variables dropped
+  except `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM`. The system config is read since M3's
+  review (2026-10-15 KST): a system `commit.gpgsign` or Git for Windows' `core.autocrlf` is the person's setting, and
+  the overrides outrank the system file as they do the repository's. No prompt, a 60 s timeout; `--end-of-options` before a `--changed-since` ref. git older
   than 2.31, or a filter command still set after the overrides, fails closed: `workTree` reports no repository and
   `--changed-since` refuses (`workTree` and `--changed-since` are the engine's git calls). An edit inside a
   submodule is not part of `tree`.

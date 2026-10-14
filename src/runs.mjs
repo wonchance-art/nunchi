@@ -2,7 +2,8 @@
 // `.nunchi/runs/<id>` only when complete, so a reader never sees half a run and a crash leaves the
 // previous run intact. Ids are sequential numbers (deterministic, no clock). `latest` names the newest
 // complete run and is replaced atomically.
-import { readdirSync, mkdirSync, readFileSync, existsSync, rmSync, statSync, appendFileSync } from 'node:fs';
+import { readdirSync, mkdirSync, readFileSync, existsSync, rmSync, statSync, appendFileSync, mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -121,15 +122,31 @@ export function gcRuns(dir, { keep = 5, staleMs = 3600e3, now = Date.now(), fold
 // - diffs take DIFF_SAFE: no external diff, no textconv, and no git run inside a submodule (whose own config
 //   could name other programs), so an edit inside a submodule is not seen;
 // - no optional locks: the index is never rewritten, so no post-index-change hook;
-// - the caller's GIT_* variables are dropped; no system config, no pager, no prompt; a timeout.
+// - the caller's GIT_* variables are dropped, except where its config files are (GIT_CONFIG_SYSTEM, GIT_CONFIG_GLOBAL,
+//   GIT_CONFIG_NOSYSTEM: the overrides outrank every file); no pager, no prompt; a timeout.
+// System config is read (M3 review, 2026-10-15 KST): a system `commit.gpgsign=true` or Git for Windows' `core.autocrlf`
+// are the person's settings, and dropping them made unsigned commits and phantom edits. Only the keys above are
+// neutralised, through the overrides, which outrank the system file as they outrank the repository's.
 export const DIFF_SAFE = ['--no-ext-diff', '--no-textconv', '--ignore-submodules=dirty'];
-export const GIT_OVERRIDES = [['core.fsmonitor', 'false'], ['core.hooksPath', '/dev/null'], ['diff.external', ''], ['core.pager', 'cat']];
-export function gitEnv(env = process.env, overrides = GIT_OVERRIDES) {
+// core.hooksPath=/dev/null means "no hooks" on POSIX; Git for Windows reads it as C:\dev\null, a folder anyone could
+// make, so there it is an empty folder of nunchi's own (made once per process, mode 0700, removed at exit).
+let noHooksDir = null;
+export function noHooksPath(platform = process.platform) {
+  if (platform !== 'win32') return '/dev/null';
+  if (!noHooksDir) {
+    noHooksDir = mkdtempSync(join(tmpdir(), 'nunchi-nohooks-'));
+    process.once('exit', () => { try { rmSync(noHooksDir, { recursive: true, force: true }); } catch {} });
+  }
+  return noHooksDir.replace(/\\/g, '/');
+}
+export const gitOverrides = (platform = process.platform) => [['core.fsmonitor', 'false'], ['core.hooksPath', noHooksPath(platform)], ['diff.external', ''], ['core.pager', 'cat']];
+const PASS_GIT = new Set(['GIT_CONFIG_SYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM']);
+export function gitEnv(env = process.env, overrides = gitOverrides()) {
   const out = {};
-  for (const [k, v] of Object.entries(env)) if (!/^GIT_/i.test(k)) out[k] = v;
+  for (const [k, v] of Object.entries(env)) if (!/^GIT_/i.test(k) || PASS_GIT.has(k)) out[k] = v;
   out.GIT_CONFIG_COUNT = String(overrides.length);
   overrides.forEach(([k, v], i) => { out[`GIT_CONFIG_KEY_${i}`] = k; out[`GIT_CONFIG_VALUE_${i}`] = v; });
-  return { ...out, GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', GIT_OPTIONAL_LOCKS: '0' };
+  return { ...out, GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', GIT_OPTIONAL_LOCKS: '0' };
 }
 const gitUnsafe = why => Object.assign(new Error(`git cannot be run safely here: ${why}`), { code: 'GIT_UNSAFE' });
 // → git(args, { encoding }) for one repository. Throws like execFileSync when git fails, GIT_UNSAFE when its
@@ -150,8 +167,9 @@ export function gitRunner(root, { timeout = 60_000 } = {}) {
     try { return run(['config', '-z', '--get-regexp', re], overrides).toString().split('\0').filter(Boolean).map(e => { const i = e.indexOf('\n'); return i < 0 ? [e, ''] : [e.slice(0, i), e.slice(i + 1)]; }); }
     catch (e) { if (e.status === 1) return []; throw e; }             // exit 1: no such key
   };
-  const names = [...new Set(config('^filter\\.', GIT_OVERRIDES).map(([k]) => /^filter\.([\s\S]+)\.(clean|smudge|process|required)$/i.exec(k)?.[1]).filter(n => n !== undefined))].sort();
-  const overrides = [...GIT_OVERRIDES, ...names.flatMap(n => [['clean', ''], ['smudge', ''], ['process', ''], ['required', 'false']].map(([x, v]) => [`filter.${n}.${x}`, v]))];
+  const base = gitOverrides();
+  const names = [...new Set(config('^filter\\.', base).map(([k]) => /^filter\.([\s\S]+)\.(clean|smudge|process|required)$/i.exec(k)?.[1]).filter(n => n !== undefined))].sort();
+  const overrides = [...base, ...names.flatMap(n => [['clean', ''], ['smudge', ''], ['process', ''], ['required', 'false']].map(([x, v]) => [`filter.${n}.${x}`, v]))];
   if (names.length) {
     const last = new Map(config('^filter\\..*\\.(clean|smudge|process)$', overrides));
     const live = [...last].filter(([, v]) => v !== '').map(([k]) => k);
