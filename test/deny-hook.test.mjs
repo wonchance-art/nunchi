@@ -26,7 +26,7 @@ function repo() {
   writeFileSync(join(state, 'boards', '4242.json'), JSON.stringify({ pid: 4242, port: 47123, socket: join(state, 'boards', '4242.sock'), mode: 'board', project: root }));
   mkdirSync(join(root, '.nunchi', 'runs', '0001', 'home.guest.normal.d'), { recursive: true });
   mkdirSync(join(root, '.nunchi', 'decisions', 'group-aaaaaaaaaaaa'), { recursive: true });
-  const xdg = join(root, 'xdg');
+  const xdg = tmp('nunchi-hook-xdg-');                // outside the repository, as a real state folder is
   mkdirSync(join(xdg, 'nunchi', 'abc', 'keys', '0001'), { recursive: true });
   writeFileSync(join(xdg, 'nunchi', 'abc', 'keys', '0001', 'verify-key.json'), '{}');
   return { root, common, state, env: { ...process.env, XDG_STATE_HOME: xdg }, xdg };
@@ -101,6 +101,41 @@ test('deny hook: the human-only commands, and nunchi under a pseudo-terminal, ar
     'npm run build && npm test', 'cat .nunchi/runs/0001/hunt-plan.json', 'ls .nunchi/runs/0001/home.guest.normal.d', 'git log --oneline',
     'curl -s http://127.0.0.1:3000/api/health', 'echo "a script to approve"',
   ]) assert.equal(call(r, 'Bash', { command }), null, command);
+});
+
+test('deny hook: the bypasses of review B4 — recursive searches, globs, cd, quotes, find -exec, xargs, inline code, Grep/Glob bases, process lists', () => {
+  const r = repo();
+  writeFileSync(join(r.root, '.nunchi', 'runs', '0001', 'canaries.json'), '{}');
+  writeFileSync(join(r.root, '.nunchi', 'runs', '0001', 'hunt-plan.json'), '{}');
+  mkdirSync(join(r.root, 'src'), { recursive: true });
+  for (const command of [
+    // recursive searches over the project root that do not leave out .git and .nunchi
+    'grep -rn approved .', 'grep -R "fix" ', 'grep -rl keep', 'grep --recursive -n x .', 'egrep -r x .', 'grep -rn x . --exclude-dir=.nunchi', 'grep -rn x .nunchi/runs',
+    'rg --hidden approved', 'rg -uu approved .', 'rg -. x', 'rg x .git', 'rg x .nunchi', 'rg --hidden x -g "!.git"', 'rg --hidden -l x | xargs cat',
+    // canaries.json through globs, *.json, braces
+    'cat .nunchi/runs/0001/*.json', 'cat .nunchi/runs/*/canar*', 'jq . .nunchi/runs/0001/{hunt-plan,canaries}.json', 'head .nunchi/runs/000?/c*',
+    'cat .git/nunch?/root/state/ledger.json', 'cat .git/*/root/state/approved.json', 'ls .git/nunchi*',
+    // cd, quote concatenation, escapes, subshells
+    'cd .git && cat nunchi/root/state/ledger.json', '(cd .nunchi && cat state/approved.json)', 'cd .nunchi/runs/0001; jq . canaries.json',
+    'cat .nu"nchi"/state/ledger.json', "cat '.git'/'nunchi'/root/state/ledger.json", 'cat .nunchi/st\\ate/ledger.json', 'cat $(echo .nunchi/runs/0001/canaries.json)',
+    // find -exec, find | xargs
+    'find . -name "*.json" -exec cat {} +', 'find . -type f -exec grep -l keep {} \\;', 'find .git -exec cat {} \\;', 'find . -name "*.json" | xargs cat', 'find . -not -path ./.git -name "*.json" -exec cat {} +',
+    // inline code
+    'node -e "require(\'fs\').readFileSync(\'.git/nunchi/root/state/ledger.json\', \'utf8\')"', 'node -e "fs.readdirSync(path.join(\'.git\', \'nunchi\'))"',
+    'python3 -c "print(open(\'.nunchi/runs/0001/\' + \'canaries.json\').read())"', 'bash -c "cat .nunchi/state/ledger.json"', 'sh -c \'cd .git && cat nunchi/root/state/approved.json\'',
+    // other processes' command lines
+    'ps aux', 'ps -ef', 'ps ax', 'ps -eo pid,args', 'ps -o command -p 1', 'pgrep -a chrome', 'pgrep -fl chrome', 'cat /proc/*/cmdline', 'for f in /proc/[0-9]*/cmdline; do cat $f; done', 'cd /proc && cat */cmdline',
+  ]) assert.ok(call(r, 'Bash', { command }), command);
+  for (const command of [
+    'grep -rn useState src', 'grep -rn x . --exclude-dir=.git --exclude-dir=.nunchi', 'grep -rn x . --exclude-dir={.git,.nunchi}', 'grep -rn x . --include="*.tsx"', 'grep -n x README.md',
+    'rg useState', 'rg -n "TODO" src', 'rg --hidden x -g "!.git" -g "!.nunchi"', 'rg -t ts x', 'rg --files', 'rg --hidden --files',
+    'cat .nunchi/runs/0001/hunt-plan.json', 'ls .nunchi/runs/0001/', 'cat src/*.tsx', 'ls -la src/', 'cd src && ls',
+    'find . -name "*.tsx" -exec grep -l useState {} +', 'find src -type f -exec cat {} +', 'find . -name "*.json"', 'find . -path ./.git -prune -o -path ./.nunchi -prune -o -name "*.json" -exec cat {} +',
+    'node -e "console.log(1 + 1)"', 'python3 -c "print(2)"', 'bash -c "npm test"', 'ps', 'ps -e', 'ps -p 123 -o pid,comm', 'pgrep node', 'cat README.md 2>&1', 'npm test 2>/dev/null',
+  ]) assert.equal(call(r, 'Bash', { command }), null, command);
+  for (const [tool, input] of [['Grep', { pattern: 'x', path: join(r.root, '.git') }], ['Grep', { pattern: 'x', path: '.nunchi/runs' }], ['Grep', { pattern: 'x', path: join(r.root, '.nunchi') }],
+    ['Glob', { pattern: '.git/**/*.json' }], ['Glob', { pattern: '**/*', path: join(r.root, '.nunchi', 'runs', '0001') }], ['Grep', { pattern: 'x', path: '/proc' }]]) assert.ok(call(r, tool, input), `${tool} ${JSON.stringify(input)}`);
+  for (const [tool, input] of [['Grep', { pattern: 'x', path: join(r.root, 'src') }], ['Grep', { pattern: 'keep', path: join(r.root, '.nunchi', 'decisions') }], ['Glob', { pattern: 'src/**/*.tsx' }]]) assert.equal(call(r, tool, input), null, `${tool} ${JSON.stringify(input)}`);
 });
 
 test('deny hook: the board\'s script is never run directly and its link handover is never asked for; reading its source is fine', () => {

@@ -1239,7 +1239,16 @@ to `.nunchi/decisions/**`, `.nunchi/labels/**`, `.nunchi/lenses/**`, `lenses.loc
 (reads stay open: they are committed). It denies `nunchi … approve`, `… label` / `--label`, `--approve-checks`,
 nunchi under `script`, `unbuffer`, `expect`, `socat` or a Python pty (it would pass for `cli-tty`), and running
 `board/server.mjs` or `board/launch.mjs` directly (node, bun, deno, npx, `import(…)`) or any `--link-to-parent`.
-Links are followed before deciding. A pure data hook: no network, nothing written. Limits: it reads paths and
+A Bash command is read as segments (also at `$(`, backticks and parentheses), with words joined as a shell joins
+them (`.nu"nchi"`, escapes), `cd` followed, globs and braces expanded against the file system (`.nunchi/runs/*/*.json`
+is the files it names), pieces of words checked as paths (inline code), and `sh -c` / `eval` judged as commands;
+inline code that names nunchi's places in pieces (`join('.git', 'nunchi')`) is denied. Recursive reads — `grep -r`,
+`rg`, `find` with `-exec`/`-ok`/`-delete`, `find` or `rg --files` into `xargs` — are denied when they reach the state,
+the keys, `auth.json` or a run's canaries, unless their filters leave those out (`--exclude-dir=.git
+--exclude-dir=.nunchi`, `--include`, `-g '!.git'`, `-t`, `-name`, `-path … -prune`); rg's own skipping of dot folders
+counts unless `--hidden`, `-.` or `-uu`. Process lists with command lines (`ps aux`, `ps -ef`, `ps -o args`, `pgrep -a`,
+`top -c`, `/proc/*/cmdline`) are denied. Grep and Glob are denied with a base in `.git`, `.nunchi` itself, `.nunchi/runs`
+or `/proc`. Links are followed before deciding. A pure data hook: no network, nothing written. Limits: it reads paths and
 words in the call; a command that builds a path at run time is not seen. Codex CLI has no such hook. The skill
 states the same rules for other agents.
 
