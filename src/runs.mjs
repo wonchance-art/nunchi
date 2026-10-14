@@ -161,7 +161,9 @@ export function gitRunner(root, { timeout = 60_000 } = {}) {
   const run = (args, overrides, extra = {}) => {
     const env = gitEnv(process.env, overrides);
     for (const [k, v] of Object.entries(extra.env || {})) { if (!CALL_ENV.has(k)) throw new Error(`git: ${k} is not a variable a call may set`); env[k] = v; }
-    return execFileSync('git', ['--no-optional-locks', '-C', root, ...args], opts(env, extra.timeout ?? timeout));
+    const o = opts(env, extra.timeout ?? timeout);
+    if (extra.input !== undefined) { o.input = extra.input; o.stdio = ['pipe', 'pipe', 'pipe']; }
+    return execFileSync('git', ['--no-optional-locks', '-C', root, ...args], o);
   };
   const config = (re, overrides) => {                                 // [key, value] in the order git reads them
     try { return run(['config', '-z', '--get-regexp', re], overrides).toString().split('\0').filter(Boolean).map(e => { const i = e.indexOf('\n'); return i < 0 ? [e, ''] : [e.slice(0, i), e.slice(i + 1)]; }); }
@@ -175,7 +177,7 @@ export function gitRunner(root, { timeout = 60_000 } = {}) {
     const live = [...last].filter(([, v]) => v !== '').map(([k]) => k);
     if (live.length) throw gitUnsafe(`filter commands still set: ${live.join(', ')}`);
   }
-  return (args, { encoding, env, timeout: t } = {}) => { const out = run(args, overrides, { env, timeout: t }); return encoding ? out.toString(encoding) : out; };
+  return (args, { encoding, env, timeout: t, input } = {}) => { const out = run(args, overrides, { env, timeout: t, input }); return encoding ? out.toString(encoding) : out; };
 }
 
 // What the app's source looked like when it was captured. `tree` changes with any edit, committed or

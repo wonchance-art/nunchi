@@ -876,3 +876,14 @@ test('branch: verify and undo only on the fix branch; the same commit on another
   assert.match(u.lines.at(-1), /^Couldn't undo the fix of 'Tap target smaller than 24px' \(commit [0-9a-f]{7}\): HEAD is detached, not on the fix branch nunchi\/fixes-\d{4}\. Switch back to nunchi\/fixes-\d{4}, then tell your AI “undo it” — it needs you\.$/);
   assert.equal(git(p.root, 'rev-parse', 'HEAD'), head, 'nothing reverted');
 });
+
+test('filters: a repository whose files go through git filters (Git LFS) is refused up front, with the paths; none → no refusal', async () => {
+  const p = await fixProject({ files: { '.gitattributes': '* -text\n*.bin filter=lfs diff=lfs merge=lfs -text\n', 'assets/hero.bin': 'version https://git-lfs.github.com/spec/v1\n' } });
+  const s = await F.startFix(ctxOf(p), p.group);
+  assert.equal(s.code, 1);
+  assert.match(s.lines.at(-1), /^This repository runs files through git filters \(Git LFS or similar: assets\/hero\.bin\)\. nunchi runs git with every filter switched off/);
+  assert.equal(latest(p), null, 'nothing started');
+  const { fixGit } = await import('../src/fix/git.mjs');
+  const q = await fixProject();
+  assert.deepEqual(fixGit(q.root).filtered(), []);
+});

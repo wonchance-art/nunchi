@@ -136,6 +136,15 @@ function causeOf(ctx, rows, sweep) {
   return { rootFiles: rc.files, from: rc.from, groupRoutes, scopeRoutes, allowed, map };
 }
 
+// A repository whose files go through git filters (LFS and the like): refused up front, with the paths (design §4.7;
+// M3 review: nunchi's git runs with filters off, so the tree hash never matched and an undo wrote LFS pointers).
+function filterRefusal(ctx) {
+  let hit;
+  try { hit = ctx.git.filtered(); } catch (e) { return `nunchi could not read this repository's git attributes (${String(e.stderr || e.message).trim().split('\n')[0]}): fix by hand for now.`; }
+  if (!hit.length) return null;
+  return `This repository runs files through git filters (Git LFS or similar: ${hit.slice(0, 3).join(', ')}${hit.length > 3 ? ` and ${hit.length - 3} more` : ''}). nunchi runs git with every filter switched off, so its checks of the commit and its undo would see the stored form of those files, not the files: the fix loop does not work here yet. Fix by hand, then capture; finding and deciding still work.`;
+}
+
 // ---- reconcile (design §4.8: every command first) ---------------------------------------------------------------------
 
 const claimOk = (ctx, rec) => { const c = readClaim(ctx.stateDir, rec.group); return !!c && !!rec.claim?.token && c.token === rec.claim.token && claimLive(c, ctx.deps.now()); };
@@ -303,6 +312,8 @@ export async function startFix(ctx, id, opts = {}) {
   }
   if (early) {
     if (!head) return refuse('This repository has no commit yet: commit once, then fix.');
+    const filtered = filterRefusal(ctx);
+    if (filtered) return refuse([...said, filtered]);
     if (!ctx.git.branch()) return refuse('HEAD is detached: switch to a branch first (nunchi makes its fix branch from it).');
     const dirty = ctx.git.status();
     if (dirty.length || ctx.git.inProgress().length) return refuse([...said, `Your working tree has uncommitted changes (${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? ` +${dirty.length - 5} more` : ''}${ctx.git.inProgress().length ? `; a ${ctx.git.inProgress()[0]} is in progress` : ''}): commit them as "WIP before nunchi fixes", or stash them, before fixing.`], { dirty });
@@ -502,6 +513,8 @@ export async function verifyFix(ctx, id, opts = {}) {
     if (!c.ok) return refuse(refusalText(c, { me: rec.agent, folder: basename(rec.worktree), worktree: rec.worktree, now: ctx.deps.now() }));
     rec = setPhase(ctx.stateDir, rec, 'committed', { claim: { token: c.token }, outcome: null, retried: (rec.retried || 0) + 1 }, gen(ctx));
   }
+  const filtered = filterRefusal(ctx);
+  if (filtered) return refuse([...said, filtered]);
   // the commit check: one commit on the base, the trailer, a clean tree, not the default branch
   const head = ctx.git.head();
   const parents = ctx.git.parents(head);
@@ -754,6 +767,8 @@ export function undoFix(ctx, id) {
   if (ctx.git.head() !== rec.commit) return refuse([...said, `The fix of '${found.title}' (commit ${short(rec.commit)}) is no longer the last commit: nunchi undoes only its own last commit. Undo it by hand with git revert ${short(rec.commit)}.`]);
   const dirty = ctx.git.uncommitted();
   if (dirty.length) return refuse([...said, dirtyLine(found.title, rec.commit, dirty, { refusal: true })], { dirty });
+  const filtered = filterRefusal(ctx);
+  if (filtered) return refuse([...said, filtered]);
   rec = setPhase(ctx.stateDir, rec, 'undoing', { folded: rec.phase === 'fixed' }, gen(ctx));
   const r = doRevert(ctx, rec, 'the person asked to undo this fix', { title: found.title });
   return { ...r, lines: [...said, ...r.lines] };

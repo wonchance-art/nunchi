@@ -67,6 +67,17 @@ export function fixGit(root) {
     // what a commit made now would take besides the fix's own undo: changes in the working tree (nunchi's folder aside)
     // and anything staged at all (a staged .nunchi file would be committed too)
     uncommitted: () => [...new Set([...api.status(), ...git(['diff', ...DIFF_SAFE, '--cached', '--name-only', '-z']).split('\0').filter(Boolean)])].sort(),
+    // Tracked paths that git runs through a filter (Git LFS, git-crypt…): their `filter` attribute is set. nunchi's git
+    // runs with every filter off (runs.mjs), so on these paths its tree hash, status and an undo would see the stored
+    // form (an LFS pointer), not the file: the fix loop refuses such a repository up front.
+    filtered: () => {
+      const files = git(['ls-files', '-z']).split('\0').filter(Boolean);
+      if (!files.length) return [];
+      const out = run(['check-attr', '-z', '--stdin', 'filter'], { encoding: 'utf8', input: files.join('\0') }).split('\0');
+      const hit = [];
+      for (let i = 0; i + 2 < out.length; i += 3) if (out[i + 2] && !['unspecified', 'unset'].includes(out[i + 2])) hit.push(out[i]);
+      return hit.sort();
+    },
     // the commit a revert in progress is undoing (REVERT_HEAD), or null
     revertHead: () => { try { return readFileSync(api.gitPath('REVERT_HEAD'), 'utf8').trim() || null; } catch { return null; } },
     // The tree a commit of the working tree as it is would get (nunchi's folder as HEAD has it): hashed in a temporary
