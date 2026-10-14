@@ -228,8 +228,13 @@ fixed: never say *fixed*, *undone* or *needs you* unless the engine printed it.
       branch …", or any other "Couldn't undo": say it as printed, and do not undo it with git yourself.
     - "Undid the kept fix of '<title>' (commit …) to try again with your note.": the user's note is in the new brief.
     - "Stopped fixing '<title>': you decided … while I was fixing it.", "Stopped fixing: the claim expired before a
-      fix was committed. It is still to fix." or "'<title>' changed while it was being re-checked …": go on with the
-      next finding; `fix --start <group>` starts that one again when the user wants it.
+      fix was committed. It is still to fix.", "'<title>' changed while it was being re-checked …" or "Someone stopped
+      this attempt … Nothing more was done." (say any revert commit it names): go on with the next finding;
+      `fix --start <group>` starts that one again when the user wants it.
+    - A claim in the way "that no open attempt owns": tell the user; `fix --abort <group>` releases it when they say
+      so, or it expires by itself in the minutes the line names.
+    - "Couldn't undo the fix … would overwrite or remove files that git does not show as changed (…)": the user moves
+      those files somewhere safe, then says undo.
     The user undoes a fix by telling you "undo the fix of “<title>” (nunchi fix --undo <group>)" (the board gives them
     that sentence) or "undo it": run `fix --undo <group>` (only while that fix is the last commit on its branch).
     `fix --status` shows every attempt; `fix --abort <group>` stops one.

@@ -1033,7 +1033,9 @@ only from the engine's probes.
   before its claim expired. It needs you: tell your AI “retry” to re-check it, or “undo it”."; a fix that must be
   undone while the person has uncommitted work: "Couldn't undo the fix of '…' (commit …): you have changes that are not
   committed (notes.md), and undoing now would mix them into the undo. Commit them (git commit) or stash them (git
-  stash push --include-untracked), then tell your AI “undo it” — it needs you."; batch: "Fixed 4 of 5 (re-checked 23
+  stash push --include-untracked), then tell your AI “undo it” — it needs you."; a record another command changed
+  meanwhile: "Someone stopped this attempt (fix --abort) while this command ran. Nothing more was done." (with "The
+  fix had just been undone by commit abc1234: that commit stays" when a revert had landed); batch: "Fixed 4 of 5 (re-checked 23
   screens, nothing else broke). 1 needs you: '…' → the board (nunchi open)." ("nothing else broke" only when no fix
   broke something or showed something new on a screen with nothing to compare against). Every line is built from a
   record the engine wrote; the summary reads the records of the plan's groups, never the agent's words. A route that
@@ -1055,7 +1057,9 @@ only from the engine's probes.
   would see the stored form; refused up front, the paths named), HEAD carrying an unverified `Nunchi-Fix` for the group
   ("resume with `fix --verify`"), 2 attempts used, an attempt waiting in the board, and after an earlier decision used
   every attempt a Fix the agent recorded (only a person's new Fix starts another round: "ask them to choose “Try again
-  with a note…” for it in the board").
+  with a note…” for it in the board"). A claim in the way says what to do by its attempt's step (resume with
+  `--start`, go on with `--checks`, resume with `--verify`); one no open attempt owns (a command killed while it
+  claimed) says "wait N min for it to expire, or release it now with `nunchi fix --abort <group>`", which releases it.
 - The branch is `nunchi/fixes-<MMDD>` (KST) made from HEAD with `git switch -c`, or the `nunchi/fix…` branch HEAD is
   on already; in a linked worktree `nunchi/fix-<group>`. Verify and undo run only on the attempt's branch.
 - **Claims** (`src/fix/claims.mjs`): `state/claims/<group>.json` written `wx` under a lock, plus one marker per
@@ -1084,10 +1088,12 @@ left half done (a revert nunchi started and left half done → `revert --abort`,
 started is never aborted; a fold half done → folded). Cancellation: a decision that moved away from Fix during an open
 attempt (also while P1 runs) reverts the fix commit when it is HEAD (else *needs you*, the commit shown) and releases
 the claim; rows a sweep folded as gone do not cancel anything. Claim expired or `--abort`: before a commit → to fix
-again; after → *needs you* with the commit. The attempt count is the number of distinct `Nunchi-Attempt` values on
-commits carrying the group's `Nunchi-Fix` and its current `Nunchi-Decision` on any branch (`git log --all --grep`; a
-git error stops the command rather than counting none), so it survives lost state, rebases and other worktrees; only
-a person's new Fix decision (*Try again with a note…*) starts a new count.
+again; after → *needs you* with the commit. The attempt count is the number of distinct
+(`Nunchi-Decision`, `Nunchi-Attempt`) pairs on commits carrying the group's `Nunchi-Fix` on any branch (`git log --all
+--grep`; a git error stops the command rather than counting none) whose decision is the last Fix a person made (board
+or `cli-tty`) or any Fix decided after it, so it survives lost state, rebases and other worktrees, and a Fix the agent
+records after a revert never resets it; only a person's new Fix (*Try again with a note…*) starts a new count. A
+record changed by another command shows as words, never a stack trace (§6.1).
 
 ### 6.4 Checks (design §4.3)
 
@@ -1102,15 +1108,19 @@ a person's new Fix decision (*Try again with a note…*) starts a new count.
   `run --ignore-scripts`: it errors); yarn 1.22.22 and bun 1.4.2 run `pre`/`post` whatever flag is given, so a check
   with a pre or post line is refused there and said plainly (before any "not on PATH": installing would not help);
   yarn 2+ runs none, and yarn's major version is read from `yarn --version` when package.json has no `packageManager`.
-  A check line that runs another script through a manager (`npm run helper`, `pnpm lint`, `yarn helper`, `bun run x`)
-  is refused: that nested run starts the helper's pre/post lines (measured with pnpm); binaries (`npx`, `pnpm exec`,
-  `yarn dlx`, `bunx`) are fine. `shell: false` (on Windows the manager's `.cmd` shim through `cmd.exe /d /s /c "…"`, the
+  A check line that runs other scripts through a manager (`npm run helper`, `pnpm lint`, `yarn helper`, `bun run x`)
+  or a task runner (`turbo run`, `lerna run`, `nx run`, `npm-run-all`, `concurrently "pnpm:x"`) is refused: that nested
+  run starts the helpers' pre/post lines (measured with pnpm). The line is split as the shell splits it (quotes, `#`
+  comments, `&&`, `;`, `|`) and only command words count, after env assignments and wrappers, so `echo "use npm run
+  build"`, `tsc # pnpm test` and `node x.js npm` run; binaries (`npx`, `pnpm exec`, `yarn dlx`, `bunx`) are fine. `shell: false` (on Windows the manager's `.cmd` shim through `cmd.exe /d /s /c "…"`, the
   whole line in one more pair of quotes so a path with spaces stays one word; a path with `"` or `%` is refused; the
   script name checked to be a plain word); environment `PATH, HOME, LANG, TERM, CI=1, NODE_ENV=test` and corepack's
   `COREPACK_ENABLE_AUTO_PIN=0`, `COREPACK_ENABLE_NETWORK=0`, `COREPACK_ENABLE_DOWNLOAD_PROMPT=0` (Windows adds
   `SystemRoot`, `PATHEXT`, `COMSPEC`, `TEMP`, `TMP`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`); a missing manager
   binary is refused; 10 minutes, then the process tree is killed and the pipes closed (a run also ends 1.5 s after its
-  process exits, so a grandchild holding the output cannot hold it); output loses colour codes and passes the secret
+  process exits, so a grandchild holding the output cannot hold it); at every end the check's process group is killed
+  and every descendant a watcher saw (POSIX: `ps` every 500 ms, a pid reused by another process never touched; Windows:
+  `taskkill /T`), so a detached grandchild does not outlive its check; output loses colour codes and passes the secret
   scanner before it is stored or printed.
 - Baseline at `--start`; a check blocks only when it newly fails or its count rises: "lint was already failing before
   this fix (40 problems) — not blocking; still 40 after."; "no test script — nunchi relies on re-capture." A suite
@@ -1137,12 +1147,14 @@ a person's new Fix decision (*Try again with a note…*) starts a new count.
 - Probe runs are never `latest`, are hidden from `runs` (`runs --all` lists them), are recorded in the ledger's folds
   and folded only by the fix loop: only the group's fingerprints, only on `fixed` (source `fix`); discarded on revert;
   `gc` removes probes first and keeps those of an open attempt.
-- **Judging** (`src/fix/judge.mjs`), by precedence: 1 inconclusive → *needs you (c)* (a screen of P0, of the group or
-  of P1 itself failed, 500ed or redirected, a health problem, replay misses, no proof, a second look that did not see
-  its screen); 2 caused-regression (a new defect by `(rule, cell, element identity)` in P0's scope; identity =
+- **Judging** (`src/fix/judge.mjs`), by precedence: 1 inconclusive → *needs you (c)* (a screen of P0 or of the group
+  failed, 500ed or redirected, a health problem, replay misses, no proof, a second look that did not see its screen; a
+  screen only P1 has that did not load is said only after rows 2 and 3 found nothing, and a visitor sent away from a
+  route no capture knew is not applicable, not lost); 2 caused-regression (a new defect by `(rule, cell, element identity)` in P0's scope; identity =
   normalised selector unless the two named elements differ in name, or the same tag and accessible name with IoU ≥ 0.5;
-  another group's old defect the fix wrapped, renamed or shifted is matched by selector or tag and box, or paired per
-  cell and rule with one that vanished; flaky rules `layout-shift`, `font-not-loaded`, `page-error` captured once more
+  another group's old defect the fix moved is matched by its normalised selector, its accessible name, or a wrapper
+  the fix inserted (the old selector's steps a subsequence of the new one's), never by tag and overlap alone; pairing
+  per cell and rule is the last resort, only while the old element is still on the screen; flaky rules `layout-shift`, `font-not-loaded`, `page-error` captured once more
   first) → revert, attempt counted; 3 not-fixed (the defect found in any cell P1 looked at: its fingerprint anywhere, or
   the same element where P0 had it; the group's own flaky-rule defect that P1 shows gone is captured once more; an AI
   item still there in the re-check) → revert, attempt counted; 4 visual drift → *needs you (a)*, commit kept (outside
@@ -1154,8 +1166,9 @@ a person's new Fix decision (*Try again with a note…*) starts a new count.
   `.github/` shows its old path): *needs you* when a path is `.nunchi/**`, `package.json`, a lockfile, `.npmrc`,
   `.yarnrc*`, `.env*`, `.github/**`, `.husky/**`, `.git*` or `*.config.*`, or a symbolic link or submodule (mode
   120000/160000); when the diff adds an import of a package the project does not depend on (a multi-line import's
-  `} from 'pkg'` line too; tsconfig path aliases are not packages), a `<script` or `document.createElement('script')`,
-  or an outbound URL literal (protocol-relative `//host` in a string, `src=` or `url()` too); or when it touches a file
+  `} from 'pkg'` closing line too, never JSX text that says "from"; tsconfig path aliases are not packages), a `<script` or `document.createElement('script')`,
+  or an outbound URL literal (protocol-relative `//host` in a string, `src=` or `url()` too, when the host ends in a
+  top-level-domain-like label, not a file extension: `label="//note.txt"` is a path); or when it touches a file
   outside the root-cause files and the source-map files of the group's routes. The flagged paths are printed with the
   diffstat. Root-cause files: the grounded `evidence.file` (AI), else inventory files whose strings match the finding's
   text or element name, else the route's page file; never a layout or frame file (layout, template, loading, error,
@@ -1165,8 +1178,9 @@ a person's new Fix decision (*Try again with a note…*) starts a new count.
   it reads, `--no-optional-locks`, `GIT_TERMINAL_PROMPT=0`, the caller's `GIT_*` dropped, a timeout;
   `--no-ext-diff --no-textconv` on diffs). The commit check is `rev-list --parents -n1 HEAD` = `[HEAD, base]`, the
   `Nunchi-Fix`, `Nunchi-Attempt` and `Nunchi-Decision` trailers, a clean tree (`.nunchi/` aside) and the attempt's
-  branch. A revert only when HEAD is the fix commit on the fix branch and the working tree and index are clean (else
-  *needs you* with what to commit or stash: `revert --no-commit` starts from the index, and `revert --abort` would throw
+  branch. A revert only when HEAD is the fix commit on the fix branch, the working tree and index are clean, and no file git
+  does not show as changed would be overwritten or removed (a path the fix deleted that is on disk again, an ignored
+  `local.json` say, or one it added that holds other content now) (else *needs you* with what to commit, stash or move: `revert --no-commit` starts from the index, and `revert --abort` would throw
   staged work away): `revert --no-commit`, a commit with `Nunchi-Revert: <group> attempt <n>`, hooks off, 60 s; any
   failure → `revert --abort` and *needs you*; a required signing that fails (an SSH signer says only "failed to write
   commit object") → *needs you*, never unsigned. Never push, reset or force.
