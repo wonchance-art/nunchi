@@ -234,6 +234,14 @@ test('deny hook: the script answers exit 2 with the reason on stderr to deny, ex
   assert.equal(run({ tool_name: 'Bash', tool_input: { command: 'nunchi approve --all' }, cwd: r.root }).status, 2);
 });
 
+test('CI validates the plugin manifests (claude plugin validate --strict, the CLI pinned)', () => {
+  const ci = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  assert.equal(pkg.scripts['validate:plugin'], 'claude plugin validate --strict .');
+  assert.match(ci, /\n {6}- run: npm run validate:plugin\n/, 'a step runs it');
+  assert.match(ci, /npm install --global @anthropic-ai\/claude-code@\d+\.\d+\.\d+\n/, 'with an exact version of the CLI');
+});
+
 test('deny hook: hooks/hooks.json runs the script on every tool that reads, writes, runs or fetches', () => {
   const hooks = JSON.parse(readFileSync(join(ROOT, 'hooks', 'hooks.json'), 'utf8'));
   const entry = hooks.hooks.PreToolUse[0];
