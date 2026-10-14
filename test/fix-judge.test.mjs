@@ -20,6 +20,10 @@ test('element identity: the normalised selector, else the same tag and name with
   const a = J.identityOf(fnd('target-size-min', S, 'main > button:nth-of-type(2)'), S);
   const b = J.identityOf(fnd('target-size-min', S, 'main > button:nth-of-type(3)', { fp: 'other0000000' }), S);
   assert.equal(J.sameDefect(a, b), true, 'positions are normalised away');
+  const privacy = J.identityOf(fnd('dead-href', S, 'footer > a:nth-of-type(1)', { fp: 'privacy00000', evidence: { name: 'Privacy' } }), S);
+  const terms = J.identityOf(fnd('dead-href', S, 'footer > a:nth-of-type(2)', { fp: 'terms0000000', evidence: { name: 'Terms' } }), S);
+  assert.equal(J.sameDefect(privacy, terms), false, 'named siblings with one normalised selector are two defects');
+  assert.equal(J.sameDefect(privacy, { ...privacy, fp: 'moved0000000' }), true, 'the same name and selector after the fix');
   const ctl = [{ selector: 'main > div > button.save', tag: 'button', name: 'Save', box: [12, 11, 40, 20] }];
   const wrapped = J.identityOf(fnd('target-size-min', S, 'main > div > button.save', { fp: 'wrapped00000', box: null }), S, ctl);
   const plain = J.identityOf(fnd('target-size-min', S, 'main > button.save', { evidence: { name: 'Save' } }), S, [{ selector: 'main > button.save', tag: 'button', name: 'Save', box: [10, 10, 40, 20] }]);

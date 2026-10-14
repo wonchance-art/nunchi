@@ -110,9 +110,11 @@ export async function serveApp({ root, profile, script, url, env = process.env, 
 
 // ---- a probe capture -------------------------------------------------------------------------------------------------
 
-// The scenes of a probe: each route of the scope with the path the last sweep used for it (its sample), per person.
+// The scenes of a probe: each route of the scope with the path the last sweep used for it (its sample), per person
+// the sweep saw that route as (`scope.personsOf`): a visitor sent to the login page from a signed-in route was no
+// screen of that route in the sweep either, so it is no baseline and no failed screen in a probe.
 export function probeScenes(scope, samplePaths = {}) {
-  return scope.routes.flatMap(route => scope.persons.map(person => ({ route, path: samplePaths[route] || route, person })));
+  return scope.routes.flatMap(route => (scope.personsOf?.[route] ?? scope.persons).filter(p => scope.persons.includes(p)).map(person => ({ route, path: samplePaths[route] || route, person })));
 }
 // One probe run (P0 or P1): a run folder of .nunchi/runs (ids shared with the other worktrees), never `latest`.
 // `capture`: capture.mjs's capture (passed in so the engine's packages load only when a probe runs).

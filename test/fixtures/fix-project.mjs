@@ -62,7 +62,8 @@ const has = (root, file, marker) => { try { return readFileSync(join(root, file)
 // - CLIP in app/settings/page.jsx: the panel heading is cut off on /settings (a new defect in the fix's own screen);
 // - world.flakyOnce: a page error on /settings that many times (a flaky rule: gone when captured again);
 // - world.hostile: the Save button's name, as an app could make it (prompt-injection-like text);
-// - world.fail: route → the scene fails; world.misses: replay misses.
+// - world.fail: route → the scene fails; world.misses: replay misses; world.redirected: routes a visitor is sent away
+//   from (to the login page), in the sweep as in every probe.
 export function screen(root, route, vp, state, world = {}) {
   const [w, h] = VPS[vp];
   const id = `${slug(route)}.guest.${state}.${vp}`;
@@ -107,7 +108,7 @@ export function fakeCapture(root, world = {}) {
       write(join(dir, 'aria.yml'), '- main\n');
       write(join(dir, 'measure.json'), { h1: null });
       entries.push({ id: sc.id, route: s.route, path: s.path, person: s.person || 'guest', state, viewport: vp, status: sc.failed ? 'capture-failed' : 'captured', reason: sc.failed ? 'no-dom' : null,
-        finalPath: s.path, redirected: false, httpStatus: 200, top: sha(sc.png), full: sha(sc.png), textHash: sha(s.route), findings: sc.findings.length, dataRequests: 1, replayMisses: (world.misses || {})[s.route] || 0 });
+        finalPath: (world.redirected || []).includes(s.route) ? '/login' : s.path, redirected: (world.redirected || []).includes(s.route), httpStatus: 200, top: sha(sc.png), full: sha(sc.png), textHash: sha(s.route), findings: sc.findings.length, dataRequests: 1, replayMisses: (world.misses || {})[s.route] || 0 });
       findings.push(...sc.findings);
     }
     // a whole-app finding (no screen): a secret in the browser bundle

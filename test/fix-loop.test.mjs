@@ -186,6 +186,18 @@ test('a route P1 added (the diff reaches it, no baseline): a new finding there g
   assert.deepEqual([rec.phase, rec.outcome.needsYou, git(p.root, 'rev-parse', 'HEAD')], ['needs-you', 'unbaselined', rec.commit]);
 });
 
+test('a route the sweep saw only as a redirect (a visitor sent to the login page) is no screen of a probe either: the fix that reaches it is still judged', async () => {
+  const p = await fixProject({ world: { redirected: ['/help'] } });
+  const { s, v } = await attempt(p, { change: ['TINY', 'ROOMY'], extraEdit: root => edit(root, 'components/panel.jsx', 'Shelf panel', 'Shelf panel, tidied') });
+  assert.equal(s.code, 0);
+  assert.match(v.lines.at(-1), /^Fixed 'Tap target smaller than 24px' \(re-checked \d+ screens?, nothing else broke\)\.$/);
+  const rec = latest(p);
+  assert.deepEqual(rec.p1.scope.routes, ['/help', '/settings'], 'the diff reaches /help');
+  assert.deepEqual(rec.p1.scope.personsOf, { '/help': [], '/settings': ['guest'] }, 'as the sweep saw them');
+  const p1 = JSON.parse(readFileSync(join(p.nunchi, 'runs', rec.p1.run, 'manifest.json'), 'utf8'));
+  assert.deepEqual([...new Set(p1.scenes.map(x => x.route))], ['/settings'], 'no /help screen to fail');
+});
+
 // ---- AI items: fixed only from a non-suspect re-check from a fresh context -------------------------------------------
 
 // An AI finding (L6, the panel heading on /settings, grounded in components/panel.jsx) double-checked in the sweep,

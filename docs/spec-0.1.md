@@ -1085,8 +1085,9 @@ lost state and works across worktrees; a new Fix decision (*Try again with a not
 
 ### 6.5 Probes, judging and the diff policy (design §4.4–§4.7)
 
-- **P0** at `--start`: the group's routes plus the routes rendering its root-cause files; all persons, both viewports,
-  the baseline's states; strict replay from a snapshot of each person's recording copied into the attempt's folder
+- **P0** at `--start`: the group's routes plus the routes rendering its root-cause files; each route as every person
+  the sweep saw it as (a visitor the sweep saw redirected to the login page is no screen of a signed-in route, so no
+  failed screen of a probe either; found by the harness run, §6.7), both viewports, the baseline's states; strict replay from a snapshot of each person's recording copied into the attempt's folder
   (`<n>-har/`, sha256 in the record); PNG first views (`top.png`); whole-app detectors off; `run.json` `kind:
   fix-probe`. A P0 that failed a screen, has a health problem or replay misses aborts the start; a P0 that no longer
   shows the defect too ("it may be fixed already").

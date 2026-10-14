@@ -16,7 +16,7 @@
 import { join, basename, dirname, relative, sep } from 'node:path';
 import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import * as P from '../project.mjs';
-import { titleOf, latestRunOf, foldFix, unfoldFix, commitFix, byRun } from '../ledger.mjs';
+import { titleOf, latestRunOf, foldFix, unfoldFix, commitFix, byRun, looked } from '../ledger.mjs';
 import { human } from '../board/shared.mjs';
 import { readConfig, workTree } from '../runs.mjs';
 import { baseUrlRefusal } from '../network.mjs';
@@ -85,9 +85,15 @@ function lastSweep(ctx) {
   if (!id) return null;
   const dir = join(ctx.runsDir, id);
   const meta = readJson(join(dir, 'run.json'), {}), manifest = readJson(join(dir, 'manifest.json'), {});
-  const samplePaths = {};
+  const samplePaths = {}, seenAs = {};
   for (const s of Array.isArray(manifest.scenes) ? manifest.scenes : []) if (s && s.canary === undefined && typeof s.route === 'string' && typeof s.path === 'string' && !samplePaths[s.route]) samplePaths[s.route] = s.path;
-  return { id, dir, meta, manifest, samplePaths, persons: meta.scope?.persons || ['guest'], states: meta.scope?.states || ['normal'], baseUrl: manifest.baseUrl || null };
+  // the persons each route was a screen for (a visitor redirected to the login page was not)
+  for (const s of Array.isArray(manifest.scenes) ? manifest.scenes : []) if (s && s.canary === undefined && typeof s.route === 'string' && typeof s.person === 'string') {
+    seenAs[s.route] ||= new Set();
+    if (looked(s)) seenAs[s.route].add(s.person);
+  }
+  const personsOf = Object.fromEntries(Object.entries(seenAs).map(([r, set]) => [r, [...set].sort()]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+  return { id, dir, meta, manifest, samplePaths, personsOf, persons: meta.scope?.persons || ['guest'], states: meta.scope?.states || ['normal'], baseUrl: manifest.baseUrl || null };
 }
 
 // Root-cause files, the routes that render them, and every file the group's routes render (design §4.6).
@@ -300,11 +306,11 @@ export async function startFix(ctx, id, opts = {}) {
   const persons = sweep.persons.filter(p => p !== 'signed-in' || existsSync(join(ctx.nunchiDir, 'auth.json')));
   // ---- the attempt
   if (!rec) {
-    const scope = { routes: cause.scopeRoutes, persons, viewports: ['d', 'm'], states: sweep.states };
+    const scope = { routes: cause.scopeRoutes, persons, personsOf: Object.fromEntries(cause.scopeRoutes.map(r => [r, sweep.personsOf[r] ?? persons])), viewports: ['d', 'm'], states: sweep.states };
     rec = allocate(ctx.stateDir, g.group, {
       decision: { id: tf.decision.id, at: tf.decision.at ?? null, note: tf.decision.note ?? null }, try: attemptsUsed(ctx, g.group, tf.decision.id) + 1, base: head, startBranch: ctx.git.branch(), worktree: ctx.git.toplevel(), stream: ctx.stream,
       url: url || null, serve: opts.serve || null, agent: opts.agent || null, vendor: opts.vendor || null, allowHosts: opts.allowHosts || [], title,
-      rootFiles: cause.rootFiles, rootFrom: cause.from, allowed: cause.allowed, routes: cause.groupRoutes, scope, samplePaths: sweep.samplePaths, sweep: sweep.id,
+      rootFiles: cause.rootFiles, rootFrom: cause.from, allowed: cause.allowed, routes: cause.groupRoutes, scope, samplePaths: sweep.samplePaths, personsOf: sweep.personsOf, sweep: sweep.id,
       fps: { rule: tf.fixing.filter(r => r.source !== 'ai').map(r => r.fp).sort(), ai: tf.fixing.filter(r => r.source === 'ai').map(r => r.fp).sort() },
     }, gen(ctx));
   }
@@ -507,6 +513,7 @@ export async function verifyFix(ctx, id, opts = {}) {
   const reached = affectedRoutes(map, (rec.diff?.files || []).filter(f => f.startsWith(prefix)).map(f => f.slice(prefix.length))).routes;
   const extra = reached.filter(r => !rec.scope.routes.includes(r) && (!/\[/.test(r) || rec.samplePaths?.[r]));
   const scope1 = { ...rec.scope, routes: [...new Set([...rec.scope.routes, ...extra])].sort() };
+  if (rec.scope.personsOf) scope1.personsOf = { ...rec.scope.personsOf, ...Object.fromEntries(extra.map(r => [r, rec.personsOf?.[r] || rec.scope.persons])) };
   const profile = checkProfile(ctx.root);
   rec = setPhase(ctx.stateDir, rec, 'p1', { p1: { scope: scope1 } }, gen(ctx));
   const p = await probe(ctx, rec, 'P1', { url: opts.url || rec.url, serve: opts.serve || rec.serve, scope: scope1, harDir, profile });

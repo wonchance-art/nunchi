@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { proveByFile, serveApp, snapshotRecordings, snapshotIntact, freePort, STATIC_DIRS } from '../src/fix/probe.mjs';
+import { proveByFile, serveApp, snapshotRecordings, snapshotIntact, freePort, STATIC_DIRS, probeScenes } from '../src/fix/probe.mjs';
 import { checkProfile } from '../src/checks.mjs';
 import { findBinary } from '../src/fix/run.mjs';
 import { tmp } from './fixtures/fix-project.mjs';
@@ -65,4 +65,14 @@ test('the recording snapshot: copied once per attempt with its sha; a snapshot c
   assert.equal(snapshotIntact(join(root, 'snap'), r.shas), true, 'a new recording in .nunchi/har does not touch the attempt\'s');
   writeFileSync(join(root, 'snap', 'guest.json'), '{"entries":[2]}');
   assert.equal(snapshotIntact(join(root, 'snap'), r.shas), false);
+});
+
+test('probe scenes: each route of the scope as the persons the sweep saw it as, with the sweep\'s sample path', () => {
+  const scope = { routes: ['/app/tasks/[id]', '/pricing'], persons: ['guest', 'signed-in'], personsOf: { '/app/tasks/[id]': ['signed-in'], '/pricing': ['guest', 'signed-in'] } };
+  assert.deepEqual(probeScenes(scope, { '/app/tasks/[id]': '/app/tasks/2' }), [
+    { route: '/app/tasks/[id]', path: '/app/tasks/2', person: 'signed-in' },
+    { route: '/pricing', path: '/pricing', person: 'guest' }, { route: '/pricing', path: '/pricing', person: 'signed-in' }]);
+  // no record of how the sweep saw a route (an older record): every person; a person without a login is never added
+  assert.deepEqual(probeScenes({ routes: ['/'], persons: ['guest'] }).map(s => s.person), ['guest']);
+  assert.deepEqual(probeScenes({ routes: ['/'], persons: ['guest'], personsOf: { '/': ['guest', 'signed-in'] } }).map(s => s.person), ['guest']);
 });

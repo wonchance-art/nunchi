@@ -48,7 +48,9 @@ export function identityOf(f, scene, controls = []) {
 export function sameDefect(a, b) {
   if (a.rule !== b.rule || a.route !== b.route || a.cell !== b.cell) return false;
   if (a.fp && a.fp === b.fp) return true;
-  if (a.norm && a.norm === b.norm) return true;
+  // positions are normalised away, so two named siblings (`footer > a` Privacy and Terms) share a selector: their
+  // names tell them apart (found by the fix-gate harness on Pebble, 2026-10-15 KST)
+  if (a.norm && a.norm === b.norm && !(a.name && b.name && a.name !== b.name)) return true;
   return !!a.tag && a.tag === b.tag && !!a.name && a.name === b.name && iou(a.box, b.box) >= IOU_MIN;
 }
 
