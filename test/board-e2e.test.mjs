@@ -540,13 +540,17 @@ test('board a11y: axe finds nothing on Progress, Findings, Detail and Screens; l
         assert.equal(await page.locator('nav[aria-label=nunchi]').count(), 1);
         assert.equal(await page.locator('main#main').count(), 1);
         // every control is at least 44 px high (and buttons as wide)
-        const small = await page.$$eval('main button, main [role=tab], main [role=option], main select, main input, nav .nav a, main .btn, main .tile', els => els
+        const small = await page.$$eval('main button, main [role=tab], main [role=option], main select, main input, nav .nav a, main .btn, main .tile, main .meter-row a, nav .side-foot button', els => els
           .filter(e => e.offsetParent !== null).map(e => ({ e: e.outerHTML.slice(0, 80), r: e.getBoundingClientRect() })).filter(x => x.r.height < 43.5 || (x.e.startsWith('<button') && x.r.width < 43.5)).map(x => `${x.e} ${Math.round(x.r.width)}×${Math.round(x.r.height)}`));
         assert.deepEqual(small, [], `${view} at ${width}px`);
         // severity is said in words, not only by the dot's colour
         for (const text of await page.$$eval('.sev', els => els.map(e => e.textContent.trim()))) assert.match(text, /^(Blocker|High|Medium|Low)$/);
         if (width === 390) assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), `${view}: no sideways scroll at 390 px (200% zoom of 780 px)`);
       }
+      // the skip link, once the keyboard reaches it, is 44 px too
+      await page.evaluate(() => { document.activeElement?.blur(); document.querySelector('.skip').focus(); });
+      const skip = await page.$eval('.skip', e => ({ h: e.getBoundingClientRect().height, w: e.getBoundingClientRect().width, focused: document.activeElement === e }));
+      assert.ok(skip.focused && skip.h >= 43.5, `the skip link is ${Math.round(skip.w)}×${Math.round(skip.h)}`);
       await page.evaluate(() => { location.hash = '#/findings'; });
       await page.waitForSelector('#h-findings');
     await page.waitForFunction(() => document.activeElement?.classList.contains('row'));

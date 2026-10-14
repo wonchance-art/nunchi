@@ -147,6 +147,10 @@ export const BOARD_CSS = `
 .board .nav a[data-nav]:not([aria-current="page"]):hover{background:var(--soft)!important}
 .board .view{display:block}.board .detail{display:block}
 .board h1[tabindex="-1"]:focus,.board h2[tabindex="-1"]:focus{outline:none}
+/* links that stand alone are targets like any control: 44 px (the skip link, "4 of 5" screens checked) */
+.board .skip:focus{display:inline-flex;align-items:center;min-height:44px}
+.board .meter-row a{display:inline-flex;align-items:center;min-height:44px;min-width:44px;justify-content:flex-end}
+.board .meter-row{align-items:center}
 button{font:inherit;color:inherit}
 .b{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;min-width:44px;padding:0 14px;border:1px solid var(--control);border-radius:8px;background:var(--panel);color:var(--ink);font-size:14px;cursor:pointer;text-decoration:none}
 .b:hover{background:var(--soft)}.b[disabled]{opacity:.55;cursor:not-allowed}

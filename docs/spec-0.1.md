@@ -1245,7 +1245,8 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   falls to the page: a redraw (a live update, an undo) puts it back on the same control, the row or the heading, Z in
   Detail goes back to the finding it reopened, and a tab that lost the board focuses and says its message; Shift+J and
   Shift+K say how many groups are selected; severity is a word beside its dot; every
-  control is at least 44 px; reduced motion stops all transitions; dark mode; no sideways scroll at 390 px. Tested
+  control is at least 44 px, and so are the links that stand alone (the skip link, "4 of 5" screens checked, the
+  sidebar's two buttons); reduced motion stops all transitions; dark mode; no sideways scroll at 390 px. Tested
   with axe (no violation) on each view, light at 1280 px and dark at 390 px. Non-text contrast (WCAG 1.4.11): the
   edge of a field, button, decision button, tick box and screen card is `--control` (#7A7F88, 3.4:1 or more against
   the panel, the ground and a selected row, light and dark); the toast's buttons and focus ring are 3:1 or more on
