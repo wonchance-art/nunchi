@@ -1282,7 +1282,9 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
 - *The dock:* the decision bar and the undo toast right above it are one sticky dock at the bottom of the window,
   on a phone too (2 × 2 buttons there), so the toast never covers the bar whatever its height; the page measures the
   dock (`--dock-h`) and `scroll-padding-bottom` keeps the focused row clear of it (WCAG 2.4.11), also when the
-  toast makes the dock taller. On a view without a bar the toast sits at the bottom of the window. The toast waits
+  toast makes the dock taller. On a view without a bar the toast sits at the bottom of the window, inside `main` (so it is in a landmark, axe
+  `region`). Esc while it shows hides it and does Esc's usual step in the same press (back to the list from Detail,
+  clearing a selection); the Keys help says so. The toast waits
   while the pointer is over it or the focus is in it, and gets its 6 seconds again after (WCAG 2.2.1); hidden with
   the focus inside (Esc, Undo, the other reason), the focus goes back to the row, or the view's heading. A screen's
   numbered markers have room inside the Screens panel (they sit half outside their box). Tested at 1280 × 560,

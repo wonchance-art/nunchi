@@ -69,7 +69,7 @@ export function decidedText(decision, reason) {
 }
 // Every key the board answers, for the help dialog (design §3.4 accessibility: `?` shows help).
 export const KEY_HELP = [
-  ['J / ↓', 'Next finding'], ['K / ↑', 'Previous finding'], ['Enter', 'Open the finding'], ['Esc', 'Back to the list'],
+  ['J / ↓', 'Next finding'], ['K / ↑', 'Previous finding'], ['Enter', 'Open the finding'], ['Esc', 'Back to the list (and hides the undo toast)'],
   ['F', 'Fix'], ['W', 'Keep: intended'], ['Shift+W', 'Keep: out of scope'], ['X', 'Not a problem: nothing wrong here'],
   ['Shift+X', 'Not a problem: right issue, wrong spot'], ['S', 'Later'], ['Z', 'Undo the last decision or batch'],
   ['Space', 'Select the row'], ['Shift+J / Shift+K', 'Extend the selection'], ['R', 'Show the updated list'],

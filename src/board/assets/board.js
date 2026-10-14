@@ -9,7 +9,8 @@ const $ = id => d.getElementById(id);
 const main = () => $('main');
 const TOAST = $('toast');
 // Every view is drawn through here. The undo toast then sits in the view's dock, right above the decision bar and
-// moving with it (never over it, whatever the bar's height), or at the bottom of the window when the view has no bar;
+// moving with it (never over it, whatever the bar's height), or at the bottom of the window when the view has no bar
+// (then it is the last child of main: inside a landmark, as everything on the page);
 // and the dock's height keeps focus and scrolling clear of it (scroll-padding-bottom, WCAG 2.4.11).
 let dockObserver = null;
 function show(...nodes) {
@@ -23,7 +24,7 @@ function show(...nodes) {
     if (again) again.focus({ preventScroll: true }); else focusHeading();
   }
   const dock = main().querySelector('.dock');
-  if (dock) dock.prepend(TOAST); else if (TOAST.parentElement !== d.body) d.body.append(TOAST);
+  if (dock) dock.prepend(TOAST); else if (TOAST.parentElement !== main()) main().append(TOAST);
   dockObserver?.disconnect();
   fitDock();
   if (dock && 'ResizeObserver' in window) { dockObserver = new ResizeObserver(fitDock); dockObserver.observe(dock); }
@@ -867,7 +868,8 @@ function onKey(e) {
   if (e.key === 'Escape') {
     // out of a field: to the row (or the heading), never to the page
     if (typing) { e.preventDefault(); const row = S.route.view === "findings" && S.focus ? $("row-" + S.focus) : null; if (row) row.focus(); else { t.blur(); focusHeading(); } return; }
-    if (!TOAST.hidden) return hideToast();
+    // the undo toast goes, and Esc does what it does without one (one press, not two)
+    if (!TOAST.hidden) hideToast();
     if (S.selection.size) { S.selection.clear(); return renderFindings(true); }
     if (S.route.view === 'detail') return go('#/findings');
     return;

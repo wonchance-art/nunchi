@@ -255,6 +255,40 @@ test('board e2e: a short window (420 px or less, e.g. 200% zoom at 640 × 360) k
   }
 });
 
+test('board e2e: on a view without a dock the toast is inside main (axe region); Esc hides it and does its usual step in the same press', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = project();
+  const s = await open(p);
+  const { page } = s;
+  try {
+    await page.waitForSelector('#h-progress');
+    await page.click('a[data-nav=findings]');
+    await page.waitForSelector('#h-findings');
+    await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
+    await page.keyboard.press('j');
+    await page.keyboard.press('s');
+    await page.waitForSelector('#toast:not([hidden])');
+    await page.evaluate(() => { location.hash = '#/screens'; });
+    await page.waitForSelector('#h-screens');
+    const where = await page.evaluate(() => { const t = document.getElementById('toast'); return { hidden: t.hidden, inMain: !!t.closest('main'), dock: !!t.closest('.dock') }; });
+    assert.deepEqual(where, { hidden: false, inMain: true, dock: false }, 'the toast shows on Screens, inside main');
+    assert.deepEqual((await axe(page)).filter(v => v.id === 'region'), [], 'no content outside a landmark');
+    // Esc in Detail with the toast showing: the toast goes and the view goes back to the list, in one press
+    await page.evaluate(() => { location.hash = '#/findings'; });
+    await page.waitForSelector('#h-findings');
+    await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#h-detail');
+    await page.keyboard.press('s');
+    await page.waitForSelector('#toast:not([hidden])');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#h-findings');
+    assert.equal(await page.evaluate(() => document.getElementById('toast').hidden), true, 'and the toast is gone');
+    const help = await page.evaluate(() => import('/assets/shared.mjs').then(W => W.KEY_HELP.find(([k]) => k === 'Esc')[1]));
+    assert.match(help, /undo toast/, 'the Keys help says so');
+  } finally { await s.close(); }
+});
+
 test('board e2e: the toast waits while the pointer is over it or the focus is in it (WCAG 2.2.1); hidden with the focus inside, the focus goes back to the row', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = project();
