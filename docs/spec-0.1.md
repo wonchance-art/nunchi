@@ -100,8 +100,9 @@ in place without a run (tests, scripts).
 `run.json` (metadata, not compared between runs): id, parent run, git commit, `dirty` and a `tree` hash of the
 working tree (uncommitted and untracked edits included, `.nunchi/` excluded) — so *evidence is from the code you
 have now* holds without the user committing — scope (routes, persons, viewports, states, `--changed-since`),
-`wholeApp` (no `--routes`, no `--changed-since` and no discovered route skipped, for a missing sample or a path
-to resolve: whole-app detectors judged every route), network mode per person, run health. Every file of a run is
+`wholeApp` (no `--routes`, no `--changed-since` and no dynamic route skipped for a missing sample: whole-app
+detectors judged every route), `unresolved` (paths discover cannot resolve, skipped by every run; they never
+make a run partial, and are listed so they stay visible), network mode per person, run health. Every file of a run is
 written to a temp file in the same folder (created exclusively, keeping the mode of the file it replaces) and
 renamed into place, so files written into a complete run later (hunt, verify, canary score) are never seen half
 written. Two captures started at once never get the same id.
@@ -431,8 +432,10 @@ unreadable one by one). Built in `src/ledger.mjs`:
     normal), and the app was reachable, the recording current and, for signed-in cells, the login working.
     Whole-app findings (route-less secrets, `unreachable-route`, `link-to-missing-route`, L4 one-offs) keep what
     the runs that saw them looked at (route × cell; routes the app no longer has drop out) and need a `wholeApp`
-    run that looked at all of it again. `--states`, `--viewports`, `--routes`, `--changed-since` and a skipped
-    route fix nothing they did not look at. A run that would fix ≥ 10 items and more than half of the open ones
+    run that looked at all of it again; a route an earlier run looked at that this run did not (it failed, answered
+    an error or redirected this time) makes the run partial, while a route no run has looked at (always broken,
+    always redirected, unresolved) does not. `--states`, `--viewports`, `--routes`, `--changed-since` and a
+    skipped sample fix nothing they did not look at. A run that would fix ≥ 10 items and more than half of the open ones
     while most of its screens show one and the same text (another app, or one error page) fixes nothing, and
     `findings` says so.
   - *looked at:* each item records the last run that looked at all its cells; `findings` says when an open item
@@ -446,9 +449,12 @@ unreadable one by one). Built in `src/ledger.mjs`:
     they are an hour old.
   - *lock:* `<file>.lock.d`, a folder taken by renaming a folder that already holds its owner into place. A holder
     on this machine is stale only when its process is gone (or its pid names another process), never by age; one
-    on another machine, after 30 s without a touch. One taker at a time removes a stale lock, after checking again
-    that it still holds the owner judged stale; a lock is never given back and is released only by its owner.
-    Waiting ends after 5 s with an error.
+    on another machine, after 30 s without a touch. Windows reuses pids within seconds and has no start time to
+    tell them apart, so a Windows holder also goes stale after 30 s without a touch. One taker at a time removes a
+    stale lock, after checking again that it still holds the owner judged stale; a lock is never given back and is
+    released only by its owner. Waiting ends after 5 s with an error. Renames Windows refuses while another process
+    reads in the folder (EPERM, EACCES, EBUSY) are retried with backoff, for the lock, the ledger files, run folders
+    and `runs/latest` (last writer wins; a failed `latest` write never fails a capture).
 - **CLI:** `nunchi findings` (one row per kind; `--rule <rule>` lists its groups; `--status`, `--all`, `--json`),
   `nunchi decide <id…> <decision> [--reason] [--note]`, `nunchi approve <id…>|--all`, `nunchi trust`.
 

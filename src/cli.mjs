@@ -275,9 +275,11 @@ if (cmd === 'setup') {
   const runMeta = {
     schema: 1, id: run?.id ?? null, parent: run?.parent ?? null, ...workTree(root),
     scope: { routes: [...new Set(all.map(s => s.route))].sort(), persons, viewports, states, changedSince: args.changedSince || null },
-    // every route the source has, none skipped (a dynamic route without a sample, a path to resolve), so
-    // whole-app detectors (secrets, the link graph, one-offs) judged the whole app
-    wholeApp: !args.routes && !args.changedSince && !skipped.length,
+    // every route the source has, none skipped for this run only (a dynamic route without a sample), so
+    // whole-app detectors (secrets, the link graph, one-offs) judged the whole app. Paths discover cannot
+    // resolve are skipped by every run: they never make a run partial, and are listed here so they stay visible.
+    wholeApp: !args.routes && !args.changedSince && !skipped.some(s => s.reason === 'needs-sample'),
+    unresolved: skipped.filter(s => s.reason !== 'needs-sample' && s.reason !== 'unchanged').map(s => s.route).sort(),
   };
   // L3 knows every route of the app when they come from the source, and the navigations the source names.
   let flow = {};

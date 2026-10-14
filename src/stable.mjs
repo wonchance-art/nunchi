@@ -27,8 +27,9 @@ export const sha = (data, n = 16) => createHash('sha256').update(data).digest('h
 
 const POSIX = process.platform !== 'win32';
 const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-// The syncs are what make a write survive a power loss, and no output shows them: a test can watch them here.
-export const io = { fsync: fd => fsyncSync(fd) };
+// The syncs (what makes a write survive a power loss) and renames go through here, and so does which platform's rules apply to a refused rename: no output
+// shows them, so a test can watch the syncs and make renames refuse as Windows does.
+export const io = { fsync: fd => fsyncSync(fd), rename: (from, to) => renameSync(from, to), posix: POSIX };
 
 // Write-temp-then-rename in the same folder (a rename within one folder is atomic). The temp file is
 // `.<name>.tmp-<pid>-<random>`, created exclusively ('wx'); it never appears in the output.
@@ -66,18 +67,23 @@ function syncFolder(dir) {
   try { io.fsync(fd); } catch (e) { if (!NO_FOLDER_SYNC.has(e.code)) throw e; } finally { closeSync(fd); }
 }
 
-// Windows refuses a rename over a file another process has open for a moment (virus scanners, indexers).
+// Windows refuses a rename over a file another process has open for a moment (virus scanners, indexers, a
+// reader), a rename of a folder while another process has a file in it open, and a new file or folder at a
+// path still being deleted: EPERM, EACCES or EBUSY. Those are retried with backoff for up to `totalMs`, then
+// thrown. POSIX never refuses for those reasons, so nothing is retried there.
 const BUSY = new Set(['EACCES', 'EPERM', 'EBUSY']);
-const isDir = p => { try { return statSync(p).isDirectory(); } catch { return false; } };
-function renameRetry(from, to) {
-  for (let wait = 10, waited = 0; ; wait *= 2) {
-    try { return renameSync(from, to); }
+export function retryBusy(fn, totalMs = 5000, { posix = io.posix } = {}) {
+  for (let wait = 5, waited = 0; ; wait = Math.min(wait * 2, 200)) {
+    try { return fn(); }
     catch (e) {
-      if (POSIX || !BUSY.has(e.code) || waited >= 5000 || isDir(to)) throw e;
+      if (posix || !BUSY.has(e.code) || waited >= totalMs) throw e;
       sleep(wait); waited += wait;
     }
   }
 }
+const isDir = p => { try { return statSync(p).isDirectory(); } catch { return false; } };
+// a folder in the way is not busy: it stays in the way
+const renameRetry = (from, to) => retryBusy(() => { try { return io.rename(from, to); } catch (e) { if (isDir(to)) e.code = 'EISDIR'; throw e; } });
 
 // What a crash in the middle of a write leaves: temp files of writeAtomic (and of older versions) and lock
 // folders being made or removed. Removed from `dir` once they are an hour old (design §8.1).
@@ -102,12 +108,17 @@ export function sweepLeftovers(dir, { olderThanMs = 3600e3, now = Date.now() } =
 // `<file>.lock.d` is the lock, a folder holding owner.json.
 // - taken by renaming a folder that already holds owner.json into place: the rename fails while the lock exists,
 //   so there is never a lock without its owner.
-// - stale: a holder on this machine (same host, boot and pid namespace) is judged by its process alone (gone, or
-//   its pid now names another process), never by age, so a clock jump or a sleeping laptop does not take a live
-//   lock away. A holder elsewhere is stale once it has not touched the lock for `staleMs`.
+// - stale: a holder on this machine (same host, boot and pid namespace) is judged by its process (gone, or its
+//   pid now names another process by its start time), not by age, so a clock jump or a sleeping laptop does not
+//   take a live lock away. A holder elsewhere is stale once it has not touched the lock for `staleMs`. Windows:
+//   `process.kill(pid, 0)` does tell an exited process, but Windows reuses a pid within seconds and has no start
+//   time to tell the new process from the holder, so a dead holder's pid can look alive for ever; there a holder
+//   on this machine is also stale once it has not touched the lock for `staleMs`, as one elsewhere.
 // - a stale lock is removed by one taker at a time, under `<file>.lock.d.reap`, and only after reading again,
 //   under it, that the lock still holds the owner judged stale and is still stale. A lock is never given back.
 // - released only while it still holds our token.
+// - Windows refuses to rename the lock folder while another process reads owner.json in it: those renames, and
+//   the reads, are retried (retryBusy), so a release is never lost to a reader.
 // Held only around read–change–write of a small file, never across capture or network I/O. Acquisition backs
 // off for `timeoutMs`, then fails with code LOCKED, also when a stale lock cannot be removed.
 const procFile = p => { try { return readFileSync(p, 'utf8'); } catch { return null; } };
@@ -116,28 +127,36 @@ const pidNs = () => { try { return readlinkSync('/proc/self/ns/pid'); } catch { 
 // Linux: start time of a process in clock ticks since boot (field 22 of /proc/<pid>/stat, after the name).
 const procStart = pid => { const s = procFile(`/proc/${pid}/stat`); return s ? s.slice(s.lastIndexOf(')') + 2).split(' ')[19] ?? null : null; };
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
-const readOwner = dir => { try { return JSON.parse(readFileSync(join(dir, 'owner.json'), 'utf8')); } catch { return null; } };
+// null when there is no lock, or no readable owner in it
+function readOwner(dir) {
+  let text;
+  try { text = retryBusy(() => readFileSync(join(dir, 'owner.json'), 'utf8'), 1000); } catch { return null; }
+  try { return JSON.parse(text); } catch { return null; }
+}
 const RM = { recursive: true, force: true, maxRetries: 10, retryDelay: 20 };
 // A rename onto a lock that exists: ENOTEMPTY or EEXIST; Windows says EPERM, EACCES or EBUSY.
-const taken = e => e.code === 'ENOTEMPTY' || e.code === 'EEXIST' || (!POSIX && BUSY.has(e.code));
+const taken = e => e.code === 'ENOTEMPTY' || e.code === 'EEXIST' || (!io.posix && BUSY.has(e.code));
+const sameMachine = o => !!o && o.host === hostname() && o.boot === bootId() && o.ns === pidNs();
 
-function staleOwner(dir, staleMs) {
+function staleOwner(dir, staleMs, { posix = io.posix } = {}) {
   const owner = readOwner(dir);
   let touched;
   try { touched = statSync(owner ? join(dir, 'owner.json') : dir).mtimeMs; } catch { return null; }   // just released: try again
-  if (owner && owner.host === hostname() && owner.boot === bootId() && owner.ns === pidNs()) {
+  const untouched = Date.now() - touched > staleMs;
+  if (sameMachine(owner)) {
     if (!alive(owner.pid)) return { owner };
     const start = procStart(owner.pid);
-    return owner.start && start && owner.start !== start ? { owner } : null;
+    if (owner.start && start) return owner.start !== start ? { owner } : null;
+    return !posix && untouched ? { owner } : null;                   // Windows: the pid may have been reused
   }
-  return Date.now() - touched > staleMs ? { owner } : null;
+  return untouched ? { owner } : null;
 }
 
 // → true when the stale lock judged was removed (the caller tries to take the lock again at once).
 function reap(dir, judged, staleMs) {
   const guard = `${dir}.reap`;
   try { mkdirSync(guard); } catch (e) {
-    if (e.code !== 'EEXIST' && !(!POSIX && BUSY.has(e.code))) throw e;
+    if (e.code !== 'EEXIST' && !(!io.posix && BUSY.has(e.code))) throw e;
     // a taker that died while removing a lock leaves its guard; it is cleared once it is old
     try { if (Date.now() - statSync(guard).mtimeMs > staleMs) rmSync(guard, RM); } catch {}
     return false;
@@ -146,7 +165,7 @@ function reap(dir, judged, staleMs) {
     const now = staleOwner(dir, staleMs);
     if (!now || (now.owner?.token ?? null) !== (judged.owner?.token ?? null)) return false;
     const gone = `${dir}.gone-${randomBytes(4).toString('hex')}`;
-    try { renameSync(dir, gone); } catch { return false; }
+    try { retryBusy(() => io.rename(dir, gone), 1000); } catch { return false; }
     rmSync(gone, RM);
     return true;
   } finally { rmSync(guard, RM); }
@@ -155,7 +174,11 @@ function reap(dir, judged, staleMs) {
 function release(dir, token) {
   if (readOwner(dir)?.token !== token) return;                   // not ours (any more): leave it
   const gone = `${dir}.gone-${token}`;
-  try { renameSync(dir, gone); } catch { return; }
+  try { retryBusy(() => io.rename(dir, gone)); }
+  catch (e) {                                                    // a lock that cannot be released is said, not left silently
+    if (e.code === 'ENOENT') return;
+    throw Object.assign(new Error(`${dir} could not be released (${e.code}); remove it if no nunchi is running`), { code: 'LOCKED' });
+  }
   rmSync(gone, RM);
 }
 
@@ -169,12 +192,13 @@ export function withLock(path, fn, { timeoutMs = 5000, staleMs = 30000 } = {}) {
   const t0 = Date.now();
   try {
     for (let wait = 5; ; wait = Math.min(wait * 2, 100)) {
-      try { renameSync(ready, dir); break; } catch (e) { if (!taken(e)) throw e; }
+      try { io.rename(ready, dir); break; } catch (e) { if (!taken(e)) throw e; }
       const stale = staleOwner(dir, staleMs);
       if (stale && reap(dir, stale, staleMs)) continue;
       if (Date.now() - t0 > timeoutMs) {
         const o = readOwner(dir);
-        throw Object.assign(new Error(`${path} is locked by another nunchi process${o ? ` (pid ${o.pid} on ${o.host})` : ''}; try again in a moment, or remove ${dir} if no nunchi is running`), { code: 'LOCKED' });
+        const who = o ? ` (pid ${o.pid} on ${o.host}${sameMachine(o) ? `, ${alive(o.pid) ? 'running' : 'exited'}` : ''})` : '';
+        throw Object.assign(new Error(`${path} is locked by another nunchi process${who}; try again in a moment, or remove ${dir} if no nunchi is running`), { code: 'LOCKED' });
       }
       sleep(wait);
     }

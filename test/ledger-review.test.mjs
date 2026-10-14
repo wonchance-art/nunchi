@@ -67,6 +67,18 @@ test('review 1: a whole-app run that did not look at a screen the secret was see
   assert.equal(item(st, 'secret-in-client-bundle').goneAt, '0005');
 });
 
+test('decision: a route seen before but not this time keeps whole-app items open; a route no run has seen (always broken, unresolved) does not', () => {
+  const routes = ['/a', '/b', '/broken'];
+  const run = down => cells(routes, ['guest'], ['normal'], ['m']).map(s => (down.includes(s.route) ? { ...s, httpStatus: 503 } : s));
+  let st = fold(empty(), '0001', { routes, scenes: run(['/broken']) }, []);       // /broken answers 503 in every run
+  st = fold(st, '0002', { routes, scenes: run(['/broken', '/b']) }, [SECRET]);     // seen while /b was down
+  st = fold(st, '0003', { routes, scenes: run(['/broken', '/b']) }, []);
+  assert.equal(item(st, 'secret-in-client-bundle').goneAt, null, '/b was looked at before and not this time: the run is partial');
+  st = fold(st, '0004', { routes, scenes: run(['/broken']) }, []);
+  assert.equal(item(st, 'secret-in-client-bundle').goneAt, '0004', 'a route no run has looked at does not stop it');
+  assert.deepEqual(st.seenRoutes, ['/a', '/b']);
+});
+
 test('review 2: a sighting by a narrower run keeps the cells it did not look at', () => {
   let st = fold(empty(), '0001', { viewports: ['m', 'd'] }, [fnd('/tasks', 'guest.normal.m', 'x'), fnd('/tasks', 'guest.normal.d', 'x')]);
   st = fold(st, '0002', { viewports: ['m'] }, [fnd('/tasks', 'guest.normal.m', 'x')]);
@@ -119,18 +131,30 @@ test('review 3: many processes, most dying while they hold it, never hold the lo
   const dir = tmp('nunchi-lock-stress-');
   const file = join(dir, 'ledger.json'), sentinel = join(dir, 'inside');
   const child = `import { withLock } from ${JSON.stringify(STABLE)};
-import { openSync, closeSync, unlinkSync } from 'node:fs';
+import { openSync, closeSync, unlinkSync, readFileSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 const [file, sentinel, n, at, die] = process.argv.slice(1);
 while (Date.now() < Number(at)) {}
 let bad = 0;
-for (let i = 0; i < Number(n); i++) withLock(file, () => {
-  let fd;
-  try { fd = openSync(sentinel, 'wx'); } catch { bad++; return; }      // another process is inside
-  closeSync(fd);
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
-  unlinkSync(sentinel);
-  if (die === '1') process.exit(0);                                    // dies holding it: the lock is left stale
-}, { timeoutMs: 60000 });
+try {
+  for (let i = 0; i < Number(n); i++) withLock(file, () => {
+    let fd;
+    try { fd = openSync(sentinel, 'wx'); } catch (e) { if (e.code !== 'EEXIST') throw e; bad++; return; }   // another process is inside
+    closeSync(fd);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    unlinkSync(sentinel);
+    if (die === '1') process.exit(0);                                  // dies holding it: the lock is left stale
+  }, { timeoutMs: 60000 });
+} catch (e) {
+  // what this worker saw when it gave up: the holder named in the lock, and whether that process still runs
+  let owner = null, holderAlive = null;
+  try { owner = JSON.parse(readFileSync(join(file + '.lock.d', 'owner.json'), 'utf8')); } catch (r) { owner = 'unreadable: ' + r.code; }
+  if (owner && owner.pid) { try { process.kill(owner.pid, 0); holderAlive = true; } catch (k) { holderAlive = k.code === 'EPERM'; } }
+  let files = null;
+  try { files = readdirSync(dirname(file)).sort(); } catch {}
+  process.stderr.write(JSON.stringify({ worker: process.pid, die, error: e.code, message: String(e.message).split('\\n')[0], owner, holderAlive, files }));
+  process.exit(1);
+}
 process.stdout.write(String(bad));`;
   // each death leaves a stale lock that every waiting process races to take over
   for (let batch = 0; batch < 2; batch++) {
@@ -138,9 +162,69 @@ process.stdout.write(String(bad));`;
     const at = Date.now() + 2500;
     const procs = [...Array.from({ length: 10 }, () => [8, 0]), ...Array.from({ length: 20 }, () => [1, 1])];
     const out = await Promise.all(procs.map(([n, die]) => node(child, [file, sentinel, n, at, die], { timeout: 120000 })));
-    for (const r of out) assert.equal(r.code, 0, r.stderr);
+    const failed = out.map((r, i) => ({ i, die: procs[i][1], code: r.code, stderr: r.stderr.slice(0, 2000) })).filter(r => r.code !== 0);
+    let lockNow = null;
+    try { lockNow = { files: readdirSync(dir).sort(), owner: readFileSync(join(`${file}.lock.d`, 'owner.json'), 'utf8') }; } catch (e) { lockNow = { files: readdirSync(dir).sort(), owner: e.code }; }
+    assert.deepEqual(failed, [], `batch ${batch}: workers that failed, and the lock after the batch: ${JSON.stringify(lockNow)}`);
     assert.equal(out.reduce((s, r) => s + Number(r.stdout || 0), 0), 0, `batch ${batch}: two holders at once`);
   }
+});
+
+test('review 3 (Windows): a holder on this machine whose start time cannot be read goes stale by age too (its pid may be reused)', () => {
+  const dir = tmp('nunchi-lock-win-');
+  const file = join(dir, 'x.json'), lock = `${file}.lock.d`;
+  S.withLock(file, () => {
+    // as Windows writes it: no start time; this process is alive, as a reused pid would be
+    const owner = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'));
+    writeFileSync(join(lock, 'owner.json'), JSON.stringify({ ...owner, start: null }));
+    const old = new Date(Date.now() - 60e3);
+    utimesSync(join(lock, 'owner.json'), old, old);
+    assert.ok(S.lockInternals.staleOwner(lock, 30000, { posix: false }), 'Windows: untouched for 30 s, stale');
+    assert.equal(S.lockInternals.staleOwner(lock, 30000, { posix: true }), null, 'POSIX: a live pid is the holder, whatever the age');
+    const now = new Date();
+    utimesSync(join(lock, 'owner.json'), now, now);
+    assert.equal(S.lockInternals.staleOwner(lock, 30000, { posix: false }), null, 'Windows: recently touched, alive');
+  });
+});
+
+test('Windows (CI 295e028): a lock release or a `latest` update refused while another process reads (EPERM) is retried; `latest` never fails a run', () => {
+  const dir = tmp('nunchi-win-rename-');
+  const saved = { rename: S.io.rename, posix: S.io.posix };
+  const refuse = (match, times) => { let n = 0; S.io.rename = (a, b) => { if (match(a, b) && n < times) { n++; throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }); } return saved.rename(a, b); }; return () => n; };
+  S.io.posix = false;
+  try {
+    // a waiter reading owner.json keeps the holder's release from renaming the lock away, three times
+    const file = join(dir, 'ledger.json');
+    let refused = refuse(a => a.endsWith('.lock.d'), 3);
+    S.withLock(file, () => {});
+    assert.equal(refused(), 3);
+    assert.ok(!existsSync(`${file}.lock.d`), 'released, not left for every other process to wait on');
+    // two captures finishing at once: the `latest` pointer is replaced through refusals
+    const runs = join(dir, 'runs');
+    refused = refuse((a, b) => b.endsWith('latest'), 3);
+    const r = R.startRun(runs);
+    R.finishRun(runs, r.id);
+    assert.equal(refused(), 3);
+    assert.equal(readFileSync(join(runs, 'latest'), 'utf8'), `${r.id}\n`);
+    // refused for good: the run is still complete, and latestRun still finds it
+    refused = refuse((a, b) => b.endsWith('latest'), Infinity);
+    const r2 = R.startRun(runs);
+    assert.equal(R.finishRun(runs, r2.id), join(runs, r2.id));
+    assert.equal(R.latestRun(runs), r.id, 'the pointer kept its last value');
+    assert.deepEqual(R.listRuns(runs).complete, [r.id, r2.id]);
+  } finally { Object.assign(S.io, saved); }
+});
+
+test('Windows renames: EPERM, EACCES and EBUSY are retried with backoff and then thrown; other errors at once', () => {
+  let n = 0;
+  const busy = code => () => { n++; if (n < 3) throw Object.assign(new Error(code), { code }); return 'done'; };
+  assert.equal(S.retryBusy(busy('EPERM'), 5000, { posix: false }), 'done');
+  n = 0; assert.equal(S.retryBusy(busy('EBUSY'), 5000, { posix: false }), 'done');
+  n = 0; assert.throws(() => S.retryBusy(busy('EPERM'), 5000, { posix: true }), { code: 'EPERM' }, 'POSIX: not retried');
+  n = 0; assert.throws(() => S.retryBusy(busy('ENOENT'), 5000, { posix: false }), { code: 'ENOENT' });
+  const t0 = Date.now();
+  assert.throws(() => S.retryBusy(() => { throw Object.assign(new Error('x'), { code: 'EACCES' }); }, 100, { posix: false }), { code: 'EACCES' });
+  assert.ok(Date.now() - t0 < 2000, 'bounded');
 });
 
 const deadLock = async file => {

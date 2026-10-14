@@ -199,8 +199,15 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
   const next = { ...state, runs: [...state.runs, id].sort(byRun), items: { ...state.items } };
   const covered = [...new Set(scenes.filter(looked).map(s => keyOf(s.route, `${s.person}.${s.state}.${s.viewport}`)))].sort();
   const coveredSet = new Set(covered);
-  const whole = wholeApp === true;
   const appRoutes = new Set(scope.routes || []);
+  // A route an earlier run looked at that this run did not (it failed, answered an error or redirected this
+  // time) makes the run partial. A route no run has looked at (always broken, always redirected, or a path
+  // discover cannot resolve, recorded as `unresolved` in run.json) does not: no whole-app item can have been
+  // seen there, and the per-item coverage guards the rest.
+  const seenBefore = new Set(state.seenRoutes || []);
+  const seenNow = new Set(scenes.filter(looked).map(s => s.route));
+  const whole = wholeApp === true && ![...appRoutes].some(r => seenBefore.has(r) && !seenNow.has(r));
+  next.seenRoutes = [...new Set([...seenBefore, ...seenNow])].sort();
   const here = setId(covered);
   // what a whole-app item asks for after this sighting: what this run looked at, plus what earlier sightings
   // looked at that this run did not (minus routes the app no longer has, which only a whole-app run can tell)
