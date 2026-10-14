@@ -1392,7 +1392,9 @@ showed two bugs fixed before merge: the favicon lockout and the Progress mark (Â
 After the fixes of the review of PR #29 (2026-10-15 02:56 KST), the bench is unchanged: rule recall 34/34, 0 false
 positives on 8 clean scenes, determinism identical (1,141 files), fingerprints 100% (52/52); 170 s per capture, with
 the Node 24 test suite running beside it. The suite: 429 tests on Node 22.22.0 and on Node 24.21.0, Chromium
-included.
+included. After round 2 of the review (2026-10-15 04:04â€“04:09 KST): rule recall 34/34, 0 false positives on 8 clean
+scenes, determinism identical (1,141 files), fingerprints 100% (52/52), 160 s per capture with the Node 24 suite
+beside it; 438 tests on Node 22.22.0 and on Node 24.21.0, Chromium included.
 
 **Known limits (review of PR #29, 2026-10-15 KST; left as they are).**
 - The hook's check of the board's port names `127.0.0.1`, `localhost`, `::1`, `0.0.0.0` and `0`; other spellings of
