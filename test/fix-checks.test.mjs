@@ -59,6 +59,9 @@ test('shell: false; on Windows the .cmd shim starts through cmd.exe /d /s /c wit
   assert.equal(c.opts.windowsVerbatimArguments, true);
   assert.match(X.commandFor({ pm: { name: 'npm' }, script: 'lint & calc', bin: 'x', platform: 'win32' }).refused, /not a script name/);
   assert.match(X.commandFor({ pm: { name: 'pnpm' }, script: 'lint', bin: null }).refused, /^no pnpm on PATH: nunchi never downloads a package manager/);
+  // the pre/post refusal comes first whether or not the manager is installed: installing bun would not lift it
+  const prePost = { scripts: { prelint: 'x', lint: 'y' } };
+  for (const pm of [{ name: 'bun', major: null }, { name: 'yarn', major: 1 }]) assert.match(X.commandFor({ pm, script: 'lint', bin: null, profile: prePost }).refused, /runs prelint and postlint whatever it is told/);
   assert.equal(X.findBinary('nunchi-no-such-manager', { env: { PATH: process.env.PATH } }), null);
   assert.deepEqual(X.packageManagerOf('/nowhere', { packageManager: 'pnpm@9.1.0+sha512.abc' }), { name: 'pnpm', major: 9, from: 'packageManager' });
 });

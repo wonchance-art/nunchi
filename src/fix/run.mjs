@@ -69,16 +69,17 @@ export function childEnv(env = process.env, platform = process.platform, { serve
 // The command that runs one script line and nothing else of package.json. → { cmd, args, opts } | { refused }.
 export function commandFor({ pm, script, bin, platform = process.platform, profile = null, extraArgs = [] }) {
   if (!SCRIPT.test(script)) return { refused: `"${script}" is not a script name nunchi runs` };
-  if (!bin) return { refused: `no ${pm.name} on PATH: nunchi never downloads a package manager (install ${pm.name}, or run nunchi where it is)` };
   const prePost = !!(profile && (profile.scripts?.[`pre${script}`] !== undefined || profile.scripts?.[`post${script}`] !== undefined || profile.serve?.[`pre${script}`] !== undefined || profile.serve?.[`post${script}`] !== undefined));
   let args;
   if (pm.name === 'npm') args = ['run', '--ignore-scripts', script];
   else if (pm.name === 'pnpm') args = ['--config.enable-pre-post-scripts=false', 'run', script];
   else if (pm.name === 'yarn' && pm.major !== null && pm.major >= 2) args = ['run', script];
   else {
+    // before the PATH check: installing the manager would not lift this refusal, so "install bun" is not the answer
     if (prePost) return { refused: `${pm.name === 'yarn' ? 'yarn 1' : 'bun'} runs pre${script} and post${script} whatever it is told, so nunchi does not run ${script} (it runs only the line itself)` };
     args = ['run', script];
   }
+  if (!bin) return { refused: `no ${pm.name} on PATH: nunchi never downloads a package manager (install ${pm.name}, or run nunchi where it is)` };
   const extra = extraArgs.map(String);
   if (extra.some(a => !/^[\w:.=-]{1,64}$/.test(a))) return { refused: 'extra arguments must be plain words' };
   if (extra.length) args = pm.name === 'npm' || pm.name === 'pnpm' ? [...args, '--', ...extra] : [...args, ...extra];
