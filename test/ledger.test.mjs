@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { normalizeSelector, fingerprintOf, annotate, foldRun, view, groups, writeDecision, readDecisions, trust } from '../src/ledger.mjs';
+import { normalizeSelector, fingerprintOf, annotate, foldRun, view, groups, writeDecision, readDecisions, trust, approvalKey } from '../src/ledger.mjs';
 
 const f = (route, extra = {}) => ({ lens: 'L8', rule: 'target-size-min', severity: 'medium', scene: `${route.slice(1) || '~'}.guest.normal.m`, route, viewport: 'm', selector: 'main > ul > li:nth-of-type(3) > button', box: [0, 0, 18, 18], evidence: { width: 18, height: 18, minimum: 24, name: 'Done' }, ...extra });
 const empty = () => ({ schema: 1, runs: [], items: {} });
+// a manifest scene entry, as capture writes it
+const scene = (route, person = 'guest', state = 'normal', viewport = 'm', extra = {}) => ({ id: `${route.slice(1) || '~'}.${person}.${state}.${viewport}`, route, person, state, viewport, status: 'captured', reason: null, httpStatus: 200, ...extra });
 
 test('selectors lose positions, framework ids and generated class names', () => {
   assert.equal(normalizeSelector('ul > li:nth-of-type(12) > a:nth-child(2)'), 'ul > li > a');
@@ -27,15 +29,16 @@ test('fingerprint: same defect on another viewport, state, person or row is the 
 });
 
 test('ledger state: new, gone where the run looked, back again; not gone where it did not look', () => {
-  let st = foldRun(empty(), { id: '0001', scope: { routes: ['/tasks', '/notes'], persons: ['guest'] }, findings: annotate([f('/tasks'), f('/notes')]) });
+  const scenes = routes => routes.map(r => scene(r));
+  let st = foldRun(empty(), { id: '0001', scope: { routes: ['/tasks', '/notes'], persons: ['guest'] }, scenes: scenes(['/tasks', '/notes']), findings: annotate([f('/tasks'), f('/notes')]) });
   assert.deepEqual(Object.values(st.items).map(i => [i.route, i.firstSeen, i.goneAt]).sort(), [['/notes', '0001', null], ['/tasks', '0001', null]]);
-  st = foldRun(st, { id: '0002', scope: { routes: ['/tasks'], persons: ['guest'], changedSince: 'HEAD' }, findings: [] });
+  st = foldRun(st, { id: '0002', scope: { routes: ['/tasks'], persons: ['guest'], changedSince: 'HEAD' }, scenes: scenes(['/tasks']), findings: [] });
   const by = r => Object.values(st.items).find(i => i.route === r);
   assert.equal(by('/tasks').goneAt, '0002', 'captured and absent: fixed');
   assert.equal(by('/notes').goneAt, null, 'not captured this time: unknown, still open');
-  st = foldRun(st, { id: '0003', scope: { routes: ['/tasks', '/notes'], persons: ['guest'] }, health: { problems: [{ status: 'app-unreachable' }] }, findings: [] });
+  st = foldRun(st, { id: '0003', scope: { routes: ['/tasks', '/notes'], persons: ['guest'] }, health: { problems: [{ status: 'app-unreachable' }] }, scenes: scenes(['/tasks', '/notes']), findings: [] });
   assert.equal(by('/notes').goneAt, null, 'an app that did not load fixes nothing');
-  st = foldRun(st, { id: '0004', scope: { routes: ['/tasks', '/notes'], persons: ['guest'] }, findings: annotate([f('/tasks')]) });
+  st = foldRun(st, { id: '0004', scope: { routes: ['/tasks', '/notes'], persons: ['guest'] }, scenes: scenes(['/tasks', '/notes']), findings: annotate([f('/tasks')]) });
   assert.equal(by('/tasks').regressedAt, '0004');
   assert.deepEqual(view(st, []).map(r => [r.route, r.status]).sort(), [['/notes', 'fixed'], ['/tasks', 'regressed']]);
   assert.deepEqual(foldRun(st, { id: '0004', scope: {}, findings: [] }), st, 'folding the same run twice changes nothing');
@@ -51,13 +54,13 @@ test('decisions: append-only files, latest wins, a group decision covers new scr
   const fix = writeDecision(dir, { target: { fp: tasks.fp }, decision: 'fix', by: 'me' });
   const git = writeDecision(dir, { target: { fp: secret.fp }, decision: 'false-positive', reason: 'not-a-problem', by: 'someone else' });
   assert.equal(readdirSync(dir).length, 3, 'one folder per target, one file per decision: nothing to merge');
-  const rows = view(st, readDecisions(dir), new Set([keep.id, fix.id]));
+  const rows = view(st, readDecisions(dir), new Set([keep, fix].map(approvalKey)));
   const status = r => rows.find(x => x.fp === r.fp).status;
   assert.equal(status(tasks), 'to-fix', 'the later decision on the fingerprint wins over the group');
   assert.equal(rows.find(r => r.route === '/notes').status, 'kept', 'the group decision covers the other screen');
   assert.equal(status(secret), 'open');
   assert.match(rows.find(r => r.fp === secret.fp).note, /needs approval/);
-  assert.equal(view(st, readDecisions(dir), new Set([keep.id, fix.id, git.id])).find(r => r.fp === secret.fp).status, 'dismissed', 'approved on this machine: honoured');
+  assert.equal(view(st, readDecisions(dir), new Set([keep, fix, git].map(approvalKey))).find(r => r.fp === secret.fp).status, 'dismissed', 'approved on this machine: honoured');
   assert.deepEqual(groups(rows).map(g => [g.rule, g.routes.length]), [['secret-in-client-bundle', 0], ['target-size-min', 2]]);
 });
 

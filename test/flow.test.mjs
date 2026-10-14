@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { routeMatcher, codeNavigations, buildFlow } from '../src/flow.mjs';
+import { routeMatcher, codeNavigations, buildFlow, isRedirected } from '../src/flow.mjs';
 
 test('routeMatcher: literal routes win over dynamic ones, every router syntax', () => {
   const m = routeMatcher(['/', '/posts/[id]', '/posts/new', '/docs/[...slug]', '/shop/[[...rest]]', '/u/$userId', '/files/$', '/team/:id', '/opt/:id?']);
@@ -68,6 +68,37 @@ test('flow: dead links, unreachable routes and dead ends are found; their clean 
   assert.equal(flow.nodes.find(n => n.route === '/via-code').reachedBy, 'code');
   assert.equal(flow.nodes.find(n => n.route === '/login').reachedBy, 'redirect');
   assert.deepEqual(flow.order.slice(0, 6), ['/', '/about', '/pricing', '/posts/[id]', '/end', '/broken']);
+});
+
+test('isRedirected: the flag when the entry has it, else derived from path and finalPath (manifests written before the flag)', () => {
+  assert.equal(isRedirected({ redirected: true, path: '/a', finalPath: '/a' }), true, 'the flag wins');
+  assert.equal(isRedirected({ redirected: false, path: '/a', finalPath: '/login' }), false, 'the flag wins');
+  assert.equal(isRedirected({ path: '/private', finalPath: '/login', reason: 'redirected to /login' }), true);
+  assert.equal(isRedirected({ path: '/a?x=1', finalPath: '/a?tab=2#top', reason: null }), false, 'only the path part counts, as capture decides it');
+  assert.equal(isRedirected({ path: '/a', finalPath: null, reason: 'no-dom' }), false, 'no page, no redirect');
+  assert.equal(isRedirected({ reason: 'redirected to /login' }), true, 'no paths: the reason says so');
+  assert.equal(isRedirected({ reason: 'login-expired' }), false);
+});
+
+test('flow: a manifest written before entries carried `redirected`: redirected scenes still lead to their targets and add no links', () => {
+  // entries exactly as such a manifest has them: path, finalPath and reason, no `redirected` field
+  const old = (route, finalPath, extra = {}) => {
+    const { redirected, ...e } = scene(route, 'guest', 'm', { path: route, finalPath, reason: finalPath.split('?')[0] === route ? null : `redirected to ${finalPath}`, ...extra });
+    return e;
+  };
+  const routes = ['/', '/a', '/private', '/billing', '/login', '/signup'];
+  const entries = [old('/', '/'), old('/a', '/a?tab=1'), old('/private', '/login'), old('/billing', '/signup', { status: 'capture-failed' })];
+  const sceneLinks = new Map([
+    ['/.guest.normal.m', [link('/a')]],
+    ['/a.guest.normal.m', [link('/')]],
+    ['/private.guest.normal.m', [link('/'), link('/gone')]],   // the sign-in page's links, not /private's
+  ]);
+  const { flow, findings } = buildFlow({ entries, sceneLinks, routes, complete: true });
+  assert.deepEqual(flow.edges.map(e => `${e.from} ${e.to}`), ['/ /a', '/a /'], 'no links are read from a redirected scene');
+  assert.equal(flow.nodes.find(n => n.route === '/login').reachedBy, 'redirect');
+  assert.equal(flow.nodes.find(n => n.route === '/signup').reachedBy, 'redirect', 'a strict-path redirect still leads to its target');
+  assert.equal(flow.nodes.find(n => n.route === '/private').captured, false);
+  assert.deepEqual(findings.map(f => `${f.rule} ${f.route}`).sort(), ['unreachable-route /billing', 'unreachable-route /private']);
 });
 
 test('flow: without the app\'s route list, or for a partial capture, nothing is called missing or unreachable', () => {

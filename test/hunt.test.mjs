@@ -469,3 +469,48 @@ test('cli: hunt --plan applies the default budget, --budget all lifts it, nonsen
     assert.equal(r.status, 1, bad); assert.match(r.stderr, /--budget takes a whole number of tokens, or all/);
   }
 });
+
+test('record: an aria node with inline text is cited by its role and name, or by its whole line', () => {
+  const { cwd, runDir, lenses } = setup();
+  writeFileSync(join(runDir, 'tasks.guest.error.m', 'aria.yml'), '- heading "Tasks" [level=1]\n- group "Week of 3 May": Mon Tue Full Full\n- heading "Can I swap?" [level=3]: Yes, until noon\n- paragraph: Oops! Something went wrong.\n');
+  const plan = planHunt({ runDir, lenses, runId: '0001' });
+  const l2 = plan.units.find(u => u.lens === 'L2' && u.scenes[0].state === 'error');
+  const claim = selector => ({ scene: 'tasks.guest.error.m', selector, claim: 'The failed load shows every slot as Full.', severity: 'high' });
+  const answers = { schema: 1, plan: plan.id, units: [answerAll(l2, 'none', { 'L2.looks-normal': { answer: 'defect', defects: [
+    claim('aria=group "Week of 3 May"'),
+    claim('aria=group "Week of 3 May": Mon Tue Full Full'),
+    claim('aria=heading "Can I swap?" [level=3]'),
+    claim('aria=group "Week of 10 May"'),
+    claim('aria=paragraph'),
+  ] } })] };
+  const r = recordHunt({ runDir, plan, answers, root: cwd });
+  assert.deepEqual(r.findings.map(f => f.selector).sort(), ['aria=group "Week of 3 May"', 'aria=group "Week of 3 May": Mon Tue Full Full', 'aria=heading "Can I swap?" [level=3]']);
+  assert.deepEqual(r.rejected.map(x => x.detail.split(' is not')[0]).sort(), ['aria=group "Week of 10 May"', 'aria=paragraph']);
+});
+
+test('plan: a lens with reference "nearest" compares a detail page with its list page; others spread by hash', () => {
+  const dir = join(tmp(), 'run');
+  const scenes = [];
+  for (const [slug, route] of [['bookings', '/bookings'], ['bookings~[id]', '/bookings/:id'], ['help', '/help'], ['about', '/about'], ['garden~beds', '/garden/beds'], ['garden', '/garden']]) {
+    const id = `${slug}.guest.normal.d`;
+    scenes.push({ id, route, path: route.replace(':id', 'b-1'), person: 'guest', state: 'normal', viewport: 'd', status: 'captured', reason: null });
+    mkdirSync(join(dir, id), { recursive: true });
+    writeFileSync(join(dir, id, 'top.jpg'), fakeJpeg(1280, 800));
+    for (const f of ['styles.json', 'controls.json']) writeFileSync(join(dir, id, f), '[]');
+  }
+  writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ schema: 1, health: { status: 'ok', problems: [] }, scenes }));
+  writeFileSync(join(dir, 'run.json'), JSON.stringify({ schema: 1, id: '0001' }));
+  const { lenses } = loadLenses({ root: tmp() });
+  const plan = planHunt({ runDir: dir, lenses: lenses.filter(l => ['L4', 'L5'].includes(l.id)), runId: '0001' });
+  const ref = (lens, route) => plan.units.find(u => u.lens === lens && u.scenes[0].route === route).reference.route;
+  assert.equal(lenses.find(l => l.id === 'L4').reference, 'nearest');
+  assert.equal(ref('L4', '/bookings/:id'), '/bookings');
+  assert.equal(ref('L4', '/bookings'), '/bookings/:id');
+  assert.equal(ref('L4', '/garden/beds'), '/garden');
+  assert.notEqual(ref('L4', '/help'), '/help', 'no shared segment: any other route, by hash');
+  // L5 keeps the hash spread: its references are not all the nearest route
+  const l5 = ['/bookings/:id', '/bookings', '/garden/beds', '/garden'].map(r => ref('L5', r));
+  assert.notDeepEqual(l5, ['/bookings', '/bookings/:id', '/garden', '/garden/beds']);
+  const again = planHunt({ runDir: dir, lenses: lenses.filter(l => ['L4', 'L5'].includes(l.id)), runId: '0001' });
+  assert.equal(stableJson(again), stableJson(plan));
+});

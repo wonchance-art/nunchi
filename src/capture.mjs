@@ -6,18 +6,28 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
 import { initScript, collect, FREEZE_CSS } from './collect.mjs';
-import { ruleFindings, secretFindings } from './rules.mjs';
+import { ruleFindings, secretFindings, scrubSecrets } from './rules.mjs';
 import { buildFlow } from './flow.mjs';
 import { buildSystem, parityFindings } from './system.mjs';
 import { annotate } from './ledger.mjs';
 import { writeStable, sha } from './stable.mjs';
 import { canaryMutate, canarySeed, plantCanaries } from './canary.mjs';
 import { loadLenses, BUILTIN_DIR } from './lenses.mjs';
-import { FONT_HOSTS, BACKEND_SUFFIXES, isBackendHost, isDataRequest, requestKey, forceResponse, Recording, redactUrl, redactText } from './network.mjs';
+import { FONT_HOSTS, BACKEND_SUFFIXES, isBackendHost, isDataRequest, requestKey, forceResponse, Recording, redactUrl, redactText, baseUrlRefusal } from './network.mjs';
+import { redactSelector } from './selector-secrets.mjs';
+
+// paint.json: selectors of text-less containers can carry an id the app set to a key or session id. The whole
+// measure has already been through scrubDeep; this also catches ids with no word boundary (sess_sk_live_…).
+const paintRecord = p => ({ schema: 1, ...Object.fromEntries(Object.entries(p).map(([k, rows]) => [k, rows.map(r => ({ ...r, selector: redactSelector(r.selector) }))])) });
 
 const require = createRequire(import.meta.url);
 const AXE_SOURCE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
 const AXE_RULES = ['color-contrast', 'button-name', 'link-name', 'image-alt', 'label', 'duplicate-id-aria', 'select-name', 'input-button-name'];
+
+// A sign-in page by its path, query and fragment ignored: /sign-in?next=%2Fbilling is one, /signing-tips is not.
+export function isSignInPath(p) {
+  return /(^|\/)(log-?in|sign-?in|auth)(\/|$)/i.test(String(p || '').split(/[?#]/)[0]);
+}
 
 export const VIEWPORTS = { m: { width: 390, height: 844 }, d: { width: 1280, height: 800 } };
 const DEFAULT_CLOCK = Date.UTC(2026, 0, 15, 9, 0, 0);
@@ -44,6 +54,72 @@ export function sceneSlug(route) {
 }
 export function sceneId(route, person, state, vp) {
   return `${sceneSlug(route)}.${person}.${state}.${vp}`;
+}
+
+// D7: an aria snapshot writes what a field holds: `- textbox "API key": <value>`, a `- text:` child beside a
+// placeholder, a select's options with the chosen one `[selected]`. A field keeps its node, name, state and
+// placeholder (so a claim can still point at it); its value and every other child go. Lines of what an editor
+// holds (contenteditable, role=textbox: `editorLines` from collect) go too.
+const FIELD_NODE = /^(\s*)- (textbox|searchbox|spinbutton|combobox|slider|listbox)((?: "(?:[^"\\]|\\.)*")?(?: \[[^\]]*\])*)(:.*)?$/;
+const INLINE_TEXT = /^\s*- [a-z]+(?: "(?:[^"\\]|\\.)*")?(?: \[[^\]]*\])*: (.+)$/;
+export function ariaWithoutValues(yaml, editorLines = []) {
+  const editor = new Set(editorLines);
+  const unquote = s => { if (!/^".*"$/.test(s)) return s; try { return JSON.parse(s); } catch { return s; } };
+  const editorText = line => {
+    const m = INLINE_TEXT.exec(line);
+    if (!m) return false;
+    const t = String(unquote(m[1].trim())).replace(/\s+/g, ' ').trim();
+    return editor.has(t) || (t.length >= 8 && editorLines.some(l => l.includes(t)));
+  };
+  const out = [];
+  let field = -1, header = -1;                          // the field whose children follow: indentation, line
+  for (const line of String(yaml).split('\n')) {
+    const indent = line.length - line.trimStart().length;
+    if (field >= 0 && indent > field) {
+      if (indent === field + 2 && /^\s*- \/placeholder:/.test(line)) { out.push(line); if (!out[header].endsWith(':')) out[header] += ':'; }
+      continue;
+    }
+    field = -1;
+    const m = FIELD_NODE.exec(line);
+    if (m) {
+      if (m[4] === ':') { field = indent; header = out.length; }
+      out.push(`${m[1]}- ${m[2]}${m[3]}`);
+      continue;
+    }
+    if (!editorText(line)) out.push(line);
+  }
+  return out.join('\n');
+}
+
+// Every string capture writes goes through the secret check: a secret-shaped one becomes [secret-shaped: kind].
+const scrubDeep = v => (typeof v === 'string' ? scrubSecrets(v) : Array.isArray(v) ? v.map(scrubDeep)
+  : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrubDeep(x)])) : v);
+
+// Strict replay (D11): what the recording cannot answer is never sent. A write that is not a data request
+// (a beacon, a form post, a server action) is stopped the same way; an EventSource stream is stopped and a
+// WebSocket closed (listed as `streams`, apart from the misses: a stream is never recorded).
+const READS = new Set(['GET', 'HEAD', 'OPTIONS']);
+// Forced states and canary copies of a person replay whenever that person does not capture live, even from an
+// empty recording.
+export const derivedMode = personMode => (personMode === 'live' ? 'live' : 'replay');
+
+// Installed in every frame before any app script, in every mode: what a page sends while it unloads is dropped.
+// A keepalive fetch or a beacon sent on beforeunload/pagehide/unload (a navigation inside the scene, an iframe
+// moving on) outlives its document, and Chromium sends it from the browser process, where request routing and
+// offline emulation do not reach (measured on Chromium 141 and 153), so strict replay could not stop it otherwise.
+// fetchLater() is sent by the browser when the document goes away: it never sends. Nothing on screen changes; what
+// a page sends while it is torn down is not part of the capture.
+export function exitGuard() {
+  let leaving = false;
+  for (const type of ['beforeunload', 'pagehide', 'unload']) addEventListener(type, () => { leaving = true; }, { capture: true });
+  const dropped = () => Promise.reject(new TypeError('Failed to fetch'));
+  const fetch0 = globalThis.fetch;
+  if (typeof fetch0 === 'function') globalThis.fetch = function fetch(...args) { return leaving ? dropped() : fetch0.apply(this, args); };
+  const beacon = globalThis.Navigator && Navigator.prototype.sendBeacon;
+  if (typeof beacon === 'function') Navigator.prototype.sendBeacon = function sendBeacon(...args) { return leaving ? false : beacon.apply(this, args); };
+  const send = globalThis.XMLHttpRequest && XMLHttpRequest.prototype.send;
+  if (typeof send === 'function') XMLHttpRequest.prototype.send = function send_(...args) { if (leaving) { this.abort(); return undefined; } return send.apply(this, args); };
+  if ('fetchLater' in globalThis) globalThis.fetchLater = function fetchLater() { return { activated: false }; };
 }
 
 // Network policy for the whole browser, not just the page: the app under test and local hosts go
@@ -100,6 +176,7 @@ async function captureOne(browser, base, scene, opts) {
     ...(opts.storageState ? { storageState: opts.storageState } : {}),
   });
   await ctx.addInitScript(initScript, { frozen: opts.clock, seed: 42 });
+  await ctx.addInitScript(exitGuard);
   const origin = new URL(base).origin;
   const blocked = new Set();
   const requests = [];
@@ -107,7 +184,8 @@ async function captureOne(browser, base, scene, opts) {
   // Data requests (fetch/XHR to the app or its backend) are recorded, replayed or rewritten for
   // the forced state; everything else from the app passes through; third parties are blocked.
   let release; const held = new Promise(r => { release = r; });
-  const data = []; const drift = [];
+  const data = []; const drift = []; const streams = [];
+  const replay = opts.mode === 'replay';
   await ctx.route('**/*', async route => {
     const req = route.request();
     const u = new URL(req.url());
@@ -118,32 +196,46 @@ async function captureOne(browser, base, scene, opts) {
       blocked.add(u.hostname);
       return route.abort('blockedbyclient');
     }
-    if (!isDataRequest({ resourceType: req.resourceType(), headers: req.headers() })) return route.continue();
+    if (replay && req.resourceType() === 'eventsource') { streams.push(requestKey('SSE', req.url(), null, origin)); return route.abort('failed').catch(() => {}); }
+    if (!isDataRequest({ resourceType: req.resourceType(), headers: req.headers() })) {
+      if (replay && !READS.has(req.method())) { drift.push(requestKey(req.method(), req.url(), req.postData(), origin)); return route.abort('failed').catch(() => {}); }
+      return route.continue();
+    }
     const key = requestKey(req.method(), req.url(), req.postData(), origin);
     data.push(key);
-    if (scene.state === 'slow') await held;
     if (scene.state === 'error') {
       const f = forceResponse('error');
       return route.fulfill({ status: f.status, contentType: f.contentType, body: f.body }).catch(() => {});
     }
-    let res = opts.mode === 'replay' ? opts.loader.take(key) : null;
+    // a miss, read or write, is counted when it is asked for (capture drift; `recording-stale` when most miss)
+    // and fails in the page; it never goes live
+    let res = replay ? opts.loader.take(key) : null;
+    if (!res && replay) drift.push(key);
+    if (scene.state === 'slow') await held;
+    if (!res && replay) return route.abort('failed').catch(() => {});
     if (!res) {
-      if (opts.mode === 'replay') drift.push(key);
-      let fetched;
-      try { fetched = await route.fetch(); } catch { return route.abort('failed').catch(() => {}); }
-      const contentType = fetched.headers()['content-type'] || '';
-      if (!TEXTUAL.test(contentType)) return route.fulfill({ response: fetched }).catch(() => {});
-      res = { status: fetched.status(), contentType, body: (await fetched.body()).toString('utf8') };
+      // live or recording: a response that outlives the page (a held slow request) is dropped, not a crash
+      try {
+        const fetched = await route.fetch();
+        const contentType = fetched.headers()['content-type'] || '';
+        if (!TEXTUAL.test(contentType)) return route.fulfill({ response: fetched }).catch(() => {});
+        res = { status: fetched.status(), contentType, body: (await fetched.body()).toString('utf8') };
+      } catch { return route.abort('failed').catch(() => {}); }
       if (opts.mode === 'record') opts.loader.add(key, res);
     }
     const out = (scene.state === 'empty' && forceResponse('empty', res)) || res;
     return route.fulfill({ status: out.status, contentType: out.contentType, body: out.body }).catch(() => {});
   });
+  // WebSockets bypass request routing: in replay each one is closed before it reaches a server.
+  if (replay) await ctx.routeWebSocket(/.*/, ws => { streams.push(requestKey('WS', ws.url().replace(/^ws/, 'http'), null, origin)); ws.close().catch(() => {}); });
   const page = await ctx.newPage();
+  // A scene ends by disposing its context, never by navigating or closing the page: that runs no unload handler
+  // (exitGuard covers the case where one runs anyway).
+  const leave = () => ctx.close();
   const pageErrors = [];
   const nativeDialogs = [];
-  page.on('pageerror', e => pageErrors.push(redactText(String(e.message || e).split('\n')[0].slice(0, 200))));
-  page.on('dialog', d => { nativeDialogs.push({ type: d.type(), message: redactText(d.message().slice(0, 200)) }); d.dismiss().catch(() => {}); });
+  page.on('pageerror', e => pageErrors.push(scrubSecrets(redactText(String(e.message || e).split('\n')[0].slice(0, 200)))));
+  page.on('dialog', d => { nativeDialogs.push({ type: d.type(), message: scrubSecrets(redactText(d.message().slice(0, 200))) }); d.dismiss().catch(() => {}); });
   page.on('response', async res => {
     const u = new URL(res.url());
     if (u.origin !== origin) return;
@@ -188,14 +280,20 @@ async function captureOne(browser, base, scene, opts) {
 
   // ── canary hook (spec §4 H2) ── only for canary scenes: plant a known defect after load and before
   // anything is measured, so every evidence file shows it. No suitable element → the copy is dropped.
-  const canary = opts.canaryKinds ? await page.evaluate(canaryMutate, { kinds: opts.canaryKinds }).catch(() => null) : undefined;
-  if (opts.canaryKinds && !canary) { release(); await ctx.close(); return { canary: null }; }
+  // A redirect that left the base origin (redirect hops are not routed, so the base-URL guard cannot stop them)
+  // shows another server's page: nothing of it is collected, the scene is capture-failed and says where it went.
+  let offOrigin = null;
+  try { const u = new URL(page.url()); if (/^https?:$/.test(u.protocol) && u.origin !== origin) offOrigin = u; } catch {}
+  const canary = opts.canaryKinds && !offOrigin ? await page.evaluate(canaryMutate, { kinds: opts.canaryKinds }).catch(() => null) : undefined;
+  if (opts.canaryKinds && !canary) { release(); await leave(); return { canary: null }; }
   // ── end canary hook ──
-  let measure = await page.evaluate(collect).catch(e => { errors.push('collect: ' + e.message); return null; });
+  let measure = offOrigin ? null : await page.evaluate(collect).catch(e => { errors.push('collect: ' + e.message); return null; });
   // Chromium's own error page (connection refused, empty error response) is not the app's screen.
   const browserErrorPage = !!measure?.browserErrorPage;
   if (browserErrorPage) measure = null;
   if (measure) delete measure.browserErrorPage;
+  const editorLines = measure ? measure.editorLines : [];
+  if (measure) { delete measure.editorLines; measure = scrubDeep(measure); }
   // URLs read from the page can carry credentials (magic links, signed image URLs): redacted before use.
   if (measure) {
     measure.url = redactUrl(measure.url);
@@ -204,26 +302,29 @@ async function captureOne(browser, base, scene, opts) {
   }
   // CLS depends on timing; the evidence keeps the web.dev band, the raw value goes to volatile.json.
   if (measure) { measure.cls = cls; measure.clsBand = cls <= 0.1 ? 'good' : cls <= 0.25 ? 'needs-improvement' : 'poor'; }
-  await page.addScriptTag({ content: AXE_SOURCE }).catch(() => {});
-  const axe = await page.evaluate(async rules => {
+  if (!offOrigin) await page.addScriptTag({ content: AXE_SOURCE }).catch(() => {});
+  const axe = offOrigin ? [] : scrubDeep(await page.evaluate(async rules => {
     try {
       const r = await globalThis.axe.run(document, { runOnly: rules, resultTypes: ['violations'] });
       return r.violations.map(v => ({ id: v.id, impact: v.impact, nodes: v.nodes.slice(0, 20).map(n => ({ selector: n.target.join(' '), summary: (n.failureSummary || '').split('\n').slice(1, 2).join(' ').trim().slice(0, 200) })) }));
     } catch (e) { return [{ id: 'axe-error', impact: null, nodes: [{ selector: 'html', summary: String(e).slice(0, 120) }] }]; }
-  }, AXE_RULES).catch(() => []);
+  }, AXE_RULES).catch(() => []));
   let aria = '';
-  try { aria = await page.locator('body').ariaSnapshot({ timeout: 5000 }); } catch (e) { errors.push('aria: ' + String(e.message).split('\n')[0]); }
+  if (!offOrigin) try { aria = await page.locator('body').ariaSnapshot({ timeout: 5000 }); } catch (e) { errors.push('aria: ' + String(e.message).split('\n')[0]); }
 
   const dir = join(opts.out, scene.id);
-  const top = await page.screenshot({ type: 'jpeg', quality: 70, animations: 'disabled', caret: 'hide' }).catch(e => { errors.push('top: ' + e.message); return null; });
-  const full = await page.screenshot({ type: 'jpeg', quality: 70, fullPage: true, animations: 'disabled', caret: 'hide' }).catch(e => { errors.push('full: ' + e.message); return null; });
-  // Freeze what was seen at capture time; held (slow) requests released afterwards are not evidence.
-  const seen = requests.slice();
+  const shot = o => (offOrigin ? null : page.screenshot({ type: 'jpeg', quality: 70, animations: 'disabled', caret: 'hide', ...o }).catch(e => { errors.push(`${o.fullPage ? 'full' : 'top'}: ${e.message}`); return null; }));
+  const top = await shot({});
+  const full = await shot({ fullPage: true });
+  // Freeze what was seen at capture time; held (slow) requests released afterwards, and anything the page
+  // sends as it closes, are not evidence.
+  const seen = scrubDeep(requests.slice());
   const seenErrors = pageErrors.slice(); const seenDialogs = nativeDialogs.slice();
+  const seenData = [...new Set(data)].sort(), seenDrift = [...new Set(drift)].sort(), seenStreams = [...new Set(streams)].sort().map(scrubSecrets);
   release();
-  await ctx.close();
+  await leave();
 
-  const finalPath = measure ? measure.url : null;
+  const finalPath = measure ? measure.url : offOrigin ? scrubSecrets(redactUrl(offOrigin.pathname + offOrigin.search)) : null;
   const ev = {
     scene: scene.id, route: scene.route, path: redactUrl(scene.path), viewport: scene.vp, person: scene.person, state: scene.state,
     status, finalPath, redirected: finalPath !== null && finalPath.split(/[?#]/)[0] !== scene.path.split(/[?#]/)[0],
@@ -234,19 +335,20 @@ async function captureOne(browser, base, scene, opts) {
   };
   if (top) writeStable(join(dir, 'top.jpg'), top);
   if (full) writeStable(join(dir, 'full.jpg'), full);
-  writeStable(join(dir, 'aria.yml'), redactText(aria) + '\n');
+  writeStable(join(dir, 'aria.yml'), scrubSecrets(redactText(ariaWithoutValues(aria, editorLines))) + '\n');
   if (measure) {
     writeStable(join(dir, 'text.txt'), redactText(measure.text) + '\n');
     writeStable(join(dir, 'styles.json'), measure.styles);
+    writeStable(join(dir, 'paint.json'), paintRecord(measure.paint));
     writeStable(join(dir, 'controls.json'), measure.controls);
     writeStable(join(dir, 'links.json'), measure.links);
   }
-  const dataKeys = [...new Set(data)].sort();
-  writeStable(join(dir, 'network.json'), { requests: ev.requests, blocked: ev.blocked, data: dataKeys, replayMisses: [...new Set(drift)].sort() });
-  writeStable(join(dir, 'console.json'), { pageErrors: seenErrors, nativeDialogs: seenDialogs, errors });
+  const dataKeys = seenData;
+  writeStable(join(dir, 'network.json'), scrubDeep({ requests: ev.requests, blocked: ev.blocked, data: dataKeys, replayMisses: seenDrift, ...(seenStreams.length ? { streams: seenStreams } : {}) }));
+  writeStable(join(dir, 'console.json'), scrubDeep({ pageErrors: seenErrors, nativeDialogs: seenDialogs, errors }));
   // A redirected scene shows another route's page: that page is judged in its own scene. What a
   // redirect itself says is judged here: a signed-in person bounced to a sign-in page lost the session.
-  const bounced = ev.redirected && scene.person === 'signed-in' && /(^|\/)(log-?in|sign-?in|auth)(\/|$)/i.test(finalPath || '');
+  const bounced = ev.redirected && scene.person === 'signed-in' && isSignInPath(finalPath);
   const raw = !measure ? [] : ev.redirected
     ? (bounced ? [{ lens: 'L3', rule: 'signed-in-bounced', severity: 'high', scene: scene.id, route: scene.route, viewport: scene.vp, selector: null, box: null, evidence: { finalPath } }] : [])
     : ruleFindings(ev);
@@ -266,10 +368,10 @@ async function captureOne(browser, base, scene, opts) {
     entry: {
       id: scene.id, route: scene.route, path: redactUrl(scene.path), person: scene.person, state: scene.state, viewport: scene.vp,
       status: measure ? (ev.redirected && opts.strictPath ? 'capture-failed' : 'captured') : 'capture-failed',
-      reason: !measure ? (loop ? 'redirect-loop' : browserErrorPage ? 'browser-error-page' : 'no-dom') : ev.redirected ? `redirected to ${finalPath}` : null,
-      finalPath, httpStatus: status,
+      reason: !measure ? (offOrigin ? 'redirected-off-origin' : loop ? 'redirect-loop' : browserErrorPage ? 'browser-error-page' : 'no-dom') : ev.redirected ? `redirected to ${finalPath}` : null,
+      finalPath, ...(offOrigin ? { finalOrigin: offOrigin.origin } : {}), redirected: ev.redirected, httpStatus: status,
       top: top ? sha(top) : null, full: full ? sha(full) : null,
-      findings: findings.length, dataRequests: dataKeys.length, replayMisses: new Set(drift).size,
+      findings: findings.length, dataRequests: dataKeys.length, replayMisses: seenDrift.length,
       textHash: measure ? sha(measure.mainText) : null,
     },
     findings, scripts, links: measure ? measure.links : [], ...(canary ? { canary } : {}),
@@ -323,7 +425,10 @@ export function runHealth(entries, findings) {
 // network: 'auto' (replay if a recording exists, else record) | 'record' | 'replay' | 'live'.
 // canaries: how many canary scenes to plant (spec §4 H2); 0 = none (the default for the API; the CLI plants 3).
 // lenses: the loaded lens packs, so a canary is planted only where its lens hunts (default: the built-in packs).
-export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {}, flow: flowOpts = {}, canaries = 0, lenses = null }) {
+// allowBaseHosts: hosts the user listed in .nunchi/config.json; any other base URL must be local or private (D10).
+export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], allowBaseHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {}, flow: flowOpts = {}, canaries = 0, lenses = null }) {
+  const refusal = baseUrlRefusal(baseUrl, allowBaseHosts);
+  if (refusal) throw Object.assign(new Error(refusal), { code: 'URL_NOT_ALLOWED' });
   if (scenes.some(s => s.person === 'signed-in') && !(storageState && existsSync(storageState))) {
     throw Object.assign(new Error(`signed-in scenes need a saved login state, but ${storageState || '(none)'} does not exist`), { code: 'NO_AUTH' });
   }
@@ -351,8 +456,8 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   const run = async (s, vp, state) => {
     const person = s.person || 'guest';
     const scene = { ...s, vp, person, state, id: sceneId(s.route || s.path, person, state, vp) };
-    // forced states read the recording when there is one, so they rewrite the same data
-    const mode = state === 'normal' ? modes[person] : (Object.keys(recordings[person].entries).length ? 'replay' : 'live');
+    // forced states replay the recording (they rewrite the same data) unless the person is captured live
+    const mode = state === 'normal' ? modes[person] : derivedMode(modes[person]);
     const t = Date.now();
     const r = await captureOne(browser, baseUrl, scene, { out, clock, locale, timezone, timeout, storageState: person === 'signed-in' ? storageState : undefined, strictPath, allowHosts, mode, loader: recordings[person].loader() });
     timing.push({ scene: scene.id, ms: Date.now() - t });
@@ -400,10 +505,10 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
       const r = await plantCanaries({ entries, count: canaries, seed, lenses: lenses || loadLenses({ root: BUILTIN_DIR }).lenses, tryScene: async (base, kinds, id) => {
         const s = scenes.find(x => (x.route || x.path) === base.route && (x.person || 'guest') === base.person);
         const scene = { ...s, vp: base.viewport, person: base.person, state: base.state, id };
-        const mode = Object.keys(recordings[base.person].entries).length ? 'replay' : 'live';
+        const mode = derivedMode(modes[base.person]);
         const c = await captureOne(cb, baseUrl, scene, { out, clock, locale, timezone, timeout, storageState: base.person === 'signed-in' ? storageState : undefined, strictPath, allowHosts, mode, loader: recordings[base.person].loader(), canaryKinds: kinds });
         if (!c.canary) { rmSync(join(out, id), { recursive: true, force: true }); return null; }
-        c.canary.before = redactText(c.canary.before); c.canary.after = redactText(c.canary.after);
+        c.canary.before = scrubSecrets(redactText(c.canary.before)); c.canary.after = scrubSecrets(redactText(c.canary.after));
         return c;
       } });
       canaryEntries = r.entries;

@@ -4,6 +4,50 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { writeStable, sha } from './stable.mjs';
 
+// Base-URL guard (D10). Capture visits every screen and, recording, lets the app's data requests through, so
+// it runs only against a server the user runs: loopback, a private address, `*.local`, or a host the user
+// listed in `.nunchi/config.json` (`allowHosts`). Judged on the URL as written, never by a DNS answer.
+const bare = host => String(host).toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+const v4 = h => {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  const n = m && m.slice(1).map(Number);
+  return n && n.every(x => x <= 255) ? n : null;
+};
+// Link-local addresses (169.254/16, fe80::/10) are not on the list: cloud metadata services answer there
+// (169.254.169.254), as does AWS's on fd00:ec2::254. A user can still list one.
+const localV4 = ([a, b, c, d]) => a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || a + b + c + d === 0;
+export function isLocalHost(host) {
+  const h = bare(host);
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local')) return true;
+  const a = v4(h);
+  if (a) return localV4(a);
+  if (!h.includes(':')) return false;
+  // IPv6 as the URL parser writes it: compressed, lower case, an IPv4-mapped address as two hex groups
+  if (h === '::1' || h === '::') return true;
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
+  if (mapped) { const [x, y] = mapped.slice(1).map(g => parseInt(g, 16)); return localV4([x >> 8, x & 255, y >> 8, y & 255]); }
+  return /^f[cd][0-9a-f]{2}:/.test(h) && h !== 'fd00:ec2::254';      // unique local fc00::/7, not the metadata address
+}
+const listed = entry => { try { return bare(new URL(String(entry).includes('://') ? entry : `http://${entry}`).hostname); } catch { return null; } };
+const parse = url => { try { return new URL(url); } catch { return null; } };
+// null when the URL may be captured, else why not.
+export function baseUrlProblem(url, allowHosts = []) {
+  const u = parse(url);
+  if (!u) return 'not a URL (expected something like http://localhost:3000)';
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return 'only http and https servers are captured';
+  if (isLocalHost(u.hostname) || allowHosts.some(h => listed(h) === bare(u.hostname))) return null;
+  return 'not a local or private address';
+}
+// The message the CLI prints and capture() throws.
+export function baseUrlRefusal(url, allowHosts = []) {
+  const problem = baseUrlProblem(url, allowHosts);
+  if (!problem) return null;
+  const u = parse(url);
+  const hint = u && /^https?:$/.test(u.protocol)
+    ? ` If it is a preview or staging server with test data, add its host to .nunchi/config.json yourself: {"allowHosts": ["${bare(u.hostname)}"]}` : '';
+  return `refusing ${u && u.origin !== 'null' ? u.origin : url}: ${problem}. nunchi captures only a server you run (localhost, a private address or *.local), never production.${hint}`;
+}
+
 // Backends that vibe-coded apps call straight from the browser. Their data requests are part of
 // the app, not third-party noise: allowed, recorded and replayed. Analytics and ads stay blocked.
 export const BACKEND_SUFFIXES = [
@@ -41,8 +85,8 @@ const redactPart = (part, keep) => {
 };
 
 // A URL or path as it may be written into evidence: credential values replaced, in the query and in
-// a `#a=1&b=2` fragment. Only the query and fragment are touched; everything before them is kept as is.
-// `scheme://user:password@host` → `scheme://host`: credentials in the authority are dropped too.
+// a `#a=1&b=2` fragment, and `scheme://user:password@host` → `scheme://host` (credentials in the authority).
+// Nothing else before the query is changed.
 const USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^/?#@\s"'<>]*@/gi;
 export function redactUrl(url) {
   if (typeof url !== 'string') return url;
@@ -127,11 +171,19 @@ export function forceResponse(state, res) {
 // never changes what a scene sees.
 export class Recording {
   constructor(entries = {}) { this.entries = entries; }
+  // A recording that does not parse is an error with a way out, never a crash or an empty recording.
   static load(path) {
     if (!existsSync(path)) return null;
-    const data = JSON.parse(readFileSync(path, 'utf8'));
+    let data = null, why = 'not a nunchi recording';
+    try { data = JSON.parse(readFileSync(path, 'utf8')); } catch (e) { why = String(e.message).split('\n')[0]; }
+    const isMap = x => !!x && typeof x === 'object' && !Array.isArray(x);
+    if (!isMap(data) || (data.entries !== undefined && !isMap(data.entries))) {
+      throw Object.assign(new Error(`the recording ${path} is damaged (${why}): delete it, or capture again with --network record`), { code: 'BAD_RECORDING' });
+    }
     return new Recording(data.entries || {});
   }
+  // Replaced in one step and owner-only (it holds the app's API responses): a capture reading it, or one that
+  // crashes while saving, never sees half a recording.
   save(path) { writeStable(path, { schema: 1, note: 'nunchi recording: data responses only, tokens redacted', entries: this.entries }); }
   loader() {
     const counters = new Map();

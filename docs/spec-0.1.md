@@ -65,6 +65,22 @@ scene = route × person × state × viewport.
   subset of scenes captured never changes what a scene sees. The recording is nunchi's own JSON rather than
   HAR because replay needs this normalization and forced states need to rewrite responses. Volatile URL/body values (timestamps, cache busters, nonces) are normalized before
   recording. A replay miss is logged as *capture drift*, never as a UI defect, and offers a re-record.
+  *Strict replay (2026-10-14 KST, design 0.1-c D11):* in replay every fetch/XHR miss and every non-GET is aborted,
+  never sent live: a data request the recording cannot answer (read or write) fails in the page and is counted as a
+  miss when it is asked for (a slow scene's too); a write that is not a data request (a beacon, a form post, a
+  server action) is aborted and counted the same way. An EventSource stream is aborted and a WebSocket closed before
+  it reaches a server; both are listed as `streams` in `network.json`, apart from the misses (a stream is never
+  recorded, so re-recording would not help). What a page sends while it unloads never leaves the browser, in every
+  mode: a keepalive fetch or a beacon sent on beforeunload/pagehide/unload (a navigation inside the scene, an iframe
+  moving on) is sent by Chromium from the browser process, where request routing and offline emulation do not reach
+  (measured on Chromium 141 and 153), so an init script in every frame drops fetch, XHR and `sendBeacon` once the
+  page starts to unload, and `fetchLater()` never sends. A scene ends by disposing its context, which runs no unload
+  handler. Forced states and canary
+  copies replay whenever their person does not capture live, even from an empty recording. Recording still goes
+  live: the app's server must be an allowed base URL (§2.4), and a backend the app calls from the browser is reached
+  as the app would reach it; a held slow request that outlives its page is dropped, not a crash.
+  A recording is saved by writing a temporary file and renaming it, so a reader never sees half of one; one that does
+  not parse is an error naming the way out (delete it or `--network record`), not a crash.
   Server-side requests (SSR/RSC) are not covered in 0.1: those cells show *not seen: server render*.
 - Third-party requests (analytics, ads, payment widgets) are blocked and listed. The browser itself runs
   under a PAC policy: the app's host and local hosts go direct, font hosts go direct or through the user's
@@ -76,6 +92,18 @@ scene = route × person × state × viewport.
   query and fragment parameters (`token`, `access_token`, `apikey`, `code`, `X-Amz-Signature`, …) are replaced
   by `REDACTED` in every URL the evidence keeps (requests, links, image sources, final path, aria snapshot,
   console text); recording keys keep a short hash instead, so requests that differ only by token stay distinct.
+- *Form fields (2026-10-14 KST, D7):* what an input, textarea or select holds (typed, or filled in by the app: a key
+  on a settings page, a name) is never written. In `controls.json` a field has its `type`, its `label` (`<label>` or
+  `aria-labelledby`) and, as its name, only `aria-label`/`title`; a submit/button/reset input keeps its value as its
+  name (the app's own label). In `aria.yml` a field (textbox, searchbox, spinbutton, combobox, slider, listbox) keeps
+  its node, name, state and placeholder; its value and every other child (a select's options and `[selected]`) are
+  cut (`- textbox "API key"`). Editors hold what the user wrote too: the text of contenteditable regions and
+  `role=textbox|searchbox` elements is cut from `text.txt` and `aria.yml`, and their controls and links are left out.
+  Screenshots are not masked: they are what the image lenses judge.
+- *Secret-shaped strings on the page (2026-10-14 KST):* every string capture writes (page text, aria snapshot,
+  controls, measurements, console, network keys, findings) goes through `scrubSecrets`, the scrubber the HTML export
+  uses too (§7.1: the shapes of §3 L9 and more, whole private-key blocks, any JWT); a match is written as
+  `[secret-shaped: <kind>]`. URL userinfo (`https://user:pass@`) is dropped with the credential query values.
 - Gate: same build, two runs → byte-identical screenshots.
 
 ### 2.3 Forced states
@@ -100,7 +128,37 @@ in place without a run (tests, scripts).
 `run.json` (metadata, not compared between runs): id, parent run, git commit, `dirty` and a `tree` hash of the
 working tree (uncommitted and untracked edits included, `.nunchi/` excluded) — so *evidence is from the code you
 have now* holds without the user committing — scope (routes, persons, viewports, states, `--changed-since`),
-network mode per person, run health.
+`wholeApp` (no `--routes`, no `--changed-since` and no dynamic route skipped for a missing sample: whole-app
+detectors judged every route), `unresolved` (paths discover cannot resolve, skipped by every run; they never
+make a run partial, and are listed so they stay visible), network mode per person, run health. Every file of a run is
+written to a temp file in the same folder (created exclusively, keeping the mode of the file it replaces) and
+renamed into place, so files written into a complete run later (hunt, verify, canary score) are never seen half
+written. Two captures started at once never get the same id.
+
+*Safety (2026-10-14 KST, design 0.1-c D9, D10, D12):*
+- **Base URL.** `capture` refuses a base URL that is not loopback (`localhost`, `*.localhost`, 127/8, `::1`,
+  `0.0.0.0`), a private address (10/8, 172.16/12, 192.168/16, fc00::/7) or `*.local`, unless its host is listed in
+  `.nunchi/config.json` (`{"allowHosts": ["preview.example.dev"]}`, exact host names), a file the user writes.
+  Link-local addresses (169.254/16, fe80::/10) and `fd00:ec2::254` are refused unless listed: cloud metadata services
+  answer there. Judged on the URL as written, never by DNS; http and https only. The refusal (exit 2) says how to
+  list a preview host; no run folder is made. A config file that does not parse is an error, not "nothing listed".
+  Redirect hops are not routed, so a scene whose page ends on another origin is not captured: `capture-failed`,
+  reason `redirected-off-origin`, with `finalOrigin` in the manifest and nothing collected from that page.
+- **git** runs with the repository's own programs off: `--no-optional-locks`; config overrides
+  `core.fsmonitor=false`, `core.hooksPath=/dev/null`, `diff.external=`, `core.pager=cat`, and every configured filter
+  driver's commands emptied, passed as `GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n` so any filter name works (`a=b`
+  included); `--no-ext-diff --no-textconv --ignore-submodules=dirty` on diffs; the caller's `GIT_*` variables dropped;
+  `GIT_CONFIG_NOSYSTEM=1`, no prompt, a 60 s timeout; `--end-of-options` before a `--changed-since` ref. git older
+  than 2.31, or a filter command still set after the overrides, fails closed: `workTree` reports no repository and
+  `--changed-since` refuses (`workTree` and `--changed-since` are the engine's git calls). An edit inside a
+  submodule is not part of `tree`.
+- **File modes.** Run folders, evidence, recordings and the hunt mirror (everything written through `writeStable`
+  or `privateDir`) are 0700 (folders) and 0600 (files), set explicitly whatever the umask. Before it starts, `capture`
+  makes `.nunchi/har/`, `runs/` and `state/` 0700 (so the ledger's first write lands in a private folder; the ledger
+  commands and `gc`, whose catch-up fold can write it first, do the same for `state/`) and tightens `auth.json` and `evidence/` left by an older version. A symbolic
+  link at any of these paths, or at a file the engine writes, is refused (exit 2), never followed. Windows has no
+  POSIX modes and keeps its ACLs. The ledger's own files (`ledger.json`, `approved.json`) are written by the ledger
+  and protected by the 0700 `state/` folder.
 
 **Run health** — whole-run failures are reported once instead of as one finding per screen, judged from the
 evidence only: *login-expired* (≥2 and ≥half of signed-in screens bounced to a sign-in page: every signed-in scene
@@ -121,17 +179,23 @@ Per scene:
 | `aria.yml` | Playwright `ariaSnapshot` |
 | `text.txt` | visible text |
 | `styles.json` | computed-style samples of visible elements: color, background, font size/weight, line height, radius, shadow, padding, height, plus element role and box |
+| `paint.json` | the colours `styles.json` misses (it keeps only elements with their own text and controls): page and container backgrounds, border and outline colours, inline SVG fill and stroke, each with what it is seen against (§3.2.1) |
 | `controls.json` | buttons, links, inputs: accessible name, box, visible |
 | `network.json` | url, method, status, blocked, replay miss; writes (POST/PUT/PATCH/DELETE) flagged |
 | `console.json` | console errors, page errors |
 | `links.json` | internal links → target route, status |
 | `measure.json` | rule-lens measurements (§3) |
 
-Run-level: `manifest.json` (scenes with status and reason, health), `findings.json`, `timing.json`, `run.json`, `source-map.json`
+Run-level: `manifest.json` (scenes with status, reason, `finalPath` and `redirected`, health; a scene is
+redirected when its final path differs from the path it opened, query and fragment aside. Readers derive the flag
+from `reason`, `path` and `finalPath` for manifests written before it existed, so older runs read the same; a
+redirected scene feeds no link edges, design-system screens or parity pairs, and counts as a redirect to its
+final route), `findings.json`, `timing.json`, `run.json`, `source-map.json`
 (§2.5), `inventory.json` (source strings and UI states, extracted with Babel/SWC; classified in 0.1-b),
 `canaries.json` (planted defects, an answer key), and after the AI hunt `hunt-plan.json`, `hunt-key.json` and
 `hunt/<alias>/` (runs with canaries: scene aliases, an answer key, and the evidence they point to), `ai-findings.json`,
-`coverage.json`, `canary-score.json`, `verify-packets.json`, `verify-key.json` (an answer key), `verify.json` (§4).
+`coverage.json`, `canary-score.json`, `verify-packets.json`, `verify-key.json` (an answer key), `verify.json` (§4),
+and after `nunchi tokens` `tokens.json` and `tokens.css` (§3.2.1).
 
 **Inventory (0.1-b).** `nunchi inventory` (and `buildInventory(root, routes)` for the run folder) lists, per file the
 source map reaches (or every code file when no routes are found), with file:line: user-facing strings (JSX text
@@ -161,8 +225,15 @@ would have to get TypeScript generics, JSX entities and template literals right 
 A small built-in import graph (static `import`/`export … from`/`import()`/`require`/CSS `@import`, resolved
 through relative paths, tsconfig/jsconfig `paths` and `baseUrl`, and the `@/` convention) plus the files that
 frame a route without importing it (Next.js layouts, templates, loading/error/not-found, middleware; pages-router
-`_app`/`_document`; TanStack root and parent routes). It over-approximates on purpose: a missed edge would hide a
-stale screen. A change to a dependency or build config (`package.json`, lockfiles, `next/vite/tailwind/postcss`
+`_app`/`_document`; TanStack root and parent routes). React Router routes start from what the route config says
+they render, not from the config file, which imports every page:
+- discover records each route's `components` (from `element`, `Component`, and wrappers such as
+  `<Guard><Page/></Guard>`, plus those of its enclosing layout routes) and its `lazy` modules;
+- the map follows those through the config file's imports;
+- the config file itself is part of every route it declares, but its imports are not followed.
+
+A component that can't be followed (defined in the config file itself, or with no import found) falls back to the
+config file and everything it imports. It over-approximates on purpose: a missed edge would hide a stale screen. A change to a dependency or build config (`package.json`, lockfiles, `next/vite/tailwind/postcss`
 config, `tsconfig*`) affects every route. `nunchi map` prints it; `capture --changed-since <ref>` captures only the
 routes it says changed (uncommitted and untracked files included); `capture` writes `source-map.json` with the
 evidence.
@@ -190,7 +261,7 @@ Later packs override earlier ones (ESLint-style `extends`).
 | L6 copy quality | errors that don't say what happened and what to do, confirms that don't say what is deleted, `undefined`/`NaN`/`[object Object]`, raw errors | rule + AI | a / b |
 | L7 vibe-coding leftovers | Lorem ipsum, John Doe, example.com, TODO on screen, "Coming soon" sprawl, `href="#"`, empty `onClick`, hard-coded fake numbers, debug UI, drifted copies of nav/footer | rule + AI | a / b |
 | L8 accessibility | axe (contrast, names, alt, labels, duplicate ids), target size (WCAG 2.5.8: < 24px medium, < 44px low; links inline in text exempt), no focus style | rule | a |
-| L9 safety | destructive action without confirm/undo, `window.confirm`, input lost on leave, secret-shaped strings in client JS (location and kind only, value masked) | rule + AI | a / b |
+| L9 safety | destructive action without confirm/undo, `window.confirm`, input lost on leave, secret-shaped strings in client JS (location and kind only: not one character of the value, 2026-10-14 KST) | rule + AI | a / b |
 | L10 parity | control on desktop missing on phone, fixed element covering content, primary action missing from phone first view | computed (§3.2) + AI | a / b |
 
 Severity: **blocker** (core task impossible, data loss, secret exposed) · **high** (broken, wrong or raw error
@@ -244,6 +315,112 @@ visible `aria-controls` toggle opens) is `missing-on-phone` (medium; evidence sa
 `measure.json` keeps the page's hidden named controls (`hiddenControls`) for this. Fixed elements covering
 content and the phone's first view are AI-lens checks (0.1-b).
 
+### 3.2.1 Tokens: design supporter Stage 0, Tidy (built 2026-10-14 KST)
+
+Stage 0 turns the look the app already has into a token proposal, with no visual change intended. Later stages
+(a concept to move towards, a migration) build on it. Everything here is computed from the evidence. There is no
+AI, and the engine never edits the app (the CSS is a file in the run).
+
+**Measurement (`paint.json`, per scene, schema 1).** It is kept apart from `styles.json`, so the L4 inventory and the
+fingerprints do not move. Rows are deduplicated like `styles.json`: the first element in document order keeps its
+selector. Each list holds at most 400 rows.
+
+| List | Row | Recorded when |
+|---|---|---|
+| `surfaces` | `background`, `radius`, `kind`, `on`, `selector` | `<html>` and `<body>` with a background (`kind: page`); when both are transparent, the browser's white canvas (`canvas`, light scheme only). Any other visible element whose `background-color` is not transparent and whose box is ≥ 256 px² with a short side ≥ 2 px (smaller fills are dots and hairlines). `kind`: `control` (link, button), `field` (input, select, textarea), `band` (≥ 90% of the viewport wide) or `box`. Transparent means alpha 0, read from the alpha component only |
+| `borders` | `color`, `sides` (`trbl` subset, or `outline`), `width`, `on`, `selector` | a visible border side with width > 0, a style other than none or hidden, and a colour that is not transparent; one row per colour; outlines likewise |
+| `svg` | `fill`, `stroke`, `selector` | a visible inline SVG shape (`path`, `circle`, `rect`, `ellipse`, `line`, `polyline`, `polygon`, `text`, `use`) outside `<defs>`, `<symbol>`, masks and patterns; `none`, `url(#…)` paints and zero opacity are left out |
+
+`on` is the background the colour is seen against: for a surface, the nearest ancestor's background; for a border,
+the element's own background, else its ancestor's; the canvas at the top. The lookup is memoised per ancestor, so the
+walk stays linear in the size of the DOM. Selectors in `paint.json` and in token examples have secret-shaped `id` and
+`data-testid` values replaced by `REDACTED` (the bundle scanner's shapes, plus any 40+ character token mixing letters
+and digits).
+
+**Proposal (`nunchi tokens [--run <id>] [--json]`).** It reads captured scenes only (framework error pages, redirected
+scenes and canary copies are left out) and writes `tokens.json` and `tokens.css` into the run. An unreadable run
+file is a one-line error with exit code 2.
+- *Uses.* A use is a distinct style row on a screen (route × person). A screen seen at two widths or in several states
+  counts once.
+- *Colours.* Text colours come from `styles.json`. Backgrounds, borders and SVG paint come from `paint.json`; a run
+  without `paint.json` falls back to the text rows' own backgrounds (`measured: styles-only`).
+  - Colours are clustered in OKLab by leader clustering. In order of uses, then screens, then value, each colour joins
+    the nearest cluster leader within ΔE_OK ≤ 0.03 (about one just-noticeable difference) whose alpha is within 0.1.
+    Otherwise it leads a new cluster.
+  - Figure and ground keep their separation. For every pair of colours seen against each other (a card and the page,
+    a line and its card), the proposed values stay at least min(their own ΔE, 0.03) apart; otherwise the card or the
+    line would fade. A colour never joins a cluster holding a colour it is seen against, and a post-pass splits off any
+    member whose move would still bring such a pair closer (the one that moved, the lighter one when both did).
+    Such pairs are listed under `keptApart` as `{a: {token, value}, b: {token, value}, deltaE}`, with the ΔE between
+    the two colours themselves.
+  - A cluster's proposed value is its leader, the most-used member, so that colour does not change. Each member
+    lists its uses, its screens, its ΔE from the leader, the contexts it is used in and up to three examples
+    (scene, selector).
+  - Families: OKLCh chroma < 0.05 is grey. Otherwise the family comes from the hue angle: pink below 12° and from
+    340°, red to 45°, orange to 80°, yellow to 120°, green to 175°, cyan to 230°, blue to 285°, purple to 340°.
+    So Tailwind pink is pink, rose and red are red, and CSS purple and fuchsia are purple. Tokens are
+    `--<family>-<n>`, lightest first.
+  - Values are parsed strictly: every number of a colour, and `<number>px` or `<number>%` for radii and sizes.
+    Anything else is listed under `unparsed` and left out, so a tampered evidence file cannot put CSS into
+    `tokens.css`. Radii and sizes are written back from the parsed numbers.
+- *Roles,* inferred from usage, each with a confidence: the share of that usage the cluster holds among the clusters
+  eligible for the role × screen coverage (screens ÷ 3, at most 1, so a one-screen run is never above 0.33). High is
+  ≥ 0.6 and medium ≥ 0.3. Ties go to the colour seen on more screens, then to the value; the token name is never used.
+  - `background`: page records.
+  - `surface`: the most-used container fill. It may equal the background, as with white cards on a white page.
+  - `border`.
+  - `text`.
+  - `text-muted`: a grey on the same side of the background as the text, with less contrast but ≥ 1.5:1.
+  - `accent`: a control fill (button, link styled as a button; never a form field) other than the background and the
+    surface. When any such fill has a hue, greys (secondary and outline buttons) are not candidates. Ties go to the
+    more saturated colour. Without control fills, the accent is the most-used coloured link colour.
+  - `accent-foreground`: the text colour most often set on the accent.
+  - `danger`, `success`, `warning`: the most-used red, green, or orange/yellow. These are guessed from hue only, so
+    their confidence is capped at 0.5.
+- *Contrast* (WCAG 2.x, hand-written): text and muted text on the background and the surface, accent foreground on
+  the accent, accent and danger on the background. Each pair reports its ratio, AA (4.5:1) and AA for large text (3:1).
+  Two roles on one token (dark cards in the text colour) are reported at 1:1, failing.
+- *Files.* `tokens.json` holds the data. `tokens.css` holds the proposal as custom properties; it is not repeated in
+  the JSON.
+- *Radii* are one token when |a − b| ≤ max(2 px, 20% of the larger). Values ≥ 500 px are `--radius-full`, and
+  percentages stand alone.
+- *Font sizes* are one token when |a − b| ≤ max(0.5 px, 7% of the larger). The most-used plain-text size is
+  `--font-size-body`.
+- The CLI prints one line, e.g. `23 greys → 6 · 9 blues → 3 · 7 radii → 3 · 11 font sizes → 8`, then the roles and
+  the contrast. The same input gives byte-identical files.
+
+*Limits.* The following are not measured:
+- gradients and `background-image`;
+- images and video;
+- `::before` and `::after` paint;
+- box-shadow colours (they stay strings in `styles.json`);
+- text over images;
+- colours inside shadow DOM and iframes;
+- elements beyond the 400-row caps.
+
+Further caveats:
+- Alpha colours are compared as written, not composited.
+- A use is a distinct style row, not an element, because the evidence deduplicates identical rows.
+- Roles are guesses from usage. A dark-mode capture is not an axis yet (0.2).
+- Two near-white tints of different hue can merge, because their chroma is too low for hue to count (on pegroom a
+  pale green chip fill joins a pale blue one at ΔE 0.023). The member list shows this; there is no hue guard yet.
+
+*Measured (2026-10-14 KST, real-data sanity check, thresholds not tuned to either app).* Capture time is unchanged
+(Pebble 124.5 s against 125.1 s before). `styles.json`, `measure.json`, `findings.json` and `design-system.json` are
+byte-identical to a capture without `paint.json`. Pebble `--twice` stays 34/34 and identical (1,140 files), and
+fingerprints are 52/52. After the review fixes (14:01 KST) it is again 34/34, identical and 52/52 (129.7 s), and
+both summaries below are unchanged. pegroom's accent confidence rose from 0.81 to 0.93, because form fields no longer
+count as accent candidates. On a synthetic page with 10,000 filled leaves at depth 300, `collect()` takes 660 ms with
+the memoised lookup, against 2,643 ms before.
+
+| App | Scenes · screens | `nunchi tokens` summary | Roles |
+|---|---|---|---|
+| Pebble | 96 · 24 | 10 greys → 9 · 2 blues → 2 · 2 greens → 1 · 6 radii → 4 · 9 font sizes → 7 | background = surface = white; accent green, AA 7.49:1 against its white foreground |
+| pegroom (seen held-out) | 176 · 28 | 14 greys → 12 · 3 reds → 3 · 2 blues → 1 · 1 greens → 1 · 1 oranges → 1 · 1 yellows → 1 · 6 radii → 4 · 10 font sizes → 8 | cream page with white cards; the two are kept apart at ΔE 0.016; all seven contrast pairs pass AA |
+
+Both apps are small and hand-styled, so there are few merges. The sprawl case is covered by the fixture
+`test/fixtures/tokens/greys.html` (12 greys → 5).
+
 
 ### 3.3 Lens packs (built 2026-10-13 KST, 0.1-b)
 
@@ -260,8 +437,10 @@ as such, only plain JSON values, length limits): `id`, `name`, `definition`, `ch
 question, scenes?}`), `examples` (`good`/`bad` text), `severityRubric` (blocker/high/medium/low → text), `method`
 (`ai`/`rule`/`computed`), `scenes` (`{states?, viewports?, persons?}`; `{}` = all), and `evidence` — the per-scene files
 the hunter reads (added to the list above because L1 needs images and L5 does not), plus an optional `source`
-(boolean: the unit also gets its route's source inventory slice, §4; added 2026-10-13 KST). Only `method: "ai"`
-lenses are hunted.
+(boolean: the unit also gets its route's source inventory slice, §4; added 2026-10-13 KST), and an optional
+`reference` (`"spread"`, the default: each unit's reference screen is picked by hash so references spread over the app;
+`"nearest"`: the route sharing the most leading path segments comes first, so `/bookings/:id` is compared with
+`/bookings`; built-in: L4, added 2026-10-14 KST after the held-out miss in §9.4). Only `method: "ai"` lenses are hunted.
 
 Built-in packs cover the AI parts: L1 (visual: overlap, unreadable text, collapsed layout, distorted media,
 unstyled), L2 (forced states only: what happened, next step, failure that looks normal, endless loading, no loading
@@ -377,7 +556,7 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   answered twice in one file is refused and left unanswered): every item
   must be answered `defect`/`none`/`cannot-judge`; a defect needs a scene under review, a claim, a severity and a
   ground — a selector found verbatim in that scene's controls/styles/links/measure JSON or an `aria=<node>` line of
-  aria.yml, and/or a `file:line` that exists under the app root (not `.nunchi/`, `node_modules/`, `.git/`; symlinks
+  aria.yml (a node with inline text also by its role and name alone), and/or a `file:line` that exists under the app root (not `.nunchi/`, `node_modules/`, `.git/`; symlinks
   must stay inside). Anything else is listed in `rejected` with a reason; an item whose only defects were rejected
   counts as unanswered, so the unit stays *not seen: incomplete*. Findings use the rule-finding shape plus
   `source: "ai"`, `status: "claimed"`; box comes from controls.json or measure.json when the selector has one.
@@ -393,22 +572,85 @@ unreadable one by one). Built in `src/ledger.mjs`:
   notes, the page's data in quoted text; numbers bucketed to powers of two). Person, viewport and state are not
   part of it: the same defect on the phone and the desktop, in normal and error state, is one. Every finding in a
   run's `findings.json` carries its `fp`.
+- **Fingerprint v2** (2026-10-14 KST, design 0.1-c §4.5): a version changes the recipe of named rules only, and
+  `inputs.v` says which recipe made a fingerprint. v2 changes `secret-in-client-bundle` alone: a build names a bundle
+  after its content, so a hash-like part of the bundle's file name becomes `[hash]` and a rebuild keeps the secret's
+  fingerprint. Only the file name, never a folder, and only these parts: a whole name of 13 characters of
+  `[0-9a-z_-]` with a digit (Turbopack, `1grrdrpshlkcw.js`); a `-<8 characters>` suffix with a digit, `_`, `-` or an
+  inner capital (Vite/Rollup, esbuild, `index-Boalzs1w.js`); a `-`/`.`-separated part of 8+ letters and digits that is
+  lower-case hex or has a digit between letters (webpack, CRA, Parcel). Words and words with a number
+  (`checkout2.js`, `facade.js`) stay, so two bundles never become one. Every other rule's fingerprint is the
+  v1 one (a contract test pins v1 values). The evidence of a secret is `{url, kind}`: v1's `masked` (four characters
+  of the value) is gone. **Migration:** a v1 `ledger.json` is migrated on read: secret items get their v2 fingerprint
+  and group from what they stored (rule, route, selector, evidence), items that now share one (two builds of one
+  bundle) merge without making the defect easier to call fixed (first seen is the earliest; the cells and
+  whole-app coverage of both; open if either was open; looked at when both were), `masked` is dropped, and
+  `aliases` (old → new) is kept in the state. A decision made under v1 follows its item: through `aliases`, or, for one from another machine, by the v1
+  fingerprint of what the state holds now. When a merged item's old decisions disagree (one dismissed, another to
+  fix, hold or reopen), the dismissal does not carry over: open beats dismissed. The decision file is never
+  rewritten; the view moves its target and keeps its id (`targetWas`), and its approval and first-seen time stay
+  those of the file as written. The migration runs inside the ledger's read (the same checks as any read: no
+  link, a parse error by position only), and the next ledger command writes the migrated state back under the
+  ledger lock.
 - **Group** = the fingerprint without the route: a shared component's defect on 17 screens is one group, the
   unit a person decides on and the fix loop fixes. Low contrast groups by its colour pair (the design token),
   not by element. Root-cause groups by source file + symbol come with the inventory (§2.4).
 - **Decisions** are append-only files, `.nunchi/decisions/<group-…|fp-…>/<id>.json` (committed; two people
   never edit the same file): `fix`, `keep` (reason `intended` | `out-of-scope`), `false-positive` (reason
   `not-a-problem` | `wrong-place`), `hold`, `reopen`; who and when (KST). The latest decision on the fingerprint
-  or its group wins; a group decision covers screens found later.
-- **Provenance (N1):** decisions made with `nunchi decide` on this machine are recorded in
-  `.nunchi/state/approved.json` (git-ignored). Anything else came through git: it is shown, but it cannot dismiss
-  a blocker or an L9 (safety/secret) finding, and the fix loop will not act on an unapproved `fix` until
-  `nunchi approve`.
+  or its group wins; a group decision covers screens found later. Written to a temp file, synced and renamed into
+  place; a file that is torn, is not a decision, is not a regular file (a link is never followed), is larger than
+  64 KB, or does not match its place (file name = id, folder = target) is an error naming the file (exit 2), never
+  skipped. Errors give the file and the parse position, never the file's text; `approved.json` and `ledger.json`
+  are read the same way.
+- **Order (0.1-c M1a, design §8.3):** a decision's time is the earlier of its date and when this machine first saw
+  it (kept in the ledger state, by id and content), so one that arrives late cannot outrank decisions made after
+  it arrived. A decision dated more than 5 minutes after it arrived never counts, not even once its date passes.
+- **Provenance (N1; hardened in 0.1-c M1a):** decisions made with `nunchi decide` on this machine are recorded in
+  `.nunchi/state/approved.json` (git-ignored) by id **and content** (`<id>:<SHA-256 of the record>`), before the
+  decision file is written, under a lock. A file that reuses an approved id with other content is not approved.
+  Approvals written before are carried over once and each one is said: a bare id binds to the one file with that
+  id, except when two files share it or the file is a keep or false-positive on a blocker or L9 finding (the file
+  may have been swapped since): those move to `legacy`, are never honoured, and need `nunchi approve` again.
+  Anything not approved came through git: it is shown, but it cannot dismiss a blocker or an L9 (safety/secret)
+  finding, and the fix loop will not act on an unapproved `fix` until `nunchi approve`. An `approved.json` that
+  cannot be read is an error and is never replaced by an empty one.
 - **Status is computed, never committed:** each complete run is folded into `.nunchi/state/ledger.json`:
-  `open` → `fixed` when a run that looked again (the route in scope, the same persons, the app reachable, the
-  login working) no longer finds it → `regressed` when it comes back. With decisions: `to-fix`, `kept`,
-  `dismissed`, `held`. `fingerprintVersion` and each fingerprint's inputs are stored so a future v2 can migrate
-  decisions instead of orphaning them.
+  `open` → `fixed` when a run that looked again no longer finds it → `regressed` when it comes back. With
+  decisions: `to-fix`, `kept`, `dismissed`, `held`. `fingerprintVersion` and each fingerprint's inputs are stored
+  so a new version migrates decisions instead of orphaning them (v2, above). Since 0.1-c M1a:
+  - *like for like:* each item keeps the cells it was seen in (`person.state.viewport` on its route); a sighting
+    by a narrower run keeps the cells that run did not look at. It is `fixed` only when a run at the same origin
+    captured every one of them (captured, not redirected, not an error page, not a canary copy), with the other
+    side of a comparison too (parity: the desktop; `error-looks-empty`: the empty state; `no-offline-notice`:
+    normal), and the app was reachable, the recording current and, for signed-in cells, the login working.
+    Whole-app findings (route-less secrets, `unreachable-route`, `link-to-missing-route`, L4 one-offs) keep what
+    the runs that saw them looked at (route × cell; routes the app no longer has drop out) and need a `wholeApp`
+    run that looked at all of it again; a route an earlier run looked at that this run did not (it failed, answered
+    an error or redirected this time) makes the run partial, while a route no run has looked at (always broken,
+    always redirected, unresolved) does not. `--states`, `--viewports`, `--routes`, `--changed-since` and a
+    skipped sample fix nothing they did not look at. A run that would fix ≥ 10 items and more than half of the open ones
+    while most of its screens show one and the same text (another app, or one error page) fixes nothing, and
+    `findings` says so.
+  - *looked at:* each item records the last run that looked at all its cells; `findings` says when an open item
+    has not been looked at for 3 runs (it cannot be marked fixed until a run covers it).
+  - *monotonic:* a run older than the newest folded one only adds what it saw: it never marks anything fixed,
+    never moves `lastSeen` back, and brings an item back only if it saw it after the last run that looked at it.
+  - *catch-up:* every ledger command (and `capture`, `gc`) first folds the complete runs not folded yet, in run
+    order, under a lock, so a crash between a run completing and its fold leaves nothing unfolded. `gc` removes
+    only runs the ledger holds and exits 2 when it cannot bring the ledger up to date. A ledger or run file that
+    cannot be read is an error (exit 2), never "empty". Temp files and lock folders a crash left are removed once
+    they are an hour old.
+  - *lock:* `<file>.lock.d`, a folder taken by renaming a folder that already holds its owner into place. A holder
+    on this machine is stale only when its process has ended, never by age (Linux: its pid and that process's start
+    time; Windows, where a freed pid goes to the next process at once: a file the holder keeps open with sharing
+    mode 0, which Windows closes when the process ends; elsewhere, or if that file cannot be made exclusive: the
+    pid alone, so a reused pid makes takers wait and end in LOCKED, never take a live lock); one on another
+    machine, after 30 s without a touch. One taker at a time removes a
+    stale lock, after checking again that it still holds the owner judged stale; a lock is never given back and is
+    released only by its owner. Waiting ends after 5 s with an error. Renames Windows refuses while another process
+    reads in the folder (EPERM, EACCES, EBUSY) are retried with backoff, for the lock, the ledger files, run folders
+    and `runs/latest` (last writer wins; a failed `latest` write never fails a capture).
 - **CLI:** `nunchi findings` (one row per kind; `--rule <rule>` lists its groups; `--status`, `--all`, `--json`),
   `nunchi decide <id…> <decision> [--reason] [--note]`, `nunchi approve <id…>|--all`, `nunchi trust`.
 
@@ -472,31 +714,40 @@ puts the images in `index.html` as data URIs instead (one file; pegroom: 8 MB ag
   medium", "Clean", "Nothing open", "Sent to sign-in", "Redirected", "Not seen" — filtered by width, who and state;
   a selected screen shows large with numbered dashed boxes and its findings).
 - *Data*: the run's `manifest.json`, `run.json`, `findings.json`, `flow.json` (wall order), `measure.json` (the h1 as
-  a screen name), `ai-findings.json` (confirmed and claimed only), `verify.json` and `coverage.json`; statuses from
-  `view()` over `.nunchi/state/ledger.json`, the decisions and approvals. A run the ledger has not folded is folded
-  in memory only (statuses from decisions, no comparison). AI findings are folded in memory the same way until M1
-  puts them in the ledger. A finding without a box takes its element's box from the scene's evidence (the hunt's
-  selector index). Boxes are percentages of the screenshot (CSS px × the first view's pixel ratio); none is drawn
-  for an element inside a scroll area (`inside`) or outside the image, and the page says why.
+  a screen name), `ai-findings.json` (confirmed and claimed only), `verify.json` and `coverage.json`. The ledger is
+  read through its own functions: the CLI brings it up to date first as `findings` does (`syncLedger`: runs not
+  folded yet, decisions not noted yet; approvals bound to content), and statuses come from `view()`. The run's
+  findings are named through the ledger's fingerprint aliases (a run captured before fingerprint v2 still meets its
+  items). A run the ledger has not folded is folded in memory only, with current fingerprints. AI findings are folded
+  in memory the same way until M1 puts them in the ledger. `view()` gets its `now` from the data (the latest decision
+  date or first-seen time), never the clock. The page also says when an open group has not been looked at since run N
+  (the ledger's `notLookedAt`), when the run could not tell what was fixed (`state.blind`), and when a screen left
+  the app (`redirected-off-origin`: "Left the app", the other origin as text). A finding without a box takes its
+  element's box from the scene's evidence (the hunt's selector index). Boxes are percentages of the screenshot (CSS
+  px × the first view's pixel ratio); none is drawn for an element inside a scroll area (`inside`) or outside the
+  image, and the page says why.
 - *Determinism*: no clock or random value; ids are hashes of scene and group ids; every list sorted. Two exports of
   the same run, ledger and decisions are byte-identical (test, and pegroom: identical).
 - *Redaction and escaping*: HAR, `network.json`, `console.json`, `text.txt` and `aria.yml` are never read. Every
   string that did not come from the exporter goes through one helper: credential query values and URL userinfo
-  (`https://user:pass@`) are redacted (`redactText`), then secret shapes are replaced by `[secret-shaped: <kind>]`
-  (`scrubSecrets`, its own list, wider than the L9 bundle scan: whole private key blocks of every kind, Stripe
-  secret and restricted keys, AWS access key ids and secret keys, GitHub, Slack, Google, Anthropic and OpenAI keys,
-  `Authorization:`/`Bearer` values, JWTs also when split across lines), then it is clipped, then HTML-escaped. Objects
+  (`https://user:pass@`) are redacted (`redactText`), then secret shapes are replaced by `[secret-shaped: <kind>]`,
+  then it is clipped, then HTML-escaped. `scrubSecrets` (`src/rules.mjs`) is the one scrubber for capture and export
+  alike: whole private key blocks of every kind, Stripe secret and restricted keys, AWS access key ids and secret keys,
+  GitHub, Slack, Google, Anthropic and OpenAI keys, `Authorization:`/`Bearer` values that hold a digit, any JWT (also
+  split across lines), each after no letter or digit; `selector-secrets.mjs` runs it first and then the same kinds
+  with no boundary at all, plus `long-token`. It is wider than the L9 bundle scan, which it does not change. Objects
   and arrays are redacted leaf by leaf before they are serialised. URLs are never links; secret findings show
   location and kind only. Run files are data too: severities, statuses and viewports are checked against their
   enums, group and fingerprint ids must be 12 hex (others are hashed), counts are numbers, boxes four numbers, and a
   scene id that is not one plain path segment is left out and never opened (`sceneDir`, shared with the hunt).
-- *Older runs*: `--run <id>` of a run that is not the ledger's latest shows the ledger as it stood after that run,
-  folded again from the run folders up to it; when one of them is gone, the current ledger is rewound instead (fixed or
-  came back later → undone) and the page says statuses are as of now. Decisions are always as of now.
   Screenshots are CSS backgrounds, so the page has no `<img>`. CSP (meta): `default-src 'none'; img-src 'self' data:;
   style-src 'unsafe-inline'; script-src 'sha256-…'; base-uri 'none'; form-action 'none'` — the one inline script
   (current view, Copy buttons) is allowed by its hash, and the page works without it (views are `:target`
   sections, filters are radio buttons with `:has()`).
+- *Older runs*: `--run <id>` of a run that is not the ledger's latest shows the ledger as it stood after that run,
+  folded again from the run folders up to it as the ledger folds them (`runForFold`, `foldRun`, `migrateState`); when
+  one of them is gone or unreadable, the current ledger is rewound instead (fixed, came back or looked at later →
+  undone) and the page says statuses are as of now. Decisions are always as of now.
 - *Accessibility*: nav, main and aside landmarks, a skip link, visible focus, 44 px primary targets, severity as
   text beside its dot, filters as native radio groups, `prefers-color-scheme` honoured; 360 px to wide desktop.
 - *Not done*: page text is shown (claims, evidence text) — the `--include-page-text` default of design §5 applies to
@@ -740,21 +991,29 @@ took 253 s.
   - L5 'cancel' vs 'Release slot' on `/help`. This is a real cross-screen wording difference seen from Help; a
     human should label it.
 
-*Engine issues found, not fixed here.* Fixing them would turn this app into a tuning set; the numbers above stay
-as the held-out result, and a later re-measure on pegroom is reported as not blind.
-1. `signed-in-bounced` must strip `?` and `#` before matching the sign-in pattern.
-2. aria.yml nodes of the form `role "name": text` must be addressable as `aria=role "name"`.
-3. React Router source map: route each config entry to its `element` component, not to the config file.
-   Otherwise source slices and `dead-end` see the whole app on every route.
-4. L4 references: pick a scene that shares components with the one under review.
-5. Canary scoring: a `fixed-cover` hit should also count claims on elements under the bar at any scroll
-   position; `blank-state` should not be planted where a rule reports the same thing.
-6. When an app throws on `!res.ok` without reading the body, Chromium never marks the request finished, so the
-   `networkidle` waits run to their timeouts. This only slows the capture.
+*Engine issues found, not fixed in the measuring PR.* Fixing them there would have turned this app into a tuning
+set; the numbers above stay as the held-out result, and a later re-measure on pegroom is reported as not blind.
+Status after the fix PR (2026-10-14 KST), each with a synthetic fixture that triggers it and one that does not:
+1. *Fixed.* `signed-in-bounced` matches the sign-in pattern on the path only (`isSignInPath`):
+   `/sign-in?next=%2Fbilling` is a sign-in page, `/designs?from=login` is not.
+2. *Fixed.* aria.yml nodes of the form `role "name": text` are also addressable as `aria=role "name"` (the
+   whole line still works); the hunter brief and the skill say so.
+3. *Fixed.* React Router routes map to the components their config names, not to the config file (§2.5).
+   Source slices and `dead-end` now see each route's own files.
+4. *Fixed.* Lens packs may set `reference: "nearest"` (§3.3); L4 does, so a detail page is compared with its list
+   page. Other lenses keep the hash spread, so their measured plans are unchanged.
+5. *Fixed.* A `fixed-cover` canary is hit by a claim of its item anywhere on the copy; the ambiguity check against
+   the original still applies. `blank-state` is no longer planted where the message is the main area's only text.
+6. *Does not reproduce.* In the pegroom capture, error-state scenes took a median of 1.09 s, normal ones 1.08 s,
+   and no scene took more than 2.1 s. The networkidle waits did not run to their timeouts. No change.
+
+*Re-check after the fixes (2026-10-14 KST, not blind):* Pebble unchanged (rule recall 34/34, identical, 100%);
+pegroom rule recall 38/38, 0 false positives on 20 clean scenes, identical (1,837 files), fingerprints 100% (43/43).
+The AI-lens re-measure waits for a fresh held-out app.
 
 *Verdict:* the held-out app fails two gates: rule recall (37/38, one engine bug) and L4 recall (67%). Seven of
 eight AI lenses pass. Determinism, fingerprint stability and clean-screen false positives hold. Release still
-needs the fixes above and a fresh held-out app for a blind re-measure, besides the precision gate and the Codex
+needs a fresh held-out app for a blind re-measure with the fixes above, besides the precision gate and the Codex
 comparison.
 
 ## 10. Open items

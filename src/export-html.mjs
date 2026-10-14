@@ -14,7 +14,7 @@
 import { readFileSync, existsSync, mkdirSync, copyFileSync, writeFileSync, lstatSync, readdirSync, unlinkSync, renameSync, realpathSync, rmdirSync, constants as FS } from 'node:fs';
 import { join, resolve, relative, isAbsolute, dirname, basename } from 'node:path';
 import { createHash } from 'node:crypto';
-import { readState, foldRun, readDecisions, readApproved, view, groups as groupRows, titleOf, annotate } from './ledger.mjs';
+import { readState, foldRun, readDecisions, readApproved, view, groups as groupRows, titleOf, annotate, runForFold, migrateState, noteDecisions, byRun, originOf, FINGERPRINT_VERSION } from './ledger.mjs';
 import { readManifest, jpegSize, sceneIndex, sceneDir } from './hunt.mjs';
 import { scrubSecrets } from './rules.mjs';
 import { redactUrl, redactText } from './network.mjs';
@@ -70,32 +70,40 @@ const normRow = r => ({
 });
 const normScene = s => ({
   ...s, id: s.id, route: str(s.route) ?? '', person: String(s.person ?? ''), state: String(s.state ?? ''), viewport: String(s.viewport ?? ''),
-  status: String(s.status ?? ''), reason: str(s.reason), finalPath: str(s.finalPath),
+  status: String(s.status ?? ''), reason: str(s.reason), finalPath: str(s.finalPath), finalOrigin: str(s.finalOrigin),
 });
 const RUN_ID = /^\d{4,}$/;
-const runNo = id => (RUN_ID.test(String(id)) ? Number(id) : NaN);
+const later = (id, than) => typeof id === 'string' && RUN_ID.test(id) && byRun(id, than) > 0;
 
-// The ledger as it stood right after `runId`: the runs up to it folded again from their folders, as capture
-// folds them. When one of those folders is gone (gc), the current ledger is rewound instead: what came later is
-// undone where the state still says so (fixed later → open, came back later → not yet). `asOfNow` says which.
-function stateAt(state, runId, runsDir, normalize) {
-  const ids = state.runs.filter(id => runNo(id) <= runNo(runId));
-  let acc = { schema: 1, fingerprintVersion: state.fingerprintVersion, runs: [], items: {} };
-  for (const id of ids) {
-    const dir = join(runsDir, id);
-    if (!RUN_ID.test(id) || !existsSync(join(dir, 'findings.json')) || !existsSync(join(dir, 'manifest.json'))) { acc = null; break; }
-    const meta = readJsonOr(join(dir, 'run.json'), {});
-    const manifest = readJsonOr(join(dir, 'manifest.json'), {});
-    acc = foldRun(acc, { id, scope: meta.scope || {}, health: manifest.health || { problems: [] }, findings: normalize(readJsonOr(join(dir, 'findings.json'), { findings: [] }).findings || []) });
+// The ledger as it stood right after `runId`: the runs up to it folded again from their folders exactly as the
+// ledger folds them (runForFold, foldRun, then the fingerprint migration). When one of those folders is gone (gc)
+// or cannot be read, the current ledger is rewound instead: what came later is undone where the state still
+// says so (fixed, came back or looked at later). `asOfNow` says which.
+function stateAt(state, runId, runsDir) {
+  const ids = state.runs.filter(id => !later(id, runId));
+  try {
+    let acc = { schema: 1, fingerprintVersion: 1, runs: [], items: {} };
+    for (const id of ids) {
+      if (!RUN_ID.test(id)) throw new Error('not a run id');
+      acc = foldRun(acc, runForFold(join(runsDir, id)));
+    }
+    return { state: migrateState(acc), asOfNow: false };
+  } catch {
+    const items = {};
+    for (const [fp, it] of Object.entries(state.items)) {
+      if (later(it.firstSeen, runId)) continue;
+      items[fp] = { ...it, goneAt: later(it.goneAt, runId) ? null : it.goneAt, regressedAt: later(it.regressedAt, runId) ? null : it.regressedAt,
+        lastSeen: later(it.lastSeen, runId) ? runId : it.lastSeen, ...(it.lookedAt ? { lookedAt: later(it.lookedAt, runId) ? runId : it.lookedAt } : {}) };
+    }
+    const blind = Object.fromEntries(Object.entries(state.blind || {}).filter(([id]) => !later(id, runId)));
+    return { state: { ...state, runs: ids, items, blind }, asOfNow: true };
   }
-  if (acc) return { state: acc, asOfNow: false };
-  const items = {};
-  const later = id => id && runNo(id) > runNo(runId);
-  for (const [fp, it] of Object.entries(state.items)) {
-    if (later(it.firstSeen)) continue;
-    items[fp] = { ...it, goneAt: later(it.goneAt) ? null : it.goneAt, regressedAt: later(it.regressedAt) ? null : it.regressedAt, lastSeen: later(it.lastSeen) ? runId : it.lastSeen };
-  }
-  return { state: { ...state, runs: ids, items }, asOfNow: true };
+}
+// `now` for the ledger's view, taken from the data (never the clock, so two exports are the same bytes): the
+// latest decision date or first-seen time. Decisions this machine has not noted yet count as arriving then.
+function dataNow(state, decisions) {
+  const times = [...Object.values(state.decisionsSeen || {}).map(Number), ...decisions.map(d => Date.parse(d?.at))].filter(Number.isFinite);
+  return times.length ? Math.max(...times) : 0;
 }
 const pct = n => `${Math.round(n * 10000) / 100}%`;
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
@@ -104,7 +112,7 @@ const human = rule => { const r = String(rule).replace(/^L\d+\./, '').replace(/-
 // ---- model ---------------------------------------------------------------------------------------------
 
 // Reads one run and the ledger through the ledger's own functions; nothing here re-parses what they parse.
-export function buildModel({ runDir, nunchiDir }) {
+export function buildModel({ runDir, nunchiDir, ledger = null }) {
   const manifest = readManifest(runDir);
   const meta = readJsonOr(join(runDir, 'run.json'), {});
   const runId = meta.id ?? null;
@@ -116,25 +124,39 @@ export function buildModel({ runDir, nunchiDir }) {
   const coverage = readJsonOr(join(runDir, 'coverage.json'), null);
   const flow = readJsonOr(join(runDir, 'flow.json'), null);
 
-  const state = readState(join(nunchiDir, 'state', 'ledger.json'));
-  const decisions = readDecisions(join(nunchiDir, 'decisions'));
-  const approved = readApproved(join(nunchiDir, 'state', 'approved.json'));
-  const withFp = list => (list = list.filter(f => f && typeof f === 'object'), (list.every(f => f.fp && f.group) ? list : annotate(list.map(({ fp, group, ...f }) => f))).map(normFinding));
-  const rules = withFp(Array.isArray(ruleFindings) ? ruleFindings : []);
-  // A run the local ledger has not folded (a --out folder, a fresh clone) is folded here, in memory only. An older
-  // run is shown as the ledger stood after it, not as it stands now.
+  // the ledger through its own functions: the CLI brings it up to date first (syncLedger) and passes it in
+  const state = ledger?.state ?? readState(join(nunchiDir, 'state', 'ledger.json'));
+  const decisions = ledger?.decisions ?? readDecisions(join(nunchiDir, 'decisions'));
+  const approved = ledger?.approved ?? readApproved(join(nunchiDir, 'state', 'approved.json'));
+  const now = dataNow(state, decisions);
+  const seen = noteDecisions(state, decisions, now);                // in memory only
+  const fresh = list => annotate(list.filter(f => f && typeof f === 'object').map(({ fp, group, ...f }) => f)).map(normFinding);
   const inLedger = runId !== null && state.runs.includes(runId);
   const latest = state.runs.length ? state.runs[state.runs.length - 1] : null;
-  const empty = { schema: 1, runs: [], items: {} };
-  let ruleState = state, asOfNow = false;
-  if (!inLedger) ruleState = foldRun(empty, { id: runId ?? 'this run', scope: meta.scope || {}, health: manifest.health || { problems: [] }, findings: rules });
-  else if (runId !== latest) ({ state: ruleState, asOfNow } = stateAt(state, runId, join(nunchiDir, 'runs'), withFp));
-  const ai = aiFindings ? withFp(aiFindings) : [];
+  const empty = { schema: 1, fingerprintVersion: 1, runs: [], items: {} };
+  // A run the local ledger has not folded (a --out folder, a fresh clone) is folded here, in memory only, with
+  // fingerprints of the current version. An older run is shown as the ledger stood after it.
+  let ruleState = seen, asOfNow = false, rules;
+  if (!inLedger) {
+    rules = fresh(Array.isArray(ruleFindings) ? ruleFindings : []);
+    ruleState = noteDecisions(foldRun({ ...empty, fingerprintVersion: FINGERPRINT_VERSION }, { id: runId ?? 'this run', scope: meta.scope || {}, wholeApp: meta.wholeApp === true,
+      health: manifest.health || { problems: [] }, scenes: Array.isArray(manifest.scenes) ? manifest.scenes : [], findings: rules, origin: originOf(manifest.baseUrl) }), decisions, now);
+  } else {
+    if (runId !== latest) { ({ state: ruleState, asOfNow } = stateAt(state, runId, join(nunchiDir, 'runs'))); ruleState = { ...ruleState, decisionsSeen: seen.decisionsSeen }; }
+    // a run captured under an older fingerprint version: its findings are named as the ledger names them now
+    const alias = ruleState.aliases || {};
+    const list = (Array.isArray(ruleFindings) ? ruleFindings : []).filter(f => f && typeof f === 'object');
+    rules = (list.every(f => f.fp && f.group) ? list : annotate(list.map(({ fp, group, ...f }) => f)))
+      .map(f => normFinding({ ...f, fp: alias.fp?.[f.fp] || f.fp, group: alias.group?.[f.group] || f.group }));
+  }
   // AI findings are not in the ledger yet (design M1); their decisions still apply by fingerprint and group.
-  const aiState = foldRun(empty, { id: runId ?? 'this run', findings: ai });
+  const ai = aiFindings ? fresh(aiFindings) : [];
+  const aiState = noteDecisions(foldRun({ ...empty, fingerprintVersion: FINGERPRINT_VERSION }, { id: runId ?? 'this run', findings: ai }), decisions, now);
   const present = new Set([...rules, ...ai].map(f => f.fp));
-  const rows = [...view(ruleState, decisions, approved), ...view(aiState, decisions, approved)].map(normRow)
+  const rows = [...view(ruleState, decisions, approved, { now }), ...view(aiState, decisions, approved, { now })].map(normRow)
     .filter(r => present.has(r.fp) || (inLedger && r.goneAt === runId));
+  // a run that could not tell what was fixed (the app unreachable, the recording stale, every screen the same page)
+  const blind = inLedger && ruleState.blind ? str(ruleState.blind[runId]) : null;
 
   // scenes, in the wall's order (flow.json R7), canary copies left out
   const routeOrder = flow?.order || [];
@@ -219,7 +241,7 @@ export function buildModel({ runDir, nunchiDir }) {
   const kinds = [...kindMap.values()].sort((a, b) => Number(a.unchecked) - Number(b.unchecked) || SEV[a.severity] - SEV[b.severity] || b.groups.length - a.groups.length || cmp(a.rule, b.rule));
   const ordered = kinds.flatMap(k => k.groups);
 
-  return { runId, latest, asOfNow, meta, manifest, inLedger, scenes, sceneById, images, instances, groups: ordered, kinds, rows, ai: aiFindings !== null, verify, coverage };
+  return { runId, latest, asOfNow, blind, meta, manifest, inLedger, scenes, sceneById, images, instances, groups: ordered, kinds, rows, ai: aiFindings !== null, verify, coverage };
 }
 
 // ---- rendering helpers ----------------------------------------------------------------------------------
@@ -227,6 +249,8 @@ export function buildModel({ runDir, nunchiDir }) {
 const sevChip = s => `<span class="sev sev-${sevOf(s)}"><span class="dot" aria-hidden="true"></span>${SEV_LABEL[sevOf(s)]}</span>`;
 const statusChip = st => (STATUS_LABEL[st] ? `<span class="st st-${st}">${STATUS_LABEL[st]}</span>` : '<span class="st st-mixed">Mixed</span>');
 const statusChips = g => (g.status === 'mixed' ? Object.keys(g.statuses).sort((a, b) => rank(Object.keys(STATUS_LABEL), a) - rank(Object.keys(STATUS_LABEL), b)).map(statusChip).join(' ') : statusChip(g.status));
+// An open item no run has looked at again for a while (ledger NOT_LOOKED_RUNS): the oldest such run of the group.
+const notLooked = g => g.rows.map(r => str(r.notLookedAt)).filter(Boolean).sort(byRun)[0] || null;
 const sourceTag = g => (!g.ai ? '<span class="tag">Rule</span>'
   : g.ai.verified ? `<span class="tag tag-ai">AI · double-checked${g.ai.suspect ? ' (suspect)' : ''}</span>` : '<span class="tag tag-warn">AI · not double-checked</span>');
 // plain text (for aria-label, which t() escapes once) and markup
@@ -325,6 +349,7 @@ function progressView(m) {
   else if (notSeen.length) verdict = `Yes, for what was checked · ${plural(notSeen.length, 'screen')} not checked`;
   else verdict = 'Yes, for what was checked';
   const tiles = ['blocker', 'high', 'medium', 'low'].map(s => `<a class="tile${bySev[s] && SEV[s] <= SEV.high ? ` tile-${s}` : ''}" href="#findings"><span class="tile-k">${sevChip(s)}</span><span class="tile-n">${bySev[s]}</span></a>`).join('');
+  const BLIND = { 'app-unreachable': 'most screens did not load', 'recording-stale': 'most screens asked for data the recording does not have', 'one-page': 'most screens showed one and the same page' };
   const WHY = { 'login-expired': 'the saved login no longer worked: signed-in screens showed the sign-in page and were not judged', 'app-unreachable': 'most screens did not load at all', 'recording-stale': 'most screens asked for data the recording does not have' };
   const since = m.inLedger ? (() => {
     const id = m.runId;
@@ -356,6 +381,7 @@ ${since}
 <div class="meter" aria-hidden="true"><span style="width:${pctChecked}%"></span></div>
 <ul class="facts">
 <li>AI review: ${aiLine}</li>
+${m.blind ? `<li class="warn">This run could not tell what was fixed: ${BLIND[m.blind] || t(m.blind)}. Nothing was marked fixed by it.</li>` : ''}
 ${notSeen.length ? `<li>${plural(notSeen.length, 'screen')} not seen: ${t([...new Set(notSeen.map(s => s.reason || s.status))].sort().join(', '))}</li>` : ''}
 ${problems.map(p => `<li class="warn">Run problem: ${t(p.status)} (${num(p.scenes)}/${num(p.of)} screens) — ${WHY[p.status] || ''}</li>`).join('')}
 </ul></section>
@@ -372,7 +398,7 @@ function findingsView(m) {
   const radios = FILTERS.map(([k, label]) => `<input type="radio" name="fs" id="fs-${k}" value="${k}"${k === 'open' ? ' checked' : ''}><label for="fs-${k}">${label} <span class="cnt">${count(k)}</span></label>`).join('');
   const row = g => `<li class="row" data-st="${g.filterKeys.join(' ')}"><a href="#${g.hid}">
 <span class="row-main">${g.ai ? `<span class="row-what">${t(g.headline, 160)}</span><span class="row-where">${whereOf(g)}</span>` : `<span class="row-what">${whereOf(g)}</span>${g.instances.length ? `<span class="row-where">${t(gistOf(g.instances[0]), 120)}</span>` : ''}`}</span>
-<span class="row-tags">${sourceTag(g)} ${statusChips(g)}</span></a></li>`;
+<span class="row-tags">${notLooked(g) ? `<span class="tag tag-warn">Not looked at since run ${t(notLooked(g))}</span> ` : ''}${sourceTag(g)} ${statusChips(g)}</span></a></li>`;
   const kind = k => `<details class="kind" data-st="${[...new Set(k.groups.flatMap(g => g.filterKeys))].sort().join(' ')}"${k.severity === 'low' ? '' : ' open'}>
 <summary><span class="kind-title">${sevChip(k.severity)} <span>${t(k.title)}</span></span><span class="muted small">${plural(k.groups.length, 'group')}</span></summary>
 <ul class="rows">${k.groups.map(row).join('')}</ul></details>`;
@@ -444,6 +470,7 @@ ${first?.rule === 'secret-in-client-bundle' ? `<dt>Where</dt><dd class="mono">${
 ${seen.length ? `<dt>Seen on</dt><dd>${seen.slice(0, 12).map(s => `<a href="#${s.hid}">${t(s.route)} · ${sceneLabel(s)}</a>`).join('<br>')}${seen.length > 12 ? `<br><span class="muted">+${seen.length - 12} more</span>` : ''}</dd>` : ''}
 ${decision ? `<dt>Decision</dt><dd>${t(decision.decision)}${decision.reason ? ` (${t(decision.reason)})` : ''} · ${t(decision.by)} · ${t(decision.at)}${decision.verified ? '' : ' · <span class="warn">came through git, not approved on this machine</span>'}</dd>` : ''}
 ${notes.map(n => `<dt>Note</dt><dd class="warn">${t(n)}</dd>`).join('')}
+${notLooked(g) ? `<dt>Looked at</dt><dd class="warn">Not looked at since run ${t(notLooked(g))}: no run since has captured every screen it was on, so it cannot be marked fixed.</dd>` : ''}
 ${verification ? `<dt>Reviewer</dt><dd>${t(verification.verdict)} · ${t(verification.verifier || '')}${verification.suspect ? ' · <span class="warn">suspect</span>' : ''}${verification.reason ? ` — ${t(verification.reason, 240)}` : ''}</dd>` : ''}
 </dl>
 <details class="evidence"><summary>Evidence details</summary>
@@ -474,7 +501,8 @@ function screensView(m) {
     const sevs = Object.keys(by).sort((a, b) => SEV[a] - SEV[b]);
     let badge, kind, note;
     const redirected = s.reason && /^redirected/.test(s.reason);
-    if (s.status !== 'captured') { badge = 'Not seen'; kind = 'dark'; note = s.reason || s.status; }
+    if (s.reason === 'redirected-off-origin') { badge = 'Left the app'; kind = 'dark'; note = `Sent to ${s.finalOrigin || 'another site'}`; }
+    else if (s.status !== 'captured') { badge = 'Not seen'; kind = 'dark'; note = s.reason || s.status; }
     else if (redirected && fs.some(f => f.rule === 'signed-in-bounced')) { badge = 'Sent to sign-in'; kind = 'dark'; note = 'Signed in, but shown the sign-in page'; }
     else if (redirected) { badge = 'Redirected'; kind = 'low'; note = `Shows ${redactUrl(s.finalPath || '')}`; }
     else if (!fs.length) { badge = 'Clean'; kind = 'clean'; note = 'Nothing found'; }
@@ -494,7 +522,7 @@ function screensView(m) {
     const g = f => groupOf.get(f.group);
     return `<section id="${s.hid}" class="screen-panel" data-view="screens" tabindex="-1" aria-labelledby="h-${s.hid}">
 <div class="sp-head"><div><h2 id="h-${s.hid}">${t(s.h1 || s.route, 80)}</h2><p class="muted small"><span class="mono">${t(s.route)}</span> · ${sceneLabel(s)}</p></div><a href="#screens">Close</a></div>
-${s.img ? shot(s, { boxes, label: `Screenshot of ${s.route}, ${sceneLabelText(s)}${boxes.length ? `, ${plural(boxes.length, 'finding')} outlined and numbered` : ''}`, cls: `shot-${vpCls(s.viewport)}` }) : `<p class="pad muted">Not seen: ${t(s.reason || s.status)}.</p>`}
+${s.img ? shot(s, { boxes, label: `Screenshot of ${s.route}, ${sceneLabelText(s)}${boxes.length ? `, ${plural(boxes.length, 'finding')} outlined and numbered` : ''}`, cls: `shot-${vpCls(s.viewport)}` }) : s.reason === 'redirected-off-origin' ? `<p class="pad muted">This screen sent the browser to another site (<span class="mono">${t(s.finalOrigin || 'unknown')}</span>); nunchi does not capture other sites.</p>` : `<p class="pad muted">Not seen: ${t(s.reason || s.status)}.</p>`}
 ${s.reason && /^redirected/.test(s.reason) ? `<p class="pad small muted">Redirected to <span class="mono">${t(redactUrl(s.finalPath || ''))}</span>.</p>` : ''}
 ${items.length ? `<ol class="sp-list">${items.map(({ f, d, n }) => `<li><a href="#${g(f)?.hid || ''}"><span class="numb${n ? '' : ' numb-none'}">${n || '–'}</span><span class="sp-text"><span class="sp-what">${t(g(f)?.headline || titleOf(f.rule), 120)}</span><span class="small">${SEV_LABEL[f.severity]} · ${f.source === 'ai' ? 'AI' : 'Rule'} · ${STATUS_LABEL[statusOf(f)] || 'Open'}${n ? '' : ` · not outlined: ${d.why}`}</span></span></a></li>`).join('')}</ol>` : s.img ? '<p class="pad muted">Nothing found on this screen.</p>' : ''}
 ${sibs.length ? `<details class="sp-sibs small"><summary>Same page, ${plural(sibs.length, 'other screen')}</summary><p>${sibs.map(o => `<a href="#${o.hid}">${sceneLabel(o)}</a>`).join(' ')}</p></details>` : ''}
@@ -746,10 +774,10 @@ export function within(parent, child) {
 // data URIs inside index.html and no image is written. Nothing else in outDir is touched, and nothing is replaced
 // that an earlier export did not write: an index.html without the generator marker, a symlink, or an img/ folder
 // with files of the user's own is refused before anything changes.
-export function exportHtml({ runDir, nunchiDir, outDir, inline = false }) {
+export function exportHtml({ runDir, nunchiDir, outDir, inline = false, ledger = null }) {
   if (within(join(nunchiDir, 'runs'), outDir)) refuse('write the page outside .nunchi/runs (runs are evidence and are never edited)');
   if (within(runDir, outDir)) refuse('write the page outside the run folder');
-  const m = buildModel({ runDir, nunchiDir });
+  const m = buildModel({ runDir, nunchiDir, ledger });
   const imageUrl = inline
     ? key => `"data:image/jpeg;base64,${readFileSync(m.images.get(key).file).toString('base64')}"`
     : key => `"img/${key}.jpg"`;

@@ -108,6 +108,45 @@ function frameFiles(root, route, allRoutes) {
   return out;
 }
 
+// Local names a file imports, by module: `import A from`, `import { B, C as D } from`, `import * as E from`,
+// `const F = lazy(() => import(...))`. Used to follow a React Router route to the components it renders.
+export function importBindings(source) {
+  const out = new Map();
+  for (const m of source.matchAll(/\bimport\s+(?!type\b)([^'"`;]*?)\s+from\s+['"]([^'"\n]+)['"]/g)) {
+    const clause = m[1];
+    const def = /^([A-Za-z_$][\w$]*)/.exec(clause); if (def && !clause.startsWith('{') && !clause.startsWith('*')) out.set(def[1], m[2]);
+    const ns = /\*\s+as\s+([A-Za-z_$][\w$]*)/.exec(clause); if (ns) out.set(ns[1], m[2]);
+    const named = /\{([^}]*)\}/.exec(clause);
+    if (named) for (const part of named[1].split(',')) { const n = part.trim().replace(/^type\s+/, '').split(/\s+as\s+/).pop().trim(); if (n) out.set(n, m[2]); }
+  }
+  for (const m of source.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:React\.)?lazy\(\s*\(\)\s*=>\s*import\(\s*['"]([^'"\n]+)['"]\s*\)/g)) out.set(m[1], m[2]);
+  return out;
+}
+
+// A React Router route renders the components its route config names (discover reads them), not every
+// page its config file imports. Null when one of them cannot be followed: the caller then falls back to
+// the config file and everything it imports, which over-approximates but never misses an edge.
+function reactRouterStarts(root, route, cfg) {
+  if (route.router !== 'react-router' || !(route.components?.length || route.lazy?.length)) return null;
+  const file = join(root, route.file);
+  let src = '';
+  try { src = readFileSync(file, 'utf8'); } catch { return null; }
+  const bindings = importBindings(src);
+  const out = [];
+  for (const name of route.components || []) {
+    const spec = bindings.get(name.split('.')[0]);
+    const f = spec && resolveImport(spec, file, root, cfg);
+    if (!f) return null;
+    out.push(f);
+  }
+  for (const spec of route.lazy || []) {
+    const f = resolveImport(spec, file, root, cfg);
+    if (!f) return null;
+    out.push(f);
+  }
+  return out;
+}
+
 export function buildSourceMap(root, routes) {
   root = resolve(root);
   const cfg = loadAliases(root);
@@ -124,8 +163,10 @@ export function buildSourceMap(root, routes) {
   };
   const byRoute = {};
   for (const r of routes) {
-    const start = [join(root, r.file), ...frameFiles(root, r, routes)];
-    const seen = new Set();
+    const rendered = reactRouterStarts(root, r, cfg);
+    const start = rendered || [join(root, r.file), ...frameFiles(root, r, routes)];
+    // the route config itself is part of every route it declares, but its imports are other routes' pages
+    const seen = new Set(rendered ? [join(root, r.file)] : []);
     const stack = [...start];
     while (stack.length) {
       const f = stack.pop();

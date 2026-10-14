@@ -86,6 +86,54 @@ test('tanstack: root and parent routes frame a child route', () => {
   assert.deepEqual(map.routes['/'], ['src/routes/__root.tsx', 'src/routes/index.tsx', 'src/styles.css']);
 });
 
+test('react router: a route maps to the page and layouts it renders, not every page the config imports', () => {
+  const root = tree({
+    'package.json': { dependencies: { 'react-router-dom': '6.26.0' } },
+    'src/routes.jsx': `import { createBrowserRouter } from 'react-router-dom';
+      import Shell from './layouts/Shell.jsx';
+      import { Guard } from './layouts/Guard.jsx';
+      import Home from './pages/Home.jsx';
+      import Garden from './pages/Garden.jsx';
+      import { inline } from './lib/inline.js';
+      function Inline() { return inline; }
+      export const router = createBrowserRouter([
+        { element: <Shell />, children: [
+          { path: '/', element: <Home /> },
+          { element: <Guard><Shell /></Guard>, children: [
+            { path: '/garden', element: <Garden title={'Beds, rows'} /> },
+            { path: '/shed', lazy: () => import('./pages/Shed.jsx') },
+          ] },
+          { path: '/inline', element: <Inline /> },
+        ] },
+      ]);`,
+    'src/App.jsx': `import { Routes, Route } from 'react-router-dom';
+      import Frame from './layouts/Frame.jsx';
+      import Seeds from './pages/Seeds.jsx';
+      export default function App() { return (<Routes><Route element={<Frame />}><Route path="/seeds" element={<Seeds />} /></Route><Route path="/plain" element={<p>Don't panic</p>} /></Routes>); }`,
+    'src/layouts/Shell.jsx': `import './shell.css';`, 'src/layouts/shell.css': ``,
+    'src/layouts/Guard.jsx': `import { session } from '../lib/session.js';`, 'src/lib/session.js': ``,
+    'src/layouts/Frame.jsx': ``, 'src/lib/inline.js': ``,
+    'src/pages/Home.jsx': ``, 'src/pages/Garden.jsx': `import { beds } from '../lib/beds.js';`, 'src/lib/beds.js': ``,
+    'src/pages/Shed.jsx': ``, 'src/pages/Seeds.jsx': ``,
+  });
+  const routes = discover(root).routes;
+  const at = p => routes.find(r => r.path === p);
+  assert.deepEqual([at('/garden').components, at('/shed').components, at('/shed').lazy], [['Garden', 'Guard', 'Shell'], ['Guard', 'Shell'], ['./pages/Shed.jsx']]);
+  assert.deepEqual(at('/seeds').components, ['Seeds', 'Frame']);
+  assert.equal(at('/plain').components, undefined, 'a plain element names no component');
+  const map = buildSourceMap(root, routes);
+  assert.deepEqual(map.routes['/'], ['src/layouts/Shell.jsx', 'src/layouts/shell.css', 'src/pages/Home.jsx', 'src/routes.jsx']);
+  assert.deepEqual(map.routes['/garden'], ['src/layouts/Guard.jsx', 'src/layouts/Shell.jsx', 'src/layouts/shell.css', 'src/lib/beds.js', 'src/lib/session.js', 'src/pages/Garden.jsx', 'src/routes.jsx']);
+  assert.deepEqual(map.routes['/shed'], ['src/layouts/Guard.jsx', 'src/layouts/Shell.jsx', 'src/layouts/shell.css', 'src/lib/session.js', 'src/pages/Shed.jsx', 'src/routes.jsx']);
+  assert.deepEqual(map.routes['/seeds'], ['src/App.jsx', 'src/layouts/Frame.jsx', 'src/pages/Seeds.jsx']);
+  // a component defined in the config file cannot be followed: the route gets the config and all it imports
+  assert.ok(map.routes['/inline'].includes('src/pages/Garden.jsx') && map.routes['/inline'].includes('src/lib/inline.js'));
+  assert.deepEqual(map.routes['/plain'], ['src/App.jsx', 'src/layouts/Frame.jsx', 'src/pages/Seeds.jsx']);
+  // a change to the config still re-captures every route it declares; a page change only its own
+  assert.deepEqual(affectedRoutes(map, ['src/routes.jsx']).routes, ['/', '/garden', '/inline', '/shed']);
+  assert.deepEqual(affectedRoutes(map, ['src/pages/Garden.jsx']).routes, ['/garden', '/inline']);
+});
+
 test('deterministic and cycle-safe', () => {
   const root = tree({
     'package.json': { dependencies: { next: '15.0.0' } },

@@ -10,6 +10,8 @@
 //   one-off-heading-color  an h1/h2/h3 colour no other route uses
 // L10: a named control visible on desktop that the phone neither shows nor keeps in a menu:
 //   missing-on-phone
+import { isRedirected } from './flow.mjs';
+
 const HEADINGS = ['h1', 'h2', 'h3'];
 const TRANSPARENT = /^(transparent|rgba\(0, 0, 0, 0\))$/;
 // Filled or outlined buttons, and links styled as them. Icon-only plain buttons (no fill, square corners)
@@ -21,7 +23,7 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 // rowsByScene: Map(scene id → styles.json rows). Scenes: captured, normal state, not redirected.
 export function buildSystem({ entries, rowsByScene }) {
   // Framework error pages (a 500 or 404 the app did not design) are their own finding, not the app's style.
-  const scenes = entries.filter(e => e.status === 'captured' && e.state === 'normal' && !e.redirected && !(e.httpStatus >= 400)).sort((a, b) => cmp(a.id, b.id));
+  const scenes = entries.filter(e => e.status === 'captured' && e.state === 'normal' && !isRedirected(e) && !(e.httpStatus >= 400)).sort((a, b) => cmp(a.id, b.id));
   const screen = e => (e.person === 'guest' ? e.route : `${e.route} (${e.person})`);
   // property → [{ value, screens, uses, examples }], most-used first. `unit` decides what counts as one user.
   const inventory = (list, unit) => {
@@ -97,7 +99,7 @@ export function buildSystem({ entries, rowsByScene }) {
 // controlsByScene: Map(scene id → { visible: controls.json, hidden: measure.hiddenControls }).
 export function parityFindings({ entries, controlsByScene }) {
   const findings = [];
-  const normal = entries.filter(e => e.status === 'captured' && e.state === 'normal' && !e.redirected);
+  const normal = entries.filter(e => e.status === 'captured' && e.state === 'normal' && !isRedirected(e));
   const pairs = new Map();
   for (const e of normal) {
     const k = `${e.route}|${e.person}`;

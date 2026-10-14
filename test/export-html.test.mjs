@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { exportHtml, buildModel, escapeHtml } from '../src/export-html.mjs';
-import { annotate, foldRun, writeDecision, addApproved } from '../src/ledger.mjs';
+import { annotate, foldRun, runForFold, writeDecision, addApproved, approvalKey } from '../src/ledger.mjs';
 import { scrubSecrets } from '../src/rules.mjs';
 import { redactUrl, redactText } from '../src/network.mjs';
 import { sceneDir, sceneIndex } from '../src/hunt.mjs';
@@ -48,19 +48,33 @@ function project({ scenes, findings = [], ai = null, decide = null, fold = true 
   const manifest = { schema: 1, baseUrl: 'http://127.0.0.1:3000', viewports: vps, clock: '2026-01-01T00:00:00.000Z', health: { status: 'ok', problems: [] }, states: ['normal', 'error'], scenes: scenes.map(({ h1, controls, fullHeight, noFiles, ...s }) => s) };
   const scope = { routes: [...new Set(scenes.map(s => s.route))].sort(), persons: ['guest', 'signed-in'], viewports: ['m', 'd'], states: ['normal', 'error'], changedSince: null };
   write(join(run, 'manifest.json'), manifest);
-  write(join(run, 'run.json'), { schema: 1, id: '0001', parent: null, commit: '0123456789abcdef', dirty: true, scope, health: manifest.health });
+  write(join(run, 'run.json'), { schema: 1, id: '0001', parent: null, commit: '0123456789abcdef', dirty: true, wholeApp: true, scope, health: manifest.health });
   const ann = annotate(findings);
   write(join(run, 'findings.json'), { schema: 1, findings: ann });
   write(join(run, 'flow.json'), { schema: 1, order: [...new Set(scenes.map(s => s.route))] });
   if (ai) write(join(run, 'ai-findings.json'), { schema: 1, findings: ai });
-  if (fold) write(join(nunchi, 'state', 'ledger.json'), foldRun({ schema: 1, fingerprintVersion: 1, runs: [], items: {} }, { id: '0001', scope, health: manifest.health, findings: ann }));
+  // folded the way the ledger folds a run folder
+  if (fold) write(join(nunchi, 'state', 'ledger.json'), foldRun({ schema: 1, fingerprintVersion: 2, runs: [], items: {} }, runForFold(run)));
   if (decide) {
     const made = decide(ann).map(d => writeDecision(join(nunchi, 'decisions'), d));
-    addApproved(join(nunchi, 'state', 'approved.json'), made.map(d => d.id));
+    addApproved(join(nunchi, 'state', 'approved.json'), made.map(approvalKey));
   }
   return { root, nunchi, run, findings: ann };
 }
 
+// run 0002: a copy of 0001 holding only `findings`, folded into the ledger like the ledger folds it, made latest
+function secondRun(p, findings) {
+  const run2 = join(p.nunchi, 'runs', '0002');
+  for (const f of readdirSync(p.run, { recursive: true }).map(String)) { try { write(join(run2, f), readFileSync(join(p.run, f))); } catch {} }
+  const meta = JSON.parse(readFileSync(join(p.run, 'run.json'), 'utf8'));
+  write(join(run2, 'run.json'), { ...meta, id: '0002', parent: '0001', commit: null, dirty: null });
+  write(join(run2, 'findings.json'), { schema: 1, findings });
+  write(join(p.nunchi, 'runs', 'latest'), '0002\n');
+  const state = JSON.parse(readFileSync(join(p.nunchi, 'state', 'ledger.json'), 'utf8'));
+  const next = foldRun(state, runForFold(run2));
+  write(join(p.nunchi, 'state', 'ledger.json'), next);
+  return next;
+}
 const scene = (route, person, state, viewport, extra = {}) => ({
   id: `${route === '/' ? '~' : route.slice(1).replace(/\//g, '~')}.${person}.${state}.${viewport}`, route, path: route, person, state, viewport,
   status: 'captured', reason: null, finalPath: route, httpStatus: 200, findings: 0, dataRequests: 1, replayMisses: 0, ...extra,
@@ -204,18 +218,8 @@ test('export --html: a defect gone in this run shows as fixed; CLI writes the pa
   const s = sample();
   const p = project(s);
   // a second run without the clipped text: the ledger marks it gone in 0002
-  const state = JSON.parse(readFileSync(join(p.nunchi, 'state', 'ledger.json'), 'utf8'));
-  const rest = p.findings.filter(f => f.rule !== 'clipped-text');
-  const scope = JSON.parse(readFileSync(join(p.run, 'run.json'), 'utf8')).scope;
-  write(join(p.nunchi, 'state', 'ledger.json'), foldRun(state, { id: '0002', scope, health: { problems: [] }, findings: rest }));
-  const run2 = join(p.nunchi, 'runs', '0002');
-  for (const f of readdirSync(p.run, { recursive: true }).map(String)) {
-    const src = join(p.run, f);
-    try { write(join(run2, f), readFileSync(src)); } catch {}
-  }
-  write(join(run2, 'run.json'), { schema: 1, id: '0002', parent: '0001', commit: null, dirty: null, scope, health: { status: 'ok', problems: [] } });
-  write(join(run2, 'findings.json'), { schema: 1, findings: rest });
-  write(join(p.nunchi, 'runs', 'latest'), '0002\n');
+  const next = secondRun(p, p.findings.filter(f => f.rule !== 'clipped-text'));
+  assert.equal(Object.values(next.items).find(i => i.rule === 'clipped-text').goneAt, '0002');
   const json = JSON.parse(execFileSync('node', [CLI, 'export', '--html', 'review', '--json'], { cwd: p.root, encoding: 'utf8' }));
   assert.equal(json.run, '0002');
   const html = readFileSync(join(p.root, 'review', 'index.html'), 'utf8');
@@ -305,8 +309,9 @@ test('scrubSecrets and redactUrl: the wider set of secret shapes, credential par
   ];
   for (const [secret, kind] of cases) assert.ok(scrubSecrets(`v ${secret} w`).includes(`[secret-shaped: ${kind}]`) && !scrubSecrets(`v ${secret} w`).includes(secret.slice(-8)), `${kind}: ${secret}`);
   assert.equal(scrubSecrets('aws_secret_access_key = ' + 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYFIXTURE'), 'aws_secret_access_key = [secret-shaped: aws-secret-access-key]');
-  assert.equal(scrubSecrets('Authorization: Bearer abc.def-ghi_jkl'), 'Authorization: Bearer [secret-shaped: authorization]');
-  assert.equal(scrubSecrets('sent Bearer ' + 'T'.repeat(24)), 'sent Bearer [secret-shaped: bearer-token]');
+  assert.equal(scrubSecrets('Authorization: Bearer abc.def-ghi_jkl9'), 'Authorization: Bearer [secret-shaped: authorization]');
+  assert.equal(scrubSecrets('Authorization: required for this page'), 'Authorization: required for this page', 'page text without a credential stays');
+  assert.equal(scrubSecrets('sent Bearer ' + 'T'.repeat(23) + '7'), 'sent Bearer [secret-shaped: bearer-token]');
   assert.equal(redactUrl('https://bob:hunter2@db.example.test/x?token=1'), 'https://db.example.test/x?token=REDACTED');
   assert.equal(redactText('connect https://bob:hunter2@db.example.test failed'), 'connect https://db.example.test failed');
   const html = htmlOf(oneFinding({ message: 'see /x?api_key=K9FIXTURE9&y=1 and https://bob:hunter2pass@db.example.test/', href: 'https://ann:pw4fixture@h.example.test/p' }));
@@ -316,13 +321,8 @@ test('scrubSecrets and redactUrl: the wider set of secret shapes, credential par
 test('export --html: an older run shows the ledger as it stood after that run, not later fixes', () => {
   const s = sample();
   const p = project(s);
-  const scope = JSON.parse(readFileSync(join(p.run, 'run.json'), 'utf8')).scope;
-  const rest = p.findings.filter(f => f.rule !== 'clipped-text');
-  const state = JSON.parse(readFileSync(join(p.nunchi, 'state', 'ledger.json'), 'utf8'));
-  write(join(p.nunchi, 'state', 'ledger.json'), foldRun(state, { id: '0002', scope, health: { problems: [] }, findings: rest }));
-  write(join(p.nunchi, 'runs', '0002', 'manifest.json'), readFileSync(join(p.run, 'manifest.json')));
-  write(join(p.nunchi, 'runs', '0002', 'findings.json'), { schema: 1, findings: rest });
-  write(join(p.nunchi, 'runs', '0002', 'run.json'), { schema: 1, id: '0002', parent: '0001', scope });
+  const next = secondRun(p, p.findings.filter(f => f.rule !== 'clipped-text'));
+  assert.equal(Object.values(next.items).find(i => i.rule === 'clipped-text').goneAt, '0002', 'the ledger now says fixed');
   const m = buildModel({ runDir: p.run, nunchiDir: p.nunchi });
   const clipped = m.groups.find(g => g.rule === 'clipped-text');
   assert.equal(clipped.status, 'open', 'in run 0001 it was open; it is fixed only from 0002 on');
@@ -392,4 +392,37 @@ test('export --html: hostile route, selector and evidence key, and a JWT, arrive
   assert.ok(html.includes('main&quot;&gt;&lt;svg onload=alert(4)&gt;'), 'the selector is shown, escaped');
   assert.ok(html.includes('&lt;k onclick=alert(5)&gt;'), 'the evidence key is shown, escaped');
   assert.ok(html.includes('[secret-shaped: jwt]'));
+});
+
+test('export --html: reads the M1a ledger (aliases, not looked at, blind runs) and off-origin screens', () => {
+  const home = scene('/', 'guest', 'normal', 'd', { h1: 'Home' });
+  const away = { ...scene('/pay', 'signed-in', 'normal', 'd'), status: 'capture-failed', reason: 'redirected-off-origin', finalOrigin: 'https://pay.example.test', finalPath: '/checkout', noFiles: true };
+  const p = project({ scenes: [home, away], findings: [finding('clipped-text', 'medium', home, { selector: 'main > p' }), finding('dead-href', 'low', home, { lens: 'L7', selector: 'footer a' })] });
+  const state = JSON.parse(readFileSync(join(p.nunchi, 'state', 'ledger.json'), 'utf8'));
+  const clipped = Object.values(state.items).find(i => i.rule === 'clipped-text');
+  // the run's findings.json names the clipped text by an older fingerprint; the ledger's aliases name it now
+  const doc = JSON.parse(readFileSync(join(p.run, 'findings.json'), 'utf8'));
+  for (const f of doc.findings) if (f.rule === 'clipped-text') Object.assign(f, { fp: 'a1a1a1a1a1a1', group: 'b2b2b2b2b2b2' });
+  write(join(p.run, 'findings.json'), doc);
+  // three later runs (as this one is numbered now) never looked at it again, and the last one could not judge
+  write(join(p.run, 'run.json'), { ...JSON.parse(readFileSync(join(p.run, 'run.json'), 'utf8')), id: '0004' });
+  write(join(p.nunchi, 'state', 'ledger.json'), { ...state, runs: ['0001', '0002', '0003', '0004'], blind: { '0004': 'recording-stale' },
+    aliases: { fp: { a1a1a1a1a1a1: clipped.fp }, group: { b2b2b2b2b2b2: clipped.group } } });
+  const m = buildModel({ runDir: p.run, nunchiDir: p.nunchi });
+  const g = m.groups.find(x => x.rule === 'clipped-text');
+  assert.equal(g.group, clipped.group);
+  assert.equal(g.instances.length, 1, 'the run\'s old fingerprint reaches the ledger item');
+  const html = htmlOf(p);
+  assert.match(html, /Not looked at since run 0001/);
+  assert.match(html, /This run could not tell what was fixed: most screens asked for data the recording does not have/);
+  assert.match(html, /class="badge badge-dark">Left the app</);
+  assert.ok(html.includes('Sent to https://pay.example.test') && !html.includes('href="https://pay'), 'the other site is named, never linked');
+});
+
+test('export --html: a decision this machine has not noted yet still counts, and the page is the same bytes later', () => {
+  const s = sample();
+  const p = project({ ...s, decide: ann => [{ target: { group: ann.find(f => f.rule === 'clipped-text').group }, decision: 'hold', by: 'tester' }] });
+  const a = htmlOf(p);
+  assert.equal(buildModel({ runDir: p.run, nunchiDir: p.nunchi }).groups.find(g => g.rule === 'clipped-text').status, 'held');
+  assert.equal(htmlOf(p), a);
 });

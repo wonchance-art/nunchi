@@ -58,7 +58,24 @@ export function collect() {
     }
     return parts.join(' > ');
   };
-  const name = el => (el.getAttribute('aria-label') || el.getAttribute('title') || el.innerText || el.getAttribute('alt') || el.value || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  // Form fields hold what the user typed or the app filled in (a key on a settings page, a name): never
+  // recorded (D7). A field is evidence by its presence, type and label only. A submit, button or reset input's
+  // value is its label, written by the app, and stays its name.
+  const isField = el => el.localName === 'textarea' || el.localName === 'select' || (el.localName === 'input' && !/^(submit|button|reset|image)$/i.test(el.type || ''));
+  const clean = s => (s || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const name = el => clean(isField(el) ? el.getAttribute('aria-label') || el.getAttribute('title')
+    : el.getAttribute('aria-label') || el.getAttribute('title') || el.innerText || el.getAttribute('alt') || el.value);
+  // a field's own label: <label for>/wrapping <label>, else aria-labelledby (label text never holds a field's value)
+  const labelOf = el => clean((el.labels && el.labels.length ? [...el.labels] : (el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => id && document.getElementById(id)).filter(Boolean))
+    .map(l => l.innerText).join(' '));
+  // Editors (contenteditable regions, role=textbox/searchbox) hold what the user wrote, like fields: their text is
+  // cut from the page text, their controls and links are left out, and their lines go back to capture, which cuts
+  // them from aria.yml (`editorLines`, never written).
+  const EDITOR = '[contenteditable]:not([contenteditable="false"]),[role="textbox"],[role="searchbox"]';
+  const inEditor = el => !!el.closest(EDITOR);
+  const editorText = [...document.querySelectorAll(EDITOR)].filter(e => !(e.parentElement && e.parentElement.closest(EDITOR)))
+    .map(e => (e.innerText || '').trim()).filter(Boolean);
+  const withoutEditors = text => editorText.reduce((t, chunk) => { const i = t.indexOf(chunk); return i < 0 ? t : t.slice(0, i) + t.slice(i + chunk.length); }, text);
   const doc = document.documentElement;
   // App-shell layouts scroll inside an element (\`main { overflow: auto }\`), not the window: the
   // full-page screenshot then shows only the first view of it. Elements outside an ancestor's visible
@@ -103,11 +120,12 @@ export function collect() {
   };
   const controls = [];
   for (const el of document.querySelectorAll('a[href],button,[role="button"],[role="link"],input,select,textarea,summary')) {
-    if (controls.length >= MAX || !vis(el)) continue;
-    const text = (el.innerText || '').trim();
+    if (controls.length >= MAX || !vis(el) || inEditor(el)) continue;
+    const text = isField(el) ? '' : (el.innerText || '').trim();      // a select's text is its options
     controls.push({
       selector: sel(el), tag: el.localName, role: el.getAttribute('role') || null,
       name: name(el), hasText: text.length > 0, text: text.slice(0, 40), box: box(el),
+      ...(/^(input|textarea|select)$/.test(el.localName) ? { type: el.type || el.localName, label: labelOf(el) } : {}),
       href: el.localName === 'a' ? el.getAttribute('href') : null,
       inline: el.localName === 'a' && getComputedStyle(el).display === 'inline',
       ...(el.closest(NAV) || inRail(el) ? { inNav: true } : {}),
@@ -157,12 +175,98 @@ export function collect() {
     styles.push({ ...row, selector: sel(el) });
   }
 
+  // Paint: the colours the page paints that the text rows above miss (they keep only elements with their
+  // own text or controls). Kept apart from `styles` so the L4 inventory and its fingerprints do not move.
+  //   surfaces  non-transparent background-color of a visible element at least 256 px² in area and 2 px on
+  //             its short side (smaller fills are dots and hairlines, not surfaces), plus the page: <html>
+  //             and <body>, or the browser's white canvas when both are transparent (light scheme only).
+  //             kind: page | canvas | control (link, button) | field (input, select, textarea) |
+  //             band (≥ 90% of the viewport wide) | box
+  //   borders   visible border sides (width > 0, style not none/hidden, colour not transparent), one row per
+  //             colour with the sides it is on (t r b l), and outlines (sides: outline)
+  //   on        (surfaces and borders) the background the colour is seen against: for a surface the nearest
+  //             ancestor's, for a border the element's own or else its ancestor's; the canvas at the top.
+  //             A colour and what it is on must stay two tokens, or the card or the line disappears.
+  //   svg       fill and stroke of visible inline SVG shapes (none and url(#gradient) paints left out)
+  // Deduplicated like `styles`: the first element in document order with a given row keeps its selector.
+  // transparent: alpha 0, read from `rgba(r, g, b, a)` or a `/ a` slash alpha (never from a blue channel of 0)
+  const clear = c => {
+    if (!c || c === 'transparent') return true;
+    const m = /^rgba\([^,()]+,[^,()]+,[^,()]+,\s*([-\d.e]+%?)\s*\)$/.exec(c) || /\/\s*([-\d.e]+%?)\s*\)$/.exec(c);
+    return !!m && parseFloat(m[1]) === 0;
+  };
+  const paint = { surfaces: [], borders: [], svg: [] };
+  const paintSeen = new Set();
+  const addPaint = (part, el, row) => {
+    const list = paint[part];
+    const key = JSON.stringify([part, row]);
+    if (list.length >= MAX || paintSeen.has(key)) return;
+    paintSeen.add(key);
+    list.push({ ...row, selector: sel(el) });
+  };
+  const SVG_SHAPES = new Set(['path', 'circle', 'rect', 'ellipse', 'line', 'polyline', 'polygon', 'text', 'use']);
+  const roots = [doc, document.body].filter(e => !clear(getComputedStyle(e).backgroundColor));
+  for (const e of roots) addPaint('surfaces', e, { background: getComputedStyle(e).backgroundColor, radius: '0px', kind: 'page' });
+  const lightCanvas = !/^dark$/.test(getComputedStyle(doc).colorScheme.trim());
+  if (!roots.length && lightCanvas) addPaint('surfaces', doc, { background: 'rgb(255, 255, 255)', radius: '0px', kind: 'canvas' });
+  const canvas = roots.length ? getComputedStyle(roots[0]).backgroundColor : lightCanvas ? 'rgb(255, 255, 255)' : null;
+  // the background an element is seen against, memoised per ancestor so the walk stays linear in the DOM
+  const effective = new Map();
+  const behind = el => {
+    const chain = [];
+    let a = el.parentElement, found = canvas;
+    for (; a; a = a.parentElement) {
+      if (effective.has(a)) { found = effective.get(a); break; }
+      const b = getComputedStyle(a).backgroundColor;
+      if (!clear(b)) { found = b; effective.set(a, b); break; }
+      chain.push(a);
+    }
+    for (const x of chain) effective.set(x, found);
+    return found;
+  };
+  for (const el of document.querySelectorAll('body *')) {
+    if (paint.surfaces.length >= MAX && paint.borders.length >= MAX && paint.svg.length >= MAX) break;
+    const shape = el instanceof SVGElement && el.localName !== 'svg';
+    if (shape) {
+      if (!SVG_SHAPES.has(el.localName) || el.closest('defs,symbol,clipPath,mask,marker,pattern')) continue;
+      if (!el.getClientRects().length) continue;
+      const r = el.getBoundingClientRect();
+      if (!(r.width > 0 || r.height > 0)) continue;
+      if (typeof el.checkVisibility === 'function' && !el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+      const cs = getComputedStyle(el);
+      const usable = v => v && v !== 'none' && !/^url\(/.test(v) && !clear(v);
+      const fill = usable(cs.fill) && cs.fillOpacity !== '0' ? cs.fill : null;
+      const stroke = usable(cs.stroke) && cs.strokeOpacity !== '0' && parseFloat(cs.strokeWidth) > 0 ? cs.stroke : null;
+      if (fill || stroke) addPaint('svg', el, { fill, stroke });
+      continue;
+    }
+    if (!vis(el)) continue;
+    const cs = getComputedStyle(el);
+    if (!clear(cs.backgroundColor)) {
+      const r = el.getBoundingClientRect();
+      if (r.width * r.height >= 256 && Math.min(r.width, r.height) >= 2) {
+        const kind = el.matches('input,select,textarea') ? 'field' : el.matches('a[href],button,[role="button"],summary') ? 'control' : r.width >= 0.9 * innerWidth ? 'band' : 'box';
+        addPaint('surfaces', el, { background: cs.backgroundColor, radius: cs.borderTopLeftRadius, kind, on: behind(el) });
+      }
+    }
+    const sides = new Map();
+    for (const [s, S] of [['t', 'Top'], ['r', 'Right'], ['b', 'Bottom'], ['l', 'Left']]) {
+      const c = cs[`border${S}Color`];
+      if (!(parseFloat(cs[`border${S}Width`]) > 0) || /^(none|hidden)$/.test(cs[`border${S}Style`]) || clear(c)) continue;
+      if (!sides.has(c)) sides.set(c, { sides: '', width: cs[`border${S}Width`] });
+      sides.get(c).sides += s;
+    }
+    const on = sides.size || cs.outlineStyle !== 'none' ? (clear(cs.backgroundColor) ? behind(el) : cs.backgroundColor) : null;
+    for (const [color, v] of sides) addPaint('borders', el, { color, sides: v.sides, width: v.width, on });
+    if (cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) > 0 && !clear(cs.outlineColor)) addPaint('borders', el, { color: cs.outlineColor, sides: 'outline', width: cs.outlineWidth, on: behind(el) });
+  }
+
   const clipped = [];
   for (const el of document.querySelectorAll('body *')) {
     if (clipped.length >= 50) break;
     if (!vis(el)) continue;
     const ownText = [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim());
-    if (!ownText) continue;
+    if (!ownText || inEditor(el)) continue;
     const cs = getComputedStyle(el);
     if (!/hidden|clip/.test(cs.overflowX) || cs.textOverflow === 'ellipsis') continue;
     // visually hidden text for screen readers (sr-only: 1px box, clipped) is meant to be invisible
@@ -187,6 +291,7 @@ export function collect() {
 
   const links = [];
   for (const a of document.querySelectorAll('a[href]')) {
+    if (inEditor(a)) continue;                                       // a link the user wrote is not the app's navigation
     const href = a.getAttribute('href');
     let url;
     try { url = new URL(href, location.href); } catch { continue; }
@@ -202,14 +307,15 @@ export function collect() {
     url: location.pathname + location.search,
     browserErrorPage: location.protocol === 'chrome-error:',
     title: document.title,
-    h1: (document.querySelector('h1')?.innerText || '').trim().slice(0, 120),
+    h1: ([...document.querySelectorAll('h1')].find(h => !inEditor(h))?.innerText || '').trim().slice(0, 120),
     viewport: { width: innerWidth, height: innerHeight },
     scrollWidth: doc.scrollWidth,
     scrollHeight: doc.scrollHeight,
-    text: (document.body.innerText || '').replace(/ /g, ' '),
-    mainText: (main.innerText || '').replace(/ /g, ' '),
+    text: withoutEditors(document.body.innerText || '').replace(/ /g, ' '),
+    mainText: withoutEditors(main.innerText || '').replace(/ /g, ' '),
     // code samples and keyboard text: documentation quoting an error is not the app showing one
-    codeLines: [...new Set([...document.querySelectorAll('pre,code,kbd,samp')].flatMap(e => (e.innerText || '').split('\n').map(l => l.trim()).filter(Boolean)))].slice(0, 2000),
-    controls, hiddenControls, styles, clipped, images, links, fonts, fields, scrollers,
+    codeLines: [...new Set([...document.querySelectorAll('pre,code,kbd,samp')].filter(e => !inEditor(e)).flatMap(e => (e.innerText || '').split('\n').map(l => l.trim()).filter(Boolean)))].slice(0, 2000),
+    editorLines: [...new Set(editorText.flatMap(t => t.split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean)))].sort(),
+    controls, hiddenControls, styles, paint, clipped, images, links, fonts, fields, scrollers,
   };
 }
