@@ -164,6 +164,9 @@ test('deny hook: the board\'s script is never run directly and its link handover
     'node -e "import(\'./src/board/launch.mjs\').then(m => m.openBoard({ projectDir: \'.\', browser: false }))"',
     'node --input-type=module -e "const { openBoard } = await import(\'/abs/nunchi/src/board/launch.mjs\')"', 'bun src/board/server.mjs',
     'node -e "x({ linkToTerminal: true })"',
+    // round 2: a renamed copy, the flag split by quotes; the script's name split by quotes
+    'cp -r src /tmp/copy && mv /tmp/copy/board/server.mjs /tmp/copy/board/s.mjs && node /tmp/copy/board/s.mjs --project . --link-to-p""arent 3>&1',
+    "node /tmp/copy/board/s.mjs --link-to-'parent'", 'node src/board/serv""er.mjs --project .', "node src/board/'launch.mjs'",
   ]) assert.ok(call(r, 'Bash', { command }), command);
   for (const command of ['cat src/board/server.mjs', 'git diff -- src/board/server.mjs', 'grep -n openBoard src/board/launch.mjs', 'node --test test/board-security.test.mjs', 'nunchi open --no-browser']) {
     assert.equal(call(r, 'Bash', { command }), null, command);

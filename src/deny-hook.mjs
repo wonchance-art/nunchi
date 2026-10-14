@@ -468,8 +468,11 @@ const PIECES_WHY = 'this code names nunchi\'s state, answer keys or canaries: us
 export function bashRule(command, prot, { depth = 0, cwd: start = prot.cwd } = {}) {
   const cmd = String(command || '');
   const flat = cmd.replace(/\\/g, '/');
-  if (/--link-to-parent\b|\blinkToTerminal\b/.test(flat)) return 'the board\'s link goes to the person\'s own terminal only (they run nunchi open --no-browser there)';
-  for (const seg of flat.split(/;|&&|\|\||\||\n/)) {
+  // the link handover and the board's scripts, in the words as the shell joins them (`--link-to-p""arent`,
+  // `serv''er.mjs`) as well as in the raw text: the flag is the signal, whatever the script is called
+  const joined = quotedSegments(cmd).map(seg => words(seg).join(' ').replace(/\\/g, '/'));
+  if ([flat, ...joined].some(t => /--link-to-parent\b|\blinkToTerminal\b/.test(t))) return 'the board\'s link goes to the person\'s own terminal only (they run nunchi open --no-browser there)';
+  for (const seg of [...flat.split(/;|&&|\|\||\||\n/), ...joined]) {
     if (BOARD_SCRIPT.test(seg) && (words(seg).some(w => RUNS_CODE.test(w)) || /\b(import|require)\s*\(|--(import|require)\b/.test(seg))) return 'the board is started by nunchi open, never by running its script';
   }
   // inline code, whole (the finer segments below cut it at its parentheses): a shell's is judged as a command; any

@@ -1323,8 +1323,11 @@ states the same rules for other agents.
 *What this is, and is not.* The hook, the channels and the board's confirmation are an **attestation** of who
 decided: they hold against honest mistakes and naive prompt injection (an agent that follows text on a screen, or
 guesses a command). They are **not a security boundary** against code that runs as the same user as the person:
-such code can read the same files, start the same processes and drive the same browser. For a repository you do not
-trust, run the agent in a container or as a separate user.
+such code can read the same files, start the same processes and drive the same browser. A text hook in particular
+cannot see a script that imports `board/launch.mjs`, or a copy of the board's script edited to print its link: it
+sees the `--link-to-parent` flag (checked in the words as the shell joins them, whatever the script is called) and
+the script's own names, nothing a file does once it runs. For a repository you do not trust, run the agent in a
+container or as a separate user.
 
 **Deviations from design §3, and why (the safer option each time).**
 - One-time code in the link, traded for a per-tab key, instead of the key itself in the fragment: a link that leaks
