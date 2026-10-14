@@ -279,8 +279,11 @@ test('board e2e: on a view without a dock the toast is inside main (axe region);
     await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
     await page.keyboard.press('Enter');
     await page.waitForSelector('#h-detail');
+    // the first decision's toast can still be showing: wait for this decision itself to land (it moves Detail on to
+    // the next finding, then shows its toast), so Esc never races the request (macos-latest, round 2)
+    const hash = await page.evaluate(() => location.hash);
     await page.keyboard.press('s');
-    await page.waitForSelector('#toast:not([hidden])');
+    await page.waitForFunction(h => location.hash !== h && !document.getElementById('toast').hidden, hash);
     await page.keyboard.press('Escape');
     await page.waitForSelector('#h-findings');
     assert.equal(await page.evaluate(() => document.getElementById('toast').hidden), true, 'and the toast is gone');
