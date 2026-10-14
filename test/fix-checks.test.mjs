@@ -4,7 +4,7 @@
 // fails or its count rises. Synthetic projects in temp folders.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, realpathSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, realpathSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as X from '../src/fix/run.mjs';
@@ -153,9 +153,10 @@ test('the timeout bounds the run even when a grandchild keeps the output open; a
   const hold = "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)'], { stdio: 'inherit', detached: true }).unref()";
   const quick = project({ test: `node -e "${hold}"` });
   let t0 = Date.now();
-  const a = await X.runChecks({ root: quick, profile: checkProfile(quick), timeout: 2000 });
-  assert.equal(a.results.test.status, 'pass');
-  assert.ok(Date.now() - t0 < 8000, `took ${Date.now() - t0} ms`);
+  // a generous timeout (npm alone takes seconds to start on Windows): the run must end well before the grandchild does
+  const a = await X.runChecks({ root: quick, profile: checkProfile(quick), timeout: 15000 });
+  assert.equal(a.results.test.status, 'pass', a.results.test.output);
+  assert.ok(Date.now() - t0 < 14000, `took ${Date.now() - t0} ms`);
   const slow = project({ test: `node -e "${hold}; setTimeout(() => {}, 60000)"` });
   t0 = Date.now();
   const b = await X.runChecks({ root: slow, profile: checkProfile(slow), timeout: 2000 });
@@ -209,4 +210,45 @@ test('yarn: its major version comes from the binary, not from the markers (when 
   assert.equal(r.pm.major, v);
   assert.equal(r.pm.from, 'yarn --version');
   if (Number(v) === 1) assert.equal(r.results.lint.status, 'refused', 'yarn 1 runs pre/post: refused');
+});
+
+test('a check that exits normally takes its detached grandchild with it (the tree the watcher saw is killed)', { skip: process.platform === 'win32' && 'ps is POSIX' }, async () => {
+  const gc = "require('fs').writeFileSync('gc.pid', String(process.pid)); setTimeout(() => {}, 20000)";
+  const parent = `require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(gc)}], { stdio: 'ignore', detached: true }).unref(); setTimeout(() => {}, 1500)`;
+  const root = project({ test: `node -e ${JSON.stringify(parent)}` });
+  const r = await X.runChecks({ root, profile: checkProfile(root), timeout: 15000 });
+  assert.equal(r.results.test.status, 'pass', r.results.test.output);
+  const pid = Number(readFileSync(join(root, 'gc.pid'), 'utf8'));
+  let alive = true;
+  for (let i = 0; i < 40 && alive; i++) { try { process.kill(pid, 0); await new Promise(res => setTimeout(res, 50)); } catch { alive = false; } }
+  assert.equal(alive, false, `the grandchild ${pid} still runs`);
+});
+
+test('the tree watcher: descendants through parents, a detached one kept once seen, a reused pid never killed', () => {
+  const procs = [{ pid: 10, ppid: 1, start: 'a' }, { pid: 11, ppid: 10, start: 'b' }, { pid: 12, ppid: 11, start: 'c' }, { pid: 20, ppid: 1, start: 'd' }];
+  assert.deepEqual([...X.descendantsOf(10, procs).keys()].sort(), [11, 12]);
+  // 11 exited: 12 now belongs to init, still known
+  const later = [{ pid: 10, ppid: 1, start: 'a' }, { pid: 12, ppid: 1, start: 'c' }, { pid: 13, ppid: 12, start: 'e' }];
+  assert.deepEqual([...X.descendantsOf(10, later, new Map([[11, 'b'], [12, 'c']])).keys()].sort(), [12, 13]);
+  // a pid reused by another process (another start) is not ours
+  assert.deepEqual([...X.descendantsOf(10, [{ pid: 12, ppid: 1, start: 'zzz' }], new Map([[12, 'c']])).keys()], []);
+  const killed = [];
+  const w = X.treeWatcher(10, { platform: 'linux', procs: () => procs, every: 1e6, kill: pid => killed.push(pid) });
+  w.stop();
+  assert.deepEqual(w.killAll().sort(), [11, 12]);
+  assert.deepEqual(killed.sort(), [11, 12]);
+  assert.deepEqual(X.treeWatcher(10, { platform: 'win32', procs: () => procs }).killAll(), [], 'Windows: taskkill /T instead');
+});
+
+test('Windows paths, checked on any machine: the manager found on a ;-separated PATH as .cmd, cmd.exe and taskkill under SystemRoot', () => {
+  const dir = tmp('nunchi-winpath-');
+  writeFileSync(join(dir, 'pnpm.cmd'), '@echo off\r\n');
+  assert.equal(X.findBinary('pnpm', { env: { Path: `C:\\nowhere;${dir}` }, platform: 'win32' }), join(dir, 'pnpm.cmd'));
+  assert.equal(X.findBinary('pnpm', { env: { Path: dir }, platform: 'linux' }), null, 'no .cmd on POSIX');
+  const c = X.commandFor({ pm: { name: 'pnpm' }, script: 'lint', bin: 'C:\\Program Files\\pnpm\\pnpm.cmd', platform: 'win32' });
+  assert.match(c.cmd, /^[A-Za-z]:\\.*\\System32\\cmd\.exe$/);
+  assert.deepEqual(c.args, ['/d', '/s', '/c', '""C:\\Program Files\\pnpm\\pnpm.cmd" --config.enable-pre-post-scripts=false run lint"']);
+  const calls = [];
+  X.killTree({ pid: 4242, kill() {} }, 'win32', { run: (cmd, args) => calls.push([cmd, args]), systemRoot: 'C:\\Windows' });
+  assert.deepEqual(calls, [['C:\\Windows\\System32\\taskkill.exe', ['/pid', '4242', '/T', '/F']]]);
 });

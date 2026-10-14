@@ -15,7 +15,7 @@
 // - Output goes through the secret scanner (and loses its colour codes) before it is stored or printed.
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, statSync, accessSync, constants } from 'node:fs';
-import { join, delimiter } from 'node:path';
+import { join, delimiter, win32 } from 'node:path';
 import { scrubSecrets } from '../rules.mjs';
 import { redactText } from '../network.mjs';
 import { CHECK_SCRIPTS } from '../checks.mjs';
@@ -94,7 +94,7 @@ function launch(bin, args, { platform = process.platform, name = 'the package ma
     const root = /^[A-Za-z]:\\[^"%&|<>^\n]*$/.test(process.env.SystemRoot || '') ? process.env.SystemRoot : 'C:\\Windows';
     // /s strips the outer pair of quotes and keeps the rest as it is: the whole line goes in one more pair, as node
     // does for shell: true, so a path with spaces ("C:\Program Files\nodejs\npm.cmd") stays one word
-    return { cmd: join(root, 'System32', 'cmd.exe'), args: ['/d', '/s', '/c', `""${bin}" ${args.join(' ')}"`], opts: { windowsVerbatimArguments: true } };
+    return { cmd: win32.join(root, 'System32', 'cmd.exe'), args: ['/d', '/s', '/c', `""${bin}" ${args.join(' ')}"`], opts: { windowsVerbatimArguments: true } };
   }
   return { cmd: bin, args, opts: {} };
 }
@@ -200,14 +200,49 @@ export function countOf(text) {
 }
 
 // Kills a process tree: its group on POSIX (it was started detached), taskkill /T on Windows.
-export function killTree(child, platform = process.platform) {
+// `run`: how taskkill is started (injected by tests, so the Windows path is checked on any machine).
+export function killTree(child, platform = process.platform, { run = spawnSync, systemRoot = process.env.SystemRoot } = {}) {
   try {
-    if (platform === 'win32') spawnSync(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'), ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    if (platform === 'win32') run(win32.join(systemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'), ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     else process.kill(-child.pid, 'SIGKILL');
   } catch { try { child.kill('SIGKILL'); } catch {} }
 }
+// Every process on the machine as `ps` lists it (POSIX): [{ pid, ppid, start }] (`start` tells a pid reused later).
+export function listProcs() {
+  try {
+    const r = spawnSync('ps', ['-A', '-o', 'pid=,ppid=,lstart='], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
+    return String(r.stdout || '').split('\n').map(l => /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(l)).filter(Boolean).map(m => ({ pid: Number(m[1]), ppid: Number(m[2]), start: m[3] }));
+  } catch { return []; }
+}
+// The descendants of `root` in a process list, and of every process already `known` (pid → start) that is still the
+// same process: a grandchild that detached (its own session) is found while its parent lives, and kept after.
+// → Map pid → start.
+export function descendantsOf(root, procs, known = new Map()) {
+  const kids = new Map();
+  for (const p of procs) { if (!kids.has(p.ppid)) kids.set(p.ppid, []); kids.get(p.ppid).push(p); }
+  const startOf = new Map(procs.map(p => [p.pid, p.start]));
+  const out = new Map([...known].filter(([pid, start]) => startOf.get(pid) === start));
+  const todo = [root, ...out.keys()];
+  while (todo.length) for (const k of kids.get(todo.shift()) || []) if (!out.has(k.pid) && k.pid !== root) { out.set(k.pid, k.start); todo.push(k.pid); }
+  return out;
+}
+// Watches a check's process tree (POSIX: `ps` now and then; the descendants it saw are remembered, so one that
+// detached into its own session is still killed when the check ends). `kill(pid)`: its group, then itself.
+export function treeWatcher(root, { platform = process.platform, procs = listProcs, every = 500, kill = pid => { try { process.kill(-pid, 'SIGKILL'); } catch {} try { process.kill(pid, 'SIGKILL'); } catch {} } } = {}) {
+  let seen = new Map(), t = null, first = null;
+  const poll = () => { if (platform !== 'win32') seen = descendantsOf(root, procs(), seen); };
+  if (platform !== 'win32') { first = setTimeout(poll, Math.min(100, every)); t = setInterval(poll, every); }
+  return {
+    poll,
+    stop() { clearTimeout(first); clearInterval(t); },
+    // every descendant seen that is still the same process
+    killAll() { if (platform === 'win32') return []; poll(); const left = [...seen.keys()]; for (const pid of left) kill(pid); return left; },
+  };
+}
 // → { exit, signal, timedOut, output, ms }
-export function runProcess({ cmd, args, opts = {}, cwd, env, timeout = CHECK_TIMEOUT_MS, platform = process.platform }) {
+// The whole tree ends with the run (M3 review, round 2): on the timeout, and on a normal exit too, the check's process
+// group is killed, and every descendant the watcher saw (a detached grandchild, `sleep 20 &` in its own session).
+export function runProcess({ cmd, args, opts = {}, cwd, env, timeout = CHECK_TIMEOUT_MS, platform = process.platform, watch = treeWatcher }) {
   return new Promise(res => {
     const t0 = Date.now();
     let out = '';
@@ -216,6 +251,7 @@ export function runProcess({ cmd, args, opts = {}, cwd, env, timeout = CHECK_TIM
     catch (e) { res({ exit: null, signal: null, timedOut: false, output: cleanOutput(String(e.message)), ms: 0, error: true }); return; }
     const take = d => { out += d.toString('utf8'); if (out.length > 4 * OUTPUT_KEEP * 16) out = out.slice(-4 * OUTPUT_KEEP * 8); };
     child.stdout.on('data', take); child.stderr.on('data', take);
+    const tree = watch(child.pid, { platform });
     let timedOut = false, done = false, grace = null;
     // a grandchild that keeps stdout open would hold `close` forever: the run ends at the process's own exit plus a
     // short grace for its last output, and on the timeout the tree is killed and the pipes are closed from this side
@@ -223,6 +259,9 @@ export function runProcess({ cmd, args, opts = {}, cwd, env, timeout = CHECK_TIM
       if (done) return;
       done = true;
       clearTimeout(timer); clearTimeout(grace);
+      tree.stop();
+      killTree(child, platform);
+      tree.killAll();
       for (const s of [child.stdout, child.stderr]) { try { s.destroy(); } catch {} }
       const text = cleanOutput(out);
       res({ exit, signal, timedOut, output: text.length > OUTPUT_KEEP ? text.slice(-OUTPUT_KEEP) : text, count: countOf(text), ms: Date.now() - t0 });

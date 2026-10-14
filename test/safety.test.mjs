@@ -165,6 +165,12 @@ test('D9: through nunchi\'s git, the repository\'s fsmonitor, hooks, external di
   const get = k => run(['config', '--get', k], { encoding: 'utf8' }).trim();
   assert.deepEqual(['core.fsmonitor', 'core.hooksPath', 'diff.external', 'core.pager'].map(get), ['false', runs.noHooksPath(), '', 'cat']);
   assert.equal(runs.noHooksPath('linux'), '/dev/null');
+  // the Windows value, checked on any machine: an empty folder of nunchi's own, written with forward slashes
+  const win = runs.noHooksPath('win32');
+  assert.notEqual(win, '/dev/null');
+  assert.ok(!win.includes('\\'), win);
+  assert.deepEqual(readdirSync(win), []);
+  assert.equal(runs.noHooksPath('win32'), win, 'one folder per process');
 });
 
 test('D9: the system config is read (signing, line endings are the person\'s), and cannot switch the programs back on', () => {
