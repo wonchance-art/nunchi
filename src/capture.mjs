@@ -316,6 +316,8 @@ async function captureOne(browser, base, scene, opts) {
   const shot = o => (offOrigin ? null : page.screenshot({ type: 'jpeg', quality: 70, animations: 'disabled', caret: 'hide', ...o }).catch(e => { errors.push(`${o.fullPage ? 'full' : 'top'}: ${e.message}`); return null; }));
   const top = await shot({});
   const full = await shot({ fullPage: true });
+  // fix probes (design §4.4): the first view as a PNG too, for the visual-drift check (a JPEG's noise is not a change)
+  const png = opts.png && !offOrigin ? await page.screenshot({ type: 'png', animations: 'disabled', caret: 'hide' }).catch(e => { errors.push(`png: ${e.message}`); return null; }) : null;
   // Freeze what was seen at capture time; held (slow) requests released afterwards, and anything the page
   // sends as it closes, are not evidence.
   const seen = scrubDeep(requests.slice());
@@ -334,6 +336,7 @@ async function captureOne(browser, base, scene, opts) {
     measure,
   };
   if (top) writeStable(join(dir, 'top.jpg'), top);
+  if (png) writeStable(join(dir, 'top.png'), png);
   if (full) writeStable(join(dir, 'full.jpg'), full);
   writeStable(join(dir, 'aria.yml'), scrubSecrets(redactText(ariaWithoutValues(aria, editorLines))) + '\n');
   if (measure) {
@@ -426,7 +429,10 @@ export function runHealth(entries, findings) {
 // canaries: how many canary scenes to plant (spec §4 H2); 0 = none (the default for the API; the CLI plants 3).
 // lenses: the loaded lens packs, so a canary is planted only where its lens hunts (default: the built-in packs).
 // allowBaseHosts: hosts the user listed in .nunchi/config.json; any other base URL must be local or private (D10).
-export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], allowBaseHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {}, flow: flowOpts = {}, canaries = 0, lenses = null }) {
+// Fix probes (design §4.4) pass `wholeAppDetectors: false` (no flow, design-system one-offs or secret findings: a probe
+// sees a few routes, never the whole app), `png: true` (first views as PNG too), and `canarySeed` / `canaryRoutes`, so
+// the probes before and after a fix plant the same canaries on the fixed screens (the re-check's controls, §2.4).
+export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], allowBaseHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {}, flow: flowOpts = {}, canaries = 0, lenses = null, wholeAppDetectors = true, png = false, canarySeed: seedGiven = null, canaryRoutes = null }) {
   const refusal = baseUrlRefusal(baseUrl, allowBaseHosts);
   if (refusal) throw Object.assign(new Error(refusal), { code: 'URL_NOT_ALLOWED' });
   if (scenes.some(s => s.person === 'signed-in') && !(storageState && existsSync(storageState))) {
@@ -459,7 +465,7 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
     // forced states replay the recording (they rewrite the same data) unless the person is captured live
     const mode = state === 'normal' ? modes[person] : derivedMode(modes[person]);
     const t = Date.now();
-    const r = await captureOne(browser, baseUrl, scene, { out, clock, locale, timezone, timeout, storageState: person === 'signed-in' ? storageState : undefined, strictPath, allowHosts, mode, loader: recordings[person].loader() });
+    const r = await captureOne(browser, baseUrl, scene, { out, clock, locale, timezone, timeout, storageState: person === 'signed-in' ? storageState : undefined, strictPath, allowHosts, mode, loader: recordings[person].loader(), png });
     timing.push({ scene: scene.id, ms: Date.now() - t });
     entries.push(r.entry); findings.push(...r.findings); sceneLinks.set(r.entry.id, r.links); rowsByScene.set(r.entry.id, r.styles); if (r.controls) controlsByScene.set(r.entry.id, r.controls);
     for (const sc of r.scripts) if (!scriptMap.has(sc.path)) scriptMap.set(sc.path, sc.body);
@@ -486,12 +492,12 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   const flowRoutes = flowOpts.routes || [...new Set(scenes.map(s => s.route || s.path))].sort();
   const { flow, findings: flowFindings } = buildFlow({ entries, sceneLinks, routes: flowRoutes, complete: !!flowOpts.routes, wholeApp: flowOpts.wholeApp ?? !!flowOpts.routes, code: flowOpts.code || [] });
   // an app that did not load shows no links: the flow cannot be judged, nothing is "unreachable"
-  if (!health.problems.some(p => p.status === 'app-unreachable')) findings.push(...flowFindings);
+  if (wholeAppDetectors && !health.problems.some(p => p.status === 'app-unreachable')) findings.push(...flowFindings);
   // L4 and L10: the app's measured design system and phone/desktop parity.
   const { system, findings: systemFindings } = buildSystem({ entries, rowsByScene });
-  findings.push(...systemFindings, ...parityFindings({ entries, controlsByScene }));
+  findings.push(...(wholeAppDetectors ? systemFindings : []), ...parityFindings({ entries, controlsByScene }));
   const scripts = [...scriptMap].sort().map(([path, body]) => ({ path, body }));
-  findings.push(...secretFindings(scripts));
+  if (wholeAppDetectors) findings.push(...secretFindings(scripts));
   const order = { blocker: 0, high: 1, medium: 2, low: 3 };
   findings.sort((a, b) => order[a.severity] - order[b.severity] || String(a.scene).localeCompare(String(b.scene)) || a.rule.localeCompare(b.rule) || String(a.selector).localeCompare(String(b.selector)));
   // ── canaries (spec §4 H2) ── copies of a few captured scenes with a planted defect, captured after every
@@ -499,10 +505,11 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   // never in findings.json, flow, the design system or run health.
   let canaryEntries = []; let canaryFile = null;
   if (canaries > 0) {
-    const seed = canarySeed({ routes: [...new Set(scenes.map(s => s.route || s.path))], persons, viewports, states });
+    const seed = seedGiven || canarySeed({ routes: [...new Set(scenes.map(s => s.route || s.path))], persons, viewports, states });
+    const eligible = canaryRoutes ? entries.filter(e => canaryRoutes.includes(e.route)) : entries;
     const cb = await launch({ browserPath, baseUrl, allowHosts });
     try {
-      const r = await plantCanaries({ entries, count: canaries, seed, lenses: lenses || loadLenses({ root: BUILTIN_DIR }).lenses, tryScene: async (base, kinds, id) => {
+      const r = await plantCanaries({ entries: eligible, count: canaries, seed, again: !!canaryRoutes, lenses: lenses || loadLenses({ root: BUILTIN_DIR }).lenses, tryScene: async (base, kinds, id) => {
         const s = scenes.find(x => (x.route || x.path) === base.route && (x.person || 'guest') === base.person);
         const scene = { ...s, vp: base.viewport, person: base.person, state: base.state, id };
         const mode = derivedMode(modes[base.person]);

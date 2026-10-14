@@ -1,6 +1,9 @@
 // The check profile (design 0.1-c §4.3): what nunchi's fix loop (M3) will run of the repository's own checks, approved
-// once through a human channel (the board's card, `/api/approve-checks`), never by the agent. It holds:
+// once through a human channel (the board's card, `/api/approve-checks`, or `nunchi fix --approve-checks` in the
+// person's own terminal), never by the agent. It holds:
 // - the exact `build`, `typecheck`, `lint` and `test` script lines of package.json, and their `pre*` / `post*` lines;
+// - `serve`: the `dev` and `start` lines (and their pre/post lines), the scripts `fix --serve` may start the app with
+//   (design §4.4 "the approved start script");
 // - the SHA-256 of `.npmrc`, `.yarnrc`, `.yarnrc.yml` (and the file its `yarnPath` names), `bunfig.toml`,
 //   `pnpm-workspace.yaml` and `.pnpmfile.cjs` (absent: null);
 // - the `packageManager` field.
@@ -13,6 +16,7 @@ import { stableJson } from './stable.mjs';
 import { readDoc, updateDoc } from './state.mjs';
 
 export const CHECK_SCRIPTS = ['build', 'typecheck', 'lint', 'test'];
+export const SERVE_SCRIPTS = ['dev', 'start'];
 export const CONFIG_FILES = ['.npmrc', '.yarnrc', '.yarnrc.yml', 'bunfig.toml', 'pnpm-workspace.yaml', '.pnpmfile.cjs'];
 const sha256 = buf => createHash('sha256').update(buf).digest('hex');
 const MAX = 4 * 1024 * 1024;
@@ -28,8 +32,9 @@ export function checkProfile(projectDir) {
   let pkg;
   try { pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')); } catch { return null; }
   const all = pkg && typeof pkg.scripts === 'object' && pkg.scripts ? pkg.scripts : {};
-  const scripts = {};
+  const scripts = {}, serve = {};
   for (const name of CHECK_SCRIPTS) for (const n of [`pre${name}`, name, `post${name}`]) if (typeof all[n] === 'string') scripts[n] = all[n];
+  for (const name of SERVE_SCRIPTS) for (const n of [`pre${name}`, name, `post${name}`]) if (typeof all[n] === 'string') serve[n] = all[n];
   const files = {};
   for (const f of CONFIG_FILES) files[f] = fileHash(join(root, f));
   // `.yarnrc.yml` can point yarn at a JavaScript file of the repository: that file is part of what runs
@@ -37,7 +42,7 @@ export function checkProfile(projectDir) {
     const m = /^\s*yarnPath:\s*["']?([^"'\n]+?)["']?\s*$/m.exec(readFileSync(join(root, '.yarnrc.yml'), 'utf8'));
     if (m) { const p = resolve(root, m[1]); files[`yarnPath:${m[1]}`] = inside(root, p) ? fileHash(p) : 'outside the project'; }
   } catch {}
-  const profile = { scripts, files, packageManager: typeof pkg.packageManager === 'string' ? pkg.packageManager : null };
+  const profile = { scripts, serve, files, packageManager: typeof pkg.packageManager === 'string' ? pkg.packageManager : null };
   return { ...profile, hash: sha256(stableJson(profile)).slice(0, 32) };
 }
 
@@ -58,7 +63,7 @@ export function approveProfile(file, projectDir, { seen, channel, by, generation
   updateDoc(file, doc => {
     const cur = doc || { schema: 1 };
     if (cur.profiles?.[now.hash]) return doc;
-    return { ...cur, schema: 1, note: 'check profiles a person approved (design §4.3); any change asks again', profiles: { ...(cur.profiles || {}), [now.hash]: { scripts: now.scripts, files: now.files, packageManager: now.packageManager, channel, by } } };
+    return { ...cur, schema: 1, note: 'check profiles a person approved (design §4.3); any change asks again', profiles: { ...(cur.profiles || {}), [now.hash]: { scripts: now.scripts, serve: now.serve, files: now.files, packageManager: now.packageManager, channel, by } } };
   }, { read: READ, prev: false, generation });
   return now.hash;
 }

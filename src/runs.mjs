@@ -24,13 +24,19 @@ export function listRuns(dir) {
   };
 }
 
+// A run's kind (run.json `kind`; a run without one is a sweep). Fix probes (design §4.4) are runs too, kept apart: never
+// `latest`, hidden from `nunchi runs`, removed first by `gc`.
+export function runKind(dir, id) {
+  try { const k = JSON.parse(readFileSync(join(dir, id, 'run.json'), 'utf8'))?.kind; return typeof k === 'string' ? k : 'sweep'; } catch { return 'sweep'; }
+}
 export function latestRun(dir) {
   const f = join(dir, 'latest');
   let id = null;
   try { id = retryBusy(() => readFileSync(f, 'utf8'), 1000).trim(); } catch {}            // absent, or replaced right now
   if (id && ID.test(id) && existsSync(join(dir, id))) return id;
   const { complete } = listRuns(dir);
-  return complete.length ? complete[complete.length - 1] : null;
+  const runs = complete.filter(r => runKind(dir, r) !== 'fix-probe');
+  return runs.length ? runs[runs.length - 1] : null;
 }
 
 // Reserves the next id. mkdir without `recursive` fails if the folder exists, so two captures started
@@ -74,10 +80,11 @@ function reserve(dir, after) {
 
 // `latest` is a pointer for convenience: replaced atomically, and when several captures finish at once the last
 // write wins; a write that still fails is not fatal (latestRun falls back to the newest complete run).
-export function finishRun(dir, id) {
+// `latest: false` (fix probes) leaves the pointer where it is.
+export function finishRun(dir, id, { latest = true } = {}) {
   const final = join(dir, id);
   retryBusy(() => io.rename(join(dir, `${id}.partial`), final));
-  try { writeAtomic(join(dir, 'latest'), id + '\n', { mode: 0o600 }); } catch {}
+  if (latest) { try { writeAtomic(join(dir, 'latest'), id + '\n', { mode: 0o600 }); } catch {} }
   return final;
 }
 
@@ -85,12 +92,15 @@ export function finishRun(dir, id) {
 // nothing has written to for `staleMs`. With `folded` (the runs the ledger holds), a complete run the ledger has
 // not folded is never removed. `pinned` (design §8.1): runs an open item still names (its last sighting, the
 // evidence a re-check compares with) are kept too.
+// Fix probes are removed first (design §3.4): they never count towards `keep`, and only a probe an open attempt
+// pins (`pinned`) stays.
 export function gcRuns(dir, { keep = 5, staleMs = 3600e3, now = Date.now(), folded = null, pinned = null } = {}) {
   const { complete, partial } = listRuns(dir);
   const latest = latestRun(dir);
-  const keepSet = new Set(complete.slice(-keep));
+  const probe = new Set(complete.filter(id => runKind(dir, id) === 'fix-probe'));
+  const keepSet = new Set(complete.filter(id => !probe.has(id)).slice(-keep));
   if (latest) keepSet.add(latest);
-  if (folded) for (const id of complete) if (!folded.has(id)) keepSet.add(id);
+  if (folded) for (const id of complete) if (!folded.has(id) && !probe.has(id)) keepSet.add(id);
   if (pinned) for (const id of complete) if (pinned.has(id)) keepSet.add(id);
   const removed = [];
   for (const id of complete) if (!keepSet.has(id)) { rmSync(join(dir, id), RM); removed.push(id); }
@@ -124,11 +134,18 @@ export function gitEnv(env = process.env, overrides = GIT_OVERRIDES) {
 const gitUnsafe = why => Object.assign(new Error(`git cannot be run safely here: ${why}`), { code: 'GIT_UNSAFE' });
 // → git(args, { encoding }) for one repository. Throws like execFileSync when git fails, GIT_UNSAFE when its
 // programs cannot be switched off.
+// A call may add `env` (only GIT_INDEX_FILE, a temporary index the fix loop hashes a working tree with) and its own
+// `timeout`.
+const CALL_ENV = new Set(['GIT_INDEX_FILE']);
 export function gitRunner(root, { timeout = 60_000 } = {}) {
-  const opts = env => ({ env, timeout, maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  const opts = (env, t = timeout) => ({ env, timeout: t, maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   const version = /(\d+)\.(\d+)/.exec(execFileSync('git', ['--version'], opts(gitEnv(process.env, []))).toString());
   if (!version || +version[1] < 2 || (+version[1] === 2 && +version[2] < 31)) throw gitUnsafe(`git ${version ? version[0] : '(unknown)'} is older than 2.31`);
-  const run = (args, overrides) => execFileSync('git', ['--no-optional-locks', '-C', root, ...args], opts(gitEnv(process.env, overrides)));
+  const run = (args, overrides, extra = {}) => {
+    const env = gitEnv(process.env, overrides);
+    for (const [k, v] of Object.entries(extra.env || {})) { if (!CALL_ENV.has(k)) throw new Error(`git: ${k} is not a variable a call may set`); env[k] = v; }
+    return execFileSync('git', ['--no-optional-locks', '-C', root, ...args], opts(env, extra.timeout ?? timeout));
+  };
   const config = (re, overrides) => {                                 // [key, value] in the order git reads them
     try { return run(['config', '-z', '--get-regexp', re], overrides).toString().split('\0').filter(Boolean).map(e => { const i = e.indexOf('\n'); return i < 0 ? [e, ''] : [e.slice(0, i), e.slice(i + 1)]; }); }
     catch (e) { if (e.status === 1) return []; throw e; }             // exit 1: no such key
@@ -140,7 +157,7 @@ export function gitRunner(root, { timeout = 60_000 } = {}) {
     const live = [...last].filter(([, v]) => v !== '').map(([k]) => k);
     if (live.length) throw gitUnsafe(`filter commands still set: ${live.join(', ')}`);
   }
-  return (args, { encoding } = {}) => { const out = run(args, overrides); return encoding ? out.toString(encoding) : out; };
+  return (args, { encoding, env, timeout: t } = {}) => { const out = run(args, overrides, { env, timeout: t }); return encoding ? out.toString(encoding) : out; };
 }
 
 // What the app's source looked like when it was captured. `tree` changes with any edit, committed or
