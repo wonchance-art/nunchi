@@ -291,6 +291,11 @@ test('store: a file that cannot be read is an error, never "empty"; a read that 
   assert.equal(n, 2, 'read twice');
 });
 
+// The lock is not first come, first served (a waiter backs off up to 100 ms, and a process that just wrote may take it
+// again first), so one update can wait for a good share of the whole run: here 2.4 s of a 10 s run with 50 ms writes.
+// Windows CI (node 20, run 38616912416) ran this test in 105 s against 7.8 s on node 22 in the same run (the whole
+// suite took twice as long), and one child gave up at the 60 s it had while the holder was running. What the test
+// checks is that no update is lost, so a child waits as long as the test itself may run.
 test('store: many processes updating one file at once lose no update; revs and the generation count every write (slow: ~10 s)', async () => {
   const dir = tmp('nunchi-store-stress-');
   const file = join(dir, 'ledger.json'), gen = join(dir, 'generation');
@@ -300,7 +305,7 @@ while (Date.now() < Number(at)) {}
 for (let i = 0; i < Number(n); i++) updateDoc(file, doc => {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);       // work between read and write widens the race
   return { count: (doc?.count || 0) + 1, by: { ...(doc?.by || {}), [who]: (doc?.by?.[who] || 0) + 1 } };
-}, { generation: gen, timeoutMs: 60000 });`;
+}, { generation: gen, timeoutMs: 200000 });`;
   const at = Date.now() + 1500, n = 12, procs = Array.from({ length: 12 }, (_, i) => `p${i}`);
   const out = await Promise.all(procs.map(who => node(child, [file, gen, who, n, at])));
   for (const r of out) assert.equal(r.code, 0, r.stderr);
