@@ -122,6 +122,28 @@ test('channels: `nunchi decide` run by the agent (no terminal) is cli-agent, say
   assert.equal(L.reasonProblem('keep', 'intended'), null);
 });
 
+test('summary: a redirected screen is not checked, for the verdict and the counts alike (checked + not seen = all)', () => {
+  const p = smallProject();
+  const mf = join(p.nunchi, 'runs', '0001', 'manifest.json');
+  const m = JSON.parse(readFileSync(mf, 'utf8'));
+  const captured = m.scenes.filter(s => s.status === 'captured');
+  captured[0].reason = 'redirected to /login';
+  writeFileSync(mf, JSON.stringify(m));
+  let led = P.loadLedger(p.nunchi, { root: p.root });
+  const { groups } = P.ledgerView(led);
+  const board = (g, decision, reason = null) => P.recordDecisions(P.loadLedger(p.nunchi, { root: p.root }), { targets: [{ group: g.group }], decision, reason, by: 'me', channel: 'board' });
+  board(groups.find(g => g.rule === 'secret-in-client-bundle'), 'false-positive', 'not-a-problem');
+  board(groups.find(g => g.rule === 'raw-error-text'), 'keep', 'intended');
+  led = P.loadLedger(p.nunchi, { root: p.root });
+  led.state.folds.push({ run: '0001', source: 'ai', key: 'k', stream: 'main' });
+  const { rows, groups: gs } = P.ledgerView(led);
+  const s = summary({ state: led.state, rows, groups: gs, runsDir: led.st.runsDir });
+  const sc = s.health.scenes;
+  assert.equal(sc.checked + sc.notSeen, sc.total, 'every screen is either checked or not seen');
+  assert.equal(s.verdict.text, `Yes, for what was checked · ${sc.notSeen} screens not checked`);
+  assert.ok(sc.reasons.includes('redirected to /login'));
+});
+
 test('summary: the verdict names what stands in the way, then the AI review, then screens not checked; a running capture is too early', () => {
   const p = smallProject();
   let led = P.loadLedger(p.nunchi, { root: p.root });

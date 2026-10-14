@@ -1207,7 +1207,8 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   confirm, not double-checked, verified by a suspect check, waiting for the AI, later); "Not yet · N fixes since the
   last full check: capture again" (commits with a `Nunchi-Fix:` trailer after the full check's commit, through the
   hardened git runner); "Probably · rules only — the AI review hasn't run"; "Yes, for what was checked · no full
-  check yet" or "· N screens not checked"; "Yes".
+  check yet" or "· N screens not checked" (a screen redirected to another page is not checked, here and in the
+  counts, as in the export); "Yes".
 - *Since last full check:* a full check is a sweep with `wholeApp`; the panel counts groups new, fixed and back after
   the previous full check, labelled "Since last full check (run 0007)" (that run), or "First full check (run N)".
 - *Keys:* F, W, Shift+W, X, Shift+X, S, always with an explicit reason; after each decision a 6-second toast with the

@@ -63,7 +63,10 @@ export function summary({ state, rows, groups, stream = 'main', runsDir, git = n
   const full = checks[checks.length - 1] ?? null, previous = checks[checks.length - 2] ?? null;
   const fixCommits = git && full ? fixCommitsSince(git, readJsonOr(join(runsDir, full, 'run.json'), {})?.commit) : null;
   const scenes = (Array.isArray(manifest.scenes) ? manifest.scenes : []).filter(s => s && s.canary === undefined);
-  const notSeen = scenes.filter(s => s.status !== 'captured');
+  // a screen is checked when it was captured at its own address: a redirected one showed another page (judged in
+  // that page's own scene), so it is not checked — the same for the verdict, the counts and the export
+  const checkedScene = s => s.status === 'captured' && !/^redirected/.test(s.reason || '');
+  const notSeen = scenes.filter(s => !checkedScene(s));
   const problems = (Array.isArray(manifest.health?.problems) ? manifest.health.problems : []).map(p => ({ status: String(p.status), scenes: Number(p.scenes) || 0, of: Number(p.of) || 0 }));
 
   // groups, by severity and by status, and why each stands in the way. Groups, never rows, and counted as the board's
@@ -133,7 +136,7 @@ export function summary({ state, rows, groups, stream = 'main', runsDir, git = n
   return {
     run: latest, kind: meta.kind ?? 'sweep', fullCheck: full, previousFullCheck: previous, running,
     verdict, bySeverity, byStatus, standing, toDecide, toFix, handoff, since, confirm,
-    health: { problems, blind: (latest && state.blind?.[latest]) || null, scenes: { total: scenes.length, checked: scenes.filter(s => s.status === 'captured' && !/^redirected/.test(s.reason || '')).length, notSeen: notSeen.length, reasons: [...new Set(notSeen.map(s => String(s.reason || s.status)))].sort() } },
+    health: { problems, blind: (latest && state.blind?.[latest]) || null, scenes: { total: scenes.length, checked: scenes.length - notSeen.length, notSeen: notSeen.length, reasons: [...new Set(notSeen.map(s => String(s.reason || s.status)))].sort() } },
     ai: { ran: aiRan, groups: new Set(ai.map(r => r.group)).size, doubleChecked: new Set(ai.filter(r => r.checked).map(r => r.group)).size,
       notDoubleChecked: new Set(ai.filter(r => !r.checked).map(r => r.group)).size, stale: groups.filter(g => g.status === 'stale').length,
       needsYou: rows.filter(r => r.needsYou && !r.goneAt).length, suspect: ai.some(r => r.verification?.suspect) },
