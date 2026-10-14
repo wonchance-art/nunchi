@@ -86,7 +86,7 @@ Plug-in points: **Lens** = a candidate rule. **Copy** = board explanation copy. 
 | 12 | Reference-site list: Mobbin, 60fps, MotionSites, Framer (Notion) | **Reject** | none | Galleries of real product screens. Out of scope and against the copy rule. |
 | 13 | Scroll-animation vocabulary (Notion) | **Reject for swaps; vocab only** | Vocab (glossary) | Static captures can't judge motion. Keep names in the glossary only. |
 | 14 | A specific icon library suggested by the note (Notion) | **Reject for nunchi's own UI drawings** | none | Its licence would permit it, but the rule is our own generic drawings. Users' apps may of course use any icon set. |
-| 15 | Korean + English name pairs (Notion tables) | **Adopt (format only)** | Vocab, Copy | Our users are Korean vibe coders prompting AIs, often in English. Show both: `버튼 · Primary button`. |
+| 15 | Korean + English name pairs (Notion tables) | **Adopt (format only)** | Vocab, Copy | Our users are Korean vibe coders prompting AIs, often in English. Show both, English first: `Primary button · 버튼`. |
 
 ## 5. Feature B: click an element, see alternatives, swap with one click
 
@@ -155,7 +155,7 @@ Families for the most common components (our own vocabulary, informed by both so
 │        ┌───────────────────┐                                            │
 │        │ Confirm booking ◉ │ ← clicked                                  │
 │        └───────────────────┘                                            │
-│   ┌ 버튼 · Primary button  (main action on this screen)   [?] [×] ─┐    │
+│   ┌ Primary button · 버튼  (main action on this screen)   [?] [×] ─┐    │
 │   │ ⓪ ★ Match your usual button                                  │    │
 │   │    this: 44px · corners 4 · weight 500                        │    │
 │   │    usual: 40px · corners 8 · weight 600  (used on 9 routes)   │    │
@@ -181,7 +181,7 @@ The pegroom figures (44/4/500 against 40/8/600 on 9 routes) are measured. "N one
 Tier ③ example: a single-choice group with 3 short options shown as a Select.
 
 ```
-   ┌ 셀렉트 · Select  (choose one · 3 options)                [×] ─┐
+   ┌ Select · 셀렉트  (choose one · 3 options)                [×] ─┐
    │ ⓪ Keep as is                                                  │
    │ ─ Other components that do this job ───────────────────────  │
    │   [▾ Select ✔]   [◉ Radio list]   [▭▭▭ Segmented]             │
@@ -220,6 +220,14 @@ Change-plan entries use the prompt formula *where + name + count + details*. The
 3. Should tier ⓪ "Match usual" ship before the full T1 gate on L4? It reuses L4 data but needs no new judgement.
 4. Advisory lenses #5–#7: in scope for 0.1-c, or backlog?
 5. By "다른 아이콘들", did you mean option thumbnails (§5.4, covered) or swapping glyphs inside icon buttons (direction-only, applied by the AI)?
+
+### Owner decisions (2026-10-14 KST)
+The owner answered: English first; the rest as recommended. Recorded as:
+1. **English first** on the board: `Primary button · 버튼`. The vocabulary keeps both.
+2. **Tier ③ is sketch-only in 0.1.** No throwaway branch or worktree in the user's repository; "Try on my screen" waits for a sandbox policy.
+3. **Tier ⓪ may ship before the T1 gate**, but only for deterministic rule-based L4 one-offs (no AI judgement involved).
+4. **Advisory lenses #5–#7 go to the backlog**; each needs a fixture pair and a precision measurement before it ships.
+5. **"Other icons" covers both readings:** option thumbnails as specified in §5.4, and for icon buttons nunchi gives direction only; the AI picks the glyph from the user's own icon set when applying.
 
 ## Sources
 - 바이브코딩 UI 총정리 노트, Notion, @juuouse. https://app.notion.com/p/UI-3d6063ed09fd80ec8b5ef9784079694e (read 2026-10-14 KST)
