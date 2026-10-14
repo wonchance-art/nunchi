@@ -1243,8 +1243,10 @@ to `.nunchi/decisions/**`, `.nunchi/labels/**`, `.nunchi/lenses/**`, `lenses.loc
 (reads stay open: they are committed). It denies `nunchi … approve`, `… label` / `--label`, `--approve-checks`,
 nunchi (by name, `npx nunchi@<version>` included, or its `cli.mjs`) under `script`, `unbuffer`, `expect`, `socat`,
 `tmux`, `screen`, `dtach`, `abduco`, `zellij`, `winpty` or a pty module (Python `pty` or `pexpect`, `node-pty`,
-ConPTY): it would pass for `cli-tty`; and running `board/server.mjs` or `board/launch.mjs` directly (node, bun, deno,
-npx, `import(…)`) or any `--link-to-parent`.
+ConPTY): it would pass for `cli-tty`; `XDG_STATE_HOME=`, `LOCALAPPDATA=`, `HOME=`, `USERPROFILE=` or `APPDATA=` set
+in a command that runs nunchi, and `export`/`set`/`$env:` of `XDG_STATE_HOME` or `LOCALAPPDATA` anywhere (the answer
+keys would land where the hook does not look); and running `board/server.mjs` or `board/launch.mjs` directly (node,
+bun, deno, npx, `import(…)`) or any `--link-to-parent`.
 A Bash command is read as segments (also at `$(`, backticks and parentheses), with words joined as a shell joins
 them (`.nu"nchi"`, escapes), `cd` followed, globs and braces expanded against the file system (`.nunchi/runs/*/*.json`
 is the files it names), pieces of words checked as paths (inline code), and `sh -c` / `eval` judged as commands;

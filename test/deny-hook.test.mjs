@@ -101,6 +101,9 @@ test('deny hook: the human-only commands, and nunchi under a pseudo-terminal, ar
     'python -c "from pty import spawn; spawn([\'node\', \'src/cli.mjs\', \'decide\', \'abc\', \'keep\'])"', 'python3 -c "import pexpect; pexpect.spawn(\'nunchi decide abc keep\')"',
     'node -e "require(\'node-pty\').spawn(\'nunchi\', [\'decide\', \'abc\', \'keep\'])"', 'npx nunchi@latest approve --all', 'npx -y nunchi@0.1.0 approve --all',
     'npx -y nunchi@0.1.0 open --label', 'tmux new -d npx nunchi@latest decide abc keep',
+    // review B7: the key folder moved for one command (the keys would land where the hook does not look)
+    'XDG_STATE_HOME=/tmp/k nunchi hunt --plan', 'HOME=/tmp/h node src/cli.mjs verify --plan', 'env LOCALAPPDATA=C:\\tmp nunchi hunt --plan',
+    'export XDG_STATE_HOME=/tmp/k && nunchi hunt --plan', 'export XDG_STATE_HOME=/tmp/k', 'USERPROFILE=/tmp/u npx nunchi@latest hunt --plan', '$env:LOCALAPPDATA = "C:\\tmp"',
   ]) assert.ok(call(r, 'Bash', { command }), command);
   for (const command of [
     'node "${CLAUDE_SKILL_DIR}/../../src/cli.mjs" findings --json', 'node src/cli.mjs decide abc fix', 'node src/cli.mjs decide abc not-a-problem --from-chat',
@@ -108,6 +111,7 @@ test('deny hook: the human-only commands, and nunchi under a pseudo-terminal, ar
     'npm run build && npm test', 'cat .nunchi/runs/0001/hunt-plan.json', 'ls .nunchi/runs/0001/home.guest.normal.d', 'git log --oneline',
     'curl -s http://127.0.0.1:3000/api/health', 'echo "a script to approve"',
     'npx nunchi@latest findings --json', 'npx -y nunchi@0.1.0 capture --url http://127.0.0.1:3000', 'tmux ls', 'nunchi capture --url http://127.0.0.1:3000 --screens home',
+    'HOME=/tmp/h npm test', 'NUNCHI_BROWSER=/opt/chrome nunchi capture --url http://127.0.0.1:3000',
   ]) assert.equal(call(r, 'Bash', { command }), null, command);
 });
 

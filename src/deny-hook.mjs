@@ -134,6 +134,8 @@ export function pathRule(p, prot, { write = false } = {}) {
 
 // nunchi by name (`npx nunchi@latest`, `npx -y nunchi@0.1.0` too) or by its CLI file
 const NUNCHI = /(^|[\s;&|(`'"/])(nunchi(@[\w.^~<>=*-]+)?|cli\.mjs)(?=[\s;&|)`'"]|$)/;
+// a variable that moves where nunchi writes its answer keys (or its home), set in a command that runs nunchi
+const KEY_HOME = /(^|[\s;&|(`'"])(export\s+|env\s+(-\S+\s+)*|setx?\s+)?(XDG_STATE_HOME|LOCALAPPDATA|HOME|USERPROFILE|APPDATA)=|\$env:(XDG_STATE_HOME|LOCALAPPDATA|HOME|USERPROFILE|APPDATA)\s*=/i;
 // what gives a command a pseudo-terminal: terminal multiplexers and detachers, script/expect-style wrappers, a pty
 // module of any language (Python's pty and pexpect, node-pty, Windows' winpty/ConPTY)
 const PTY = /(^|[\s;&|(`'"])(script|unbuffer|expect|ptyexec|socat|tmux|screen|dtach|abduco|zellij|winpty)(?=[\s;&|)`'"]|$)|\bpty\b|\b(pexpect|ptyprocess|forkpty|openpty|conpty)\b/i;
@@ -482,7 +484,10 @@ export function bashRule(command, prot, { depth = 0, cwd: start = prot.cwd } = {
     if (/(nunchi|cli\.mjs)\b[^;&|\n]*\s(label\b|--label\b)/.test(flat)) return 'labelling is done by a person in the board (they run nunchi open --label themselves)';
     if (/--approve-checks\b/.test(flat)) return 'check scripts are approved by the person in the board';
     if (PTY.test(flat)) return 'running nunchi under a pseudo-terminal would pass for the person\'s own terminal';
+    if (KEY_HOME.test(flat)) return 'nunchi keeps its answer keys under your state folder; moving it for one command would put them where the AI can read them';
   }
+  // the key folder moved for the rest of the session
+  if (/(^|[\s;&|(`])(export|setx?|declare\s+-x|typeset\s+-x)\s+(XDG_STATE_HOME|LOCALAPPDATA)\b|\$env:(XDG_STATE_HOME|LOCALAPPDATA)\s*=/i.test(flat)) return 'nunchi keeps its answer keys under the state folder: it is not moved from the AI\'s commands';
   if (/\/proc\/[^\s/'"]+\/(cmdline|environ|mem|maps|fd)\b/.test(flat)) return READ_DENY[4][1];
   const home = homedir().replace(/\\/g, '/');
   const segs = segments(cmd);
