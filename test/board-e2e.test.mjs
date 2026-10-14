@@ -206,6 +206,55 @@ test('board e2e: the decision bar and the toast never cover each other or the fo
   }
 });
 
+test('board e2e: a short window (420 px or less, e.g. 200% zoom at 640 × 360) keeps the dock to a third: no sub-labels, the toast on one line, the focused row clear', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  for (const [width, height, deviceScaleFactor] of [[640, 360, 2], [800, 420, 1]]) {
+    const p = project();
+    const s = await open(p, { viewport: { width, height }, deviceScaleFactor });
+    const { page } = s;
+    // everything measured in one evaluation: a live redraw between two round trips would measure a detached node
+    const measure = () => page.evaluate(() => {
+      const dock = document.querySelector('.dock'), bar = dock.querySelector('.toolbar'), toast = document.getElementById('toast'), row = document.activeElement;
+      const r = e => e.getBoundingClientRect();
+      const shown = !toast.hidden && dock.contains(toast);
+      const kids = shown ? [...toast.children].map(k => Math.round(r(k).top + r(k).height / 2)) : [];
+      return {
+        dock: r(dock).height / innerHeight, dockTop: r(dock).top, dockH: Math.ceil(r(dock).height),
+        dockVar: getComputedStyle(document.documentElement).getPropertyValue('--dock-h').trim(),
+        scrollPad: getComputedStyle(document.documentElement).scrollPaddingBottom,
+        subs: [...bar.querySelectorAll('.dbtn small')].filter(e => getComputedStyle(e).display !== 'none').length,
+        barRows: new Set([...bar.querySelectorAll('.dbtn')].map(b => Math.round(r(b).top))).size,
+        barOverflow: bar.scrollWidth > bar.clientWidth + 1, toastOverflow: shown && toast.scrollWidth > toast.clientWidth + 1,
+        toastLines: new Set(kids).size, shown,
+        row: row?.classList.contains('row') ? { top: r(row).top, bottom: r(row).bottom } : null,
+        targets: [...bar.querySelectorAll('.dbtn'), ...(shown ? toast.querySelectorAll('button') : [])].map(b => Math.min(r(b).width, r(b).height)),
+      };
+    });
+    try {
+      await page.waitForSelector('#h-progress');
+      await page.click('a[data-nav=findings]');
+      await page.waitForSelector('#h-findings');
+      await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
+      const a = await measure();
+      assert.ok(a.dock <= 0.2, `${width}×${height}: the dock takes ${Math.round(a.dock * 100)}% of the window`);
+      assert.deepEqual([a.subs, a.barRows, a.barOverflow], [0, 1, false], `${width}×${height}: one row of buttons, no sub-labels, nothing cut off`);
+      assert.ok(a.targets.every(x => x >= 44), `${width}×${height}: every button is still 44 px (${a.targets.join(', ')})`);
+      await page.keyboard.press('j');
+      await page.keyboard.press('w');
+      await page.waitForSelector('#toast:not([hidden])');
+      await page.waitForFunction(() => document.documentElement.style.getPropertyValue('--dock-h') === `${Math.ceil(document.querySelector('.dock').getBoundingClientRect().height)}px`);
+      const b = await measure();
+      assert.ok(b.shown, 'the toast is in the dock');
+      assert.ok(b.dock <= 0.35, `${width}×${height}: with the toast, the dock takes ${Math.round(b.dock * 100)}% of the window (51% before)`);
+      assert.deepEqual([b.toastLines, b.toastOverflow], [1, false], `${width}×${height}: the toast is on one line`);
+      assert.ok(b.targets.every(x => x >= 44), `${width}×${height}: the toast's buttons are 44 px too`);
+      assert.equal(b.dockVar, `${b.dockH}px`, 'the page measures the dock');
+      assert.notEqual(b.scrollPad, '0px', 'and keeps the scroll padding');
+      assert.ok(b.row && b.row.bottom <= b.dockTop + 1 && b.row.top >= 0, `${width}×${height}: the focused row is not under the dock (${b.row?.top}–${b.row?.bottom} vs ${b.dockTop})`);
+    } finally { await s.close(); }
+  }
+});
+
 test('board e2e: the toast waits while the pointer is over it or the focus is in it (WCAG 2.2.1); hidden with the focus inside, the focus goes back to the row', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = project();

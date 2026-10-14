@@ -1247,7 +1247,7 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   sends the ids of the decisions it made (`POST /api/undo {decisions}`); the server reopens exactly their targets (the
   fingerprints of a group decided on its fingerprints), only for decisions approved with channel `board`, and answers
   409 unless each target still shows that decision (decided again since, here, in the terminal or through git:
-  nothing is undone). Buttons carry the permanent sub-labels.
+  nothing is undone). Buttons carry the permanent sub-labels, except in a window 420 px high or less (below).
 - *Frozen list:* while Findings or Detail is open, order and members stay; rows take new statuses in place; a banner
   says "Updated: 2 new, 1 fixed · Show (R)". Decisions target group ids.
 - *Batches:* group by kind (default), root-cause file (the grounded file of an AI item, else "No file known"),
@@ -1286,7 +1286,10 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   while the pointer is over it or the focus is in it, and gets its 6 seconds again after (WCAG 2.2.1); hidden with
   the focus inside (Esc, Undo, the other reason), the focus goes back to the row, or the view's heading. A screen's
   numbered markers have room inside the Screens panel (they sit half outside their box). Tested at 1280 × 560,
-  800 × 520 and 390 × 640.
+  800 × 520 and 390 × 640. In a window 420 px high or less (a phone on its side, 200% zoom at 640 × 360) the bar's
+  buttons sit in one row without their sub-labels and the toast is on one line, still 44 px each: the dock takes 16%
+  of a 640 × 360 window, 32% with the toast (32% and 51% before); tested at 640 × 360 and 800 × 420, measured in
+  one evaluation.
 - *Views:* only Progress, Findings (and Detail) and Screens; "More views in 0.2" lists the commands that show the rest.
   It and "Keys (?)" are at the foot of the sidebar, and in the header on a phone (≤ 760 px), 44 px each.
 - *Words:* one table (`shared.mjs`), English. Decision times show as relative or local; files keep KST. The main

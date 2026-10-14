@@ -226,6 +226,10 @@ dialog h2{font-size:17px;margin:0 0 10px}.dialog-actions{display:flex;flex-wrap:
 .live-status{margin:0;padding:4px 10px;border-radius:8px;background:var(--high-soft);color:var(--high-ink);font-size:13px;font-weight:600}.live-status:empty{display:none}
 @media (max-width:760px){.board .side-foot{display:flex;flex-wrap:wrap;align-items:center;padding:0}.board .side-foot p{margin:0}.board .side-foot p:first-child{display:none}
 .board .side-foot button{min-width:44px;font-size:14px}.field input{min-width:0;width:100%}.toolbar{gap:6px;padding:6px}.toolbar .tb-label{display:none}.dbtn{flex:1 1 40%;min-height:48px;padding:2px 10px}}
+/* a short window (420 px or less: a phone on its side, 200% zoom at 640 × 360): the dock keeps its buttons in one row
+   without their sub-labels, and the toast on one line, so it covers about a third of the window, not half */
+@media (max-height:420px){.toolbar{flex-wrap:nowrap;gap:6px;padding:6px}.toolbar .tb-label{display:none}.dbtn{flex:1 1 0;min-width:0;min-height:44px;padding:2px 10px}.dbtn small{display:none}.dbtn b{white-space:nowrap}
+.dock{gap:6px}.toast,.dock>.toast{flex-wrap:nowrap;gap:8px;padding:4px 4px 4px 14px}.toast>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.toast .b{flex:none;white-space:nowrap}}
 @media (prefers-color-scheme:dark){.b-primary,.b-primary:hover{color:#141518}
 /* the toast is light on the dark board, so it stands out from the panel and the ground (3:1 or more) */
 .toast{background:#ECEDEF;color:#141518}.toast .b{color:#141518;border-color:#6B7079}.toast .b:hover{background:#D9DBDF}.toast :focus-visible{outline-color:#141518}}
