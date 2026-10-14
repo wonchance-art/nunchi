@@ -16,7 +16,7 @@
 import { join, basename, dirname, relative, sep, resolve } from 'node:path';
 import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import * as P from '../project.mjs';
-import { titleOf, latestRunOf, foldFix, unfoldFix, commitFix, byRun, looked } from '../ledger.mjs';
+import { titleOf, latestRunOf, foldFix, unfoldFix, commitFix, byRun, looked, currentTargets, writtenAs, approvalKey, HUMAN_CHANNELS } from '../ledger.mjs';
 import { human } from '../board/shared.mjs';
 import { readConfig, workTree } from '../runs.mjs';
 import { baseUrlRefusal } from '../network.mjs';
@@ -90,27 +90,28 @@ function toFix(rows) {
   const decisions = fixing.map(r => r.decision).sort((a, b) => cmp(a.at || '', b.at || '') || cmp(a.id, b.id));
   return { open, fixing, decision: decisions[decisions.length - 1] || null, unverified: fixing.filter(r => r.decision && r.decision.verified === false) };
 }
-// The attempts made for this decision (design §4.5), from git's trailers on every branch: distinct Nunchi-Attempt values
-// of the fix commits carrying the group and this decision (a rebased copy, or the same commit on a remote branch, is
-// one attempt, not two). A git error throws (fail closed).
-function attemptsUsed(ctx, group, decisionId) {
-  if (!ctx.git) return 0;
-  return new Set(ctx.git.groupCommits(group).filter(c => (c.trailers[TRAILERS.fix] || []).includes(group) && (c.trailers[TRAILERS.decision] || [null])[0] === decisionId)
-    .map(c => (c.trailers[TRAILERS.attempt] || [null])[0])).size;
+// The attempts made on this group (design §4.5) since the last Fix decision a person made (the board or their own
+// terminal): every fix commit on any branch whose Nunchi-Decision is that decision or a Fix decided after it, counted as
+// distinct (decision, Nunchi-Attempt) pairs (a rebased copy, or the same commit on a remote branch, is one attempt).
+// A Fix the agent records after a revert therefore never resets the count (M3 review, round 2); only a person's new Fix
+// ("Try again with a note…") does. With no person's Fix at all, every attempt on the group counts. A git error throws.
+function fixDecisions(ctx, group) {
+  const fps = new Set(ctx.rows.filter(r => r.group === group).map(r => r.fp));
+  return currentTargets(ctx.led.decisions, ctx.led.state).filter(d => d.decision === 'fix' && (d.target?.group === group || fps.has(d.target?.fp))).map(d => {
+    const key = approvalKey(writtenAs(d));
+    const verified = ctx.led.approved.has(key);
+    const channel = !verified ? 'git' : ctx.led.channels.get(key) || 'unknown';
+    return { id: d.id, at: d.at || '', human: verified && (HUMAN_CHANNELS.has(channel) || !!ctx.led.confirmed?.has(key)) };
+  }).sort((a, b) => cmp(a.at, b.at) || cmp(a.id, b.id));
 }
-// Whether an earlier Fix decision of this group used every attempt (needs you b): then only a person's new Fix (the
-// board's "Try again with a note…", or nunchi decide in their own terminal) starts another round, never the agent's.
-function exhaustedBefore(ctx, group, decisionId) {
-  if (!ctx.git) return false;
-  const by = new Map();
-  for (const c of ctx.git.groupCommits(group)) {
-    if (!(c.trailers[TRAILERS.fix] || []).includes(group)) continue;
-    const d = (c.trailers[TRAILERS.decision] || [null])[0];
-    if (d === decisionId) continue;
-    if (!by.has(d)) by.set(d, new Set());
-    by.get(d).add((c.trailers[TRAILERS.attempt] || [null])[0]);
-  }
-  return [...by.values()].some(s => s.size >= MAX_ATTEMPTS) || allRecords(ctx.stateDir, group).some(r => r.outcome?.needsYou === 'b' && r.decision?.id !== decisionId);
+function attemptsUsed(ctx, group) {
+  if (!ctx.git) return 0;
+  const ds = fixDecisions(ctx, group);
+  const lastHuman = [...ds].reverse().find(d => d.human) || null;
+  const counted = lastHuman ? new Set(ds.filter(d => cmp(d.at, lastHuman.at) > 0 || (d.at === lastHuman.at && cmp(d.id, lastHuman.id) >= 0)).map(d => d.id)) : null;
+  return new Set(ctx.git.groupCommits(group).filter(c => (c.trailers[TRAILERS.fix] || []).includes(group))
+    .map(c => [(c.trailers[TRAILERS.decision] || [null])[0], (c.trailers[TRAILERS.attempt] || [null])[0]])
+    .filter(([d]) => !counted || counted.has(d)).map(([d, a]) => `${d}:${a}`)).size;
 }
 
 // The last sweep of this worktree: what the probes copy (persons, states, sample paths, the base URL).
@@ -251,7 +252,7 @@ export function planFixes(ctx, { url = null } = {}) {
     if (!tf.fixing.length) continue;
     const rec = latestRecord(ctx.stateDir, g.group);
     const cause = causeOf(ctx, tf.fixing, sweep);
-    const used = attemptsUsed(ctx, g.group, tf.decision?.id);
+    const used = attemptsUsed(ctx, g.group);
     const title = g.source === 'ai' ? `AI · ${human(g.rule)}` : titleOf(g.rule);
     items.push({ group: g.group, title, severity: g.severity, routes: g.routes, rootFiles: cause.rootFiles, attemptsUsed: used, needsApproval: tf.unverified.length > 0,
       notDoubleChecked: tf.fixing.some(r => r.source === 'ai' && !r.checked), routeless: !cause.groupRoutes.length, last: rec ? { attempt: rec.attempt, phase: rec.phase, needsYou: rec.outcome?.needsYou ?? null } : null });
@@ -341,9 +342,10 @@ async function startFixInner(ctx, id, opts = {}) {
     // HEAD carries an unverified fix of this group (a commit with its trailer that no closed record judged)
     const t = head ? ctx.git.trailers(head) : {};
     if ((t[TRAILERS.fix] || []).includes(g.group) && !(last && last.commit === head && !isOpen(last))) return refuse([...said, `HEAD carries an unverified fix of '${title}': resume with nunchi fix --verify ${g.group}.`]);
-    const used = attemptsUsed(ctx, g.group, tf.decision.id);
-    if (used >= MAX_ATTEMPTS) return refuse([...said, `The AI couldn't fix '${title}' in ${MAX_ATTEMPTS} tries: it waits for you in the board ("Try again with a note…", Keep or Later).`]);
-    if (tf.decision.human !== true && exhaustedBefore(ctx, g.group, tf.decision.id)) return refuse([...said, `The AI couldn't fix '${title}' in ${MAX_ATTEMPTS} tries, and only the person can start another round: ask them to choose “Try again with a note…” for it in the board (nunchi open). A Fix your AI records does not count.`]);
+    const used = attemptsUsed(ctx, g.group);
+    if (used >= MAX_ATTEMPTS) return refuse([...said, tf.decision.human === true
+      ? `The AI couldn't fix '${title}' in ${MAX_ATTEMPTS} tries: it waits for you in the board ("Try again with a note…", Keep or Later).`
+      : `The AI couldn't fix '${title}' in ${MAX_ATTEMPTS} tries, and only the person can start another round: ask them to choose “Try again with a note…” for it in the board (nunchi open). A Fix your AI records does not count.`]);
   }
   if (early) {
     if (!head) return refuse('This repository has no commit yet: commit once, then fix.');
@@ -377,7 +379,7 @@ async function startFixInner(ctx, id, opts = {}) {
   if (!rec) {
     const scope = { routes: cause.scopeRoutes, persons, personsOf: Object.fromEntries(cause.scopeRoutes.map(r => [r, sweep.personsOf[r] ?? persons])), viewports: ['d', 'm'], states: sweep.states };
     rec = allocate(ctx.stateDir, g.group, {
-      decision: { id: tf.decision.id, at: tf.decision.at ?? null, note: tf.decision.note ?? null }, try: attemptsUsed(ctx, g.group, tf.decision.id) + 1, base: head, startBranch: ctx.git.branch(), worktree: ctx.git.toplevel(), stream: ctx.stream,
+      decision: { id: tf.decision.id, at: tf.decision.at ?? null, note: tf.decision.note ?? null }, try: attemptsUsed(ctx, g.group) + 1, base: head, startBranch: ctx.git.branch(), worktree: ctx.git.toplevel(), stream: ctx.stream,
       url: url || null, serve: opts.serve || null, agent: opts.agent || null, vendor: opts.vendor || null, allowHosts: opts.allowHosts || [], title,
       rootFiles: cause.rootFiles, rootFrom: cause.from, allowed: cause.allowed, routes: cause.groupRoutes, scope, samplePaths: sweep.samplePaths, personsOf: sweep.personsOf, sweep: sweep.id,
       fps: { rule: tf.fixing.filter(r => r.source !== 'ai').map(r => r.fp).sort(), ai: tf.fixing.filter(r => r.source === 'ai').map(r => r.fp).sort() },
@@ -818,7 +820,7 @@ function finishRevert(ctx, rec, revertSha, lines, { cancelWord = null, title = r
     lines.push(line);
     return;
   }
-  const used = attemptsUsed(ctx, rec.group, rec.decision?.id);
+  const used = attemptsUsed(ctx, rec.group);
   const why = rec.phrase || (rec.verdict?.outcome === 'regression' ? `That fix broke '${titleOf(rec.verdict.regressions[0].rule)}' on ${rec.verdict.regressions[0].route ? routeText(rec.verdict.regressions[0].route) : 'a screen'}` : `That fix did not remove '${title}'`);
   if (used >= MAX_ATTEMPTS) {
     const line = `${why}, so I undid it (attempt ${Math.min(used, MAX_ATTEMPTS)} of ${MAX_ATTEMPTS}). The AI couldn't fix this in ${MAX_ATTEMPTS} tries: it needs you in the board.`;

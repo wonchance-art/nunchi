@@ -125,3 +125,25 @@ test('--serve start proves the commit only when the approved build check passed 
   const runChecks = async () => ({ pm: { name: 'npm' }, results: { build: { status: 'pass', exit: 0, count: null, output: '' } } });
   assert.equal((await F.startFix(ctxOf(q, { serve, runChecks }), q.group, { serve: 'start' })).code, 0);
 });
+
+test('attempts: counted per group since the person\'s last Fix — a Fix the agent records after each revert does not reset the count', async () => {
+  const p = await fixProject();
+  const lines = [];
+  for (let i = 0; i < 4; i++) {
+    const s = await F.startFix(ctxOf(p), p.group);
+    if (s.code) { lines.push(s.lines.at(-1)); break; }
+    edit(p.root, 'app/settings/page.jsx', 'TINY', 'WRAP');
+    commitWith(p.root, trailers(await F.checkFix(ctxOf(p), p.group)));
+    lines.push((await F.verifyFix(ctxOf(p), p.group)).lines.at(-1));
+    P.recordDecisions(P.loadLedger(p.nunchi, { root: p.root }), { targets: [{ group: p.group }], decision: 'fix', by: 'agent', channel: 'cli-agent' });
+  }
+  assert.match(lines[0], /\(attempt 1 of 2\)\. Trying another way\.$/);
+  assert.match(lines[1], /\(attempt 2 of 2\)\. The AI couldn't fix this in 2 tries: it needs you in the board\.$/);
+  assert.match(lines[2], /only the person can start another round: ask them to choose “Try again with a note…” for it in the board \(nunchi open\)\. A Fix your AI records does not count\.$/);
+  assert.equal(lines.length, 3);
+  // a person's Fix (the board) starts a new round: attempt 1 of 2 again
+  P.recordDecisions(P.loadLedger(p.nunchi, { root: p.root }), { targets: [{ group: p.group }], decision: 'fix', by: 'Tester', channel: 'board', note: 'use the shared button' });
+  const s = await F.startFix(ctxOf(p), p.group);
+  assert.equal(s.code, 0, s.lines.join('\n'));
+  assert.match(s.lines.join('\n'), /attempt 1 of 2/);
+});
