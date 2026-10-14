@@ -115,6 +115,32 @@ test('decoys: when the claimed scenes run out of fine elements, any other captur
   assert.deepEqual([planVerify({ ...args, scenes: [] }).key.decoys, planVerify({ ...args, scenes: [] }).key.decoysPlanned], [0, 3]);
 });
 
+test('decoys: a shared header or nav claimed on one screen is no decoy on any other, nor an element of that name under that rule; one decoy per element; deterministic', () => {
+  // the screens share a header (a Help link and a Pricing link) and a footer; the Help link is claimed on one
+  const shared = () => [ctl('header > nav > a.help', 'Help', { tag: 'a' }), ctl('header > nav > a.pricing', 'Pricing', { tag: 'a' }), ctl('footer > a.about', 'About', { tag: 'a' })];
+  const ids = ['home.guest.normal.d', 'tasks.guest.normal.d', 'notes.guest.normal.d', 'team.guest.normal.d'];
+  const controls = Object.fromEntries(ids.map(id => [id, shared()]));
+  // the claimed screen has nothing else; one other screen has a control of its own
+  controls[ids[0]] = [shared()[0]];
+  controls[ids[1]].push(ctl('main > button.add', 'Add task'));
+  // on the team screen the Help link sits elsewhere in the page (another selector, the same name)
+  controls['team.guest.normal.d'].push(ctl('aside > a.help', 'Help', { tag: 'a' }));
+  const scenes = ids.map(id => ({ id, route: `/${id.split('.')[0]}`, viewport: 'd' }));
+  const one = [{ source: 'ai', status: 'claimed', lens: 'L6', rule: 'L6.unclear-label', severity: 'medium', scene: ids[0], route: '/home', viewport: 'd', selector: 'header > nav > a.help', box: [0, 0, 40, 20], evidence: { claim: 'Help does not say where it goes', groundedIn: ['controls.json'] } }];
+  const args = { findings: one, controlsOf: s => controls[s] || null, scenes };
+  const a = planVerify(args);
+  const made = Object.entries(a.key.packets).filter(([, k]) => k.decoy).map(([id]) => a.packets.packets.find(p => p.packet === id).claim);
+  assert.equal(made.length, 3);
+  for (const c of made) {
+    assert.notEqual(c.selector, 'header > nav > a.help', `the claimed shared element is no decoy on ${c.scene}`);
+    const row = controls[c.scene].find(x => x.selector === c.selector);
+    assert.ok(!(row.name === 'Help' && c.rule === 'L6.unclear-label'), 'an element of the claimed name is no decoy under the claimed rule');
+  }
+  assert.equal(new Set(made.map(c => c.selector)).size, made.length, 'never two decoys on one element (a shared one on several screens)');
+  assert.deepEqual(planVerify({ ...args, scenes: [...scenes].reverse() }), a, 'the same plan whatever the order of the scenes');
+  assert.deepEqual(planVerify(args), a, 'deterministic');
+});
+
 const verdictsFor = (key, decoyVerdict, n = Infinity) => {
   let left = n;
   return Object.entries(key.packets).map(([packet, k]) => ({

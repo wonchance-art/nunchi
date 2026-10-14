@@ -3,6 +3,7 @@
 // from the same evidence) and records verdicts. The verifier itself is a fresh model context run by the
 // plugin skill. Pure functions; the CLI does the file I/O. Deterministic: same claims → same packets.
 import { sha, stableJson } from './stable.mjs';
+import { ariaRoleName } from './ai-identity.mjs';
 
 export const DECOY_SHARE = 0.2;              // share of packets that are decoys
 export const SUSPECT_PASS_THROUGH = 0.1;     // decoy pass-through above this → the run's verifications are suspect
@@ -38,7 +39,7 @@ export function eligible(f, canaryScenes = new Set(), { again = false } = {}) {
 const PLACEHOLDER = /lorem|ipsum|\btodo\b|fixme|\btbd\b|example\.(com|org)|john doe|jane doe|coming soon|placeholder|asdf|xxx|undefined|\bnan\b|\[object/i;
 const DESTRUCTIVE = /\b(delete|remove|clear|discard|erase|reset|destroy|wipe|cancel|close|archive|sign ?out|log ?out|unsubscribe|leave|revoke|deactivate)\b/i;
 const plain = c => c && !c.inside && typeof c.name === 'string' && c.name.length >= 2 && c.name.length <= 40 && Array.isArray(c.box) && c.box[2] > 0 && c.box[3] > 0;
-const nameKey = c => c.name.toLowerCase().replace(/\s+/g, ' ').trim();
+const nameKey = c => String(c.name ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
 
 // Each decoy template makes a claim that the scene's own evidence contradicts: an element that is fine,
 // claimed as a defect. `fits` picks such elements from controls.json. Rule ids are checklist ids of the
@@ -79,8 +80,19 @@ export function planVerify({ findings, canaryScenes = new Set(), controlsOf = ()
   const want = decoysWanted(real.length);
   const decoys = [];
   if (want) {
-    const claimed = new Set(real.map(r => `${r.claim.scene}|${r.claim.selector}`));
+    // What the run claims, anywhere in it: a decoy never lands on a claimed selector on any scene (a shared header or
+    // nav is the same element on every screen, so a decoy there could be true), nor claims, with the same rule, an
+    // element whose accessible name a claim of that rule names. A correct verifier would confirm such a decoy.
+    const claimedSel = new Set(real.map(r => r.claim.selector).filter(Boolean));
+    const claimedNameRule = new Set();
+    for (const r of real) {
+      const f = findings[r.index];
+      const row = (controlsOf(r.claim.scene) || []).find(c => c && c.selector === r.claim.selector);
+      for (const n of [row?.name, f.identity?.name, ariaRoleName(r.claim.selector)?.name]) if (typeof n === 'string' && n.trim()) claimedNameRule.add(`${r.claim.rule}|${nameKey({ name: n })}`);
+    }
+    // one decoy per element: by selector across the run's scenes, and by rule and name
     const used = new Set();
+    const free = (c, t) => !claimedSel.has(c.selector) && !used.has(c.selector) && !claimedNameRule.has(`${t.rule}|${nameKey(c)}`) && !used.has(`${t.rule}|${nameKey(c)}`);
     const order = real.map((r, i) => i).sort(byHash(seed, 'claim'));
     // the other captured scenes of the run, in a seeded order: never a canary copy, never a claimed element
     const claimScenes = new Set(real.map(r => r.claim.scene));
@@ -93,7 +105,7 @@ export function planVerify({ findings, canaryScenes = new Set(), controlsOf = ()
       const bases = [...order.map((_, a) => real[order[(j + a) % order.length]].claim), ...others];
       for (let a = 0; a < bases.length && !made; a++) {
         const base = bases[a];
-        const controls = (controlsOf(base.scene) || []).filter(c => c && c.selector && !claimed.has(`${base.scene}|${c.selector}`) && !used.has(`${base.scene}|${c.selector}`));
+        const controls = (controlsOf(base.scene) || []).filter(c => c && c.selector && !claimedSel.has(c.selector) && !used.has(c.selector));
         if (!controls.length) continue;
         // decoys of the claim's own lens first (on another scene, the lens of the claim this decoy follows), so decoys
         // follow the claims' mix of lenses
@@ -104,14 +116,14 @@ export function planVerify({ findings, canaryScenes = new Set(), controlsOf = ()
           const pool = [...controls].sort((x, y) => byHash(seed, `e${j}${t.id}`)(x.selector, y.selector));
           let c = null, d = null;
           if (t.pair) {
-            for (const x of pool) { d = controls.find(y => t.fits(x, y)) || null; if (d) { c = x; break; } }
-          } else c = pool.find(x => t.fits(x)) || null;
+            for (const x of pool) { d = free(x, t) ? controls.find(y => t.fits(x, y) && free(y, t)) || null : null; if (d) { c = x; break; } }
+          } else c = pool.find(x => t.fits(x) && free(x, t)) || null;
           if (!c) continue;
           made = {
             template: t.id,
             claim: { lens: t.lens, rule: t.rule, severity: t.severity, scene: base.scene, route: base.route, viewport: base.viewport, selector: c.selector, box: c.box, evidence: t.pair ? t.evidence(c, d) : t.evidence(c) },
           };
-          used.add(`${base.scene}|${c.selector}`);
+          for (const e of t.pair ? [c, d] : [c]) used.add(e.selector).add(`${t.rule}|${nameKey(e)}`);
           break;
         }
       }
