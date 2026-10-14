@@ -109,16 +109,77 @@ export async function majorOf(bin, { root, env = process.env, platform = process
   return v.exit === 0 && m ? Number(m[1]) : null;
 }
 
-// A check line that runs another script through a package manager (`npm run helper`, `pnpm lint`, `yarn helper`, `bun
-// run x`): that nested run would start helper's pre/post lines, which nunchi cannot switch off from outside (measured:
-// a nested `pnpm run helper` ran prehelper). Such a check is not run, and the line says why. Running a binary (`npx`,
-// `pnpm exec`/`dlx`, `yarn exec`/`dlx`, `bunx`, `bun x`) is not a nested run.
-const MANAGER = /(?:^|[\s;&|()`])(npm|pnpm|yarn|bun)(?=\s|$)((?:\s+-{1,2}[\w.=-]+)*)(?:\s+([\w:.-]+))?/g;
-export function nestedRun(line) {
-  for (const m of String(line || '').matchAll(MANAGER)) {
-    const [, pm, , sub] = m;
-    if (['exec', 'dlx', 'x', 'add', 'install', 'i', 'ci', '--version', '-v'].includes(sub)) continue;
-    return `${pm}${sub ? ` ${sub}` : ''}`;
+// A check line that runs other scripts — through a package manager (`npm run helper`, `pnpm lint`, `yarn helper`, `bun
+// run x`) or a task runner (`turbo run`, `lerna run`, `nx run`, `npm-run-all`, `concurrently "pnpm:x"`) — would start
+// their pre/post lines, which nunchi cannot switch off from outside (measured: a nested `pnpm run helper` ran
+// prehelper). Such a check is not run, and the line says why. The line is split as the shell splits it (quotes,
+// # comments, &&, ;, |), and only command words count: `echo "use npm run build"`, `tsc # pnpm test` and `node x.js
+// npm` run nothing nested; running a binary (`npx tsc`, `pnpm exec`, `yarn dlx`, `bunx`) is fine.
+// A script line as the shell would split it: simple commands (separated by &&, ||, ;, |, &, newlines and parentheses),
+// each a list of words with quotes removed; a # that starts a word begins a comment to the end of the line. Enough to
+// find the command words of a package.json script, not a shell.
+export function commandsOf(line) {
+  const cmds = [];
+  let words = [], word = null, quote = null;
+  const end = () => { if (word !== null) { words.push(word); word = null; } };
+  const cut = () => { end(); if (words.length) cmds.push(words); words = []; };
+  const s = String(line || '');
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else if (ch === '\\' && quote === '"' && i + 1 < s.length) word += s[++i];
+      else word += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") { quote = ch; word ??= ''; continue; }
+    if (ch === '\\' && i + 1 < s.length) { word = (word ?? '') + s[++i]; continue; }
+    if (ch === '#' && word === null) { while (i < s.length && s[i] !== '\n') i++; cut(); continue; }
+    if (/[;&|()\n]/.test(ch)) { cut(); continue; }
+    if (/\s/.test(ch)) { end(); continue; }
+    word = (word ?? '') + ch;
+  }
+  cut();
+  return cmds;
+}
+const base = w => String(w).split(/[\\/]/).pop().replace(/\.(cmd|exe|ps1)$/i, '');
+const MANAGERS = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+const NOT_A_RUN = new Set(['exec', 'dlx', 'x', 'add', 'install', 'i', 'ci', 'remove', 'rm', 'uninstall', 'outdated', 'audit', 'why', 'ls', 'list', 'pack', 'publish', 'version', 'config', 'help']);
+const RUNNERS = new Set(['turbo', 'lerna', 'nx', 'npm-run-all', 'npm-run-all2', 'run-s', 'run-p', 'wireit', 'ultra']);
+const WRAPPERS = new Set(['npx', 'bunx', 'pnpx', 'cross-env', 'dotenv', 'env', 'time', 'nice', 'nohup']);
+
+// A check line that runs another script through a package manager or a task runner → what it calls, or null.
+export function nestedRun(line, depth = 0) {
+  for (const cmd of commandsOf(line)) {
+    let w = cmd.slice();
+    // FOO=bar before the command, and wrappers that run the rest as a command (npx turbo …, pnpm exec nx …)
+    for (let guard = 0; guard < 8 && w.length; guard++) {
+      while (w.length && /^[A-Za-z_][\w]*=/.test(w[0])) w.shift();
+      if (!w.length) break;
+      const c = base(w[0]);
+      if (WRAPPERS.has(c)) { w = w.slice(1); while (w.length && w[0].startsWith('-')) w.shift(); continue; }
+      if ((c === 'pnpm' || c === 'yarn') && ['exec', 'dlx'].includes(w[1])) { w = w.slice(2); continue; }
+      if (c === 'bun' && w[1] === 'x') { w = w.slice(2); continue; }
+      break;
+    }
+    if (!w.length) continue;
+    const c = base(w[0]);
+    const rest = w.slice(1).filter(x => !x.startsWith('-'));
+    if (MANAGERS.has(c)) {
+      const sub = rest[0];
+      if (!sub || NOT_A_RUN.has(sub)) continue;
+      return `${c} ${sub}`;
+    }
+    if (RUNNERS.has(c)) {
+      if (w.slice(1).some(x => x === '--version' || x === '-v') && rest.length === 0) continue;
+      return `${c}${rest[0] ? ` ${rest[0]}` : ''}`;
+    }
+    if (c === 'concurrently' || c === 'parallelshell') {
+      for (const arg of w.slice(1)) {
+        if (/^(npm|pnpm|yarn|bun):/.test(arg)) return `${c} "${arg}"`;
+        if (depth < 2) { const inner = nestedRun(arg, depth + 1); if (inner) return `${c} "${inner}"`; }
+      }
+    }
   }
   return null;
 }
@@ -187,7 +248,7 @@ export async function runChecks({ root, profile, env = process.env, platform = p
   for (const name of names) {
     if (!profile || profile.scripts?.[name] === undefined) { results[name] = { status: 'missing' }; continue; }
     const nested = [`pre${name}`, name, `post${name}`].map(n => profile.scripts?.[n]).map(nestedRun).find(Boolean);
-    if (nested) { results[name] = { status: 'refused', why: `its line calls \`${nested}\`, and a nested run starts that script's pre/post lines, which nunchi cannot switch off. Put the commands in the ${name} line itself` }; continue; }
+    if (nested) { results[name] = { status: 'refused', why: `its line runs other scripts (\`${nested}\`), whose pre/post lines nunchi cannot switch off. Put the commands in the ${name} line itself` }; continue; }
     const c = commandFor({ pm, script: name, bin, platform, profile });
     if (c.refused) { results[name] = { status: 'refused', why: c.refused }; continue; }
     const r = await runProcess({ ...c, cwd: root, env: childEnv(env, platform), timeout, platform });

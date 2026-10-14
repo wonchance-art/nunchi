@@ -187,9 +187,14 @@ test('the profile covers every script (a helper a check calls); a check that run
   assert.deepEqual(checkProfile(root).others, { helper: 'node mark.js h2.txt' });
   const r = await X.runChecks({ root, profile: checkProfile(root) });
   assert.equal(r.results.test.status, 'refused');
-  assert.match(r.results.test.why, /^its line calls `npm run`, and a nested run starts that script's pre\/post lines/);
+  assert.match(r.results.test.why, /^its line runs other scripts \(`npm run`\), whose pre\/post lines nunchi cannot switch off/);
   assert.ok(!existsSync(join(root, 't.txt')), 'nothing of it ran');
-  for (const [line, hit] of [['pnpm lint', 'pnpm lint'], ['yarn helper', 'yarn helper'], ['bun run x', 'bun run'], ['eslint . && npm test', 'npm test'], ['npx tsc', null], ['pnpm exec tsc', null], ['yarn dlx x', null], ['bunx x', null], ['node npm.js', null]]) assert.equal(X.nestedRun(line), hit, line);
+  for (const [line, hit] of [['pnpm lint', 'pnpm lint'], ['yarn helper', 'yarn helper'], ['bun run x', 'bun run'], ['eslint . && npm test', 'npm test'], ['npx tsc', null], ['pnpm exec tsc', null], ['yarn dlx x', null], ['bunx x', null], ['node npm.js', null],
+    // task runners, and commands inside a runner's quoted arguments (M3 review, round 2)
+    ['turbo run build', 'turbo run'], ['npx turbo run lint', 'turbo run'], ['lerna run test --stream', 'lerna run'], ['nx run app:build', 'nx run'], ['pnpm exec nx test app', 'nx test'],
+    ['concurrently "pnpm:lint" "pnpm:types"', 'concurrently "pnpm:lint"'], ['concurrently "npm run a" "tsc"', 'concurrently "npm run"'], ['run-s lint test', 'run-s lint'], ['cross-env CI=1 npm test', 'npm test'], ['FOO=1 yarn helper', 'yarn helper'],
+    // command words only: text, comments and arguments that name a manager run nothing
+    ['echo "use npm run build"', null], ["echo 'pnpm test'", null], ['tsc # pnpm test', null], ['node x.js npm', null], ['eslint . --rule "no-npm: off"', null], ['vitest run', null], ['yarn', null], ['npm --version', null]]) assert.equal(X.nestedRun(line), hit, line);
 });
 
 test('yarn: its major version comes from the binary, not from the markers (when installed)', async t => {
