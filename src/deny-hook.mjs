@@ -82,8 +82,20 @@ function stateDirsOf(cwd, common) {
 }
 
 // What a project protects, computed once per call. `env` and `cwd` come from the hook's input.
+// Is there a `.git` (a folder, or a worktree's file) here or in a folder above? Git is asked only then, so a call in
+// a folder that is no repository spawns nothing.
+export function plausibleGit(cwd) {
+  let cur = resolve(cwd);
+  for (let i = 0; i < 128; i++) {
+    try { lstatSync(join(cur, '.git')); return true; } catch {}
+    const up = dirname(cur);
+    if (up === cur) return false;
+    cur = up;
+  }
+  return false;
+}
 export function protectedOf(cwd, { env = process.env, common = undefined } = {}) {
-  const gc = common === undefined ? gitCommonDir(cwd) : common;
+  const gc = common === undefined ? (plausibleGit(cwd) ? gitCommonDir(cwd) : null) : common;
   const stateDirs = stateDirsOf(cwd, gc);
   return { cwd, common: gc, keys: keyBases(env), boards: boards(stateDirs) };
 }
@@ -565,16 +577,25 @@ export function judge(input, { env = process.env, common } = {}) {
   }
 }
 
+// The hook's answer to what came on stdin: → { status, stderr }. It fails closed: input it cannot read (not JSON,
+// over 4 MB) and an error while judging deny the call, so a call the hook cannot judge never passes by default.
+export const MAX_INPUT = 4 * 1024 * 1024;
+export function answer(raw, { judgeFn = judge } = {}) {
+  const deny = why => ({ status: 2, stderr: `nunchi: denied — ${why}.\n` });
+  if (typeof raw !== 'string' || raw.length > MAX_INPUT) return deny('the hook cannot read a tool call over 4 MB');
+  let input;
+  try { input = JSON.parse(raw); } catch { return deny('the hook could not read this tool call (not JSON)'); }
+  let why;
+  try { why = judgeFn(input); } catch (e) { return deny(`the hook could not judge this call (${String(e?.message || e).split('\n')[0].slice(0, 200)})`); }
+  return why ? deny(why) : { status: 0, stderr: '' };
+}
 // The hook: the tool call on stdin; exit 0 allows it, exit 2 with a reason on stderr denies it (Claude Code shows the
-// reason to the agent). Input that cannot be read is let through: the hook guards nunchi's files, not every call.
+// reason to the agent).
 async function main() {
   let raw = '';
-  for await (const chunk of process.stdin) { raw += chunk; if (raw.length > 4 * 1024 * 1024) break; }
-  let input;
-  try { input = JSON.parse(raw); } catch { process.exit(0); }
-  const why = judge(input);
-  if (!why) process.exit(0);
-  process.stderr.write(`nunchi: denied — ${why}.\n`);
-  process.exit(2);
+  try { for await (const chunk of process.stdin) { raw += chunk; if (raw.length > MAX_INPUT) break; } } catch { raw = null; }
+  const r = answer(raw);
+  if (r.stderr) process.stderr.write(r.stderr);
+  process.exit(r.status);
 }
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) main();

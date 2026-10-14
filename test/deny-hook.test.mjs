@@ -3,11 +3,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync, symlinkSync, readFileSync, existsSync, realpathSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { judge, keyBases, protectedOf } from '../src/deny-hook.mjs';
+import { judge, keyBases, protectedOf, answer, plausibleGit, MAX_INPUT } from '../src/deny-hook.mjs';
 import { tmp } from './fixtures/board-project.mjs';
 
 const HOOK = fileURLToPath(new URL('../src/deny-hook.mjs', import.meta.url));
@@ -191,7 +191,7 @@ test('deny hook: the app\'s code, the run evidence and nunchi\'s outputs stay op
   assert.ok(keyBases({ XDG_STATE_HOME: '/x/state' }).includes(join('/x/state', 'nunchi')));
 });
 
-test('deny hook: the script answers exit 2 with the reason on stderr to deny, exit 0 to allow, and lets unreadable input through', () => {
+test('deny hook: the script answers exit 2 with the reason on stderr to deny, exit 0 to allow, and fails closed: input it cannot read and an error while judging deny', () => {
   const r = repo();
   const run = input => spawnSync(process.execPath, [HOOK], { input: typeof input === 'string' ? input : JSON.stringify(input), encoding: 'utf8', env: r.env, cwd: r.root, timeout: 20000 });
   const deny = run({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: join(r.state, 'ledger.json') }, cwd: r.root });
@@ -199,7 +199,20 @@ test('deny hook: the script answers exit 2 with the reason on stderr to deny, ex
   assert.match(deny.stderr, /^nunchi: denied — nunchi's shared state/);
   const allow = run({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: join(r.root, 'README.md') }, cwd: r.root });
   assert.deepEqual([allow.status, allow.stdout, allow.stderr], [0, '', '']);
-  assert.equal(run('not json').status, 0);
+  assert.equal(run('not json').status, 2, 'not JSON: denied');
+  const big = run(JSON.stringify({ tool_name: 'Read', tool_input: { file_path: 'x'.repeat(MAX_INPUT + 10) } }));
+  assert.equal(big.status, 2, 'over 4 MB: denied');
+  assert.match(big.stderr, /over 4 MB/);
+  const broken = answer(JSON.stringify({ tool_name: 'Read' }), { judgeFn: () => { throw new Error('boom'); } });
+  assert.deepEqual([broken.status, /could not judge this call \(boom\)/.test(broken.stderr)], [2, true], 'an error while judging: denied');
+  // git is asked only where a .git can be: none here, a folder, a worktree's file, a folder below one
+  const plain = tmp('nunchi-hook-plain-');
+  assert.equal(plausibleGit(plain), false);
+  assert.equal(protectedOf(plain, { env: r.env }).common, null);
+  assert.equal(plausibleGit(r.root), true);
+  assert.equal(plausibleGit(join(r.root, '.nunchi', 'runs')), true);
+  writeFileSync(join(plain, '.git'), 'gitdir: /elsewhere\n');
+  assert.equal(plausibleGit(plain), true, 'a worktree');
   assert.equal(run({ tool_name: 'Bash', tool_input: { command: 'nunchi approve --all' }, cwd: r.root }).status, 2);
 });
 
@@ -208,7 +221,17 @@ test('deny hook: hooks/hooks.json runs the script on every tool that reads, writ
   const entry = hooks.hooks.PreToolUse[0];
   for (const tool of ['Read', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash', 'Grep', 'Glob', 'WebFetch']) assert.ok(new RegExp(`^(${entry.matcher})$`).test(tool), tool);
   assert.equal(entry.hooks[0].type, 'command');
-  assert.match(entry.hooks[0].command, /^node "\$\{CLAUDE_PLUGIN_ROOT\}\/src\/deny-hook\.mjs"$/);
+  assert.equal(entry.hooks[0].command, 'command -v node >/dev/null 2>&1 || exit 0; node "${CLAUDE_PLUGIN_ROOT}/src/deny-hook.mjs"');
+  if (POSIX) {
+    // run as Claude Code runs it (a POSIX shell; Git Bash on Windows): with node it judges, without node it allows (the
+    // documented limit: no node, no hook)
+    const r = repo();
+    const sh = (PATH, input) => spawnSync('/bin/sh', ['-c', entry.hooks[0].command], { input: JSON.stringify(input), encoding: 'utf8', env: { PATH, CLAUDE_PLUGIN_ROOT: ROOT, HOME: r.env.HOME || '/' }, cwd: r.root, timeout: 20000 });
+    const nodeDir = dirname(process.execPath);
+    assert.equal(sh(`${nodeDir}:/usr/bin:/bin`, { tool_name: 'Read', tool_input: { file_path: join(r.state, 'ledger.json') }, cwd: r.root }).status, 2);
+    assert.equal(sh(`${nodeDir}:/usr/bin:/bin`, { tool_name: 'Read', tool_input: { file_path: join(r.root, 'README.md') }, cwd: r.root }).status, 0);
+    assert.equal(sh('/nonexistent', { tool_name: 'Read', tool_input: { file_path: join(r.state, 'ledger.json') }, cwd: r.root }).status, 0, 'no node: the hook cannot run, and says nothing');
+  }
   assert.ok(existsSync(join(ROOT, 'src', 'deny-hook.mjs')));
   // a pure data hook: nothing in it opens a socket or fetches
   const src = readFileSync(HOOK, 'utf8');

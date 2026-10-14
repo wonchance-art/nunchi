@@ -1229,7 +1229,11 @@ check · 23/50"; no decision bar. A label is `.nunchi/labels/<labeller>/<id>.jso
 channel: board, at}`, written atomically, and its content is noted in `state/labels-approved.json`.
 
 **The deny hook (design §1; spec §5.1 notes).** `hooks/hooks.json` runs `src/deny-hook.mjs` before Read,
-NotebookRead, Write, Edit, MultiEdit, NotebookEdit, Bash, Grep, Glob and WebFetch; exit 2 with the reason denies. It
+NotebookRead, Write, Edit, MultiEdit, NotebookEdit, Bash, Grep, Glob and WebFetch; exit 2 with the reason denies.
+It fails closed: input it cannot read (not JSON, over 4 MB) and an error while judging deny the call. The command is
+`command -v node >/dev/null 2>&1 || exit 0; node …/deny-hook.mjs` (a POSIX shell, as Claude Code runs hooks; Git Bash
+on Windows): without node there is no hook, the documented limit. Git is asked for the common folder only when a
+`.git` is in the folder or one above, so a call outside a repository spawns nothing. It
 denies every tool the shared state (`<git-common-dir>/nunchi/**`, by git's own answer and by any `.git/nunchi` in a
 path) and `.nunchi/state/**`; the answer keys (`$XDG_STATE_HOME/nunchi`, `%LOCALAPPDATA%\nunchi`,
 `~/.local/state/nunchi`, all three); `.nunchi/auth.json`; a run's `canaries.json` and older keys; a running board's
