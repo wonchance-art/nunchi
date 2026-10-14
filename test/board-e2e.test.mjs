@@ -463,15 +463,41 @@ test('board e2e: live updates outlast a board that does not answer for a while; 
     await advance(20000, () => polls >= 2);
     assert.ok(polls >= 2, `two polls got no answer (${polls})`);
     assert.equal(await lostText(), null, 'two misses do not say the board is gone');
+    const status = () => page.evaluate(() => document.getElementById('live-status').textContent);
+    assert.equal(await status(), 'Reconnecting…', 'but they say it is reconnecting');
     down = false;
     const before = streams;
     await advance(30000, () => streams > before);
     assert.ok(streams > before, 'once the board answers, the stream is tried again');
     assert.equal(await lostText(), null);
+    assert.equal(await status(), '', 'the next answer clears the status');
     down = true;
     await advance(90000, () => false);
     assert.equal(await lostText(), 'The board is not running.', 'four misses in a row say so');
   } finally { await context.close(); await b.close(); }
+});
+
+test('board e2e: a board killed hard says "Reconnecting…" within about 3 s (said politely), then "not running" after 4 misses', { timeout: 60000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = smallProject();
+  const b = await startBoard({ projectDir: p.root });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await context.newPage();
+  try {
+    await page.goto(b.newLink());
+    await page.waitForSelector('#h-progress');
+    await page.waitForFunction(() => document.getElementById('live-status') && document.getElementById('live-status').textContent === '');
+    // killed hard: no goodbye on the stream, every connection dropped, nothing listening
+    const t0 = Date.now();
+    b.server.close(); b.server.closeAllConnections();
+    await page.waitForFunction(() => document.getElementById('live-status').textContent === 'Reconnecting…', null, { timeout: 3500 });
+    assert.ok(Date.now() - t0 <= 3500, `Reconnecting… after ${Date.now() - t0} ms`);
+    assert.equal(await page.evaluate(() => document.getElementById('announce').getAttribute('aria-live')), 'polite');
+    await page.waitForFunction(() => document.getElementById('announce').textContent === 'Reconnecting…', null, { timeout: 2000 });
+    assert.equal(await page.evaluate(() => document.getElementById('lost-h')), null, 'one miss does not say the board is gone');
+    await page.waitForFunction(() => document.getElementById('lost-h')?.textContent === 'The board is not running.', null, { timeout: 20000 });
+    assert.equal(await page.evaluate(() => document.getElementById('live-status').textContent), '', 'the status gives way to the message');
+  } finally { await context.close(); await b.close().catch(() => {}); }
 });
 
 test('board e2e: the list holds still while you work; new findings wait behind a banner until R', { timeout: 90000 }, async t => {

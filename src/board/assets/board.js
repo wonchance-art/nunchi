@@ -164,6 +164,7 @@ function lost(why) {
     h('p', { class: 'muted small' }, 'The key is never stored on disk or shown to your AI, so a reload needs a fresh link.')));
   $('nav').hidden = true;
   TOAST.hidden = true;
+  const ls = $('live-status'); if (ls) ls.textContent = '';
   // said, and the focus on the message (it replaced whatever had the focus)
   focusHeading();
   announce(text);
@@ -196,8 +197,16 @@ async function boot() {
 
 // ---- live updates: a fetch stream; when it breaks, polling, and the stream again --------------------------------------
 // A request that gets no answer at all (the network, a board restarting, a laptop waking up) is retried with a growing
-// wait; only OFFLINE_AFTER of them in a row say the board is not running. An answer of any status (429, 503) means it is.
-const OFFLINE_AFTER = 4, POLL_MS = 3000, POLL_MAX_MS = 15000, STREAM_MAX_MS = 60000;
+// wait (RETRY_MS), and the first miss says "Reconnecting…" at once; only OFFLINE_AFTER of them in a row say the board is
+// not running. An answer of any status (429, 503) means it is, and clears the status.
+const OFFLINE_AFTER = 4, POLL_MS = 3000, RETRY_MS = [1000, 2000, 4000, 8000], STREAM_MAX_MS = 60000;
+const RECONNECTING = 'Reconnecting…';
+function reconnecting(on) {
+  const el = $('live-status');
+  if (!el || !!el.textContent === on) return;
+  el.textContent = on ? RECONNECTING : '';
+  if (on) announce(RECONNECTING);
+}
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // One stream, read to its end. → 'bye' | 'expired' | 'ended' (it ran, then closed) | 'failed' (it could not open)
 async function stream() {
@@ -223,18 +232,20 @@ async function stream() {
   } catch { return 'ended'; }
 }
 // Polls the version for at least `ms`, until the board answers. → false when the tab is done (no key, offline).
-async function pollFor(ms) {
+// `first`: the wait before the first poll (short when a stream that ran just ended: the board may have gone).
+async function pollFor(ms, first = POLL_MS) {
   const until = Date.now() + ms;
-  let misses = 0, wait = POLL_MS;
+  let misses = 0, wait = first;
   for (;;) {
     await sleep(wait);
     if (S.stopped) return false;
-    try { const r = await api('/api/generation'); misses = 0; wait = POLL_MS; changed(r.version); if (Date.now() >= until) return true; }
+    try { const r = await api('/api/generation'); misses = 0; wait = POLL_MS; reconnecting(false); changed(r.version); if (Date.now() >= until) return true; }
     catch (e) {
       if (e.status === 401) return false;
-      if (e.status) { misses = 0; wait = POLL_MS; if (Date.now() >= until) return true; continue; }   // it answered
-      if (++misses >= OFFLINE_AFTER) { lost('offline'); return false; }
-      wait = Math.min(wait * 2, POLL_MAX_MS);
+      if (e.status) { misses = 0; wait = POLL_MS; reconnecting(false); if (Date.now() >= until) return true; continue; }   // it answered
+      if (++misses >= OFFLINE_AFTER) { reconnecting(false); lost('offline'); return false; }
+      reconnecting(true);
+      wait = RETRY_MS[Math.min(misses, RETRY_MS.length) - 1];
     }
   }
 }
@@ -245,7 +256,7 @@ async function live() {
     if (r === 'bye') return lost('stopped');
     if (r === 'expired') return lost('expired');
     if (r === 'ended') wait = POLL_MS;
-    if (!(await pollFor(wait))) return;
+    if (!(await pollFor(wait, r === 'ended' ? RETRY_MS[0] : POLL_MS))) return;
     if (r === 'failed') wait = Math.min(wait * 2, STREAM_MAX_MS);
   }
 }

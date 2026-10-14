@@ -1185,8 +1185,11 @@ the live endpoints answer (the others 404, so nothing unblinds).
   every open stream (a `fetch` stream read with `ReadableStream`, SSE framing, a ping every 15 s); the page then
   reloads the summary and, in place, the list and detail it shows. A stream that fails or ends falls back to polling
   `/api/generation` every 3 s, and is tried again once the board answers (after 3 s of polling, doubling to 60 s while
-  it cannot be opened). A request that gets no answer at all is retried with a growing wait (3, 6, 12, then 15 s);
-  only 4 in a row say "The board is not running"; an answer of any status (429, 503) means it is running. `nunchi decide` now bumps the generation after it writes the decision files too (the
+  it cannot be opened). A request that gets no answer at all is retried with a growing wait (1, 2, 4, then 8 s;
+  the first poll after a stream that ran and ended comes after 1 s), and the first miss shows "Reconnecting…" beside
+  the run box, said once by the polite live region; only 4 in a row say "The board is not running" (about 8 s after a
+  hard kill, against 36 s before the review of PR #29, round 2); an answer of any status (429, 503) means it is
+  running and clears the status. Tested by closing the server and every connection under an open page. `nunchi decide` now bumps the generation after it writes the decision files too (the
   approvals' bump came before the files existed).
 - The model (`src/board/model.mjs`) is ledger-wide, as `findings` sees it (`view()` through `project.mjs`), not one
   run: a partial latest run does not hide open items. Evidence comes from the run that last saw each item: a rule
