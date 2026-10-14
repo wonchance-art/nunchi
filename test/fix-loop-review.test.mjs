@@ -199,3 +199,27 @@ test('a route only P1 has, showing a defect the ledger already holds open, is no
   assert.deepEqual(latest(p).p1.scope.routes, ['/help', '/settings']);
   assert.match(v.lines.at(-1), /^Fixed 'Tap target smaller than 24px'/);
 });
+
+test('undo never overwrites a file git does not show: one the fix deleted that is back (ignored), one it added that holds other content now', async () => {
+  const p = await fixProject({ files: { '.gitignore': 'local.json\n' } });
+  writeFileSync(join(p.root, 'local.json'), '{"theirs":0}\n');
+  git(p.root, 'add', '-f', 'local.json');
+  git(p.root, 'commit', '-q', '-m', 'a tracked local.json');
+  await attempt(p, { change: ['TINY', 'ROOMY'], verify: false, extraEdit: root => { git(root, 'rm', '-q', 'local.json'); writeFileSync(join(root, 'app', 'settings', 'extra.jsx'), 'export const x = 1;\n'); git(root, 'add', 'app/settings/extra.jsx'); } });
+  await F.verifyFix(ctxOf(p), p.group);                                  // needs you (the change touched local.json)
+  const fixCommit = git(p.root, 'rev-parse', 'HEAD');
+  writeFileSync(join(p.root, 'local.json'), '{"mine":1}\n');            // made anew, ignored: status stays clean
+  assert.equal(git(p.root, 'status', '--porcelain', '--', '.', ':!.nunchi'), '');
+  let u = F.undoFix(ctxOf(p), p.group);
+  assert.equal(u.code, 1);
+  assert.match(u.lines.at(-1), /^Not undone: undoing it would overwrite or remove files that git does not show as changed \(local\.json: the fix deleted it, and a file of that name is there again\)\. Move them somewhere safe, then tell your AI “undo it”\.$/);
+  assert.equal(readFileSync(join(p.root, 'local.json'), 'utf8'), '{"mine":1}\n');
+  assert.equal(git(p.root, 'rev-parse', 'HEAD'), fixCommit);
+  rmSync(join(p.root, 'local.json'));
+  // a file the fix added, hidden from status (skip-worktree) and changed since
+  git(p.root, 'update-index', '--skip-worktree', 'app/settings/extra.jsx');
+  writeFileSync(join(p.root, 'app', 'settings', 'extra.jsx'), 'export const x = 2; // mine\n');
+  u = F.undoFix(ctxOf(p), p.group);
+  assert.match(u.lines.at(-1), /app\/settings\/extra\.jsx: the fix added it, and it holds other content now/);
+  assert.equal(readFileSync(join(p.root, 'app', 'settings', 'extra.jsx'), 'utf8'), 'export const x = 2; // mine\n');
+});

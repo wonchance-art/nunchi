@@ -8,7 +8,7 @@
 //   `Nunchi-Revert: <group> attempt <n>` trailer, hooks off, 60 s; any failure → `git revert --abort`, and the caller
 //   says *needs you*. A signing the repository requires and that fails is never retried unsigned;
 // - attempts are counted from the trailers of every branch (`--all`), so they survive lost state and other worktrees.
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { gitRunner, DIFF_SAFE } from '../runs.mjs';
@@ -67,6 +67,23 @@ export function fixGit(root) {
     // what a commit made now would take besides the fix's own undo: changes in the working tree (nunchi's folder aside)
     // and anything staged at all (a staged .nunchi file would be committed too)
     uncommitted: () => [...new Set([...api.status(), ...git(['diff', ...DIFF_SAFE, '--cached', '--name-only', '-z']).split('\0').filter(Boolean)])].sort(),
+    // What undoing `fixCommit` would destroy that a clean status does not show: a path the fix deleted that is on disk
+    // again (an ignored file the person made anew: the undo would write the old one over it), and a path the fix added
+    // that no longer holds what the fix put there (skip-worktree, assume-unchanged: the undo would delete it).
+    // → [{ file, why }].
+    occupied: fixCommit => {
+      const names = filter => git(['diff', ...DIFF_SAFE, '--no-renames', `--diff-filter=${filter}`, '--name-only', '-z', '--end-of-options', `${fixCommit}^`, fixCommit, '--']).split('\0').filter(Boolean).sort();
+      const top = api.toplevel();
+      const out = [];
+      for (const f of names('D')) { try { lstatSync(join(top, f)); out.push({ file: f, why: 'the fix deleted it, and a file of that name is there again' }); } catch {} }
+      for (const f of names('A')) {
+        let now = null;
+        try { if (lstatSync(join(top, f)).isFile()) now = git(['hash-object', '--no-filters', '--', join(top, f)]).trim(); } catch { continue; }
+        const was = tryGit(['rev-parse', '--verify', '--quiet', `${fixCommit}:${f}`]);
+        if (now && was && now !== was.trim()) out.push({ file: f, why: 'the fix added it, and it holds other content now' });
+      }
+      return out;
+    },
     // Tracked paths that git runs through a filter (Git LFS, git-crypt…): their `filter` attribute is set. nunchi's git
     // runs with every filter off (runs.mjs), so on these paths its tree hash, status and an undo would see the stored
     // form (an LFS pointer), not the file: the fix loop refuses such a repository up front.
@@ -132,6 +149,8 @@ export function fixGit(root) {
       if (api.inProgress().length) return { ok: false, reason: 'in-progress', message: `a ${api.inProgress()[0]} is in progress` };
       const dirty = api.uncommitted();
       if (dirty.length) return { ok: false, reason: 'dirty', files: dirty, message: `your working tree has changes that are not committed (${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? ` +${dirty.length - 5} more` : ''})` };
+      const taken = api.occupied(fixCommit);
+      if (taken.length) return { ok: false, reason: 'occupied', files: taken.map(x => x.file), occupied: taken, message: taken.map(x => `${x.file}: ${x.why}`).join('; ') };
       const abort = () => { tryGit(['revert', '--abort'], { timeout: REVERT_TIMEOUT }); };
       onStart();
       try {

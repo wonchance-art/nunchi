@@ -743,15 +743,22 @@ function dirtyLine(title, commit, files, { refusal = false } = {}) {
   return `${refusal ? 'Not undone' : `Couldn't undo the fix of '${title}' (commit ${short(commit)})`}: you have changes that are not committed (${list}), and undoing now would mix them into the undo. Commit them (git commit) or stash them (git stash push --include-untracked), then tell your AI “undo it”${refusal ? '' : ' — it needs you'}.`;
 }
 
+// The line when undoing would overwrite or delete files git does not show as changed (ignored ones, say).
+function occupiedLine(title, commit, taken, { refusal = false } = {}) {
+  const list = taken.slice(0, 3).map(x => `${x.file}: ${x.why}`).join('; ');
+  return `${refusal ? 'Not undone' : `Couldn't undo the fix of '${title}' (commit ${short(commit)})`}: undoing it would overwrite or remove files that git does not show as changed (${list}${taken.length > 3 ? `; and ${taken.length - 3} more` : ''}). Move them somewhere safe, then tell your AI “undo it”${refusal ? '' : ' — it needs you'}.`;
+}
+
 // Undo the fix commit (only while it is HEAD; design §4.7). `rec` is in phase reverting/undoing already.
 function doRevert(ctx, rec, why, { cancelWord = null, quiet = false, title = rec.title || 'this finding' } = {}) {
   const r = ctx.git.revert({ fixCommit: rec.commit, group: rec.group, attempt: rec.attempt, why: String(why).slice(0, 300), branch: rec.branch || null,
     onStart: () => { rec = update(ctx.stateDir, rec, { revertStarted: kst(ctx.deps.now()) }, gen(ctx)); } });
   if (!r.ok) {
-    const kind = r.reason === 'signing' ? 'signing' : r.reason === 'dirty' ? 'dirty' : r.reason === 'wrong-branch' ? 'wrong-branch' : 'revert-failed';
+    const kind = r.reason === 'signing' ? 'signing' : r.reason === 'dirty' || r.reason === 'occupied' ? 'dirty' : r.reason === 'wrong-branch' ? 'wrong-branch' : 'revert-failed';
     const line = r.reason === 'signing'
       ? `Couldn't undo the fix of '${title}' (commit ${short(rec.commit)}): your repository requires signed commits and signing failed. nunchi never commits unsigned: it needs you.`
       : r.reason === 'dirty' ? dirtyLine(title, rec.commit, r.files)
+      : r.reason === 'occupied' ? occupiedLine(title, rec.commit, r.occupied)
       : r.reason === 'wrong-branch' ? `Couldn't undo the fix of '${title}' (commit ${short(rec.commit)}): ${r.message}. Switch back to ${rec.branch}, then tell your AI “undo it” — it needs you.`
       : `Couldn't undo the fix of '${title}' (commit ${short(rec.commit)}): ${r.message}. Nothing was reset; it needs you.`;
     closeWith(ctx, rec, 'needs-you', { kind: 'needs-you', needsYou: kind, commit: rec.commit, line });
@@ -804,6 +811,8 @@ export function undoFix(ctx, id) {
   if (ctx.git.head() !== rec.commit) return refuse([...said, `The fix of '${found.title}' (commit ${short(rec.commit)}) is no longer the last commit: nunchi undoes only its own last commit. Undo it by hand with git revert ${short(rec.commit)}.`]);
   const dirty = ctx.git.uncommitted();
   if (dirty.length) return refuse([...said, dirtyLine(found.title, rec.commit, dirty, { refusal: true })], { dirty });
+  const taken = ctx.git.occupied(rec.commit);
+  if (taken.length) return refuse([...said, occupiedLine(found.title, rec.commit, taken, { refusal: true })], { occupied: taken.map(x => x.file) });
   const filtered = filterRefusal(ctx);
   if (filtered) return refuse([...said, filtered]);
   rec = setPhase(ctx.stateDir, rec, 'undoing', { folded: rec.phase === 'fixed' }, gen(ctx));
