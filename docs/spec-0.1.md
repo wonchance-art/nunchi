@@ -1141,7 +1141,16 @@ verdict counts a group waiting in a fix record as *needs you*.
   capture (`test/fix-*.test.mjs`), plus one end-to-end run with real Chromium and real git, and the board's fix states
   in Chromium with axe.
 - The gate harness `bench/fix-gate.mjs` runs the loop on Pebble with recorded fixes (`bench/fixes/pebble.json`); a
-  harness run is not the gate (design §9.4, pre-registered apart).
+  harness run is not the gate (design §9.4, pre-registered apart). One run (2026-10-15 06:06 KST, one sequential pass
+  of 4 seeds, `--serve start`) printed: P03 needs you (a) (the image now loads and the 3 controls below it moved:
+  4% of the phone view); P18 fixed (4 screens); P15 fixed (20 screens); P01 reverted, attempt 1 of 2 (its group
+  also holds an overflow on /app/tasks the recorded edit does not touch); batch "Fixed 2 of 4 (re-checked 24
+  screens, nothing else broke). 1 needs you: 'Image does not load' → the board (nunchi open). 1 not finished yet."
+  28–69 s per seed. Earlier runs found two engine defects, fixed with tests: a visitor redirected from a signed-in
+  route failed every probe of it, and named siblings sharing a normalised selector matched each other.
+- *Measured (2026-10-15 05:37 KST, after M3):* Pebble `node bench/run.mjs --twice` unchanged: rule recall 34/34,
+  0 false positives on 8 clean scenes, determinism identical (1,141 files), fingerprints 100% (52/52), 148 s per
+  capture. `npm test` 506 of 506 on Node 22.22.0 and on Node 24.21.0, Chromium included (2026-10-15 06:20 KST).
 - Limits: the drift threshold (1%) is not calibrated yet (the gate does that); `--serve start` serves the build in
   the folder, which matches the commit only when `build` is one of the checks; the other *needs you* kinds (diff
   policy, no baseline, an interrupted or half-done revert) show in the verdict and `fix --status` with their line but
