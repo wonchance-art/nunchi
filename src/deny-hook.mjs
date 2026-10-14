@@ -42,6 +42,10 @@ import { pathToFileURL } from 'node:url';
 const FOLD = process.platform === 'win32' || process.platform === 'darwin';
 const norm = p => { const s = String(p).replace(/\\/g, '/').replace(/\/+$/, ''); return FOLD ? s.toLowerCase() : s; };
 const within = (p, dir) => { const a = norm(p), b = norm(dir); return !!b && (a === b || a.startsWith(b + '/')); };
+// A path as /proc sees it: on Windows a rooted path resolves onto the current drive (`cd /proc` is `D:\proc` to node),
+// while Git Bash, which Claude Code runs there, has a /proc with command lines; so the drive is dropped first.
+const procPath = p => norm(p).replace(/^[a-z]:(?=\/|$)/i, '') || '/';
+export const isProc = (p, sub = '') => { const n = procPath(p), base = sub ? `/proc/${sub}` : '/proc'; return n === base || n.startsWith(`${base}/`); };
 const realish = p => {
   let cur = resolve(p); const rest = [];
   for (let i = 0; i < 64; i++) { try { lstatSync(cur); break; } catch { const up = dirname(cur); if (up === cur) break; rest.unshift(basename(cur)); cur = up; } }
@@ -117,12 +121,12 @@ const WRITE_DENY = [
 export function pathRule(p, prot, { write = false } = {}) {
   const abs = isAbsolute(p) ? resolve(p) : resolve(prot.cwd, p);
   for (const cand of [abs, realish(abs)]) {
-    const n = norm(cand);
+    const n = procPath(cand);                 // the rules below match within the path, so a dropped drive changes nothing else
     if (prot.common && within(cand, join(prot.common, 'nunchi'))) return READ_DENY[0][1];
     for (const k of prot.keys) if (within(cand, k)) return 'the answer keys are kept out of reach of the AI (they say which findings are planted or decoys)';
     for (const b of prot.boards) {
       if (b.socket && within(cand, b.socket)) return 'the board\'s control socket is for nunchi open only';
-      if (b.pid && within(cand, `/proc/${b.pid}`)) return 'the board\'s process holds its key';
+      if (b.pid && isProc(cand, String(b.pid))) return 'the board\'s process holds its key';
     }
     for (const [re, why] of READ_DENY) if (re.test(n)) return why;
     if (write) for (const [re, why] of WRITE_DENY) if (re.test(n)) return why;
@@ -548,8 +552,8 @@ function urlRule(url, prot) {
 function searchBaseRule(base, prot) {
   const why = 'a search there reaches nunchi\'s state, answer keys or a run\'s canaries: read the files you need by name';
   for (const b of [base, realish(base)]) {
-    for (const d of [join(prot.cwd, '.git'), prot.common, join(prot.cwd, '.nunchi', 'runs'), '/proc']) if (d && within(b, d)) return why;
-    if (norm(b) === norm(join(prot.cwd, '.nunchi'))) return why;
+    for (const d of [join(prot.cwd, '.git'), prot.common, join(prot.cwd, '.nunchi', 'runs')]) if (d && within(b, d)) return why;
+    if (norm(b) === norm(join(prot.cwd, '.nunchi')) || isProc(b)) return why;
   }
   return null;
 }

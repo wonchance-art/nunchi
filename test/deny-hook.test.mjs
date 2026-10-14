@@ -7,7 +7,7 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { judge, keyBases, protectedOf, answer, plausibleGit, MAX_INPUT } from '../src/deny-hook.mjs';
+import { judge, keyBases, protectedOf, answer, plausibleGit, MAX_INPUT, isProc } from '../src/deny-hook.mjs';
 import { tmp } from './fixtures/board-project.mjs';
 
 const HOOK = fileURLToPath(new URL('../src/deny-hook.mjs', import.meta.url));
@@ -148,6 +148,12 @@ test('deny hook: the bypasses of review B4 — recursive searches, globs, cd, qu
   for (const [tool, input] of [['Grep', { pattern: 'x', path: join(r.root, '.git') }], ['Grep', { pattern: 'x', path: '.nunchi/runs' }], ['Grep', { pattern: 'x', path: join(r.root, '.nunchi') }],
     ['Glob', { pattern: '.git/**/*.json' }], ['Glob', { pattern: '**/*', path: join(r.root, '.nunchi', 'runs', '0001') }], ['Grep', { pattern: 'x', path: '/proc' }]]) assert.ok(call(r, tool, input), `${tool} ${JSON.stringify(input)}`);
   for (const [tool, input] of [['Grep', { pattern: 'x', path: join(r.root, 'src') }], ['Grep', { pattern: 'keep', path: join(r.root, '.nunchi', 'decisions') }], ['Glob', { pattern: 'src/**/*.tsx' }]]) assert.equal(call(r, tool, input), null, `${tool} ${JSON.stringify(input)}`);
+});
+
+test('deny hook: /proc as Windows resolves it (onto the current drive) is still /proc, where Git Bash has command lines', () => {
+  for (const p of ['/proc', '/proc/123/cmdline', 'D:\\proc\\123\\cmdline', 'd:/proc/self/environ', 'C:\\proc']) assert.ok(isProc(p), p);
+  assert.ok(isProc('D:\\proc\\4242\\fd\\3', '4242'), 'the board\'s own process, by pid');
+  for (const p of ['/procfs/x', 'D:\\projects\\app', '/home/me/proc/1/cmdline', 'D:\\a\\proc']) assert.equal(isProc(p), false, p);
 });
 
 test('deny hook: the board\'s script is never run directly and its link handover is never asked for; reading its source is fine', () => {
