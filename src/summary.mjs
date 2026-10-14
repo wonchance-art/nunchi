@@ -1,0 +1,150 @@
+// What the board's Progress view says, computed once for the board (`/api/summary`) and `nunchi findings --json`
+// (`summary`), so the two never disagree (design 0.1-c §3.3, §3.4). Deterministic: the same ledger and run folders
+// give the same summary; no clock.
+//
+// The verdict formula (design §3.4). "Ready to ship? Yes" only when all of these hold:
+// - no blocker or high group is open, to fix, held, needs you, or not double-checked, and none is kept or called
+//   "not a problem" by a decision no person made or confirmed (design §1: the AI recorded it, or it came through git);
+// - the last full check is newer than the last fix commit (a commit with a `Nunchi-Fix:` trailer, the fix loop's);
+// - no double-checked AI item at blocker or high was double-checked by a suspect verification.
+// Otherwise the verdict names what stands in the way.
+import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { listRuns } from './runs.mjs';
+import { captureRuns, latestRunOf, byRun, titleOf } from './ledger.mjs';
+import { SEV, plural, human } from './board/shared.mjs';
+
+const readJsonOr = (p, fallback) => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return fallback; } };
+const SERIOUS = s => s === 'blocker' || s === 'high';
+const ACTIVE = new Set(['open', 'regressed', 'to-fix', 'held', 'stale']);
+const DISMISS = new Set(['keep', 'false-positive']);
+
+// Why a group stands in the way, most pressing first (one reason per group).
+export const STANDING = ['needs-you', 'decide', 'confirm', 'unchecked', 'suspect', 'fix', 'later'];
+const STANDING_WORDS = { 'needs-you': n => `${n} need${n === 1 ? 's' : ''} you`, decide: n => `${n} to decide`, confirm: n => `${n} to confirm`,
+  unchecked: n => `${n} not double-checked`, suspect: n => `${n} verified by a suspect check`, fix: n => `${n} waiting for the AI`, later: n => `${n} later` };
+
+// A decision that keeps a finding or calls it not a problem, that no person made or confirmed (design §1).
+export const unconfirmed = d => !!d && DISMISS.has(d.decision) && d.human === false;
+
+// One group's reason to stand in the way (any severity), or null.
+export function standingOf(g, rows) {
+  const mine = rows.filter(r => r.group === g.group);
+  const reasons = new Set();
+  for (const r of mine) {
+    if (r.goneAt) continue;
+    if (r.needsYou) reasons.add('needs-you');
+    if (r.status === 'open' || r.status === 'regressed' || r.status === 'stale') reasons.add(r.source === 'ai' && !r.checked ? 'unchecked' : 'decide');
+    if ((r.status === 'kept' || r.status === 'dismissed') && unconfirmed(r.decision)) reasons.add('confirm');
+    if (r.status === 'to-fix') reasons.add('fix');
+    if (r.status === 'held') reasons.add('later');
+    if (r.source === 'ai' && r.verification?.status === 'confirmed' && r.verification.suspect && ACTIVE.has(r.status)) reasons.add('suspect');
+  }
+  return STANDING.find(x => reasons.has(x)) || null;
+}
+
+// The runs of this worktree's stream that were full checks (a sweep of the whole app), oldest first.
+function fullChecks(state, stream, runsDir) {
+  return captureRuns(state, stream).filter(id => {
+    const fold = (state.folds || []).find(f => f.run === id && f.source === 'rule' && (f.stream ?? 'main') === stream);
+    if (fold?.kind && fold.kind !== 'sweep') return false;
+    return readJsonOr(join(runsDir, id, 'run.json'), {})?.wholeApp === true;
+  });
+}
+
+// `git`: the hardened git runner of the project (runs.mjs gitRunner), to count commits with a `Nunchi-Fix:` trailer
+// after the last full check's commit; null when there is no git. `running`: a capture folder still being written.
+export function summary({ state, rows, groups, stream = 'main', runsDir, git = null }) {
+  const latest = latestRunOf(state, stream);
+  const meta = latest ? readJsonOr(join(runsDir, latest, 'run.json'), {}) : {};
+  const manifest = latest ? readJsonOr(join(runsDir, latest, 'manifest.json'), {}) : {};
+  const running = listRuns(runsDir).partial.length > 0;
+  const checks = fullChecks(state, stream, runsDir);
+  const full = checks[checks.length - 1] ?? null, previous = checks[checks.length - 2] ?? null;
+  const fixCommits = git && full ? fixCommitsSince(git, readJsonOr(join(runsDir, full, 'run.json'), {})?.commit) : null;
+  const scenes = (Array.isArray(manifest.scenes) ? manifest.scenes : []).filter(s => s && s.canary === undefined);
+  const notSeen = scenes.filter(s => s.status !== 'captured');
+  const problems = (Array.isArray(manifest.health?.problems) ? manifest.health.problems : []).map(p => ({ status: String(p.status), scenes: Number(p.scenes) || 0, of: Number(p.of) || 0 }));
+
+  // groups, by severity and by status (a group "came back" counts as open), and why each stands in the way
+  const bySeverity = { blocker: 0, high: 0, medium: 0, low: 0 };
+  const byStatus = { open: 0, 'to-fix': 0, held: 0, kept: 0, dismissed: 0, fixed: 0, stale: 0 };
+  const standing = {};
+  for (const x of STANDING) standing[x] = { blocker: 0, high: 0, medium: 0, low: 0 };
+  for (const g of groups) {
+    const keys = new Set(Object.keys(g.statuses).map(s => (s === 'regressed' ? 'open' : s)));
+    for (const k of keys) if (Object.hasOwn(byStatus, k)) byStatus[k]++;
+    if ([...keys].some(k => ACTIVE.has(k))) bySeverity[g.severity] = (bySeverity[g.severity] || 0) + 1;
+    const why = standingOf(g, rows);
+    if (why) standing[why][g.severity]++;
+  }
+  const serious = Object.fromEntries(STANDING.map(x => [x, standing[x].blocker + standing[x].high]));
+  const seriousTotal = Object.values(serious).reduce((a, b) => a + b, 0);
+  const bh = { blocker: STANDING.reduce((n, x) => n + standing[x].blocker, 0), high: STANDING.reduce((n, x) => n + standing[x].high, 0) };
+
+  // AI review: did a hunt run on the last full check (or the latest run)?
+  const aiRan = (state.folds || []).some(f => f.source === 'ai' && (f.stream ?? 'main') === stream && (f.run === full || f.run === latest));
+  const ai = rows.filter(r => r.source === 'ai' && !r.goneAt);
+  let verdict;
+  if (running) verdict = { answer: 'too-early', text: 'Too early to say · a capture is running' };
+  else if (!latest) verdict = { answer: 'too-early', text: 'Too early to say · nothing captured yet' };
+  else if (problems.some(p => p.status === 'app-unreachable' || p.status === 'login-expired')) verdict = { answer: 'too-early', text: 'Too early to say · this run had a problem' };
+  else if (seriousTotal) {
+    const head = [bh.blocker && plural(bh.blocker, 'blocker'), bh.high && `${bh.high} high`].filter(Boolean).join(', ');
+    const parts = STANDING.filter(x => serious[x]).map(x => STANDING_WORDS[x](serious[x]));
+    verdict = { answer: 'not-yet', text: `Not yet · ${head}: ${parts.join(', ')}` };
+  } else if (fixCommits) verdict = { answer: 'not-yet', text: `Not yet · ${plural(fixCommits, 'fix', 'fixes')} since the last full check: capture again` };
+  else if (!aiRan) verdict = { answer: 'probably', text: 'Probably · rules only — the AI review hasn’t run' };
+  else if (!full) verdict = { answer: 'yes-checked', text: 'Yes, for what was checked · no full check yet' };
+  else if (notSeen.length) verdict = { answer: 'yes-checked', text: `Yes, for what was checked · ${plural(notSeen.length, 'screen')} not checked` };
+  else verdict = { answer: 'yes', text: 'Yes' };
+
+  // since the last full check (design §3.4): what the runs after the previous full check found new, fixed and back
+  const after = id => typeof id === 'string' && (!previous || byRun(id, previous) > 0);
+  const groupsWhere = pred => new Set(rows.filter(pred).map(r => r.group)).size;
+  const since = {
+    label: previous ? `Since last full check (run ${previous})` : full ? `First full check (run ${full})` : 'No full check yet',
+    against: previous,
+    new: groupsWhere(r => after(r.firstSeen) && !r.goneAt),
+    fixed: groupsWhere(r => r.goneAt && after(r.goneAt)),
+    back: groupsWhere(r => r.regressedAt && after(r.regressedAt) && !r.goneAt),
+  };
+
+  // decisions that wait for a person (design §1): dismissals the AI recorded or that came through git, once each
+  const confirm = [], seenIds = new Set();
+  for (const r of rows) {
+    const d = r.decision;
+    if (!(r.status === 'kept' || r.status === 'dismissed') || !unconfirmed(d) || seenIds.has(d.key)) continue;
+    seenIds.add(d.key);
+    const g = groups.find(x => x.group === r.group);
+    confirm.push({ id: d.id, key: d.key, decision: d.decision, reason: d.reason ?? null, channel: d.channel, by: d.by ?? null, at: d.at ?? null, note: d.note ?? null,
+      target: d.target, group: r.group, title: g?.source === 'ai' ? human(g.rule) : titleOf(r.rule), severity: g?.severity ?? r.severity });
+  }
+  confirm.sort((a, b) => SEV[a.severity] - SEV[b.severity] || (a.at < b.at ? -1 : a.at > b.at ? 1 : 0) || (a.id < b.id ? -1 : 1));
+
+  // what to decide (the main button's "Decide N"), and the handoff once nothing is left (design §3.4)
+  // (AI findings not double-checked wait for the AI's double-check first, so they do not hold the handoff back)
+  const open = r => !r.goneAt && (r.status === 'open' || r.status === 'regressed' || r.status === 'stale' || !!r.needsYou) && !(r.source === 'ai' && !r.checked);
+  const toDecide = groups.filter(g => rows.some(r => r.group === g.group && open(r))).length;
+  const toFix = groups.filter(g => g.statuses['to-fix']).length;
+  const handoff = !toDecide && toFix ? { toFix, text: `All decided. ${toFix} to fix. Go back to your AI chat and say “fix them”.`, say: 'fix them' } : null;
+  return {
+    run: latest, kind: meta.kind ?? 'sweep', fullCheck: full, previousFullCheck: previous, running,
+    verdict, bySeverity, byStatus, standing, toDecide, toFix, handoff, since, confirm,
+    health: { problems, blind: (latest && state.blind?.[latest]) || null, scenes: { total: scenes.length, checked: scenes.filter(s => s.status === 'captured' && !/^redirected/.test(s.reason || '')).length, notSeen: notSeen.length, reasons: [...new Set(notSeen.map(s => String(s.reason || s.status)))].sort() } },
+    ai: { ran: aiRan, groups: new Set(ai.map(r => r.group)).size, doubleChecked: new Set(ai.filter(r => r.checked).map(r => r.group)).size,
+      notDoubleChecked: new Set(ai.filter(r => !r.checked).map(r => r.group)).size, stale: groups.filter(g => g.status === 'stale').length,
+      needsYou: rows.filter(r => r.needsYou && !r.goneAt).length, suspect: ai.some(r => r.verification?.suspect) },
+    commit: meta.commit ?? null, dirty: meta.dirty ?? null,
+  };
+}
+
+// Commits with a `Nunchi-Fix:` trailer (the fix loop's, design §4.7) after `commit`, through the hardened git runner;
+// null when there is no git or no commit to compare with.
+export function fixCommitsSince(run, commit) {
+  if (!run || !commit || !/^[0-9a-f]{7,64}$/.test(commit)) return null;
+  try {
+    const out = run(['log', '--format=%(trailers:key=Nunchi-Fix,valueonly)%x00', `${commit}..HEAD`, '--'], { encoding: 'utf8' });
+    return out.split('\0').filter(x => x.trim()).length;
+  } catch { return null; }
+}
