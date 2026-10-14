@@ -86,7 +86,9 @@ async function openUnlocked({ projectDir, stateDir, mode = 'board', labeller = n
   const args = [SERVER, '--project', resolve(projectDir), '--mode', mode, ...(port ? ['--port', String(port)] : []), ...(browser ? ['--open'] : []),
     ...(wantLink ? ['--link-to-parent'] : []), ...(labeller ? ['--labeller', labeller] : []), ...(idleMs ? ['--idle-ms', String(idleMs)] : [])];
   // stdout carries the port only; the link, when this terminal is to print it, comes over a pipe of its own (fd 3)
-  const child = spawn(process.execPath, args, { cwd: resolve(projectDir), detached: true, stdio: ['ignore', 'pipe', 'ignore', ...(wantLink ? ['pipe'] : [])], windowsHide: true, env: serverEnv() });
+  // its working folder is the boards folder of the state, never the project: on Windows a process inside a folder
+  // keeps it from being removed or renamed (a worktree, a checkout)
+  const child = spawn(process.execPath, args, { cwd: boardsDir(stateDir), detached: true, stdio: ['ignore', 'pipe', 'ignore', ...(wantLink ? ['pipe'] : [])], windowsHide: true, env: serverEnv() });
   let line, link = null;
   try {
     line = parse(await firstLine(child.stdout, 20000));

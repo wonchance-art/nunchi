@@ -1098,7 +1098,11 @@ that matches a board link, with an allow-listed environment: the desktop session
 `windir`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP`, `TMP`, `PATHEXT`), `HOME` from the account (not the
 variable) and a fixed system `PATH`. The detached server gets an allow-listed environment too (PATH and the user's
 config for git, `XDG_STATE_HOME` / `LOCALAPPDATA` for the answer keys, locale, temp folders, the desktop session):
-never `NODE_*`, `LD_*`, `DYLD_*`, `BROWSER` or `GIT_*` (tested on `/proc/<pid>/environ`).
+never `NODE_*`, `LD_*`, `DYLD_*`, `BROWSER` or `GIT_*` (tested on `/proc/<pid>/environ`). Its working folder is the
+state's `boards` folder, never the project (on Windows a process inside a folder keeps it from being removed or
+renamed: a worktree, a checkout); it watches only the state folder and closes the watch when it stops. The hook's
+matcher keeps `NotebookRead`: matching a tool that a newer Claude Code no longer has costs nothing, and an older one
+still has it.
 
 **Security (§3.2; `test/board-security.test.mjs` has a test per check).**
 - *Bind* 127.0.0.1 only. *Host* must be exactly `127.0.0.1:<port>`, or 421 (also without a Host header: node's own

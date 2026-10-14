@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { request } from 'node:http';
 import { connect } from 'node:net';
-import { readFileSync, writeFileSync, mkdirSync, symlinkSync, readdirSync, statSync, cpSync, openSync, closeSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, symlinkSync, readdirSync, statSync, cpSync, openSync, closeSync, readlinkSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { networkInterfaces } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -523,5 +523,8 @@ test('§3.1 the opener and the detached server get an allow-listed environment: 
     const env = readFileSync(`/proc/${rec.pid}/environ`, 'utf8').split('\0').map(x => x.split('=')[0]);
     for (const k of ['BROWSER', 'NODE_PATH', 'LD_LIBRARY_PATH']) assert.ok(!env.includes(k), `the server has no ${k}`);
     assert.ok(env.includes('PATH'));
+    // its working folder is the state's boards folder, not the project (on Windows a process inside a folder keeps it
+    // from being removed)
+    assert.equal(realpathSync(readlinkSync(`/proc/${rec.pid}/cwd`)), realpathSync(join(stateDir, 'boards')));
   } finally { await stopBoards(stateDir, p.root); }
 });
