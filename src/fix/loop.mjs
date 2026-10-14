@@ -14,7 +14,7 @@
 // every side effect). Functions here return { code, lines, json }: the CLI prints the lines (the chat lines the skill
 // relays: one per outcome) and exits with the code; nothing here prints or exits.
 import { join, basename, dirname, relative, sep } from 'node:path';
-import { readFileSync, existsSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import * as P from '../project.mjs';
 import { titleOf, latestRunOf, foldFix, unfoldFix, commitFix, byRun } from '../ledger.mjs';
 import { human } from '../board/shared.mjs';
@@ -28,7 +28,7 @@ import { readKey, writeKey, keyPath } from '../state.mjs';
 import { fixGit, fixTrailers, TRAILERS } from './git.mjs';
 import { acquireClaim, renewClaim, releaseClaim, readClaim, claimLive, refusalText, whileRenewing } from './claims.mjs';
 import { allocate, setPhase, update, latestRecord, allRecords, latestRecords, isOpen, writePlan, readPlan, groupDir, kst } from './records.mjs';
-import { probeView, judgeRules, judgeAi, MAX_ATTEMPTS, FLAKY, identityOf } from './judge.mjs';
+import { probeView, probeProblems, judgeRules, judgeAi, MAX_ATTEMPTS, FLAKY } from './judge.mjs';
 import { diffPolicy, depsOf, rootCauseFiles } from './policy.mjs';
 import { fixBrief } from './brief.mjs';
 import { runChecks as runChecksReal, compareChecks } from './run.mjs';
@@ -245,6 +245,9 @@ export async function startFix(ctx, id, opts = {}) {
   const early = !rec || ['starting', 'claiming', 'branching'].includes(rec.phase);
   if (!tf.fixing.length) return refuse([...said, `'${title}' is not decided Fix (it is ${g.status}): decide in the board first.`]);
   if (tf.unverified.length) return refuse([...said, `The Fix decision on '${title}' came through git and is not approved on this machine: nunchi does not act on it until you run nunchi approve in your own terminal.`]);
+  // design §1: the agent may start a fix for a confirmed AI finding or a rule finding; one nobody double-checked needs a
+  // person's Fix (the board asks "This hasn't been double-checked. Fix anyway?")
+  if (tf.fixing.some(r => r.source === 'ai' && !r.checked && r.decision && r.decision.human !== true)) return refuse([...said, `Nobody double-checked the AI finding '${title}', and its Fix was recorded by your AI: verify it first (nunchi verify --plan), or decide Fix in the board.`]);
   const last = latestRecord(ctx.stateDir, g.group);
   const head = ctx.git.head();
   if (!rec) {
@@ -285,15 +288,15 @@ export async function startFix(ctx, id, opts = {}) {
   let allowBaseHosts = [];
   try { allowBaseHosts = readConfig(ctx.nunchiDir).allowHosts; } catch (e) { return out(2, `nunchi: ${e.message}`); }
   if (url) { const no = baseUrlRefusal(url, allowBaseHosts); if (no) return out(2, `nunchi fix: ${no}`); }
+  if (opts.serve && !['dev', 'start'].includes(opts.serve)) return refuse('--serve takes dev or start (the approved scripts that start your app).');
   // the check profile: approved through a person before anything of the repository runs
   const profile = checkProfile(ctx.root);
   const checkNames = profile ? CHECK_SCRIPTS.filter(n => profile.scripts[n] !== undefined) : [];
   if (profile && (checkNames.length || opts.serve)) {
     let ok = false;
     try { ok = approvedProfiles(scriptsApprovedPath(ctx.stateDir)).has(profile.hash); } catch (e) { return out(2, `nunchi: ${e.message}`); }
-    if (!ok) { writeChecksRequest(ctx, profile); return refuse([...said, `Your check scripts (${[...checkNames, ...Object.keys(profile.serve || {}).filter(n => n === opts.serve)].join(', ')}) are not approved yet: approve them in the board (nunchi open shows a card with the exact lines), or run \`nunchi fix --approve-checks\` in your own terminal. nunchi never approves them for you.`], { checksRequested: true }); }
+    if (!ok) { writeChecksRequest(ctx, profile); return refuse([...said, `Your check scripts (${[...checkNames, ...(opts.serve ? [opts.serve] : [])].join(', ')}) are not approved yet: approve them in the board (nunchi open shows a card with the exact lines), or run \`nunchi fix --approve-checks\` in your own terminal. nunchi never approves them for you.`], { checksRequested: true }); }
   }
-  if (opts.serve && !['dev', 'start'].includes(opts.serve)) return refuse('--serve takes dev or start (the approved scripts that start your app).');
   const persons = sweep.persons.filter(p => p !== 'signed-in' || existsSync(join(ctx.nunchiDir, 'auth.json')));
   // ---- the attempt
   if (!rec) {
@@ -341,8 +344,8 @@ export async function startFix(ctx, id, opts = {}) {
     const p = await probe(ctx, rec, 'P0', { url: opts.url || rec.url, serve: opts.serve || rec.serve, scope: rec.scope, harDir, profile });
     if (p.error) { closeWith(ctx, rec, 'aborted', { kind: 'aborted', reason: 'p0', line: p.error }); return out(p.code || 1, [`Couldn't capture the screens before the fix: ${p.error}. Start your app, then tell your AI “retry”.`]); }
     const view = probeView(readProbe(p.runDir), controlsReader(p.runDir));
-    const bad = judgeRules({ group: { rule: [], ai: [] }, p0: view, p1: view, proof: p.proof.ok });
-    if (bad.outcome === 'inconclusive') { closeWith(ctx, rec, 'aborted', { kind: 'aborted', reason: 'p0-inconclusive', p0: { run: p.runId } }); return out(1, [`Couldn't capture the screens before the fix: ${bad.reasons.map(x => x.text).join('; ')}. Start your app (and capture with --network record if the recording is stale), then tell your AI “retry”.`], { p0: p.runId }); }
+    const bad = probeProblems(view);
+    if (bad.length) { closeWith(ctx, rec, 'aborted', { kind: 'aborted', reason: 'p0-inconclusive', p0: { run: p.runId }, reasons: bad }); return out(1, [`Couldn't capture the screens before the fix: ${bad.map(x => x.text).join('; ')}. Start your app (and capture with --network record if the recording is stale), then tell your AI “retry”.`], { p0: p.runId }); }
     const shows = rec.fps.ai.length || view.all.some(x => rec.fps.rule.includes(x.f.fp));
     if (!shows) { closeWith(ctx, rec, 'aborted', { kind: 'aborted', reason: 'not-in-p0', p0: { run: p.runId } }); return out(1, `The screens before the fix no longer show '${title}': it may be fixed already. Capture again (nunchi capture) and look in the board.`, { p0: p.runId }); }
     rec = setPhase(ctx.stateDir, rec, 'started', { p0: { run: p.runId, proof: p.proof } }, gen(ctx));
@@ -483,7 +486,8 @@ export async function verifyFix(ctx, id, opts = {}) {
   if (!rec.checks?.pass || rec.checks.tree !== tree) return refuse([...said, `The checks did not run on this commit's tree (${tree.slice(0, 12)}${rec.checks?.tree ? `; they ran on ${rec.checks.tree.slice(0, 12)}` : ''}): undo the commit's extra change, or run nunchi fix --checks on it before committing.`]);
   // the diff policy (design §4.6); diff paths are the repository's, the source map's are the app's
   let prefix = '';
-  try { prefix = relative(ctx.git.toplevel(), ctx.root).split(sep).join('/'); prefix = prefix ? `${prefix}/` : ''; } catch {}
+  // compared as real paths (Windows 8.3 names, a folder reached through a link), never as raw strings
+  try { prefix = relative(realpathSync.native(ctx.git.toplevel()), realpathSync.native(ctx.root)).split(sep).join('/'); prefix = prefix ? `${prefix}/` : ''; } catch {}
   if (rec.phase === 'committed') {
     const files = ctx.git.diffNames(rec.base, head);
     const pkg = readJson(join(ctx.root, 'package.json'), {});

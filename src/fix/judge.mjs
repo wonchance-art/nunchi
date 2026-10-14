@@ -66,6 +66,17 @@ export function probeView({ manifest, findings }, controlsOf = () => []) {
   return { scenes, looks, all, misses, problems };
 }
 
+// What makes a probe unusable as a baseline (P0): a screen it did not capture (failed, redirected, an error page), a
+// health problem, replay misses. → reasons (empty when it is usable).
+export function probeProblems(v) {
+  const out = [];
+  for (const p of v.problems) if (['app-unreachable', 'login-expired', 'recording-stale'].includes(p)) out.push({ why: p, text: { 'app-unreachable': 'the screens did not load', 'login-expired': 'the saved login no longer works', 'recording-stale': 'the recording no longer answers these screens' }[p] });
+  if (v.misses) out.push({ why: 'replay-miss', text: `${v.misses} request(s) were not in the recording (never sent live)` });
+  const lost = v.scenes.filter(s => !looked(s));
+  if (lost.length) out.push({ why: 'scene-failed', text: `${lost.length} screen(s) did not load or were redirected`, cells: lost.map(s => s.id).sort() });
+  return out;
+}
+
 // The rule part of the verdict, and what is left for the AI re-check.
 // - group: { rule: [{ fp, rule, route, cells }], ai: [{ fp, route, cells }] } (the group's ledger rows, not fixed);
 // - p0, p1: probeView() of the two probes; scope0: the route|cell keys P0 looked at;

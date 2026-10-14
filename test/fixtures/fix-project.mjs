@@ -110,6 +110,8 @@ export function fakeCapture(root, world = {}) {
         finalPath: s.path, redirected: false, httpStatus: 200, top: sha(sc.png), full: sha(sc.png), textHash: sha(s.route), findings: sc.findings.length, dataRequests: 1, replayMisses: (world.misses || {})[s.route] || 0 });
       findings.push(...sc.findings);
     }
+    // a whole-app finding (no screen): a secret in the browser bundle
+    if (world.secret) findings.push({ lens: 'L9', rule: 'secret-in-client-bundle', severity: 'blocker', scene: null, route: null, viewport: null, selector: null, box: null, evidence: { url: '/assets/app.js', kind: 'stripe-live-secret-key' } });
     // canaries (the re-check's controls): copies of the eligible screens with a planted defect, cycling over them
     const planted = [];
     const eligible = entries.filter(e => e.status === 'captured' && (!canaryRoutes || canaryRoutes.includes(e.route)));
