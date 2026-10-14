@@ -14,6 +14,11 @@ import { writeStable, sha } from './stable.mjs';
 import { canaryMutate, canarySeed, plantCanaries } from './canary.mjs';
 import { loadLenses, BUILTIN_DIR } from './lenses.mjs';
 import { FONT_HOSTS, BACKEND_SUFFIXES, isBackendHost, isDataRequest, requestKey, forceResponse, Recording, redactUrl, redactText, baseUrlRefusal } from './network.mjs';
+import { redactSelector } from './selector-secrets.mjs';
+
+// paint.json: selectors of text-less containers can carry an id the app set to a key or session id. The whole
+// measure has already been through scrubDeep; this also catches ids with no word boundary (sess_sk_live_…).
+const paintRecord = p => ({ schema: 1, ...Object.fromEntries(Object.entries(p).map(([k, rows]) => [k, rows.map(r => ({ ...r, selector: redactSelector(r.selector) }))])) });
 
 const require = createRequire(import.meta.url);
 const AXE_SOURCE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
@@ -334,6 +339,7 @@ async function captureOne(browser, base, scene, opts) {
   if (measure) {
     writeStable(join(dir, 'text.txt'), redactText(measure.text) + '\n');
     writeStable(join(dir, 'styles.json'), measure.styles);
+    writeStable(join(dir, 'paint.json'), paintRecord(measure.paint));
     writeStable(join(dir, 'controls.json'), measure.controls);
     writeStable(join(dir, 'links.json'), measure.links);
   }

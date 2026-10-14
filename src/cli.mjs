@@ -83,6 +83,9 @@ Usage:
                                             Check the hunter's answers (every item answered, every defect
                                             grounded in a selector of the scene or a file:line under --root)
                                             and write ai-findings.json and coverage.json into the run
+  nunchi tokens [--run <id>] [--json]      Tidy: cluster the colours (text, backgrounds, borders, SVG), radii and
+                                            font sizes the screens use into a token proposal with roles and WCAG
+                                            contrast → tokens.json and tokens.css in the run (never your code)
   nunchi --version
   nunchi --help
 
@@ -584,6 +587,20 @@ if (cmd === 'setup') {
       if (r.verify.suspect) console.log(`SUSPECT: ${r.verify.suspectReason}. This run's verifications are marked suspect; verify again in a fresh context.`);
     }
   } else { console.error('nunchi verify: use --plan, or --record <verdicts.json>'); process.exit(1); }
+} else if (cmd === 'tokens') {
+  // Design supporter, Stage 0 (Tidy): a token proposal from the run's evidence. Writes into the run only.
+  const { buildTokens, readRunScenes, formatTokens, tokensCss } = await import('./tokens.mjs');
+  const { writeStable, stableJson } = await import('./stable.mjs');
+  const dir = runDirOf(args, 'tokens');
+  let scenes;
+  try { scenes = readRunScenes(dir); }
+  catch (e) { if (e.code !== 'BAD_RUN') throw e; console.error(`nunchi tokens: ${e.message}`); process.exit(2); }
+  if (!scenes.length) { console.error(`nunchi tokens: ${dir} has no captured screens to measure`); process.exit(1); }
+  const report = buildTokens({ scenes });
+  writeStable(join(dir, 'tokens.json'), report);
+  writeStable(join(dir, 'tokens.css'), tokensCss(report));
+  if (args.json) process.stdout.write(stableJson(report));
+  else console.log(formatTokens(report, [join(dir, 'tokens.json'), join(dir, 'tokens.css')]));
 } else if (cmd === 'gc') {
   // a run is folded before it can be removed: if the ledger cannot be brought up to date, nothing is removed,
   // and a run the ledger does not hold is never removed. The catch-up fold may write the ledger's first file: the
