@@ -1,0 +1,57 @@
+{
+  "app": "pebble",
+  "note": "Recorded fixes for the fix-loop gate harness (bench/fix-gate.mjs, design 0.1-c §9.4): for each seed, the edit an AI fixer could make, applied by the harness instead of a model so the loop itself is what runs. Seeds name the answer key's ids (bench/answers/pebble.json); a seed's group is found by rule and route, and `match` (the example's evidence) picks one when there are several: P18's Privacy and Terms links are two groups, and P01's group also holds an overflow on /app/tasks that the answer key does not list, which its recorded edit does not touch. Invented content, like the app. Not the gate's sample: the pre-registered gate draws its own (design §9 preamble).",
+  "fixes": [
+    {
+      "seed": "P03",
+      "rule": "broken-image",
+      "route": "/",
+      "edits": [
+        {
+          "file": "app/page.jsx",
+          "from": "src=\"/hero-desk.png\"",
+          "to": "src=\"/attachment.svg\""
+        }
+      ]
+    },
+    {
+      "seed": "P18",
+      "rule": "dead-href",
+      "route": "/",
+      "match": {
+        "name": "Privacy"
+      },
+      "edits": [
+        {
+          "file": "app/page.jsx",
+          "from": "<a href=\"#\">Privacy</a>",
+          "to": "<Link href=\"/about\">Privacy</Link>"
+        }
+      ]
+    },
+    {
+      "seed": "P15",
+      "rule": "placeholder-text",
+      "route": "/",
+      "edits": [
+        {
+          "file": "app/page.jsx",
+          "from": "— John Doe, CEO",
+          "to": "— Mina, a nurse on night shifts"
+        }
+      ]
+    },
+    {
+      "seed": "P01",
+      "rule": "horizontal-overflow",
+      "route": "/pricing",
+      "edits": [
+        {
+          "file": "app/pricing/page.jsx",
+          "from": "style={{ minWidth: 720, borderCollapse: 'collapse' }}",
+          "to": "style={{ width: '100%', borderCollapse: 'collapse' }}"
+        }
+      ]
+    }
+  ]
+}
