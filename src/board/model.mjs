@@ -259,7 +259,9 @@ export function groupList(model, { status = 'open', lens = null, q = null, group
     s.ids.push(g.id);
     if (SEV[g.severity] < SEV[s.severity]) s.severity = g.severity;
   }
-  const order = list => [...list.values()].sort((a, b) => SEV[a.severity] - SEV[b.severity] || b.ids.length - a.ids.length || cmp(a.key, b.key));
+  // sections follow the default order of the groups in them (their first group's place), so J walks the list in it
+  const rankOf = new Map(model.groups.map(g => [g.id, g.order]));
+  const order = list => [...list.values()].sort((a, b) => Math.min(...a.ids.map(id => rankOf.get(id))) - Math.min(...b.ids.map(id => rankOf.get(id))) || cmp(a.key, b.key));
   // every group is in `groups` (not only those shown): the page keeps its list still while the person works and
   // updates the rows it shows in place, whatever filter they match now (design §3.4)
   const lensName = id => model.lenses?.[id]?.name ? `${id} · ${model.lenses[id].name}` : id;

@@ -205,5 +205,6 @@ dialog h2{font-size:17px;margin:0 0 10px}.dialog-actions{display:flex;flex-wrap:
 .empty-note{margin:0;padding:16px 20px;color:var(--muted)}
 .loading{padding:24px;color:var(--muted)}
 @media (max-width:760px){.toast{bottom:16px}.toolbar{position:static}.field input{min-width:0;width:100%}.dbtn{flex:1 1 40%}}
+@media (prefers-color-scheme:dark){.board .btn-primary,.board .btn-primary:hover,.b-primary,.b-primary:hover{color:#141518}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
 `;

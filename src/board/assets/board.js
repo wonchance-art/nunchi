@@ -274,7 +274,7 @@ function renderProgress(focus = false) {
   const counts = h('section', { class: 'panel-box', 'aria-labelledby': 'h-status' }, h('h2', { id: 'h-status' }, 'Decisions'),
     h('ul', { class: 'statuses' }, W.FILTERS.filter(([k]) => k !== 'all').map(([k, label]) => h('li', null, h('span', { class: `st st-${k}` }, label), ' ', h('b', null, String(s.byStatus[k] || 0))))),
     s.warnings.length ? h('ul', { class: 'facts muted small' }, s.warnings.map(w => h('li', null, w))) : null);
-  main().replaceChildren(h('section', { id: 'progress', class: 'view', 'aria-labelledby': 'h-progress' },
+  main().replaceChildren(h('div', { id: 'progress', class: 'view' },
     h('div', { class: 'stack' }, hero, confirm, checks, h('div', { class: 'two' }, since, health), counts)));
   if (focus) focusHeading();
 }
@@ -379,6 +379,8 @@ const visibleIds = () => [...main().querySelectorAll('.row[data-id]')].filter(r 
 function renderFindings(focus = false) {
   if (S.route.view !== 'findings' || !S.list) return;
   const L = S.list, p = S.params;
+  // a row that has the focus keeps it across a re-render
+  if (d.activeElement?.classList?.contains('row')) focus = true;
   if (!S.focus || !L.ids.includes(S.focus)) S.focus = L.ids[0] || null;
   const tabs = h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Status' }, W.FILTERS.map(([k, label]) => {
     const t = h('button', { type: 'button', role: 'tab', 'data-k': k, 'aria-selected': p.status === k ? 'true' : 'false', tabindex: p.status === k ? '0' : '-1' }, label, ' ', h('span', { class: 'cnt' }, String(L.counts[k] || 0)));
@@ -397,7 +399,15 @@ function renderFindings(focus = false) {
   groupSel.addEventListener('change', async () => { S.params.group = groupSel.value; store.set('nunchi.group', groupSel.value); await loadList(); renderFindings(); d.getElementById('group-by')?.focus(); });
   const search = h('input', { id: 'search', type: 'search', value: p.q, placeholder: 'Plain text', autocomplete: 'off', spellcheck: 'false' });
   let t = null;
-  search.addEventListener('input', () => { clearTimeout(t); t = setTimeout(async () => { S.params.q = search.value; await loadList(); renderFindings(); const s = $('search'); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }, 250); });
+  search.addEventListener('input', () => {
+    clearTimeout(t);
+    t = setTimeout(async () => {
+      const typing = d.activeElement === $('search');
+      S.params.q = $('search').value; await loadList(); renderFindings();
+      // the search box keeps the focus only if the person is still in it
+      if (typing) { const s = $('search'); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
+    }, 250);
+  });
   const banner = h('div', { id: 'updates', class: 'banner', role: 'status', hidden: true });
   renderBanner(banner);
   const section = (s, i, prefix) => {
