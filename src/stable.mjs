@@ -1,6 +1,6 @@
 // Stable serialization: sorted keys, fixed indentation, trailing newline.
 // Every file the engine writes goes through here so equal data gives equal bytes.
-import { writeFileSync, mkdirSync, openSync, fsyncSync, fchmodSync, closeSync, renameSync, unlinkSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, lstatSync, utimesSync } from 'node:fs';
+import { writeFileSync, mkdirSync, openSync, fsyncSync, fchmodSync, closeSync, renameSync, unlinkSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, lstatSync, utimesSync, constants } from 'node:fs';
 import { dirname, basename, join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
@@ -87,7 +87,7 @@ const renameRetry = (from, to) => retryBusy(() => { try { return io.rename(from,
 
 // What a crash in the middle of a write leaves: temp files of writeAtomic (and of older versions) and lock
 // folders being made or removed. Removed from `dir` once they are an hour old (design §8.1).
-const LEFTOVER = /^\..+\.tmp-\d+-[0-9a-f]{8}$|^.+\.\d+\.tmp$|\.lock\.d\.(tmp|gone)-[0-9a-f]+$/;
+const LEFTOVER = /^\..+\.tmp-\d+-[0-9a-f]{8}$|^.+\.\d+\.tmp$|\.lock\.d\.(tmp|gone|alive)-[0-9a-f]+$/;
 export function sweepLeftovers(dir, { olderThanMs = 3600e3, now = Date.now() } = {}) {
   let names;
   try { names = readdirSync(dir); } catch { return []; }
@@ -108,12 +108,17 @@ export function sweepLeftovers(dir, { olderThanMs = 3600e3, now = Date.now() } =
 // `<file>.lock.d` is the lock, a folder holding owner.json.
 // - taken by renaming a folder that already holds owner.json into place: the rename fails while the lock exists,
 //   so there is never a lock without its owner.
-// - stale: a holder on this machine (same host, boot and pid namespace) is judged by its process (gone, or its
-//   pid now names another process by its start time), not by age, so a clock jump or a sleeping laptop does not
-//   take a live lock away. A holder elsewhere is stale once it has not touched the lock for `staleMs`. Windows:
-//   `process.kill(pid, 0)` does tell an exited process, but Windows reuses a pid within seconds and has no start
-//   time to tell the new process from the holder, so a dead holder's pid can look alive for ever; there a holder
-//   on this machine is also stale once it has not touched the lock for `staleMs`, as one elsewhere.
+// - stale: a holder on this machine (same host, boot and pid namespace) is judged by whether its process still
+//   runs, never by age, so a clock jump or a sleeping laptop does not take a live lock away:
+//   - Linux: its pid, and the start time of the process under that pid (a reused pid is another process);
+//   - Windows: a freed pid goes to the next process made, at once, and there is no start time to tell them apart.
+//     So the holder keeps `<file>.lock.d.alive-<token>` open with sharing mode 0 while it holds the lock; Windows
+//     closes it when the process ends, however it ends. A taker that can open it knows the holder has ended,
+//     whoever has its pid now; one refused (a sharing violation) knows it runs. The holder checks that its own
+//     second open is refused before it relies on this; if not, the pid alone decides (below).
+//   - otherwise (macOS, or Windows without that check): the pid alone. A reused pid then only makes takers wait
+//     and end in LOCKED: it fails closed, never takes a live lock.
+//   A holder elsewhere is stale once it has not touched the lock for `staleMs`.
 // - a stale lock is removed by one taker at a time, under `<file>.lock.d.reap`, and only after reading again,
 //   under it, that the lock still holds the owner judged stale and is still stale. A lock is never given back.
 // - released only while it still holds our token.
@@ -138,18 +143,36 @@ const RM = { recursive: true, force: true, maxRetries: 10, retryDelay: 20 };
 const taken = e => e.code === 'ENOTEMPTY' || e.code === 'EEXIST' || (!io.posix && BUSY.has(e.code));
 const sameMachine = o => !!o && o.host === hostname() && o.boot === bootId() && o.ns === pidNs();
 
-function staleOwner(dir, staleMs, { posix = io.posix } = {}) {
+// Windows: libuv's UV_FS_O_EXLOCK opens a file with sharing mode 0 (no other open succeeds while it is open).
+const EXLOCK = 0x10000000;
+function holdAliveWindows(file) {
+  let fd;
+  try { fd = openSync(file, constants.O_CREAT | constants.O_RDWR | EXLOCK, 0o600); } catch { return null; }
+  const drop = () => { try { closeSync(fd); } catch {} try { unlinkSync(file); } catch {} };
+  try { closeSync(openSync(file, 'r')); drop(); return null; }       // a second open worked: not exclusive, no use
+  catch (e) { if (!BUSY.has(e.code)) { drop(); return null; } }      // refused: only this process can open it
+  return { release: drop };
+}
+// true: the holder runs; false: it has ended; null: cannot tell (the pid decides)
+function probeAliveWindows(file) {
+  try { closeSync(openSync(file, 'r')); return false; }
+  catch (e) { return BUSY.has(e.code) ? true : null; }
+}
+io.holdAlive = file => (POSIX ? null : holdAliveWindows(file));
+io.probeAlive = file => (POSIX ? null : probeAliveWindows(file));
+
+function staleOwner(dir, staleMs) {
   const owner = readOwner(dir);
   let touched;
   try { touched = statSync(owner ? join(dir, 'owner.json') : dir).mtimeMs; } catch { return null; }   // just released: try again
-  const untouched = Date.now() - touched > staleMs;
   if (sameMachine(owner)) {
+    const running = owner.alive ? io.probeAlive(join(dirname(dir), owner.alive)) : null;
+    if (running !== null) return running ? null : { owner };
     if (!alive(owner.pid)) return { owner };
     const start = procStart(owner.pid);
-    if (owner.start && start) return owner.start !== start ? { owner } : null;
-    return !posix && untouched ? { owner } : null;                   // Windows: the pid may have been reused
+    return owner.start && start && owner.start !== start ? { owner } : null;
   }
-  return untouched ? { owner } : null;
+  return Date.now() - touched > staleMs ? { owner } : null;
 }
 
 // → true when the stale lock judged was removed (the caller tries to take the lock again at once).
@@ -167,6 +190,7 @@ function reap(dir, judged, staleMs) {
     const gone = `${dir}.gone-${randomBytes(4).toString('hex')}`;
     try { retryBusy(() => io.rename(dir, gone), 1000); } catch { return false; }
     rmSync(gone, RM);
+    if (now.owner?.alive) try { unlinkSync(join(dirname(dir), now.owner.alive)); } catch {}   // the ended holder's file
     return true;
   } finally { rmSync(guard, RM); }
 }
@@ -187,8 +211,11 @@ export function withLock(path, fn, { timeoutMs = 5000, staleMs = 30000 } = {}) {
   mkdirSync(dirname(path), { recursive: true });
   const token = randomBytes(8).toString('hex');
   const ready = `${dir}.tmp-${token}`;
-  mkdirSync(ready);
-  writeFileSync(join(ready, 'owner.json'), JSON.stringify({ token, pid: process.pid, host: hostname(), boot: bootId(), ns: pidNs(), start: procStart(process.pid), at: Date.now() }));
+  // Windows: open before the lock is ours, so there is no moment it is held without its proof of life
+  const aliveFile = `${dir}.alive-${token}`;
+  const held = io.holdAlive(aliveFile);
+  try { mkdirSync(ready); } catch (e) { held?.release(); throw e; }
+  writeFileSync(join(ready, 'owner.json'), JSON.stringify({ token, pid: process.pid, host: hostname(), boot: bootId(), ns: pidNs(), start: procStart(process.pid), alive: held ? basename(aliveFile) : null, at: Date.now() }));
   const t0 = Date.now();
   try {
     for (let wait = 5; ; wait = Math.min(wait * 2, 100)) {
@@ -202,12 +229,15 @@ export function withLock(path, fn, { timeoutMs = 5000, staleMs = 30000 } = {}) {
       }
       sleep(wait);
     }
-  } catch (e) { rmSync(ready, RM); throw e; }
+  } catch (e) { rmSync(ready, RM); held?.release(); throw e; }
   // a long holder touches the lock between steps, so a holder on another machine does not judge it stale
   const touch = () => { if (readOwner(dir)?.token === token) { const t = new Date(); try { utimesSync(join(dir, 'owner.json'), t, t); } catch {} } };
   try { return fn({ touch }); }
-  finally { release(dir, token); }
+  finally {
+    try { release(dir, token); }
+    finally { held?.release(); }                                 // after the lock is gone, never before
+  }
 }
 
 // The parts of the lock a test needs to drive one race step by step.
-export const lockInternals = { staleOwner, reap, release };
+export const lockInternals = { staleOwner, reap, release, holdAliveWindows, probeAliveWindows };

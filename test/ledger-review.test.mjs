@@ -170,21 +170,61 @@ process.stdout.write(String(bad));`;
   }
 });
 
-test('review 3 (Windows): a holder on this machine whose start time cannot be read goes stale by age too (its pid may be reused)', () => {
+test('review 3/5 (Windows): a holder is judged by the file it keeps open, not by its pid (reused at once there) nor by its age', () => {
+  // Windows keeps the file open with sharing mode 0; here, stand-ins for "a file only its holder can open"
   const dir = tmp('nunchi-lock-win-');
   const file = join(dir, 'x.json'), lock = `${file}.lock.d`;
-  S.withLock(file, () => {
-    // as Windows writes it: no start time; this process is alive, as a reused pid would be
-    const owner = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'));
-    writeFileSync(join(lock, 'owner.json'), JSON.stringify({ ...owner, start: null }));
-    const old = new Date(Date.now() - 60e3);
-    utimesSync(join(lock, 'owner.json'), old, old);
-    assert.ok(S.lockInternals.staleOwner(lock, 30000, { posix: false }), 'Windows: untouched for 30 s, stale');
-    assert.equal(S.lockInternals.staleOwner(lock, 30000, { posix: true }), null, 'POSIX: a live pid is the holder, whatever the age');
-    const now = new Date();
-    utimesSync(join(lock, 'owner.json'), now, now);
-    assert.equal(S.lockInternals.staleOwner(lock, 30000, { posix: false }), null, 'Windows: recently touched, alive');
-  });
+  const saved = { holdAlive: S.io.holdAlive, probeAlive: S.io.probeAlive };
+  const open = new Set();
+  S.io.holdAlive = f => { writeFileSync(f, ''); open.add(f); return { release() { open.delete(f); rmSync(f, { force: true }); } }; };
+  S.io.probeAlive = f => (existsSync(f) ? open.has(f) : null);
+  try {
+    S.withLock(file, () => {
+      const owner = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'));
+      assert.match(owner.alive, /\.lock\.d\.alive-[0-9a-f]{16}$/);
+      const proof = join(dir, owner.alive);
+      // as on Windows: no start time; and the lock untouched for an hour (a clock jump, a sleeping laptop)
+      writeFileSync(join(lock, 'owner.json'), JSON.stringify({ ...owner, start: null }));
+      const old = new Date(Date.now() - 3600e3);
+      utimesSync(join(lock, 'owner.json'), old, old);
+      assert.equal(S.lockInternals.staleOwner(lock, 30000), null, 'its file is held: it runs, however old the lock');
+      assert.throws(() => S.withLock(file, () => {}, { timeoutMs: 150 }), { code: 'LOCKED' });
+      // the holder ends (Windows closes its file); its pid now names another live process: this one
+      open.delete(proof);
+      assert.ok(S.lockInternals.staleOwner(lock, 30000), 'its file is free: it ended, whatever runs under its pid');
+      open.add(proof);
+    });
+    assert.deepEqual(readdirSync(dir), [], 'released, and its file removed');
+    // without the proof (a Windows where sharing mode 0 is not honoured, or macOS): the pid alone, failing closed
+    S.io.holdAlive = () => null;
+    S.withLock(file, () => {
+      const old = new Date(Date.now() - 3600e3);
+      utimesSync(join(lock, 'owner.json'), old, old);
+      assert.equal(JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8')).alive, null);
+      assert.throws(() => S.withLock(file, () => {}, { timeoutMs: 150 }), { code: 'LOCKED' }, 'a live pid is never taken over');
+    });
+  } finally { Object.assign(S.io, saved); }
+});
+
+test('the proof of life: on Windows a file only its holder can open, free once the holder ends; elsewhere none is claimed', async () => {
+  const dir = tmp('nunchi-alive-');
+  const f = join(dir, 'x.json.lock.d.alive-0123456789abcdef');
+  const { holdAliveWindows, probeAliveWindows } = S.lockInternals;
+  if (POSIX) {
+    // sharing mode 0 is not a POSIX notion (the flag bit is ignored, a second open works): fail closed, claim nothing
+    assert.equal(holdAliveWindows(f), null);
+    assert.ok(!existsSync(f), 'and leave nothing behind');
+    return;
+  }
+  const held = holdAliveWindows(f);
+  assert.ok(held, 'libuv opened it with sharing mode 0 (UV_FS_O_EXLOCK) and a second open was refused');
+  assert.equal(probeAliveWindows(f), true, 'held: refused to everyone else');
+  held.release();
+  assert.ok(!existsSync(f));
+  // a holder that ends without releasing (it crashes): Windows closes its file, whatever process gets its pid next
+  const r = await node(`import { lockInternals } from ${JSON.stringify(STABLE)}; if (!lockInternals.holdAliveWindows(${JSON.stringify(f)})) process.exit(3); process.exit(0);`);
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(probeAliveWindows(f), false, 'its holder has ended');
 });
 
 test('Windows (CI 295e028): a lock release or a `latest` update refused while another process reads (EPERM) is retried; `latest` never fails a run', () => {

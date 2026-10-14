@@ -448,9 +448,11 @@ unreadable one by one). Built in `src/ledger.mjs`:
     cannot be read is an error (exit 2), never "empty". Temp files and lock folders a crash left are removed once
     they are an hour old.
   - *lock:* `<file>.lock.d`, a folder taken by renaming a folder that already holds its owner into place. A holder
-    on this machine is stale only when its process is gone (or its pid names another process), never by age; one
-    on another machine, after 30 s without a touch. Windows reuses pids within seconds and has no start time to
-    tell them apart, so a Windows holder also goes stale after 30 s without a touch. One taker at a time removes a
+    on this machine is stale only when its process has ended, never by age (Linux: its pid and that process's start
+    time; Windows, where a freed pid goes to the next process at once: a file the holder keeps open with sharing
+    mode 0, which Windows closes when the process ends; elsewhere, or if that file cannot be made exclusive: the
+    pid alone, so a reused pid makes takers wait and end in LOCKED, never take a live lock); one on another
+    machine, after 30 s without a touch. One taker at a time removes a
     stale lock, after checking again that it still holds the owner judged stale; a lock is never given back and is
     released only by its owner. Waiting ends after 5 s with an error. Renames Windows refuses while another process
     reads in the folder (EPERM, EACCES, EBUSY) are retried with backoff, for the lock, the ledger files, run folders
