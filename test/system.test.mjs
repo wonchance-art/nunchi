@@ -58,3 +58,19 @@ test('L10: desktop navigation behind a phone menu button that renders it only wh
   const noToggle = new Map([[d.id, withToggle.get(d.id)], [m.id, { visible: [], hidden: [] }]]);
   assert.deepEqual(parityFindings({ entries: [d, m], controlsByScene: noToggle }).map(f => f.evidence.name), ['Tasks', 'Notes', 'Export'], 'no menu button: the navigation is gone');
 });
+
+test('L4 and L10: a redirected scene from a manifest written before entries carried `redirected` is not measured', () => {
+  // as such a manifest has it: path, finalPath and reason, no `redirected` field
+  const old = (route, viewport, finalPath) => { const { redirected, ...e } = scene(route, 'guest', viewport, { path: route, finalPath, reason: `redirected to ${finalPath}` }); return e; };
+  const entries = [...['/a', '/b', '/c', '/d'].map(r => scene(r)), old('/private', 'd', '/login')];
+  const rows = new Map(entries.map(e => [e.id, [btn()]]));
+  rows.set('/private.guest.normal.d', [btn({ height: 52, radius: '24px', fontWeight: '800' })]);   // the sign-in page's button
+  const r = buildSystem({ entries, rowsByScene: rows });
+  assert.deepEqual(rules(r), [], 'the sign-in page shown at /private is not /private\'s style');
+  assert.ok(!r.system.viewports.d.buttonShape.some(v => v.screens.includes('/private')));
+
+  const d = scene('/tasks', 'guest', 'd'), m = old('/tasks', 'm', '/login');
+  const controlsByScene = new Map([[d.id, { visible: [{ name: 'Export', selector: 'main > button' }], hidden: [] }], [m.id, { visible: [], hidden: [] }]]);
+  assert.deepEqual(parityFindings({ entries: [d, m], controlsByScene }), [], 'a phone scene that showed another page is not compared');
+  assert.equal(parityFindings({ entries: [d, scene('/tasks', 'guest', 'm')], controlsByScene }).length, 1, 'the same phone scene, not redirected, is');
+});

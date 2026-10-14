@@ -8,6 +8,7 @@ import { readFileSync, existsSync, statSync, realpathSync, readdirSync, mkdirSyn
 import { join, resolve, relative, isAbsolute, sep } from 'node:path';
 import { stableJson, sha, writeStable } from './stable.mjs';
 import { lensHash, lensNumber, SEVERITIES, EVIDENCE_FILES } from './lenses.mjs';
+import { isRedirected } from './flow.mjs';
 
 // Token estimate (documented in spec §4):
 //   text files   ceil(bytes / 4)  — chars/4 for ASCII; UTF-8 text with other scripts is over-estimated, never under
@@ -80,7 +81,7 @@ export function readManifest(runDir) {
 // route's page, which is judged in that route's own scene, as the rule lenses do).
 function huntable(entry) {
   if (entry.status !== 'captured') return { ok: false, reason: entry.reason || entry.status };
-  if (entry.reason && /^redirected/.test(entry.reason)) return { ok: false, reason: 'redirected' };
+  if (isRedirected(entry)) return { ok: false, reason: 'redirected' };
   return { ok: true };
 }
 
