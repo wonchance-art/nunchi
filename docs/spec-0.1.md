@@ -1211,7 +1211,9 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   counts, as in the export); "Yes".
 - *Since last full check:* a full check is a sweep with `wholeApp`; the panel counts groups new, fixed and back after
   the previous full check, labelled "Since last full check (run 0007)" (that run), or "First full check (run N)".
-- *Keys:* F, W, Shift+W, X, Shift+X, S, always with an explicit reason; after each decision a 6-second toast with the
+- *Keys:* F, W, Shift+W, X, Shift+X, S, always with an explicit reason, read by their place on the keyboard and
+  Shift (`code`, so they are the same on any layout, a Korean one included, and with Caps Lock on); `?` and `/` are
+  the characters (`key`), wherever a layout puts them; after each decision a 6-second toast with the
   other reason and Undo (Z); Z writes `reopen` for the last decision or batch (as the design says; restoring an
   earlier decision would write the agent's dismissal back as the board's), and only while its toast shows. The page
   sends the ids of the decisions it made (`POST /api/undo {decisions}`); the server reopens exactly their targets (the

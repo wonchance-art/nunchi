@@ -43,6 +43,21 @@ export const DECISION_KEYS = {
   X: { decision: 'false-positive', reason: 'wrong-place' },
   s: { decision: 'hold', reason: null },
 };
+// The key a person pressed, by its place on the keyboard (`code`) and Shift, so a shortcut is the same on every layout
+// (a Korean layout sends key "ㄹ" for F) and with Caps Lock on ("W" without Shift is still w). `?` and `/` are
+// characters wherever a layout puts them: those, and keys with no letter, digit or bracket place (arrows, Enter, Esc,
+// Home, End), come from `key`.
+export function keyOf(e) {
+  const code = typeof e?.code === 'string' ? e.code : '';
+  const letter = /^Key([A-Z])$/.exec(code);
+  if (letter) return e.shiftKey ? letter[1] : letter[1].toLowerCase();
+  const digit = /^Digit(\d)$/.exec(code);
+  if (digit && !e.shiftKey) return digit[1];
+  if (!e.shiftKey && code === 'BracketLeft') return '[';
+  if (!e.shiftKey && code === 'BracketRight') return ']';
+  if (code === 'Space') return ' ';
+  return typeof e?.key === 'string' ? e.key : '';
+}
 // The other reason the undo toast offers.
 export const OTHER_REASON = { intended: 'out-of-scope', 'out-of-scope': 'intended', 'not-a-problem': 'wrong-place', 'wrong-place': 'not-a-problem' };
 // What a decision is called after it was made ("Kept (intended)").

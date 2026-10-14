@@ -809,7 +809,7 @@ function onKey(e) {
   if (S.mode === 'label') return labelKey(e);
   const view = S.route.view;
   const inList = view === 'findings', inDetail = view === 'detail';
-  const k = e.key;
+  const k = W.keyOf(e);                                  // by its place on the keyboard (any layout, Caps Lock)
   const char = k.length === 1;                            // single-character keys can be turned off (WCAG 2.1.4)
   if (char && !S.keysOn) return;
   const stop = () => { e.preventDefault(); e.stopPropagation(); };
@@ -896,7 +896,7 @@ async function labelSet(v) {
   focusHeading();
 }
 function labelKey(e) {
-  const k = e.key;
+  const k = W.keyOf(e);                                  // by its place on the keyboard (any layout, Caps Lock)
   if (k.length === 1 && !S.keysOn) return;
   if (W.LABELS[k]) { e.preventDefault(); return labelSet(W.LABELS[k]); }
   if (k === 'j' || k === 'k') { e.preventDefault(); const n = S.label.at + (k === 'j' ? 1 : -1); if (n >= 0 && n < S.label.pool.items.length) { S.label.at = n; labelShow(true); } }

@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { startBoard } from '../src/board/server.mjs';
-import { DecisionClock, CAP_MS, IDLE_MS, relativeTime } from '../src/board/shared.mjs';
+import { DecisionClock, CAP_MS, IDLE_MS, relativeTime, keyOf, DECISION_KEYS } from '../src/board/shared.mjs';
 import * as L from '../src/ledger.mjs';
 import * as P from '../src/project.mjs';
 import { readMetrics, decisionTimes, metricsPath } from '../src/metrics.mjs';
@@ -469,6 +469,19 @@ test('decision time (§3.5): kept per decision or batch, Later apart, once per i
   assert.match(out.stdout, /decision time \(board\): singles median 4\.2 s, p90 4\.2 s \(1\)/);
   assert.match(out.stdout, /batches median 9 s, p90 9 s \(1 batches, 2 groups\)/);
   assert.match(out.stdout, /later, apart: median 1\.5 s \(1\)/);
+});
+
+test('keys: a shortcut is its place on the keyboard and Shift (any layout, Caps Lock); ? and / are the characters', () => {
+  const cases = [
+    [{ key: 'f', code: 'KeyF' }, 'f'], [{ key: 'ㄹ', code: 'KeyF' }, 'f'], [{ key: 'W', code: 'KeyW', shiftKey: false }, 'w'], [{ key: 'W', code: 'KeyW', shiftKey: true }, 'W'],
+    [{ key: 'w', code: 'KeyW', shiftKey: true }, 'W'], [{ key: 'ㅈ', code: 'KeyW', shiftKey: true }, 'W'], [{ key: 'X', code: 'KeyX' }, 'x'], [{ key: 'z', code: 'KeyZ' }, 'z'],
+    [{ key: '?', code: 'Slash', shiftKey: true }, '?'], [{ key: '/', code: 'Slash' }, '/'], [{ key: '?', code: 'Minus', shiftKey: true }, '?'], [{ key: '/', code: 'Digit7', shiftKey: true }, '/'],
+    [{ key: '0', code: 'Digit0' }, '0'], [{ key: '&', code: 'Digit1' }, '1'], [{ key: '[', code: 'BracketLeft' }, '['], [{ key: 'ArrowDown', code: 'ArrowDown' }, 'ArrowDown'],
+    [{ key: ' ', code: 'Space' }, ' '], [{ key: 'Escape', code: 'Escape' }, 'Escape'], [{ key: 'j' }, 'j'],
+  ];
+  for (const [e, k] of cases) assert.equal(keyOf(e), k, JSON.stringify(e));
+  assert.deepEqual(DECISION_KEYS[keyOf({ key: 'ㄹ', code: 'KeyF' })], { decision: 'fix', reason: null }, 'F on a Korean layout fixes');
+  assert.deepEqual(DECISION_KEYS[keyOf({ key: 'W', code: 'KeyW', shiftKey: false })], { decision: 'keep', reason: 'intended' }, 'Caps Lock W keeps as intended, not out of scope');
 });
 
 test('words: a decision\'s time reads in whole minutes and hours, rounded down (59.5 minutes is "59 min ago", never "60 min ago")', () => {

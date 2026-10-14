@@ -143,6 +143,31 @@ test('board e2e: batches — Space selects, S decides all with one batch id, Z u
   } finally { await s.close(); }
 });
 
+test('board e2e: keys by their place — F on a Korean layout fixes, W with Caps Lock keeps as intended', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = project();
+  const s = await open(p);
+  const { page } = s;
+  try {
+    await page.waitForSelector('#h-progress');
+    await page.click('a[data-nav=findings]');
+    await page.waitForSelector('#h-findings');
+    await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
+    const press = (key, code, shiftKey = false) => page.evaluate(([key, code, shiftKey]) => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key, code, shiftKey, bubbles: true, cancelable: true })), [key, code, shiftKey]);
+    await page.keyboard.press('j');
+    const first = await page.evaluate(() => document.activeElement.getAttribute('data-id'));
+    await press('ㄹ', 'KeyF');                               // what a Korean (2-set) layout sends for F
+    let files = await until(() => { const d = decisions(p.nunchi); return d.length === 1 && d; });
+    assert.deepEqual([files[0].decision, files[0].target.group], ['fix', first]);
+    await until(async () => (await page.evaluate(() => document.activeElement.getAttribute('data-id'))) !== first);
+    const second = await page.evaluate(() => document.activeElement.getAttribute('data-id'));
+    await press('W', 'KeyW', false);                             // Caps Lock on: W without Shift
+    files = await until(() => { const d = decisions(p.nunchi); return d.length === 2 && d; });
+    const kept = files.find(d => d.target.group === second);
+    assert.deepEqual([kept.decision, kept.reason], ['keep', 'intended'], 'not "out of scope" (that is Shift+W)');
+  } finally { await s.close(); }
+});
+
 test('board e2e: Z pressed while the decision is still on its way undoes that decision (a slow round trip)', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = project();
