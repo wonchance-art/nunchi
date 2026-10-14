@@ -1,8 +1,8 @@
 // Stable serialization: sorted keys, fixed indentation, trailing newline.
 // Every file the engine writes goes through here so equal data gives equal bytes.
-import { writeFileSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { createHash } from 'node:crypto';
+import { writeFileSync, mkdirSync, chmodSync, renameSync, rmSync, existsSync } from 'node:fs';
+import { dirname, basename, join, resolve } from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
 
 export function sortKeys(value) {
   if (Array.isArray(value)) return value.map(sortKeys);
@@ -16,9 +16,36 @@ export function sortKeys(value) {
 
 export const stableJson = value => JSON.stringify(sortKeys(value), null, 2) + '\n';
 
+// Evidence holds screenshots and data of signed-in screens, recordings hold API responses: owner-only
+// (D12). Modes are set explicitly, so a permissive umask cannot widen them; Windows has no POSIX modes.
+const POSIX = process.platform !== 'win32';
+export const setMode = (path, mode) => { if (POSIX) chmodSync(path, mode); };
+// mkdir -p, and every folder it creates is 0700. Folders that already exist are left as they are.
+export function privateDir(dir) {
+  const created = [];
+  for (let d = resolve(dir); !existsSync(d) && dirname(d) !== d; d = dirname(d)) created.push(d);
+  if (!created.length) return;
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const d of created) setMode(d, 0o700);
+}
+const bytes = value => (typeof value === 'string' || value instanceof Uint8Array ? value : stableJson(value));
+
 export function writeStable(path, value) {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, typeof value === 'string' || value instanceof Uint8Array ? value : stableJson(value));
+  privateDir(dirname(path));
+  writeFileSync(path, bytes(value), { mode: 0o600 });
+  setMode(path, 0o600);
+}
+
+// Replaced in one step (temp file in the same folder, then rename): a reader sees the old file or the
+// new one, never half of one, and a crash leaves the old file intact.
+export function writeStableAtomic(path, value) {
+  privateDir(dirname(path));
+  const tmp = join(dirname(path), `.${basename(path)}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`);
+  try {
+    writeFileSync(tmp, bytes(value), { mode: 0o600 });
+    setMode(tmp, 0o600);
+    renameSync(tmp, path);
+  } catch (e) { rmSync(tmp, { force: true }); throw e; }
 }
 
 export const sha = (data, n = 16) => createHash('sha256').update(data).digest('hex').slice(0, n);

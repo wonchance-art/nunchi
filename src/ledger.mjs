@@ -16,7 +16,23 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { sha, stableJson } from './stable.mjs';
 
-export const FINGERPRINT_VERSION = 1;
+// Fingerprint versions (spec §5). A version changes the recipe of some rules only; every other rule keeps its
+// version-1 recipe, so its fingerprints, and the decisions made on them, are untouched.
+// - v2 (2026-10-14 KST): secret-in-client-bundle ignores the bundle's content hash (bundleKey). A v1 state is
+//   migrated on read and v1 decisions follow their items (migrateState, currentTargets).
+export const FINGERPRINT_VERSION = 2;
+const SECRET = 'secret-in-client-bundle';
+const RECIPE = { [SECRET]: 2 };
+const recipeOf = (rule, version) => Math.min(version, RECIPE[rule] || 1);
+
+// A build names a bundle after its content, so a rebuild that leaves a secret in place renames the file. The
+// hash-like parts of a bundle path become `[hash]`: Vite/Rollup's `-<8 characters>` suffix, and any run of 6+
+// letters and digits that is lower-case hex (webpack, Parcel, CRA) or holds a digit (Turbopack, esbuild).
+export function bundleKey(path) {
+  return String(path)
+    .replace(/-([A-Za-z0-9_-]{8})(\.[A-Za-z0-9]+)$/, (all, h, ext) => (/[0-9_-]/.test(h) || /.[A-Z]/.test(h) ? `-[hash]${ext}` : all))
+    .replace(/[A-Za-z0-9]{6,}/g, t => (/^[0-9a-f]+$/.test(t) || /\d/.test(t) ? '[hash]' : t));
+}
 
 // Positions, framework ids and generated class names change without the element changing.
 export function normalizeSelector(sel) {
@@ -39,24 +55,72 @@ const DROP_TEXT = new Set(['missing-value', 'placeholder-text', 'coming-soon-spr
 const norm = v => (typeof v === 'number' ? (v <= 0 ? 0 : 2 ** Math.round(Math.log2(v)))
   : typeof v === 'string' ? v.replace(/\d+/g, '#').replace(/\s+/g, ' ').trim().slice(0, 100)
   : Array.isArray(v) ? v.map(norm) : v && typeof v === 'object' ? evidenceKey(null, v) : v);
-export function evidenceKey(rule, evidence = {}) {
+export function evidenceKey(rule, evidence = {}, version = FINGERPRINT_VERSION) {
   const out = {};
   for (const k of Object.keys(evidence || {}).sort()) {
     if (VOLATILE.has(k)) continue;
     if (k === 'text' && DROP_TEXT.has(rule)) continue;
-    if (k === 'url' || k === 'href' || k === 'src' || k === 'finalPath') { out[k] = norm(String(evidence[k]).split(/[?#]/)[0]); continue; }
+    if (k === 'url' || k === 'href' || k === 'src' || k === 'finalPath') {
+      const path = String(evidence[k]).split(/[?#]/)[0];
+      out[k] = norm(rule === SECRET && k === 'url' && recipeOf(rule, version) >= 2 ? bundleKey(path) : path);
+      continue;
+    }
     out[k] = norm(evidence[k]);
   }
   return out;
 }
 
-export function fingerprintOf(f) {
-  const inputs = { v: FINGERPRINT_VERSION, lens: f.lens, rule: f.rule, route: f.route ?? null, element: normalizeSelector(f.selector), evidence: evidenceKey(f.rule, f.evidence) };
+// `version` computes an older version's fingerprint (migration); new findings always get the current one.
+export function fingerprintOf(f, version = FINGERPRINT_VERSION) {
+  const v = recipeOf(f.rule, version);
+  const inputs = { v, lens: f.lens, rule: f.rule, route: f.route ?? null, element: normalizeSelector(f.selector), evidence: evidenceKey(f.rule, f.evidence, version) };
   const { route, ...rest } = inputs;
   // Low contrast has one cause however many elements show it: the colour pair (a design token).
   const pair = f.rule === 'axe-color-contrast' && /foreground color: (#[0-9a-f]{3,8}), background color: (#[0-9a-f]{3,8})/i.exec(f.evidence?.summary || '');
-  const groupInputs = pair ? { v: FINGERPRINT_VERSION, rule: f.rule, colors: [pair[1].toLowerCase(), pair[2].toLowerCase()] } : rest;
+  const groupInputs = pair ? { v, rule: f.rule, colors: [pair[1].toLowerCase(), pair[2].toLowerCase()] } : rest;
   return { fp: sha(stableJson(inputs), 12), group: sha(stableJson(groupInputs), 12), inputs };
+}
+
+// v1 → v2 on read. Items of a rule whose recipe changed get their fingerprint and group recomputed from what
+// they stored (lens, rule, route, selector, evidence); items that now share a fingerprint merge (the latest
+// seen one stays, first seen is the earliest); `aliases` keeps old → new so decisions made under v1 keep
+// applying. The characters of a secret that v1 stored (`evidence.masked`) are dropped.
+const SEEN_ORDER = (a, b) => (a.lastSeen > b.lastSeen ? -1 : a.lastSeen < b.lastSeen ? 1 : !a.goneAt !== !b.goneAt ? (a.goneAt ? 1 : -1) : a.fp < b.fp ? -1 : 1);
+export function migrateState(state) {
+  if (!state || !state.items || (state.fingerprintVersion || 1) >= FINGERPRINT_VERSION) return state;
+  const aliases = { fp: { ...(state.aliases?.fp || {}) }, group: { ...(state.aliases?.group || {}) } };
+  const items = {};
+  for (const old of Object.values(state.items).sort(SEEN_ORDER)) {
+    if (recipeOf(old.rule, FINGERPRINT_VERSION) === recipeOf(old.rule, state.fingerprintVersion || 1)) { items[old.fp] = old; continue; }
+    const { masked, ...evidence } = old.evidence || {};
+    const { fp, group, inputs } = fingerprintOf({ ...old, evidence });
+    if (fp !== old.fp) aliases.fp[old.fp] = fp;
+    if (group !== old.group) aliases.group[old.group] = group;
+    const have = items[fp];
+    const union = k => [...new Set([...(have?.[k] || []), ...(old[k] || [])])].sort();
+    items[fp] = !have ? { ...old, fp, group, evidence, inputs }
+      : { ...have, firstSeen: old.firstSeen < have.firstSeen ? old.firstSeen : have.firstSeen, persons: union('persons'), viewports: union('viewports'), states: union('states') };
+  }
+  return { ...state, fingerprintVersion: FINGERPRINT_VERSION, items, aliases };
+}
+
+// A decision names the fingerprint or group it was made on. One made under an older version follows its item:
+// through the migrated state's aliases, or, for a decision from another machine, by the old fingerprint of
+// what this state holds now. A moved decision keeps its id and carries `targetWas`.
+export function currentTargets(decisions, state) {
+  const fp = new Map(Object.entries(state?.aliases?.fp || {})), group = new Map(Object.entries(state?.aliases?.group || {}));
+  for (const item of Object.values(state?.items || {})) {
+    if (recipeOf(item.rule, FINGERPRINT_VERSION) === 1) continue;
+    const old = fingerprintOf(item, 1);
+    if (old.fp !== item.fp && !fp.has(old.fp)) fp.set(old.fp, item.fp);
+    if (old.group !== item.group && !group.has(old.group)) group.set(old.group, item.group);
+  }
+  return decisions.map(d => {
+    const t = d.target || {};
+    if ((d.fingerprintVersion || 1) >= FINGERPRINT_VERSION) return d;
+    const to = t.fp && fp.has(t.fp) ? { fp: fp.get(t.fp) } : t.group && group.has(t.group) ? { group: group.get(t.group) } : null;
+    return to ? { ...d, target: to, targetWas: t } : d;
+  });
 }
 
 export function annotate(findings) {
@@ -85,7 +149,7 @@ const SEVERITY = { blocker: 0, high: 1, medium: 2, low: 3 };
 
 export function readState(file) {
   if (!existsSync(file)) return { schema: 1, fingerprintVersion: FINGERPRINT_VERSION, runs: [], items: {} };
-  return JSON.parse(readFileSync(file, 'utf8'));
+  return migrateState(JSON.parse(readFileSync(file, 'utf8')));
 }
 
 function writeAtomic(file, value) {
@@ -188,6 +252,7 @@ export function addApproved(file, ids) {
 // Status of every fingerprint, from the state and the decisions. The latest decision on the fingerprint or
 // on its group wins; an unverified one is shown but only counts when it cannot hide something serious.
 export function view(state, decisions, approved = new Set()) {
+  decisions = currentTargets(decisions, state);
   const latest = new Map();
   for (const d of decisions) latest.set(d.target.fp ? `fp:${d.target.fp}` : `group:${d.target.group}`, d);
   const rows = [];

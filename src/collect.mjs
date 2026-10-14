@@ -58,7 +58,16 @@ export function collect() {
     }
     return parts.join(' > ');
   };
-  const name = el => (el.getAttribute('aria-label') || el.getAttribute('title') || el.innerText || el.getAttribute('alt') || el.value || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  // Form fields hold what the user typed or the app filled in (a key on a settings page, a name): never
+  // recorded (D7). A field is evidence by its presence, type and label only. A submit, button or reset input's
+  // value is its label, written by the app, and stays its name.
+  const isField = el => el.localName === 'textarea' || el.localName === 'select' || (el.localName === 'input' && !/^(submit|button|reset|image)$/i.test(el.type || ''));
+  const clean = s => (s || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const name = el => clean(isField(el) ? el.getAttribute('aria-label') || el.getAttribute('title')
+    : el.getAttribute('aria-label') || el.getAttribute('title') || el.innerText || el.getAttribute('alt') || el.value);
+  // a field's own label: <label for>/wrapping <label>, else aria-labelledby (label text never holds a field's value)
+  const labelOf = el => clean((el.labels && el.labels.length ? [...el.labels] : (el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => id && document.getElementById(id)).filter(Boolean))
+    .map(l => l.innerText).join(' '));
   const doc = document.documentElement;
   // App-shell layouts scroll inside an element (\`main { overflow: auto }\`), not the window: the
   // full-page screenshot then shows only the first view of it. Elements outside an ancestor's visible
@@ -104,10 +113,11 @@ export function collect() {
   const controls = [];
   for (const el of document.querySelectorAll('a[href],button,[role="button"],[role="link"],input,select,textarea,summary')) {
     if (controls.length >= MAX || !vis(el)) continue;
-    const text = (el.innerText || '').trim();
+    const text = isField(el) ? '' : (el.innerText || '').trim();      // a select's text is its options
     controls.push({
       selector: sel(el), tag: el.localName, role: el.getAttribute('role') || null,
       name: name(el), hasText: text.length > 0, text: text.slice(0, 40), box: box(el),
+      ...(/^(input|textarea|select)$/.test(el.localName) ? { type: el.type || el.localName, label: labelOf(el) } : {}),
       href: el.localName === 'a' ? el.getAttribute('href') : null,
       inline: el.localName === 'a' && getComputedStyle(el).display === 'inline',
       ...(el.closest(NAV) || inRail(el) ? { inNav: true } : {}),

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pebble Tasks — settings</title>
+<style>body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #1d1f23; background: #fff; } main { padding: 16px; } input, textarea, select { display: block; margin: 8px 0 16px; font: inherit; min-height: 44px; }</style>
+</head>
+<body>
+<main>
+  <h1>Settings</h1>
+  <!-- Invented values. A settings page shows what the app stored: none of it may reach the evidence. -->
+  <label for="key">Sync key</label>
+  <input id="key" value="VAL-attr-Kq81">
+  <input id="name" aria-label="Display name">
+  <label for="notes">Notes</label>
+  <textarea id="notes">VAL-area-Lm07</textarea>
+  <input type="password" aria-label="Password" value="VAL-pass-Rx55">
+  <input type="search" aria-label="Find a task" placeholder="Search tasks" value="VAL-search-Pp19">
+  <input type="email" aria-label="Contact email" placeholder="you@pebble.test" value="VAL-mail-Wd63">
+  <input type="number" aria-label="Reminder minutes" value="48213579">
+  <label for="plan">Plan</label>
+  <select id="plan"><option>Free</option><option selected>Team</option></select>
+  <input type="submit" value="Save">
+</main>
+<script>
+  // what the app filled in from its data after load
+  document.getElementById('name').value = 'VAL-script-Zt42';
+</script>
+</body>
+</html>

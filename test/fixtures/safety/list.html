@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pebble Tasks — list</title>
+</head>
+<body>
+<main>
+  <h1>Tasks</h1>
+  <div id="list">Loading…</div>
+  <p id="more"></p>
+</main>
+<script>
+  fetch('/api/list').then(r => r.json()).then(d => { document.getElementById('list').textContent = d.items.join(', '); });
+  // Only once the recording exists (the test asks for it with ?writes): a read and writes the recording never saw.
+  if (location.search.includes('writes')) {
+    fetch('/api/unrecorded').then(r => r.text()).then(t => { document.getElementById('more').textContent = 'more: ' + t; }).catch(() => { document.getElementById('more').textContent = 'more: failed'; });
+    fetch('/api/save', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"done":true}' }).catch(() => {});
+    fetch('/api/remove', { method: 'DELETE' }).catch(() => {});
+    navigator.sendBeacon('/api/beacon', 'seen');
+  }
+</script>
+</body>
+</html>

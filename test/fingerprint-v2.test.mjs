@@ -1,0 +1,112 @@
+// Secret findings (design 0.1-c §0 D8, §4.5): location and kind only, and fingerprint v2, whose secret
+// fingerprint ignores the bundle's content hash. v1 state and decisions migrate instead of being orphaned.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { secretFindings, mask } from '../src/rules.mjs';
+import { fingerprintOf, annotate, readState, view, FINGERPRINT_VERSION } from '../src/ledger.mjs';
+
+const secret = (url, kind = 'stripe-live-secret-key', extra = {}) => ({ lens: 'L9', rule: 'secret-in-client-bundle', severity: 'blocker', scene: null, route: null, viewport: null, selector: null, box: null, evidence: { url, kind, ...extra } });
+
+test('D8: a secret finding keeps its location and kind, and not one character of the value', () => {
+  const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const stripe = 'sk_' + 'live_' + 'Q7w3E9r1T5y8U2i6O4p0A1s3';
+  const jwt = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ role: 'service_role', iss: 'supabase' })}.${'k'.repeat(30)}`;
+  const f = secretFindings([{ path: '/_next/static/chunks/1grrdrpshlkcw.js', body: `a="${stripe}";b="${jwt}"` }]);
+  assert.deepEqual(f.map(x => x.evidence), [
+    { url: '/_next/static/chunks/1grrdrpshlkcw.js', kind: 'stripe-live-secret-key' },
+    { url: '/_next/static/chunks/1grrdrpshlkcw.js', kind: 'supabase-service-role-jwt' },
+  ]);
+  const out = JSON.stringify(annotate(f));
+  // every 4 characters of the parts that are secret (the kind already says "sk_live_" and "a JWT")
+  for (const value of [stripe.slice('sk_live_'.length), ...jwt.split('.').slice(1)]) {
+    for (let i = 0; i + 4 <= value.length; i++) assert.ok(!out.includes(value.slice(i, i + 4)), `"${value.slice(i, i + 4)}" of a secret is in the finding`);
+  }
+  assert.ok(!out.includes('sk_l') && !out.includes('eyJ'), 'not even the prefix main kept');
+  assert.equal(mask(stripe), '', 'mask keeps nothing');
+});
+
+test('fp v2: a rebuild that renames the bundle keeps the secret\'s fingerprint, whatever the bundler', () => {
+  assert.equal(FINGERPRINT_VERSION, 2);
+  const same = [
+    ['/_next/static/chunks/1grrdrpshlkcw.js', '/_next/static/chunks/0x9pqk2mz7abc.js'],                         // Turbopack (Next 16)
+    ['/_next/static/chunks/app/page-4f1c2a9b8e7d6c5b.js', '/_next/static/chunks/app/page-9e0d1c2b3a4f5e6d.js'],   // webpack
+    ['/assets/index-DiwrgTda.js', '/assets/index-B_x-3aZq.js'],                                                     // Vite / Rollup
+    ['/assets/index-4ed993c7.js', '/assets/index-a1b2c3d4.js'],                                                     // Vite 4
+    ['/static/js/main.8f3e2a1b.js', '/static/js/main.0c9d8e7f.js'],                                                 // CRA, Parcel
+    ['/build/_shared/chunk-ABCDEFGH.js', '/build/_shared/chunk-Q2W3E4R5.js'],                                       // esbuild
+  ];
+  for (const [a, b] of same) assert.equal(fingerprintOf(secret(a)).fp, fingerprintOf(secret(b)).fp, `${a} vs ${b}`);
+  // what tells two bundles apart is kept
+  for (const [a, b] of [['/app.js', '/admin.js'], ['/assets/index-DiwrgTda.js', '/assets/settings-DiwrgTda.js'], ['/js/user-settings.js', '/js/user-profile.js']]) {
+    assert.notEqual(fingerprintOf(secret(a)).fp, fingerprintOf(secret(b)).fp, `${a} vs ${b}`);
+  }
+  assert.notEqual(fingerprintOf(secret('/app.js')).fp, fingerprintOf(secret('/app.js', 'github-token')).fp, 'another kind is another defect');
+  assert.deepEqual(fingerprintOf(secret('/_next/static/chunks/1grrdrpshlkcw.js')).inputs.evidence, { kind: 'stripe-live-secret-key', url: '/_next/static/chunks/[hash].js' });
+  // v1 still computes the old fingerprint (migration needs it): the content hash was part of it
+  assert.notEqual(fingerprintOf(secret(same[0][0]), 1).fp, fingerprintOf(secret(same[0][1]), 1).fp);
+});
+
+test('fp v2 changed only the secret fingerprint: every other rule keeps its v1 fingerprint (pinned on main 3e29b26)', () => {
+  const pinned = [
+    [{ lens: 'L8', rule: 'target-size-min', severity: 'medium', route: '/tasks', selector: 'main > ul > li:nth-of-type(3) > button', evidence: { width: 18, height: 18, minimum: 24, name: 'Done' } }, 'a2949802c200', 'ec8830f1263c'],
+    [{ lens: 'L8', rule: 'axe-color-contrast', route: '/a', selector: '.text-muted', evidence: { impact: 'serious', summary: 'Element has insufficient color contrast of 2.98 (foreground color: #647987, background color: #113145, font size: 7.5pt (10px)' } }, '62d4f7df72c9', 'e1a538e244cc'],
+    [{ lens: 'L1', rule: 'failed-request', route: '/app', selector: null, evidence: { url: '/api/x-4f1c2a9b8e7d6c5b?y=1', status: 404, method: 'GET' } }, '786570564a07', 'b933ef940898'],
+    [{ lens: 'L3', rule: 'unreachable-route', route: '/reports', selector: null, evidence: { note: 'no link' } }, '5e463e56aaa1', '1078d71b80e7'],
+  ];
+  for (const [f, fp, group] of pinned) {
+    assert.deepEqual([fingerprintOf(f).fp, fingerprintOf(f).group], [fp, group], f.rule);
+    assert.deepEqual([fingerprintOf(f, 1).fp, fingerprintOf(f, 1).group], [fp, group], `${f.rule} under v1`);
+  }
+  // v1 secret fingerprints, as main wrote them
+  assert.equal(fingerprintOf(secret('/app.js', 'stripe-live-secret-key', { masked: 'sk_l…' }), 1).fp, '8dd9e485c8d7');
+  assert.equal(fingerprintOf(secret('/_next/static/chunks/1grrdrpshlkcw.js', 'stripe-live-secret-key', { masked: 'sk_l…' }), 1).fp, '02bed3a3cb83');
+});
+
+// A ledger item as main's foldRun stored it (fingerprint v1), seen in run 0001 only.
+const storedV1 = f => {
+  const { fp, group, inputs } = fingerprintOf(f, 1);
+  return { fp, group, lens: f.lens, rule: f.rule, severity: f.severity, route: f.route, persons: [], viewports: [], states: [], places: 0, examples: [],
+    selector: f.selector, evidence: f.evidence, inputs, firstSeen: '0001', lastSeen: '0001', goneAt: null, regressedAt: null };
+};
+
+test('fp v2 migration: a v1 ledger is re-keyed on read, its v1 decisions keep applying after a rebuild, stored characters go', () => {
+  const before = secret('/_next/static/chunks/1grrdrpshlkcw.js', 'stripe-live-secret-key', { masked: 'sk_l…' });
+  // the same secret after an earlier build, under its old chunk name: one defect in v2, so the two items merge
+  const older = { ...storedV1(secret('/_next/static/chunks/7hq2kd0xw9zre.js', 'stripe-live-secret-key', { masked: 'sk_l…' })), lastSeen: '0001', firstSeen: '0001' };
+  const target = { lens: 'L8', rule: 'target-size-min', severity: 'medium', route: '/tasks', selector: 'main > button', evidence: { width: 18, height: 18, minimum: 24, name: 'Done' } };
+  const items = [storedV1(before), older, storedV1(target)];
+  const file = join(mkdtempSync(join(tmpdir(), 'nunchi-fp2-')), 'ledger.json');
+  writeFileSync(file, JSON.stringify({ schema: 1, fingerprintVersion: 1, runs: ['0001'], items: Object.fromEntries(items.map(i => [i.fp, i])) }));
+  // Decisions made under v1: the secret dismissed (approved on this machine), the tap target kept as a group.
+  const decisions = [
+    { schema: 1, id: 'd1', target: { fp: items[0].fp }, decision: 'false-positive', reason: 'not-a-problem', by: 'me', at: '2026-10-14T10:00:00.000+09:00', fingerprintVersion: 1 },
+    { schema: 1, id: 'd2', target: { group: items[2].group }, decision: 'keep', reason: 'intended', by: 'me', at: '2026-10-14T10:01:00.000+09:00', fingerprintVersion: 1 },
+  ];
+  const approved = new Set(['d1', 'd2']);
+
+  const st = readState(file);
+  assert.equal(st.fingerprintVersion, 2);
+  const secrets = Object.values(st.items).filter(i => i.rule === 'secret-in-client-bundle');
+  assert.deepEqual(secrets.map(i => i.fp), [fingerprintOf(before).fp], 're-keyed under v2; the two chunk names are one defect');
+  assert.equal(st.items[secrets[0].fp].evidence.masked, undefined, 'the four characters v1 stored are gone');
+  assert.ok(!JSON.stringify(st).includes('sk_l'));
+  assert.ok(st.items[items[2].fp], 'other rules keep their fingerprint');
+  assert.deepEqual(st.aliases.fp, { [items[0].fp]: secrets[0].fp, [older.fp]: secrets[0].fp });
+
+  // The next build renames the chunk again: same fingerprint, so the next fold updates this item.
+  const after = secret('/_next/static/chunks/0x9pqk2mz7abc.js');
+  assert.equal(annotate([after])[0].fp, secrets[0].fp);
+  const rows = view(st, decisions, approved);
+  assert.equal(rows.find(r => r.rule === 'secret-in-client-bundle').status, 'dismissed', 'the v1 decision still applies');
+  assert.equal(rows.find(r => r.rule === 'target-size-min').status, 'kept');
+  assert.equal(readState(file).fingerprintVersion, 2, 'reading migrates; the file is rewritten by the next fold');
+
+  // A v1 decision from another machine, about the chunk this machine's (v2) state holds, applies too.
+  const v2item = { ...storedV1(after), ...fingerprintOf(after) };
+  const fresh = { schema: 1, fingerprintVersion: 2, runs: ['0001'], items: { [v2item.fp]: v2item } };
+  const remote = [{ ...decisions[0], id: 'd3', target: { fp: fingerprintOf(after, 1).fp } }];
+  assert.equal(view(fresh, remote, new Set(['d3']))[0].status, 'dismissed');
+});

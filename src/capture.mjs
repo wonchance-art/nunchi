@@ -13,7 +13,7 @@ import { annotate } from './ledger.mjs';
 import { writeStable, sha } from './stable.mjs';
 import { canaryMutate, canarySeed, plantCanaries } from './canary.mjs';
 import { loadLenses, BUILTIN_DIR } from './lenses.mjs';
-import { FONT_HOSTS, BACKEND_SUFFIXES, isBackendHost, isDataRequest, requestKey, forceResponse, Recording, redactUrl, redactText } from './network.mjs';
+import { FONT_HOSTS, BACKEND_SUFFIXES, isBackendHost, isDataRequest, requestKey, forceResponse, Recording, redactUrl, redactText, baseUrlRefusal } from './network.mjs';
 
 const require = createRequire(import.meta.url);
 const AXE_SOURCE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
@@ -45,6 +45,31 @@ export function sceneSlug(route) {
 export function sceneId(route, person, state, vp) {
   return `${sceneSlug(route)}.${person}.${state}.${vp}`;
 }
+
+// D7: an aria snapshot writes what a field holds (`- textbox "API key": <value>`, or a `- text:` child beside a
+// placeholder). The value goes; the node, its name, its state and its placeholder stay, so a claim can still
+// point at it.
+const VALUE_NODE = /^(\s*)- (textbox|searchbox|spinbutton|combobox|slider)((?: "(?:[^"\\]|\\.)*")?(?: \[[^\]]*\])*)(:.*)?$/;
+export function ariaWithoutValues(yaml) {
+  const out = [];
+  let field = -1;                                       // indentation of the field whose children follow
+  for (const line of String(yaml).split('\n')) {
+    const indent = line.length - line.trimStart().length;
+    if (field >= 0 && indent > field) {
+      if (!(indent === field + 2 && /^\s*- text:/.test(line))) out.push(line);
+      continue;
+    }
+    field = -1;
+    const m = VALUE_NODE.exec(line);
+    if (m && m[4] === ':') field = indent;
+    out.push(m && m[4] && m[4] !== ':' ? `${m[1]}- ${m[2]}${m[3]}` : line);
+  }
+  return out.join('\n');
+}
+
+// Strict replay (D11): what the recording cannot answer is never sent. A write that is not a data request
+// (a beacon, a form post, a server action) is stopped the same way.
+const READS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 // Network policy for the whole browser, not just the page: the app under test and local hosts go
 // direct, font hosts go direct or through the user's proxy, and everything else (including the
@@ -118,7 +143,10 @@ async function captureOne(browser, base, scene, opts) {
       blocked.add(u.hostname);
       return route.abort('blockedbyclient');
     }
-    if (!isDataRequest({ resourceType: req.resourceType(), headers: req.headers() })) return route.continue();
+    if (!isDataRequest({ resourceType: req.resourceType(), headers: req.headers() })) {
+      if (opts.mode === 'replay' && !READS.has(req.method())) { drift.push(requestKey(req.method(), req.url(), req.postData(), origin)); return route.abort('failed').catch(() => {}); }
+      return route.continue();
+    }
     const key = requestKey(req.method(), req.url(), req.postData(), origin);
     data.push(key);
     if (scene.state === 'slow') await held;
@@ -127,8 +155,9 @@ async function captureOne(browser, base, scene, opts) {
       return route.fulfill({ status: f.status, contentType: f.contentType, body: f.body }).catch(() => {});
     }
     let res = opts.mode === 'replay' ? opts.loader.take(key) : null;
+    // a miss, read or write, fails in the page and is counted (capture drift; `recording-stale` when most miss)
+    if (!res && opts.mode === 'replay') { drift.push(key); return route.abort('failed').catch(() => {}); }
     if (!res) {
-      if (opts.mode === 'replay') drift.push(key);
       let fetched;
       try { fetched = await route.fetch(); } catch { return route.abort('failed').catch(() => {}); }
       const contentType = fetched.headers()['content-type'] || '';
@@ -234,7 +263,7 @@ async function captureOne(browser, base, scene, opts) {
   };
   if (top) writeStable(join(dir, 'top.jpg'), top);
   if (full) writeStable(join(dir, 'full.jpg'), full);
-  writeStable(join(dir, 'aria.yml'), redactText(aria) + '\n');
+  writeStable(join(dir, 'aria.yml'), redactText(ariaWithoutValues(aria)) + '\n');
   if (measure) {
     writeStable(join(dir, 'text.txt'), redactText(measure.text) + '\n');
     writeStable(join(dir, 'styles.json'), measure.styles);
@@ -323,7 +352,10 @@ export function runHealth(entries, findings) {
 // network: 'auto' (replay if a recording exists, else record) | 'record' | 'replay' | 'live'.
 // canaries: how many canary scenes to plant (spec §4 H2); 0 = none (the default for the API; the CLI plants 3).
 // lenses: the loaded lens packs, so a canary is planted only where its lens hunts (default: the built-in packs).
-export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {}, flow: flowOpts = {}, canaries = 0, lenses = null }) {
+// allowBaseHosts: hosts the user listed in .nunchi/config.json; any other base URL must be local or private (D10).
+export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], allowBaseHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {}, flow: flowOpts = {}, canaries = 0, lenses = null }) {
+  const refusal = baseUrlRefusal(baseUrl, allowBaseHosts);
+  if (refusal) throw Object.assign(new Error(refusal), { code: 'URL_NOT_ALLOWED' });
   if (scenes.some(s => s.person === 'signed-in') && !(storageState && existsSync(storageState))) {
     throw Object.assign(new Error(`signed-in scenes need a saved login state, but ${storageState || '(none)'} does not exist`), { code: 'NO_AUTH' });
   }

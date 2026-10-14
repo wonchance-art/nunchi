@@ -144,7 +144,8 @@ function jwtRole(token) {
   } catch { return null; }
 }
 
-export const mask = value => value.slice(0, 4) + '…';
+// A secret is reported by location and kind only (D8): not one character of it is kept, not even a prefix.
+export const mask = () => '';
 
 export function secretFindings(scripts) {
   const out = [];
@@ -154,8 +155,8 @@ export function secretFindings(scripts) {
     for (const m of body.matchAll(/\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g)) {
       if (jwtRole(m[0]) === 'service_role' && !hits.has('supabase-service-role-jwt')) hits.set('supabase-service-role-jwt', m[0]);
     }
-    for (const [kind, value] of [...hits].sort()) {
-      out.push({ lens: 'L9', rule: 'secret-in-client-bundle', severity: 'blocker', scene: null, route: null, viewport: null, selector: null, box: null, evidence: { url: path, kind, masked: mask(value) } });
+    for (const kind of [...hits.keys()].sort()) {
+      out.push({ lens: 'L9', rule: 'secret-in-client-bundle', severity: 'blocker', scene: null, route: null, viewport: null, selector: null, box: null, evidence: { url: path, kind } });
     }
   }
   return out;
