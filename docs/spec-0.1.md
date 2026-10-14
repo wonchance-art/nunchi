@@ -1106,8 +1106,9 @@ never `NODE_*`, `LD_*`, `DYLD_*`, `BROWSER` or `GIT_*` (tested on `/proc/<pid>/e
   bundled files with no data of the project (tested), and `/favicon.ico` (204, empty). Screenshots are fetched with
   the key and shown as blob URLs.
 - *Requests:* `Sec-Fetch-Site`, when sent, must be `same-origin` or `none` (403); `req.url` must start with `/` (400)
-  and be ≤ 2048 characters (414); GET and POST only, OPTIONS 405; a GET has no body (413); writes need
-  `Content-Type: application/json` (415), `Origin` equal to `http://127.0.0.1:<port>` (403) and a body ≤ 64 KB (413,
+  and be ≤ 2048 characters (414); GET and POST only, OPTIONS 405; a GET has no body (413, by Content-Length or any
+  Transfer-Encoding, the page shell included); writes need `Content-Type: application/json` (415), `Origin` equal to
+  `http://127.0.0.1:<port>` (403) and a body ≤ 64 KB (413,
   by Content-Length or while streaming). No CORS header on any response.
 - *Headers* on every response, refusals included: the CSP of the design, `X-Frame-Options: DENY`, `nosniff`,
   `Referrer-Policy: no-referrer`, CORP and COOP `same-origin`, `Cache-Control: no-store`, and a Permissions-Policy.

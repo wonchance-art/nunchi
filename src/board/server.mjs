@@ -249,7 +249,8 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     try { u = new URL(`${origin}${req.url}`); } catch { return fail(res, 400, 'bad request target'); }
     if (u.origin !== origin) return fail(res, 400, 'bad request target');
     const path = u.pathname;
-    if (req.method === 'GET' && Number(req.headers['content-length'] || 0) > 0) return fail(res, 413, 'a GET has no body');
+    // a GET has no body: none announced by length, and none streamed (any Transfer-Encoding)
+    if (req.method === 'GET' && (Number(req.headers['content-length'] || 0) > 0 || req.headers['transfer-encoding'] !== undefined)) return fail(res, 413, 'a GET has no body');
 
     // the page shell: no data, no token, and never locked out or limited (the same bytes for everyone), so a flood of
     // requests without a key cannot keep the person from loading their board

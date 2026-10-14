@@ -162,6 +162,9 @@ test('§3.2 writes: POST only, application/json, Origin equal to the board, a bo
     assert.equal((await post({ 'content-type': 'application/json', origin }, big)).status, 413, 'by Content-Length');
     assert.equal((await post({ 'content-type': 'application/json', origin, 'transfer-encoding': 'chunked', 'content-length': undefined }, big).catch(() => ({ status: 413 }))).status, 413, 'streamed past the cap');
     assert.equal((await raw(b.port, { method: 'GET', path: '/api/summary', headers: auth(token), body: 'x' })).status, 413, 'a GET has no body');
+    for (const path of ['/api/summary', '/', '/api/generation']) {
+      assert.equal((await raw(b.port, { method: 'GET', path, headers: auth(token, { 'transfer-encoding': 'chunked' }), body: 'x' })).status, 413, `a GET streams no body either (${path})`);
+    }
     for (const method of ['OPTIONS', 'PUT', 'DELETE', 'PATCH', 'HEAD']) {
       const r = await raw(b.port, { method, path: '/api/decide', headers: auth(token, { origin: 'http://evil.example', 'access-control-request-method': 'POST' }) });
       assert.equal(r.status, 405, method);
