@@ -5,7 +5,8 @@ import { resolve, join, relative, isAbsolute } from 'node:path';
 import { readFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
 import { discover } from './discover.mjs';
 import { buildSourceMap, affectedRoutes } from './sourcemap.mjs';
-import { startRun, finishRun, gcRuns, latestRun, workTree, ensureGitignore } from './runs.mjs';
+import { startRun, finishRun, gcRuns, latestRun, workTree, ensureGitignore, ensurePrivate, readConfig, gitRunner, DIFF_SAFE } from './runs.mjs';
+import { baseUrlRefusal } from './network.mjs';
 import { codeNavigations } from './flow.mjs';
 import { syncLedger, readDecisions, buildDecision, saveDecision, readApproved, bindApproved, addApproved, approvalKey, seriousTarget, view, groups as groupRows, titleOf, DECISIONS, NOT_LOOKED_RUNS } from './ledger.mjs';
 import { sweepLeftovers } from './stable.mjs';
@@ -128,11 +129,13 @@ const cmd = args._[0];
 if (args.version) { console.log(pkg.version); process.exit(0); }
 if (args.help || !cmd) { console.log(HELP); process.exit(args.help ? 0 : 1); }
 
+// git with the repository's own programs switched off (D9), like every git call of the engine
 function changedFiles(root, ref) {
-  const git = args => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8' });
+  const run = gitRunner(root);
+  const git = args => run(args, { encoding: 'utf8' });
   const prefix = git(['rev-parse', '--show-prefix']).trim();
   const strip = f => (prefix && f.startsWith(prefix) ? f.slice(prefix.length) : f);
-  const diff = git(['diff', '--name-only', ref]).split('\n');
+  const diff = git(['diff', ...DIFF_SAFE, '--name-only', '--end-of-options', ref, '--']).split('\n');
   const untracked = git(['ls-files', '--others', '--exclude-standard']).split('\n');
   return [...new Set([...diff.map(strip), ...untracked].filter(Boolean))].sort();
 }
@@ -256,8 +259,14 @@ if (cmd === 'setup') {
   if (args.plan) { console.log(JSON.stringify({ scenes: all, skipped }, null, 2)); process.exit(0); }
   const nunchiDir = resolve('.nunchi');
   const runsDir = join(nunchiDir, 'runs');
-  // Evidence holds screenshots of the user's app and login state holds tokens: never committed.
+  // Never production (D10): a base URL that is not local or private needs the user's own .nunchi/config.json.
+  let allowBaseHosts;
+  try { allowBaseHosts = readConfig(nunchiDir).allowHosts; } catch (e) { console.error('nunchi: ' + e.message); process.exit(2); }
+  const refusal = baseUrlRefusal(args.url, allowBaseHosts);
+  if (refusal) { console.error('nunchi capture: ' + refusal); process.exit(2); }
+  // Evidence holds screenshots of the user's app and login state holds tokens: never committed, owner-only.
   ensureGitignore(nunchiDir);
+  try { ensurePrivate(nunchiDir); } catch (e) { console.error('nunchi: ' + e.message); process.exit(2); }
   const run = args.out ? null : startRun(runsDir);
   const out = run ? run.path : resolve(args.out);
   const viewports = (args.viewports || 'm,d').split(',');
@@ -298,7 +307,7 @@ if (cmd === 'setup') {
     const r = await capture({
       baseUrl: args.url, scenes: all, out, viewports, browserPath: args.browserPath, storageState: auth,
       network: args.network || 'auto', recordingDir: resolve('.nunchi/har'), states, runMeta, flow,
-      allowHosts: (args.allowHost || '').split(',').map(x => x.trim()).filter(Boolean), canaries, lenses,
+      allowHosts: (args.allowHost || '').split(',').map(x => x.trim()).filter(Boolean), allowBaseHosts, canaries, lenses,
     });
     const by = { blocker: 0, high: 0, medium: 0, low: 0 };
     for (const f of r.findings) by[f.severity]++;
@@ -333,12 +342,12 @@ if (cmd === 'setup') {
       for (const p of r.manifest.health.problems) console.log(`RUN PROBLEM ${p.status} (${p.scenes}/${p.of} screens): ${why[p.status]}`);
       console.log(`rule findings: blocker ${by.blocker} · high ${by.high} · medium ${by.medium} · low ${by.low}`);
       console.log(`network: ${Object.entries(r.run.network).map(([p, m]) => `${p} ${m}`).join(' · ')}`);
-      if (misses) console.log(`replay misses: ${misses} request(s) were not in the recording and went live; re-record with --network record`);
+      if (misses) console.log(`replay misses: ${misses} request(s) were not in the recording and were not sent (replay never goes live); re-record with --network record`);
       for (const s of skipped) console.log(`  skipped ${s.route} (${s.reason})`);
     }
     if (r.manifest.health.problems.some(p => p.status === 'login-expired' || p.status === 'app-unreachable')) process.exitCode = 3;
   } catch (e) {
-    console.error(['NO_BROWSER', 'NO_AUTH', 'NO_RECORDING', 'BAD_ARGS'].includes(e.code) ? 'nunchi: ' + e.message : e.stack);
+    console.error(['NO_BROWSER', 'NO_AUTH', 'NO_RECORDING', 'BAD_RECORDING', 'URL_NOT_ALLOWED', 'BAD_ARGS'].includes(e.code) ? 'nunchi: ' + e.message : e.stack);
     process.exit(2);
   }
 } else if (cmd === 'login') {
@@ -355,6 +364,9 @@ if (cmd === 'setup') {
   const stateFile = join(nunchiDir, 'state', 'ledger.json');
   const decisionsDir = join(nunchiDir, 'decisions');
   const approvedFile = join(nunchiDir, 'state', 'approved.json');
+  // the state folder is private before any of these commands writes its first file there (D12): the ledger's
+  // catch-up fold and noted decisions, decide's and approve's approvals
+  try { ensurePrivate(nunchiDir, existsSync(nunchiDir) ? ['state/'] : []); } catch (e) { console.error('nunchi: ' + e.message); process.exit(2); }
   const { state, decisions, approved, serious } = ledgerGuard(() => {
     sweep(nunchiDir);
     const decisions = readDecisions(decisionsDir);
@@ -445,8 +457,8 @@ if (cmd === 'setup') {
     ledgerGuard(() => addApproved(approvedFile, chosen.map(approvalKey), { decisions, serious }));
     console.log(`approved ${chosen.length} decision(s)`);
   } else {
-    const { trust } = await import('./ledger.mjs');
-    const t = trust(rows, decisions);
+    const { trust, currentTargets } = await import('./ledger.mjs');
+    const t = trust(rows, currentTargets(decisions, state));
     if (args.json) console.log(JSON.stringify(t, null, 2));
     else for (const [lens, x] of Object.entries(t)) console.log(`${lens.padEnd(4)} precision ${x.precision === null ? '—' : Math.round(x.precision * 100) + '%'} (${x.fix} fix · ${x.falsePositive} false positive of the last ${x.window})${x.suspect ? '  SUSPECT: new findings need a closer look' : ''}  · fixed ${x.fixed}/${x.decidedFix}`);
   }
@@ -574,7 +586,9 @@ if (cmd === 'setup') {
   } else { console.error('nunchi verify: use --plan, or --record <verdicts.json>'); process.exit(1); }
 } else if (cmd === 'gc') {
   // a run is folded before it can be removed: if the ledger cannot be brought up to date, nothing is removed,
-  // and a run the ledger does not hold is never removed
+  // and a run the ledger does not hold is never removed. The catch-up fold may write the ledger's first file: the
+  // state folder is private before it (D12).
+  try { ensurePrivate(resolve('.nunchi'), existsSync(resolve('.nunchi')) ? ['state/'] : []); } catch (e) { console.error('nunchi: ' + e.message); process.exit(2); }
   const state = ledgerGuard(() => { sweep(resolve('.nunchi')); return syncLedger(resolve('.nunchi/state/ledger.json'), resolve('.nunchi/runs')); });
   const r = gcRuns(resolve('.nunchi/runs'), { keep: Number.isInteger(args.keep) && args.keep > 0 ? args.keep : 5, folded: new Set(state.runs) });
   console.log(args.json ? JSON.stringify(r, null, 2) : `kept ${r.kept.join(', ') || 'nothing'} · removed ${r.removed.join(', ') || 'nothing'}`);

@@ -1,7 +1,7 @@
 // Stable serialization: sorted keys, fixed indentation, trailing newline.
 // Every file the engine writes goes through here so equal data gives equal bytes.
-import { writeFileSync, mkdirSync, openSync, fsyncSync, fchmodSync, closeSync, renameSync, unlinkSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, lstatSync, utimesSync, constants } from 'node:fs';
-import { dirname, basename, join } from 'node:path';
+import { writeFileSync, mkdirSync, openSync, fsyncSync, fchmodSync, chmodSync, closeSync, renameSync, unlinkSync, readFileSync, readlinkSync, readdirSync, rmSync, statSync, lstatSync, existsSync, utimesSync, constants } from 'node:fs';
+import { dirname, basename, join, resolve } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
 
@@ -17,10 +17,13 @@ export function sortKeys(value) {
 
 export const stableJson = value => JSON.stringify(sortKeys(value), null, 2) + '\n';
 
-// Written to a temp file and renamed into place, so a reader or a crash sees the old bytes or the new ones,
-// never half a file.
+// Written through writeAtomic (temp file, then rename), so a reader or a crash sees the old bytes or the new ones,
+// never half a file. Evidence holds screenshots and data of signed-in screens, recordings hold API responses:
+// owner-only (D12), 0600 files in 0700 folders whatever the umask, and never written through a symbolic link.
 export function writeStable(path, value) {
-  writeAtomic(path, typeof value === 'string' || value instanceof Uint8Array ? value : stableJson(value));
+  privateDir(dirname(path));
+  refuseLink(path);
+  writeAtomic(path, typeof value === 'string' || value instanceof Uint8Array ? value : stableJson(value), { mode: 0o600 });
 }
 
 export const sha = (data, n = 16) => createHash('sha256').update(data).digest('hex').slice(0, n);
@@ -30,6 +33,24 @@ const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0,
 // The syncs (what makes a write survive a power loss) and renames go through here, and so does which platform's rules apply to a refused rename: no output
 // shows them, so a test can watch the syncs and make renames refuse as Windows does.
 export const io = { fsync: fd => fsyncSync(fd), rename: (from, to) => renameSync(from, to), posix: POSIX };
+
+// Nothing is written, nor its mode changed, through a symbolic link: a link planted among nunchi's paths would
+// send the write (or the chmod) outside the repository (D12).
+export function refuseLink(path) {
+  let st;
+  try { st = lstatSync(path); } catch { return; }
+  if (st.isSymbolicLink()) throw Object.assign(new Error(`${path} is a symbolic link; nunchi does not write through links (replace it with a real file or folder)`), { code: 'UNSAFE_PATH' });
+}
+// Modes are set explicitly, so a permissive umask cannot widen them; Windows has no POSIX modes.
+export const setMode = (path, mode) => { refuseLink(path); if (POSIX) chmodSync(path, mode); };
+// mkdir -p, and every folder it creates is 0700. Folders that already exist are left as they are.
+export function privateDir(dir) {
+  const created = [];
+  for (let d = resolve(dir); !existsSync(d) && dirname(d) !== d; d = dirname(d)) created.push(d);
+  if (!created.length) return;
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const d of created) setMode(d, 0o700);
+}
 
 // Write-temp-then-rename in the same folder (a rename within one folder is atomic). The temp file is
 // `.<name>.tmp-<pid>-<random>`, created exclusively ('wx'); it never appears in the output.

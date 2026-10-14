@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pebble Tasks — live</title>
+</head>
+<body>
+<main>
+  <h1>Live board</h1>
+  <p id="state">connecting</p>
+  <iframe src="/leaving.html" title="Widget"></iframe>
+</main>
+<script>
+  // Traffic a page sends that request routing alone does not see: a WebSocket (and a message on it), an
+  // EventSource stream, and a keepalive write when the page goes away.
+  const ws = new WebSocket(location.origin.replace(/^http/, 'ws') + '/ws');
+  ws.onopen = () => ws.send('hello');
+  ws.onclose = () => { document.getElementById('state').textContent = 'offline'; };
+  const es = new EventSource('/api/events');
+  es.onerror = () => {};
+  addEventListener('pagehide', () => { fetch('/api/bye', { method: 'POST', keepalive: true, body: 'left' }).catch(() => {}); });
+</script>
+</body>
+</html>

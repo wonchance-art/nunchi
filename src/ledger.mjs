@@ -19,7 +19,33 @@ import { randomBytes } from 'node:crypto';
 import { sha, stableJson, writeAtomic, withLock } from './stable.mjs';
 import { listRuns } from './runs.mjs';
 
-export const FINGERPRINT_VERSION = 1;
+// Fingerprint versions (spec §5). A version changes the recipe of some rules only; every other rule keeps its
+// version-1 recipe, so its fingerprints, and the decisions made on them, are untouched.
+// - v2 (2026-10-14 KST): secret-in-client-bundle ignores the bundle's content hash (bundleKey). A v1 state is
+//   migrated on read and v1 decisions follow their items (migrateState, currentTargets).
+export const FINGERPRINT_VERSION = 2;
+const SECRET = 'secret-in-client-bundle';
+const RECIPE = { [SECRET]: 2 };
+const recipeOf = (rule, version) => Math.min(version, RECIPE[rule] || 1);
+
+// A build names a bundle after its content, so a rebuild that leaves a secret in place renames the file. Only a
+// hash-like part of the file name becomes `[hash]`; folders, words and words with a number (`checkout2`) stay,
+// so two bundles never become one:
+// - Turbopack: the whole name is 13 characters of [0-9a-z_-] with a digit (`1grrdrpshlkcw.js`);
+// - Vite/Rollup, esbuild: a `-<8 characters>` suffix with a digit, `_`, `-` or an inner capital (`index-Boalzs1w.js`);
+// - webpack, CRA, Parcel, and Turbopack's own runtime: a `-`/`.`-separated part of 8+ letters and digits that is
+//   lower-case hex or has a digit between letters (`page-4f1c2a9b8e7d6c5b.js`, `main.8f3e2a1b.js`).
+const hashPart = p => p.length >= 8 && (/^[0-9a-f]+$/.test(p) || /[A-Za-z][0-9]+[A-Za-z]/.test(p));
+export function bundleKey(path) {
+  const s = String(path), cut = s.lastIndexOf('/') + 1;
+  const dir = s.slice(0, cut), m = /^(.+?)((?:\.[A-Za-z0-9]{1,5})?)$/.exec(s.slice(cut));
+  if (!m) return s;
+  const [, stem, ext] = m;
+  if (/^[0-9a-z_-]{13}$/.test(stem) && /\d/.test(stem)) return `${dir}[hash]${ext}`;
+  const vite = /^(.+)-([A-Za-z0-9_-]{8})$/.exec(stem);
+  if (vite && (/[0-9_-]/.test(vite[2]) || /.[A-Z]/.test(vite[2]))) return `${dir}${vite[1]}-[hash]${ext}`;
+  return dir + stem.split(/([-.])/).map(p => (hashPart(p) ? '[hash]' : p)).join('') + ext;
+}
 
 // Positions, framework ids and generated class names change without the element changing.
 export function normalizeSelector(sel) {
@@ -42,24 +68,121 @@ const DROP_TEXT = new Set(['missing-value', 'placeholder-text', 'coming-soon-spr
 const norm = v => (typeof v === 'number' ? (v <= 0 ? 0 : 2 ** Math.round(Math.log2(v)))
   : typeof v === 'string' ? v.replace(/\d+/g, '#').replace(/\s+/g, ' ').trim().slice(0, 100)
   : Array.isArray(v) ? v.map(norm) : v && typeof v === 'object' ? evidenceKey(null, v) : v);
-export function evidenceKey(rule, evidence = {}) {
+export function evidenceKey(rule, evidence = {}, version = FINGERPRINT_VERSION) {
   const out = {};
   for (const k of Object.keys(evidence || {}).sort()) {
     if (VOLATILE.has(k)) continue;
     if (k === 'text' && DROP_TEXT.has(rule)) continue;
-    if (k === 'url' || k === 'href' || k === 'src' || k === 'finalPath') { out[k] = norm(String(evidence[k]).split(/[?#]/)[0]); continue; }
+    if (k === 'url' || k === 'href' || k === 'src' || k === 'finalPath') {
+      const path = String(evidence[k]).split(/[?#]/)[0];
+      out[k] = norm(rule === SECRET && k === 'url' && recipeOf(rule, version) >= 2 ? bundleKey(path) : path);
+      continue;
+    }
     out[k] = norm(evidence[k]);
   }
   return out;
 }
 
-export function fingerprintOf(f) {
-  const inputs = { v: FINGERPRINT_VERSION, lens: f.lens, rule: f.rule, route: f.route ?? null, element: normalizeSelector(f.selector), evidence: evidenceKey(f.rule, f.evidence) };
+// `version` computes an older version's fingerprint (migration); new findings always get the current one.
+export function fingerprintOf(f, version = FINGERPRINT_VERSION) {
+  const v = recipeOf(f.rule, version);
+  const inputs = { v, lens: f.lens, rule: f.rule, route: f.route ?? null, element: normalizeSelector(f.selector), evidence: evidenceKey(f.rule, f.evidence, version) };
   const { route, ...rest } = inputs;
   // Low contrast has one cause however many elements show it: the colour pair (a design token).
   const pair = f.rule === 'axe-color-contrast' && /foreground color: (#[0-9a-f]{3,8}), background color: (#[0-9a-f]{3,8})/i.exec(f.evidence?.summary || '');
-  const groupInputs = pair ? { v: FINGERPRINT_VERSION, rule: f.rule, colors: [pair[1].toLowerCase(), pair[2].toLowerCase()] } : rest;
+  const groupInputs = pair ? { v, rule: f.rule, colors: [pair[1].toLowerCase(), pair[2].toLowerCase()] } : rest;
   return { fp: sha(stableJson(inputs), 12), group: sha(stableJson(groupInputs), 12), inputs };
+}
+
+// v1 → v2 on read. Items of a rule whose recipe changed get their fingerprint and group recomputed from what
+// they stored (lens, rule, route, selector, evidence); items that now share a fingerprint merge (mergeSightings);
+// `aliases` keeps old → new so decisions made under v1 keep applying. The characters of a secret that v1 stored
+// (`evidence.masked`) are dropped.
+const SEEN_ORDER = (a, b) => -byRun(String(a.lastSeen ?? ''), String(b.lastSeen ?? '')) || (!a.goneAt !== !b.goneAt ? (a.goneAt ? 1 : -1) : a.fp < b.fp ? -1 : 1);
+export function migrateState(state) {
+  if (!state || !state.items || (state.fingerprintVersion || 1) >= FINGERPRINT_VERSION) return state;
+  const aliases = { fp: { ...(state.aliases?.fp || {}) }, group: { ...(state.aliases?.group || {}) } };
+  const items = {};
+  const sets = { ...(state.coverage || {}) };
+  for (const old of Object.values(state.items).sort(SEEN_ORDER)) {
+    if (recipeOf(old.rule, FINGERPRINT_VERSION) === recipeOf(old.rule, state.fingerprintVersion || 1)) { items[old.fp] = old; continue; }
+    const { masked, ...evidence } = old.evidence || {};
+    const { fp, group, inputs } = fingerprintOf({ ...old, evidence });
+    if (fp !== old.fp) aliases.fp[old.fp] = fp;
+    if (group !== old.group) aliases.group[old.group] = group;
+    items[fp] = items[fp] ? mergeSightings(items[fp], old, sets) : { ...old, fp, group, evidence, inputs };
+  }
+  const out = { ...state, fingerprintVersion: FINGERPRINT_VERSION, items, aliases };
+  if (state.coverage) {                                   // the coverage sets an item still names
+    const used = new Set(Object.values(items).map(i => i.coverage).filter(Boolean));
+    out.coverage = Object.fromEntries(Object.entries(sets).filter(([h]) => used.has(h)));
+  }
+  return out;
+}
+
+// Two v1 items that are one v2 defect (two builds of one bundle). The later sighting (`have`) keeps its evidence
+// and examples; nothing either one still needs is dropped, so the merge never makes the defect easier to call
+// fixed: the cells and whole-app coverage of both (a coverage set that cannot be found stays named, so the item
+// can never be fixed, as foldRun treats it), fixed only when both were (open beats fixed), and looked at when
+// both were.
+function mergeSightings(have, old, sets) {
+  const union = k => [...new Set([...(have[k] || []), ...(old[k] || [])])].sort();
+  const out = { ...have, firstSeen: minRun(have.firstSeen, old.firstSeen), persons: union('persons'), viewports: union('viewports'), states: union('states') };
+  if (have.cells || old.cells) out.cells = union('cells');
+  if (have.coverage || old.coverage) {
+    const lost = [have.coverage, old.coverage].find(c => c && !sets[c]);
+    if (lost) out.coverage = lost;
+    else {
+      const keys = [...new Set([...(sets[have.coverage] || []), ...(sets[old.coverage] || [])])].sort();
+      out.coverage = setId(keys);
+      sets[out.coverage] = keys;
+    }
+  }
+  if (have.lookedAt || old.lookedAt) out.lookedAt = minRun(have.lookedAt || have.lastSeen, old.lookedAt || old.lastSeen);
+  const open = [have, old].filter(i => !i.goneAt);
+  if (!open.length) Object.assign(out, { goneAt: maxRun(have.goneAt, old.goneAt), regressedAt: have.regressedAt ?? null });
+  else Object.assign(out, { goneAt: null, regressedAt: open[0].regressedAt ?? null });
+  return out;
+}
+
+// A decision names the fingerprint or group it was made on. One made under an older version follows its item:
+// through the migrated state's aliases, or, for a decision from another machine, by the old fingerprint of
+// what this state holds now. A moved decision keeps its id and carries `targetWas`; writtenAs(moved) is the
+// decision as its file holds it, whose content approvals and first-seen times name.
+const WRITTEN = new WeakMap();
+export const writtenAs = d => WRITTEN.get(d) || d;
+export function currentTargets(decisions, state) {
+  const fp = new Map(Object.entries(state?.aliases?.fp || {})), group = new Map(Object.entries(state?.aliases?.group || {}));
+  for (const item of Object.values(state?.items || {})) {
+    if (recipeOf(item.rule, FINGERPRINT_VERSION) === 1) continue;
+    const old = fingerprintOf(item, 1);
+    if (old.fp !== item.fp && !fp.has(old.fp)) fp.set(old.fp, item.fp);
+    if (old.group !== item.group && !group.has(old.group)) group.set(old.group, item.group);
+  }
+  const moved = decisions.map(d => {
+    const t = d.target || {};
+    if ((d.fingerprintVersion || 1) >= FINGERPRINT_VERSION) return d;
+    const to = t.fp && fp.has(t.fp) ? { fp: fp.get(t.fp) } : t.group && group.has(t.group) ? { group: group.get(t.group) } : null;
+    if (!to) return d;
+    const m = { ...d, target: to, targetWas: t };
+    WRITTEN.set(m, d);
+    return m;
+  });
+  // Items merged by the migration whose old decisions disagree (one dismissed, another to fix, hold or reopen):
+  // the dismissal does not carry over, so the item stays visible. Open beats dismissed.
+  const key = t => (t.fp ? `fp:${t.fp}` : `group:${t.group}`);
+  const lastByOld = new Map();                            // new target → old target → its latest moved decision
+  for (const d of moved) if (d.targetWas) {
+    const k = key(d.target);
+    if (!lastByOld.has(k)) lastByOld.set(k, new Map());
+    lastByOld.get(k).set(key(d.targetWas), d);
+  }
+  const DISMISS = new Set(['keep', 'false-positive']);
+  const conflicted = new Set([...lastByOld].filter(([, olds]) => {
+    const kinds = [...olds.values()].map(d => DISMISS.has(d.decision));
+    return kinds.includes(true) && kinds.includes(false);
+  }).map(([k]) => k));
+  return moved.filter(d => !(d.targetWas && conflicted.has(key(d.target)) && DISMISS.has(d.decision)));
 }
 
 export function annotate(findings) {
@@ -114,11 +237,16 @@ export function readJsonFile(file, fix, { max = Infinity } = {}) {
 
 const REBUILD = 'delete it and the next nunchi command rebuilds it from the runs on disk';
 
+// A state written by an older fingerprint version is migrated as it is read (migrateState); syncLedger, which
+// reads it again under the ledger lock, writes the migrated state back.
+const MIGRATED = new WeakSet();
 export function readState(file) {
   if (!present(file)) return { schema: 1, fingerprintVersion: FINGERPRINT_VERSION, runs: [], items: {} };
   const s = readJsonFile(file, REBUILD);
   if (!s || !Array.isArray(s.runs) || !s.items || typeof s.items !== 'object') throw corrupt(file, `is not a nunchi ledger: ${REBUILD}`);
-  return s;
+  const m = migrateState(s);
+  if (m !== s) MIGRATED.add(m);
+  return m;
 }
 
 // Run ids are digits, zero-padded to 4 and longer past 9999: shorter is older.
@@ -301,12 +429,13 @@ export function noteDecisions(state, decisions, now = Date.now()) {
 
 // Brings the ledger up to date, under the ledger lock: every complete run not folded yet is folded, oldest
 // first, and (with `decisions`) every decision not seen before is noted. A crash after a run is complete and
-// before its fold leaves nothing behind: the next command folds it. Nothing to do: nothing is written.
+// before its fold leaves nothing behind: the next command folds it. A state of an older fingerprint version is
+// written back migrated. Nothing to do: nothing is written.
 export function syncLedger(stateFile, runsDir, { decisions = null, now = Date.now(), timeoutMs } = {}) {
   const pending = s => listRuns(runsDir).complete.filter(id => !s.runs.includes(id)).sort(byRun);
   const unseen = s => !!decisions && decisions.some(d => !Object.hasOwn(s.decisionsSeen || {}, approvalKey(d)));
   const state = readState(stateFile);
-  if (!pending(state).length && !unseen(state)) return state;
+  if (!pending(state).length && !unseen(state) && !MIGRATED.has(state)) return state;
   return withLock(stateFile, lock => {
     let s = readState(stateFile);
     for (const id of pending(s)) { s = foldRun(s, runForFold(join(runsDir, id))); lock.touch(); }
@@ -457,11 +586,13 @@ export const NOT_LOOKED_RUNS = 3;
 // date and when this machine first saw it (state.decisionsSeen; now, if not noted yet), so one that arrived
 // late cannot outrank decisions made after it arrived. Shown in `note` and not counted: a decision dated ahead
 // of its arrival (or with no readable date), and a keep or false-positive on a blocker or an L9 finding that
-// was not made or approved on this machine (came through git).
+// was not made or approved on this machine (came through git). A decision made under an older fingerprint
+// version follows its item (currentTargets); its approval and arrival stay those of the file as written.
 export function view(state, decisions, approved = new Set(), { now = Date.now() } = {}) {
+  decisions = currentTargets(decisions, state);
   const seenAt = state.decisionsSeen || {};
   const keys = new Map();
-  const keyOfDecision = d => { if (!keys.has(d)) keys.set(d, approvalKey(d)); return keys.get(d); };
+  const keyOfDecision = d => { if (!keys.has(d)) keys.set(d, approvalKey(writtenAs(d))); return keys.get(d); };
   const arrived = d => seenAt[keyOfDecision(d)] ?? now;
   const dated = d => !Number.isNaN(dateOf(d)) && dateOf(d) <= arrived(d) + FUTURE_SLACK_MS;
   const timeOf = d => (dated(d) ? Math.min(dateOf(d), arrived(d)) : arrived(d));

@@ -58,7 +58,24 @@ export function collect() {
     }
     return parts.join(' > ');
   };
-  const name = el => (el.getAttribute('aria-label') || el.getAttribute('title') || el.innerText || el.getAttribute('alt') || el.value || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  // Form fields hold what the user typed or the app filled in (a key on a settings page, a name): never
+  // recorded (D7). A field is evidence by its presence, type and label only. A submit, button or reset input's
+  // value is its label, written by the app, and stays its name.
+  const isField = el => el.localName === 'textarea' || el.localName === 'select' || (el.localName === 'input' && !/^(submit|button|reset|image)$/i.test(el.type || ''));
+  const clean = s => (s || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const name = el => clean(isField(el) ? el.getAttribute('aria-label') || el.getAttribute('title')
+    : el.getAttribute('aria-label') || el.getAttribute('title') || el.innerText || el.getAttribute('alt') || el.value);
+  // a field's own label: <label for>/wrapping <label>, else aria-labelledby (label text never holds a field's value)
+  const labelOf = el => clean((el.labels && el.labels.length ? [...el.labels] : (el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => id && document.getElementById(id)).filter(Boolean))
+    .map(l => l.innerText).join(' '));
+  // Editors (contenteditable regions, role=textbox/searchbox) hold what the user wrote, like fields: their text is
+  // cut from the page text, their controls and links are left out, and their lines go back to capture, which cuts
+  // them from aria.yml (`editorLines`, never written).
+  const EDITOR = '[contenteditable]:not([contenteditable="false"]),[role="textbox"],[role="searchbox"]';
+  const inEditor = el => !!el.closest(EDITOR);
+  const editorText = [...document.querySelectorAll(EDITOR)].filter(e => !(e.parentElement && e.parentElement.closest(EDITOR)))
+    .map(e => (e.innerText || '').trim()).filter(Boolean);
+  const withoutEditors = text => editorText.reduce((t, chunk) => { const i = t.indexOf(chunk); return i < 0 ? t : t.slice(0, i) + t.slice(i + chunk.length); }, text);
   const doc = document.documentElement;
   // App-shell layouts scroll inside an element (\`main { overflow: auto }\`), not the window: the
   // full-page screenshot then shows only the first view of it. Elements outside an ancestor's visible
@@ -103,11 +120,12 @@ export function collect() {
   };
   const controls = [];
   for (const el of document.querySelectorAll('a[href],button,[role="button"],[role="link"],input,select,textarea,summary')) {
-    if (controls.length >= MAX || !vis(el)) continue;
-    const text = (el.innerText || '').trim();
+    if (controls.length >= MAX || !vis(el) || inEditor(el)) continue;
+    const text = isField(el) ? '' : (el.innerText || '').trim();      // a select's text is its options
     controls.push({
       selector: sel(el), tag: el.localName, role: el.getAttribute('role') || null,
       name: name(el), hasText: text.length > 0, text: text.slice(0, 40), box: box(el),
+      ...(/^(input|textarea|select)$/.test(el.localName) ? { type: el.type || el.localName, label: labelOf(el) } : {}),
       href: el.localName === 'a' ? el.getAttribute('href') : null,
       inline: el.localName === 'a' && getComputedStyle(el).display === 'inline',
       ...(el.closest(NAV) || inRail(el) ? { inNav: true } : {}),
@@ -162,7 +180,7 @@ export function collect() {
     if (clipped.length >= 50) break;
     if (!vis(el)) continue;
     const ownText = [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim());
-    if (!ownText) continue;
+    if (!ownText || inEditor(el)) continue;
     const cs = getComputedStyle(el);
     if (!/hidden|clip/.test(cs.overflowX) || cs.textOverflow === 'ellipsis') continue;
     // visually hidden text for screen readers (sr-only: 1px box, clipped) is meant to be invisible
@@ -187,6 +205,7 @@ export function collect() {
 
   const links = [];
   for (const a of document.querySelectorAll('a[href]')) {
+    if (inEditor(a)) continue;                                       // a link the user wrote is not the app's navigation
     const href = a.getAttribute('href');
     let url;
     try { url = new URL(href, location.href); } catch { continue; }
@@ -202,14 +221,15 @@ export function collect() {
     url: location.pathname + location.search,
     browserErrorPage: location.protocol === 'chrome-error:',
     title: document.title,
-    h1: (document.querySelector('h1')?.innerText || '').trim().slice(0, 120),
+    h1: ([...document.querySelectorAll('h1')].find(h => !inEditor(h))?.innerText || '').trim().slice(0, 120),
     viewport: { width: innerWidth, height: innerHeight },
     scrollWidth: doc.scrollWidth,
     scrollHeight: doc.scrollHeight,
-    text: (document.body.innerText || '').replace(/ /g, ' '),
-    mainText: (main.innerText || '').replace(/ /g, ' '),
+    text: withoutEditors(document.body.innerText || '').replace(/ /g, ' '),
+    mainText: withoutEditors(main.innerText || '').replace(/ /g, ' '),
     // code samples and keyboard text: documentation quoting an error is not the app showing one
-    codeLines: [...new Set([...document.querySelectorAll('pre,code,kbd,samp')].flatMap(e => (e.innerText || '').split('\n').map(l => l.trim()).filter(Boolean)))].slice(0, 2000),
+    codeLines: [...new Set([...document.querySelectorAll('pre,code,kbd,samp')].filter(e => !inEditor(e)).flatMap(e => (e.innerText || '').split('\n').map(l => l.trim()).filter(Boolean)))].slice(0, 2000),
+    editorLines: [...new Set(editorText.flatMap(t => t.split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean)))].sort(),
     controls, hiddenControls, styles, clipped, images, links, fonts, fields, scrollers,
   };
 }
