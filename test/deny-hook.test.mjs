@@ -64,6 +64,30 @@ test('deny hook: the shared state, .nunchi/state, the answer keys, the saved log
   for (const [tool, input] of denied) assert.ok(call(r, tool, input), `${tool} ${JSON.stringify(input)} is denied`);
 });
 
+test('deny hook: the fix loop\'s state (records, recording snapshots, claims, file markers, approved check scripts, the plan) is out of reach; its commands are not', () => {
+  const r = repo();
+  const fx = join(r.state, 'fixes', 'abcabcabcabc');
+  mkdirSync(join(fx, '1-har'), { recursive: true });
+  mkdirSync(join(r.state, 'claims', 'files'), { recursive: true });
+  for (const [p, v] of [[join(fx, '1.json'), '{}'], [join(fx, '1-har', 'guest.json'), '{}'], [join(r.state, 'claims', 'abcabcabcabc.json'), '{}'], [join(r.state, 'claims', 'files', 'f'.repeat(64)), '{}'],
+    [join(r.state, 'scripts-approved.json'), '{}'], [join(r.state, 'checks-request.json'), '{}'], [join(r.state, 'fix-plan.json'), '{}']]) writeFileSync(p, v);
+  const files = [join(fx, '1.json'), join(fx, '1-har', 'guest.json'), join(r.state, 'claims', 'abcabcabcabc.json'), join(r.state, 'claims', 'files', 'f'.repeat(64)), join(r.state, 'scripts-approved.json'), join(r.state, 'checks-request.json'), join(r.state, 'fix-plan.json')];
+  for (const f of files) {
+    for (const [tool, input] of [['Read', { file_path: f }], ['Write', { file_path: f, content: '{"phase":"fixed"}' }], ['Edit', { file_path: f, old_string: '{', new_string: '{"x":1,' }], ['Bash', { command: `cat ${f}` }], ['Bash', { command: `rm ${f}` }]]) {
+      assert.ok(call(r, tool, input), `${tool} ${f} is denied`);
+    }
+  }
+  for (const [tool, input] of [['Grep', { pattern: 'token', path: join(r.state, 'claims') }], ['Glob', { pattern: '**/*.json', path: join(r.state, 'fixes') }], ['Bash', { command: 'grep -r phase .git/nunchi' }],
+    ['Bash', { command: 'ls .git/nunchi/root/state/fixes' }], ['Bash', { command: 'nunchi fix --approve-checks' }], ['Bash', { command: 'node "${CLAUDE_SKILL_DIR}/../../src/cli.mjs" fix --approve-checks' }]]) {
+    assert.ok(call(r, tool, input), `${tool} ${JSON.stringify(input)} is denied`);
+  }
+  for (const command of ['node src/cli.mjs fix --plan', 'node src/cli.mjs fix --start abcabcabcabc --agent "Claude Code"', 'node src/cli.mjs fix --checks abcabcabcabc', 'node src/cli.mjs fix --verify abcabcabcabc',
+    'node src/cli.mjs fix --verify abcabcabcabc --record verdicts.json', 'node src/cli.mjs fix --undo abcabcabcabc', 'node src/cli.mjs fix --abort abcabcabcabc', 'node src/cli.mjs fix --status', 'node src/cli.mjs fix --summary',
+    'git add app/settings/page.jsx && git commit -m "Fix the Save tap target" -m "Nunchi-Fix: abcabcabcabc"', 'cat .nunchi/runs/0001/recheck-packets.json']) {
+    assert.equal(call(r, 'Bash', { command }), null, command);
+  }
+});
+
 test('deny hook: decisions, labels, lens packs and .nunchi/config.json can be read but not written by the AI\'s tools', () => {
   const r = repo();
   const d = join(r.root, '.nunchi', 'decisions', 'group-aaaaaaaaaaaa', 'x-1.json');
