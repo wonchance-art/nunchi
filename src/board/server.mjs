@@ -332,6 +332,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     if (post && path === '/api/undo') return undoDecisions(res, await readJsonBody(req));
     if (post && path === '/api/confirm') return confirm(res, await readJsonBody(req));
     if (post && path === '/api/approve-checks') return approveChecks(res, await readJsonBody(req));
+    if (post && path === '/api/fix-accept') return fixAccept(res, await readJsonBody(req));
     return fail(res, 404, 'not found');
   };
 
@@ -416,7 +417,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
       health: { problems: s.health.problems.map(p => ({ status: safe(p.status, 40), scenes: p.scenes, of: p.of })), blind: s.health.blind ? safe(s.health.blind, 40) : null,
         scenes: { ...s.health.scenes, reasons: s.health.scenes.reasons.map(r => safe(r, 80)) } },
       ai: { ...s.ai, coverage }, now: nowLines,
-      checks: profile ? { requested, approved, profile: { hash: profile.hash, scripts: Object.fromEntries(Object.entries(profile.scripts).map(([k, v]) => [safe(k, 40), safe(v, 400)])), files: Object.fromEntries(Object.entries(profile.files).map(([k, v]) => [safe(k, 120), v ? safe(v, 64) : null])), packageManager: profile.packageManager ? safe(profile.packageManager, 80) : null } } : null,
+      checks: profile ? { requested, approved, profile: { hash: profile.hash, scripts: Object.fromEntries(Object.entries(profile.scripts).map(([k, v]) => [safe(k, 40), safe(v, 400)])), serve: Object.fromEntries(Object.entries(profile.serve || {}).map(([k, v]) => [safe(k, 40), safe(v, 400)])), files: Object.fromEntries(Object.entries(profile.files).map(([k, v]) => [safe(k, 120), v ? safe(v, 64) : null])), packageManager: profile.packageManager ? safe(profile.packageManager, 80) : null } } : null,
       counts: { groups: m.groups.length, screens: m.latestEv?.scenes.length || 0 },
       treeChanged: !!(runTree && now && now !== runTree),
       warnings: [...warnings].map(w => safe(w, 400)),
@@ -498,6 +499,16 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     P.confirmDecisions(led, keys);
     cache = null;
     return send(res, 200, { ok: true, confirmed: keys.length });
+  }
+
+  // [Looks fine, mark fixed] on *needs you (a)* (design §3.4): a person's, through the board's key; the engine marks it
+  // fixed only when the defect itself is gone (fix/loop.mjs acceptDrift).
+  async function fixAccept(res, body) {
+    if (typeof body.group !== 'string' || !HEX12.test(body.group) || !Number.isInteger(body.attempt) || body.attempt < 1) return fail(res, 400, 'group and attempt of the fix');
+    const { openFix, acceptDrift } = await import('../fix/loop.mjs');
+    const r = acceptDrift(openFix({ cwd: project, root: project, warn: w => warnings.add(w) }), body.group, { attempt: body.attempt, by });
+    cache = null;
+    return r.ok ? send(res, 200, { ok: true, decided: 'Fixed' }) : fail(res, r.status || 409, r.error, { stale: true });
   }
 
   function approveChecks(res, body) {

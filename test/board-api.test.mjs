@@ -410,6 +410,7 @@ test('api: /api/approve-checks approves the check profile shown, once, as the pe
   try {
     let s = (await call('/api/summary')).json;
     assert.deepEqual(Object.keys(s.checks.profile.scripts).sort(), ['build', 'prebuild', 'test'], 'the check scripts and their pre/post lines, nothing else');
+    assert.deepEqual(s.checks.profile.serve, { dev: 'next dev' }, 'and the line `fix --serve dev` may start the app with (M3), shown on the card too');
     assert.deepEqual([s.checks.requested, s.checks.approved], [false, false], 'shown only when the fix loop asks (M3)');
     mkdirSync(join(p.nunchi, 'state'), { recursive: true });
     writeFileSync(join(p.nunchi, 'state', 'checks-request.json'), '{"schema":1}');

@@ -17,6 +17,8 @@ import { readGeneration } from '../state.mjs';
 import { scrubSecrets } from '../rules.mjs';
 import { redactText, redactUrl } from '../network.mjs';
 import { SEV, STATUS_LABEL, PERSONS, VPS, STATES, human, plural, drawable, sceneLabelText } from './shared.mjs';
+import { claimLive, claimMinutes } from '../fix/claims.mjs';
+import { latestRecords } from '../fix/records.mjs';
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const rank = (list, v) => { const i = list.indexOf(v); return i < 0 ? list.length : i; };
@@ -163,7 +165,12 @@ export function buildBoardModel({ nunchiDir, projectDir, warn = () => {} }) {
   const generation = readGeneration(st.files.generation);
   const { rows, groups } = ledgerView(led);
   let git = null; try { git = gitRunner(projectDir); } catch {}
-  const sum = summary({ state, rows, groups, stream: st.root.stream, runsDir: st.runsDir, git });
+  // the fix loop's latest attempt of each group (design §3.4 "Fix states on the board"); a record that cannot be read
+  // shows nothing (the CLI says why)
+  let records = new Map();
+  try { records = latestRecords(st.root.dir); } catch { records = new Map(); }
+  const fixNeeds = new Set([...records].filter(([, r]) => r.phase === 'needs-you').map(([g]) => g));
+  const sum = summary({ state, rows, groups, stream: st.root.stream, runsDir: st.runsDir, git, fixNeeds });
   const latest = latestRunOf(state, st.root.stream);
   const aliases = state.aliases || {};
   const runs = new Map();
@@ -201,7 +208,8 @@ export function buildBoardModel({ nunchiDir, projectDir, warn = () => {} }) {
     const decision = mine.map(r => r.decision).find(Boolean) || null;
     const screens = new Set(inst.map(f => f.scene && `${f.run}/${f.scene}`).filter(Boolean)).size;
     const files = [...new Set(inst.map(f => codeOf(f)?.file).filter(Boolean).concat(ai && mine[0]?.identity?.component?.file ? [mine[0].identity.component.file] : []))].sort();
-    const needsYou = mine.find(r => r.needsYou && !r.goneAt)?.needsYou || null;
+    const fix = fixOut(records.get(g.group), { waiting: mine.some(r => r.status === 'to-fix' && !r.goneAt) });
+    const needsYou = fix?.needs ? { reason: `fix-${fix.needs}`, run: fix.after } : mine.find(r => r.needsYou && !r.goneAt)?.needsYou || null;
     const claim = claims.get(g.group) || null;
     const verification = ai ? mine.map(r => r.verification).find(Boolean) || null : null;
     return {
@@ -216,7 +224,7 @@ export function buildBoardModel({ nunchiDir, projectDir, warn = () => {} }) {
       decision: decisionOut(decision),
       notLookedAt: mine.map(r => str(r.notLookedAt)).filter(Boolean).sort(byRun)[0] || null,
       needsYou: needsYou ? { reason: safe(needsYou.reason, 40), run: safeOrNull(needsYou.run, 12) } : null,
-      fixing: claim, regressed: mine.some(r => r.regressedAt && !r.goneAt), isNew: mine.some(r => after(r.firstSeen) && !r.goneAt),
+      fixing: claim, fix, regressed: mine.some(r => r.regressedAt && !r.goneAt), isNew: mine.some(r => after(r.firstSeen) && !r.goneAt),
       files: files.map(f => safe(f, 300)), firstSeen: mine.map(r => r.firstSeen).filter(Boolean).sort(byRun)[0] || null,
       lastSeen: mine.map(r => r.lastSeen).filter(Boolean).sort(byRun).pop() || null,
       _rows: mine, _inst: inst,
@@ -231,9 +239,28 @@ export function buildBoardModel({ nunchiDir, projectDir, warn = () => {} }) {
   return { generation, led, rows, groups: out, byId, summary: sum, latest, latestEv, evidenceOf, projectDir, nunchiDir, claims };
 }
 
-// Live claims (design §7, written by the fix loop from M3): `claims/<group>.json`. Expiry is the reader's:
-// lastRenewal + 30 minutes, never a value the writer set. → Map group → { agent, minutes }.
-const CLAIM_TTL = 30 * 60e3;
+// A fix record as the board shows it (design §3.4): which attempt, its phase, the *needs you* kind — (a) the fix also
+// changed other parts of the screen, (b) the AI couldn't fix it in 2 tries, (c) it could not be re-checked; any other
+// kind shows the general "needs you" — and the probes before and after. Only words the engine wrote, and run ids and
+// a commit checked for their shape.
+const NEEDS = new Set(['a', 'b', 'c']);
+function fixOut(rec, { waiting = true } = {}) {
+  if (!rec || typeof rec !== 'object') return null;
+  // needs you only while the group is still to fix (a person who chose Keep or Later after (b) has answered it)
+  const k = rec.phase === 'needs-you' && waiting ? String(rec.outcome?.needsYou || '') : null;
+  const run = v => (RUN_ID.test(String(v ?? '')) ? String(v) : null);
+  const commit = /^[0-9a-f]{7,64}$/.test(String(rec.commit || '')) ? String(rec.commit).slice(0, 7) : null;
+  return {
+    attempt: Number.isInteger(rec.try) ? rec.try : Number.isInteger(rec.attempt) ? rec.attempt : null, record: Number.isInteger(rec.attempt) ? rec.attempt : null,
+    phase: safe(rec.phase, 20), needs: k === null ? null : NEEDS.has(k) ? k : 'other', share: Number.isFinite(rec.outcome?.share) ? rec.outcome.share : null,
+    defectGone: rec.outcome?.defectGone === true, commit, before: run(rec.p0?.run), after: run(rec.p1?.run),
+    // a fix that landed (the loop said fixed, or kept it for the person): undone by the AI's `fix --undo` (design §3.4)
+    landed: !!commit && (rec.phase === 'fixed' || (rec.phase === 'needs-you' && k === 'a')),
+  };
+}
+
+// Live claims (design §7, written by the fix loop, src/fix/claims.mjs): `claims/<group>.json`. Expiry is the
+// reader's: lastRenewal + 30 minutes, never a value the writer set. → Map group → { agent, minutes }.
 export function readClaims(dir, now = Date.now()) {
   const out = new Map();
   let names = [];
@@ -242,9 +269,8 @@ export function readClaims(dir, now = Date.now()) {
     const m = /^([0-9a-f]{12})\.json$/.exec(n);
     if (!m) continue;
     const c = readJsonOr(join(dir, n), null);
-    const at = Date.parse(c?.lastRenewal), start = Date.parse(c?.startedAt);
-    if (!Number.isFinite(at) || now - at > CLAIM_TTL) continue;
-    out.set(m[1], { agent: safe(c.declaredAgent || 'Your AI', 40), minutes: Number.isFinite(start) ? Math.max(0, Math.round((now - start) / 60e3)) : null });
+    if (!claimLive(c, now)) continue;
+    out.set(m[1], { agent: safe(c.declaredAgent || 'Your AI', 40), minutes: claimMinutes(c, now) });
   }
   return out;
 }
@@ -337,12 +363,27 @@ export function groupDetail(model, id) {
   const notes = [...new Set(g._rows.map(r => r.note).filter(Boolean))].map(n => safe(n, 300));
   const rowsOut = g._rows.map(r => ({ fp: r.fp, route: safeOrNull(r.route, 200), status: r.status, firstSeen: r.firstSeen ?? null, lastSeen: r.lastSeen ?? null, regressedAt: r.regressedAt ?? null, goneAt: r.goneAt ?? null }));
   return {
-    ...publicGroup(g), instances, scenes, history, notes, rows: rowsOut, fps: [...fps].sort(),
+    ...publicGroup(g), instances, scenes, history, notes, rows: rowsOut, fps: [...fps].sort(), compare: compareOf(model, g),
     evidence: evidenceList(first), selector: safeOrNull(first?.selector, 300), box: first?.box || null,
     secret: g.rule === 'secret-in-client-bundle' ? { where: safe(redactUrl(String(first?.evidence?.url || '')), 300), kind: safe(first?.evidence?.kind || '', 80) } : null,
     code: codeOut(model.projectDir, code),
     verification: verification ? { status: safe(verification.status, 20), by: safeOrNull(verification.by, 80), vendor: safeOrNull(verification.vendor, 40), suspect: !!verification.suspect, tooFewDecoys: verification.tooFewDecoys === true, run: safeOrNull(verification.run, 12) } : null,
   };
+}
+
+// Before and after a fix (design §3.4), for both viewports: the probes P0 and P1 of the group's latest attempt, the same
+// screen of each (the group's own route, its normal state first). → [{ viewport, before, after }] or [].
+function compareOf(model, g) {
+  if (!g.fix?.before || !g.fix?.after) return [];
+  const a = model.evidenceOf(g.fix.before), b = model.evidenceOf(g.fix.after);
+  const routes = new Set(g._rows.map(r => r.route).filter(Boolean));
+  const out = [];
+  for (const vp of VPS) {
+    const cands = b.scenes.filter(s => s.viewport === vp && routes.has(s.route) && s.img && a.sceneById.get(s.id)?.img)
+      .sort((x, y) => rank(STATES, x.state) - rank(STATES, y.state) || cmp(x.id, y.id));
+    if (cands.length) out.push({ viewport: vp, before: sceneOut(a.sceneById.get(cands[0].id)), after: sceneOut(cands[0]) });
+  }
+  return out;
 }
 
 // /api/screens: the latest run's screens, each with what is open on it (rule findings of the run; AI findings last

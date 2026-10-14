@@ -392,7 +392,8 @@ function checksPanel(c) {
     try { await api('/api/approve-checks', { method: 'POST', body: { profile: c.profile.hash } }); announce('Check scripts approved'); await refreshSummary(); renderProgress(); }
     catch (e) { btn.disabled = false; announce(`Not approved: ${e.message}`); }
   });
-  const scripts = Object.entries(c.profile.scripts);
+  // the check lines, then the lines `fix --serve` may start the app with: every line the approval covers is shown
+  const scripts = [...Object.entries(c.profile.scripts), ...Object.entries(c.profile.serve || {})];
   return h('section', { class: 'panel-box', 'aria-labelledby': 'h-checks' }, h('h2', { id: 'h-checks' }, 'Your AI asks to run your checks while it fixes'),
     h('p', { class: 'small' }, 'nunchi runs these exact lines of package.json (and nothing else of it) to see that a fix breaks nothing. Approve them once; any change asks again.'),
     scripts.length ? h('dl', { class: 'facts-dl' }, scripts.map(([k, v]) => [h('dt', null, k), h('dd', { class: 'mono' }, v)])) : h('p', { class: 'muted' }, 'No build, typecheck, lint or test script.'),
@@ -764,8 +765,10 @@ function renderDetail(focus = false) {
   const decision = g.decision;
   const latest = g.history.find(x => x.decision !== 'reopen');
   const reopen = g.status !== 'open' && g.status !== 'regressed' && g.status !== 'fixed' && latest ? (() => { const b = h('button', { type: 'button', class: 'b' }, 'Reopen'); b.addEventListener('click', () => decide([g.id], 'reopen', null, { confirmed: true, ms: null })); return b; })() : null;
-  const needs = g.needsYou ? h('div', { class: 'needs', role: 'note' }, h('b', null, 'Needs you'),
-    g.needsYou.reason === 'recheck-insufficient' ? h('span', null, 'The re-check could not tell whether this is gone. Look at the screen, then decide; or tell your AI “re-check it”.') : h('span', null, 'nunchi could not finish this one on its own.')) : null;
+  const fixNeeds = fixNeedsBox(g);
+  const needs = fixNeeds || (g.needsYou ? h('div', { class: 'needs', role: 'note' }, h('b', null, 'Needs you'),
+    g.needsYou.reason === 'recheck-insufficient' ? h('span', null, 'The re-check could not tell whether this is gone. Look at the screen, then decide; or tell your AI “re-check it”.') : h('span', null, 'nunchi could not finish this one on its own.')) : null);
+  const compare = compareBox(g);
   const fixing = g.fixing ? h('p', { class: 'banner' }, `${g.fixing.agent} is fixing this${g.fixing.minutes !== null ? ` · ${g.fixing.minutes} min` : ''}`) : null;
   const facts = h('dl', { class: 'facts-dl' },
     codeLine ? [h('dt', null, 'Code'), h('dd', null, h('span', { class: 'mono' }, codeLine), ' ', codeCopy ? copyButton(codeCopy, 'Copy path') : null, ' ', g.code.link ? h('a', { class: 'b b-quiet', href: g.code.link }, 'Open in VS Code') : null)] : null,
@@ -774,7 +777,9 @@ function renderDetail(focus = false) {
     decision ? [h('dt', null, 'Decision'), h('dd', null, `${W.decidedText(decision.decision, decision.reason)} · ${decision.by || ''} · ${when(decision.at)}`, decision.channelText ? h('span', { class: decision.human ? 'muted' : 'warn' }, ` · ${decision.channelText}`) : null)] : null,
     g.notes.map(n => [h('dt', null, 'Note'), h('dd', { class: 'warn' }, n)]),
     g.notLookedAt ? [h('dt', null, 'Looked at'), h('dd', { class: 'warn' }, `Not looked at since run ${g.notLookedAt}: no run since has captured every screen it was on, so it cannot be marked fixed.`)] : null,
-    g.verification ? [h('dt', null, 'Reviewer'), h('dd', null, `${g.verification.status}${g.verification.by ? ` · ${g.verification.by}` : ''}${g.verification.suspect ? ' · suspect' : ''}${g.verification.tooFewDecoys ? ` · ${W.WORDS['too-few-decoys']}: not a double-check` : ''}`)] : null);
+    g.verification ? [h('dt', null, 'Reviewer'), h('dd', null, `${g.verification.status}${g.verification.by ? ` · ${g.verification.by}` : ''}${g.verification.suspect ? ' · suspect' : ''}${g.verification.tooFewDecoys ? ` · ${W.WORDS['too-few-decoys']}: not a double-check` : ''}`)] : null,
+    // a fix that landed is undone by the AI (`fix --undo`): the sentence to say (design §3.4 "Undo and reopen")
+    g.fix?.landed && g.fix.needs !== 'a' ? [h('dt', null, 'Fix'), h('dd', null, W.FIX_WORDS.landed(g.fix.commit), ' ', h('code', null, W.FIX_WORDS.undoSay(g.kindTitle, g.id)), ' ', copyButton(W.FIX_WORDS.undoSay(g.kindTitle, g.id)))] : null);
   const evidence = h('details', { class: 'evidence' }, h('summary', null, 'Evidence details'), h('dl', { class: 'facts-dl' },
     h('dt', null, 'Rule'), h('dd', { class: 'mono' }, `${g.lens} · ${g.rule}`), h('dt', null, 'Group'), h('dd', { class: 'mono' }, g.id),
     h('dt', null, 'Fingerprints'), h('dd', { class: 'mono' }, g.fps.join(' ')),
@@ -790,10 +795,77 @@ function renderDetail(focus = false) {
     h('div', { class: 'panel-box detail-box' },
       h('header', { class: 'detail-head' }, h('p', { class: 'chips' }, sevChip(g.severity), h('span', { class: 'muted' }, g.kindTitle), sourceTag(g), decisionTag(g), ...statusChips(g)),
         h('h1', { id: 'h-detail' }, g.headline)),
-      fixing, needs, figure || (g.secret || !g.instances.length ? h('p', { class: 'muted' }, 'No screenshot: this finding belongs to the whole app, not one screen.') : h('p', { class: 'muted' }, 'No screenshot of this finding is left (its run was removed).')),
+      fixing, needs, compare, figure || (g.secret || !g.instances.length ? h('p', { class: 'muted' }, 'No screenshot: this finding belongs to the whole app, not one screen.') : h('p', { class: 'muted' }, 'No screenshot of this finding is left (its run was removed).')),
       facts, evidence),
     history, h('div', { class: 'detail-box dock' }, decisionBar(() => targetsNow()))));
   if (focus) focusHeading();
+}
+
+// ---- the fix loop's states in Detail (design §3.4 "Fix states on the board") --------------------------------------------
+
+// *Needs you* from the fix loop, with exactly the actions the design lists: (a) the fix also changed other parts of the
+// screen → [Looks fine, mark fixed] [Undo this fix] [Try again with a note…]; (b) the AI couldn't fix it in 2 tries →
+// [Try again with a note…] [Keep] [Later]; (c) it could not be re-checked → the sentence to say.
+function fixNeedsBox(g) {
+  const k = g.fix?.needs;
+  if (!['a', 'b', 'c'].includes(k)) return null;
+  const F = W.FIX_WORDS;
+  const btn = (label, fn) => { const b = h('button', { type: 'button', class: 'b' }, label); b.addEventListener('click', fn); return b; };
+  const text = k === 'a' ? F.a(W.pctText(g.fix.share)) : k === 'b' ? F.b : F.c;
+  const actions = k === 'a' ? [btn(F.looksFine, () => looksFine(g)), btn(F.undo, () => undoSentence(g)), btn(F.tryAgain, () => tryAgain(g))]
+    : k === 'b' ? [btn(F.tryAgain, () => tryAgain(g)), btn(F.keep, () => decide([g.id], 'keep', 'intended')), btn(F.later, () => decide([g.id], 'hold', null))] : [];
+  return h('div', { class: 'needs', role: 'note' }, h('b', null, 'Needs you'), h('span', null, text), k === 'c' ? h('span', null, F.cThen) : null,
+    actions.length ? h('div', { class: 'actions' }, actions) : null);
+}
+async function looksFine(g) {
+  try { await api('/api/fix-accept', { method: 'POST', body: { group: g.id, attempt: g.fix.record } }); }
+  catch (e) { if (e.status !== 401) announce(`Not recorded: ${e.message}`); return; }
+  if (S.list?.groups[g.id]) S.list.groups[g.id] = { ...S.list.groups[g.id], status: 'fixed', statuses: { fixed: 1 } };
+  announce('Marked fixed');
+  await refreshDetail();
+}
+function undoSentence(g) {
+  const say = W.FIX_WORDS.undoSay(g.kindTitle, g.id);
+  dialog(W.FIX_WORDS.undo, h('p', { class: 'small' }, 'Tell your AI:'), h('p', { class: 'copyline' }, h('code', null, say)), h('p', null, copyButton(say)));
+}
+// [Try again with a note…]: a new Fix decision carrying the note (the fix loop counts attempts per decision)
+function tryAgain(g) {
+  const dlg = $('dialog');
+  const field = h('textarea', { id: 'fix-note', class: 'note-field', maxlength: '500', rows: '3' });
+  const no = h('button', { type: 'button', class: 'b' }, 'Cancel'), yes = h('button', { type: 'button', class: 'b b-primary' }, W.FIX_WORDS.send);
+  dlg.replaceChildren(h('h2', { id: 'dialog-title' }, W.FIX_WORDS.tryAgain), h('label', { for: 'fix-note', class: 'small' }, W.FIX_WORDS.note), field, h('div', { class: 'dialog-actions' }, no, yes));
+  no.addEventListener('click', () => dlg.close());
+  yes.addEventListener('click', async () => {
+    const note = field.value.trim();
+    dlg.close();
+    try { await api('/api/decide', { method: 'POST', body: { targets: [g.id], decision: 'fix', reason: null, note: note || null, ms: null, confirmed: true } }); }
+    catch (e) { if (e.status !== 401) announce(`Not recorded: ${e.message}`); return; }
+    announce(`${W.decidedText('fix', null)}${note ? ' (with your note)' : ''}`);
+    await refreshDetail();
+  });
+  dlg.showModal(); field.focus();
+}
+// Before and after, side by side on one frame with a slider (←/→ move it; a range input), for both viewports.
+function compareBox(g) {
+  if (!Array.isArray(g.compare) || !g.compare.length) return null;
+  const D = S.detail;
+  const vps = g.compare.map(c => c.viewport);
+  const vp = D.cmpVp && vps.includes(D.cmpVp) ? D.cmpVp : vps[0];
+  const c = g.compare.find(x => x.viewport === vp);
+  const first = sc => ({ ...sc, img: { ...sc.img, url: sc.img.thumb, h: sc.img.vh } });       // the first view (top.jpg)
+  const cls = vp === 'm' ? 'shot-m' : '';
+  const before = shot(first(c.before), [], { label: `${W.FIX_WORDS.before}: ${c.before.route}, ${c.before.label}`, cls });
+  const after = shot(first(c.after), [], { label: `${W.FIX_WORDS.after}: ${c.after.route}, ${c.after.label}`, cls: `${cls} cmp-after`.trim() });
+  const at = Number.isFinite(D.cmpAt) ? D.cmpAt : 50;
+  const slider = h('input', { type: 'range', class: 'cmp-slider', min: '0', max: '100', step: '5', value: String(at), 'aria-label': W.FIX_WORDS.slider });
+  const set = v => { after.style.clipPath = `inset(0 0 0 ${v}%)`; D.cmpAt = v; slider.setAttribute('aria-valuetext', `${W.FIX_WORDS.before} ${v}%, ${W.FIX_WORDS.after} ${100 - v}%`); };
+  slider.addEventListener('input', () => set(Number(slider.value)));
+  set(at);
+  const toggle = vps.length > 1 ? h('div', { class: 'seg-b', role: 'group', 'aria-label': 'Width' }, vps.map(v => { const b = h('button', { type: 'button', 'aria-pressed': v === vp ? 'true' : 'false' }, W.WIDTH[v] || v); b.addEventListener('click', () => { D.cmpVp = v; renderDetail(); }); return b; })) : null;
+  return h('div', { class: 'fig fix-compare', role: 'group', 'aria-label': `${W.FIX_WORDS.slider}, ${W.WIDTH[vp] || vp}` },
+    toggle ? h('div', { class: 'fig-tools' }, toggle) : null,
+    h('div', { class: 'cmp-labels', 'aria-hidden': 'true' }, h('span', null, W.FIX_WORDS.before), h('span', null, W.FIX_WORDS.after)),
+    h('div', { class: 'cmp' }, before, after), slider);
 }
 
 // ---- Screens ----------------------------------------------------------------------------------------------------------

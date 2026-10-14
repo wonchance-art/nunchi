@@ -1,0 +1,213 @@
+// The fix loop on the board (design 0.1-c §3.4 "Fix states on the board", "Undo and reopen"): a live claim, the three
+// *needs you* kinds with exactly their actions, before/after for both viewports, "Looks fine" only when the defect itself
+// is gone, the sentence that undoes a fix that landed. API tests here; the page in a real browser further down (skipped
+// without Chromium unless NUNCHI_REQUIRE_BROWSER is set). Synthetic git projects (test/fixtures/fix-project.mjs).
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { chromium } from 'playwright-core';
+import { startBoard } from '../src/board/server.mjs';
+import * as F from '../src/fix/loop.mjs';
+import * as R from '../src/fix/records.mjs';
+import * as C from '../src/fix/claims.mjs';
+import * as P from '../src/project.mjs';
+import { FIX_WORDS } from '../src/board/shared.mjs';
+import { fixProject, edit, commitWith, git, tmp } from './fixtures/fix-project.mjs';
+
+process.env.XDG_STATE_HOME = tmp('nunchi-board-fix-xdg-');
+const require = createRequire(import.meta.url);
+const AXE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
+const ctxOf = p => F.openFix({ cwd: p.root, root: p.root, deps: { capture: p.cap.capture, prove: async () => ({ ok: true }) } });
+async function attempt(p, change) {
+  assert.equal((await F.startFix(ctxOf(p), p.group)).code, 0);
+  edit(p.root, 'app/settings/page.jsx', ...change);
+  const c = await F.checkFix(ctxOf(p), p.group);
+  commitWith(p.root, c.json.trailers);
+  return F.verifyFix(ctxOf(p), p.group);
+}
+async function board(p) {
+  const b = await startBoard({ projectDir: p.root });
+  const origin = b.origin;
+  const s = await (await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) })).json();
+  const call = async (path, body, { token = s.token } = {}) => {
+    const res = await fetch(origin + path, body === undefined ? { headers: { 'x-nunchi-token': token } } : { method: 'POST', headers: { 'x-nunchi-token': token, 'content-type': 'application/json', origin }, body: JSON.stringify(body) });
+    let json = null; try { json = await res.json(); } catch {}
+    return { status: res.status, json, type: res.headers.get('content-type') };
+  };
+  return { b, call };
+}
+const decisionsOf = nunchi => readdirSync(join(nunchi, 'decisions'), { recursive: true }).map(String).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(nunchi, 'decisions', f), 'utf8')));
+
+test('board: needs you (a) — the share, before/after for both viewports (the probes P0 and P1), "Looks fine" marks it fixed once, as the person', async () => {
+  const p = await fixProject();
+  await attempt(p, ['TINY', 'ROOMY SHIFT']);
+  const rec = R.latestRecord(P.stateOf(p.nunchi).root.dir, p.group);
+  const { b, call } = await board(p);
+  try {
+    const d = (await call(`/api/groups/${p.group}`)).json;
+    assert.deepEqual([d.fix.needs, d.fix.defectGone, d.fix.before, d.fix.after, d.fix.record, d.fix.attempt, d.needsYou.reason], ['a', true, rec.p0.run, rec.p1.run, rec.attempt, 1, 'fix-a']);
+    assert.ok(d.fix.share > 0.01);
+    assert.deepEqual(d.compare.map(c => [c.viewport, c.before.run, c.after.run, c.before.id === c.after.id]), [['d', rec.p0.run, rec.p1.run, true], ['m', rec.p0.run, rec.p1.run, true]]);
+    const img = await call(d.compare[0].after.img.thumb);
+    assert.deepEqual([img.status, img.type], [200, 'image/jpeg'], 'a probe\'s screenshot is served like any run\'s');
+    // it stands in the way as "needs you" (the verdict names blocker and high only; this one is medium)
+    const { buildBoardModel } = await import('../src/board/model.mjs');
+    assert.equal(buildBoardModel({ nunchiDir: p.nunchi, projectDir: p.root }).summary.standing['needs-you'].medium, 1);
+    assert.equal(FIX_WORDS.a('4%'), 'The fix also changed other parts of this screen (4%). Is that OK?');
+    // [Looks fine, mark fixed]: the person's key only; once
+    assert.equal((await call('/api/fix-accept', { group: p.group, attempt: rec.attempt }, { token: 'f'.repeat(64) })).status, 401);
+    assert.equal((await call('/api/fix-accept', { group: p.group, attempt: 'x' })).status, 400);
+    const ok = await call('/api/fix-accept', { group: p.group, attempt: rec.attempt });
+    assert.deepEqual([ok.status, ok.json.ok], [200, true]);
+    const after = R.latestRecord(P.stateOf(p.nunchi).root.dir, p.group);
+    assert.deepEqual([after.phase, after.accepted.channel], ['fixed', 'board']);
+    const g = (await call(`/api/groups/${p.group}`)).json;
+    assert.deepEqual([g.status, g.fix.needs, g.fix.landed, g.fix.commit], ['fixed', null, true, after.commit.slice(0, 7)]);
+    assert.equal((await call('/api/fix-accept', { group: p.group, attempt: rec.attempt })).status, 409, 'it no longer waits');
+  } finally { await b.close(); }
+});
+
+test('board: needs you (b) clears once the person keeps it (or says Later); (c) waits for "retry"; a live claim shows who is fixing and asks before deciding against it', async () => {
+  const p = await fixProject();
+  await attempt(p, ['TINY', 'WRAP']);
+  await attempt(p, ['TINY', 'WRAP']);
+  const { b, call } = await board(p);
+  try {
+    assert.equal((await call(`/api/groups/${p.group}`)).json.fix.needs, 'b');
+    const kept = await call('/api/decide', { targets: [p.group], decision: 'keep', reason: 'intended', confirmed: true });
+    assert.equal(kept.status, 200);
+    const g = (await call(`/api/groups/${p.group}`)).json;
+    assert.deepEqual([g.status, g.fix.needs, g.needsYou], ['kept', null, null], 'answered by the person');
+  } finally { await b.close(); }
+  const q = await fixProject();
+  assert.equal((await F.startFix(ctxOf(q), q.group, { agent: 'Claude Code' })).code, 0);
+  const { b: b2, call: call2 } = await board(q);
+  try {
+    const s = (await call2('/api/summary')).json;
+    assert.ok(s.now.some(l => /^Claude Code is fixing Tap target smaller than 24px · \d+ min$/.test(l)), s.now.join('\n'));
+    assert.deepEqual((await call2(`/api/groups/${q.group}`)).json.fixing, { agent: 'Claude Code', minutes: 0 });
+    const ask = await call2('/api/decide', { targets: [q.group], decision: 'false-positive', reason: 'not-a-problem' });
+    assert.deepEqual([ask.status, ask.json.confirm.text], [409, 'Claude Code is fixing this right now. Stop and mark Not a problem?']);
+    // (c): the screens did not load at verify
+    edit(q.root, 'app/settings/page.jsx', 'TINY', 'ROOMY');
+    commitWith(q.root, (await F.checkFix(ctxOf(q), q.group)).json.trailers);
+    q.world.fail = ['/settings'];
+    await F.verifyFix(ctxOf(q), q.group);
+    const g = (await call2(`/api/groups/${q.group}`)).json;
+    assert.deepEqual([g.fix.needs, g.needsYou.reason, g.fixing], ['c', 'fix-c', null]);
+  } finally { await b2.close(); }
+});
+
+// ---- in a real browser -------------------------------------------------------------------------------------------------
+
+let browser = null, browserOk = true;
+before(async () => {
+  try { browser = await chromium.launch({ executablePath: process.env.NUNCHI_BROWSER || undefined }); }
+  catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
+});
+after(async () => { await browser?.close(); });
+async function page(p, viewport = { width: 1280, height: 900 }) {
+  const b = await startBoard({ projectDir: p.root });
+  const context = await browser.newContext({ viewport });
+  const pg = await context.newPage();
+  const errors = [];
+  pg.on('pageerror', e => errors.push(String(e)));
+  await pg.goto(b.newLink());
+  await pg.waitForSelector('#h-progress');
+  return { b, pg, errors, close: async () => { await context.close(); await b.close(); } };
+}
+
+test('board e2e: needs you (a) in Detail — the text and exactly its three actions, before/after side by side with a slider (←/→) for both viewports, the undo sentence, Looks fine', { timeout: 120000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = await fixProject();
+  await attempt(p, ['TINY', 'ROOMY SHIFT']);
+  const s = await page(p);
+  const { pg } = s;
+  try {
+    await pg.evaluate(id => { location.hash = `#/finding/${id}`; }, p.group);
+    await pg.waitForSelector('.fix-compare');
+    // one evaluation: live redraws make separate handle round trips flaky
+    const m = await pg.evaluate(() => {
+      const needs = document.querySelector('.needs');
+      const cmp = document.querySelector('.fix-compare');
+      const shots = [...cmp.querySelectorAll('.cmp .shot')].map(x => { const r = x.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height), clip: x.style.clipPath, label: x.getAttribute('aria-label') }; });
+      const slider = cmp.querySelector('input[type=range]');
+      return { text: needs.textContent, buttons: [...needs.querySelectorAll('button')].map(b => b.textContent), shots, slider: { value: slider.value, label: slider.getAttribute('aria-label'), h: slider.getBoundingClientRect().height },
+        widths: [...cmp.querySelectorAll('.seg-b button')].map(b => [b.textContent, b.getAttribute('aria-pressed')]), labels: cmp.querySelector('.cmp-labels').textContent };
+    });
+    assert.match(m.text, /^Needs youThe fix also changed other parts of this screen \(\d+%\)\. Is that OK\?/);
+    assert.deepEqual(m.buttons, ['Looks fine, mark fixed', 'Undo this fix', 'Try again with a note…']);
+    assert.equal(m.shots.length, 2);
+    assert.deepEqual([m.shots[0].x, m.shots[0].y, m.shots[0].w, m.shots[0].h], [m.shots[1].x, m.shots[1].y, m.shots[1].w, m.shots[1].h], 'after lies exactly over before');
+    assert.deepEqual([m.shots[1].clip, m.slider.value, m.slider.label, m.labels], ['inset(0px 0px 0px 50%)', '50', 'Before and after', 'BeforeAfter']);
+    assert.match(m.shots[0].label, /^Before: \/settings/);
+    assert.ok(m.slider.h >= 44, 'a 44 px target');
+    assert.deepEqual(m.widths, [['Desktop', 'true'], ['Phone', 'false']]);
+    await pg.focus('.fix-compare input[type=range]');
+    await pg.keyboard.press('ArrowRight');
+    await pg.keyboard.press('ArrowRight');
+    const moved = await pg.evaluate(() => ({ v: document.querySelector('.fix-compare input[type=range]').value, clip: document.querySelector('.cmp .cmp-after').style.clipPath, url: location.hash }));
+    assert.deepEqual([moved.v, moved.clip], ['60', 'inset(0px 0px 0px 60%)'], '→ moves the slider; the keys never leave the field');
+    await pg.click('.fix-compare .seg-b button:nth-child(2)');
+    const phone = await pg.evaluate(() => ({ pressed: document.querySelector('.fix-compare .seg-b button[aria-pressed=true]').textContent, label: document.querySelector('.fix-compare .cmp .shot').getAttribute('aria-label'), m: document.querySelector('.fix-compare .cmp .shot').classList.contains('shot-m') }));
+    assert.deepEqual([phone.pressed, phone.m], ['Phone', true]);
+    assert.match(phone.label, /Phone/);
+    // [Undo this fix] shows the sentence to say
+    await pg.click('.needs button:nth-child(2)');
+    const say = await pg.evaluate(() => document.querySelector('#dialog code').textContent);
+    assert.equal(say, `undo the fix of “Tap target smaller than 24px” (nunchi fix --undo ${p.group})`);
+    await pg.keyboard.press('Escape');
+    // axe on Detail with the needs-you box and the comparison
+    await pg.evaluate(AXE);
+    const v = await pg.evaluate(async () => (await globalThis.axe.run(document, { resultTypes: ['violations'] })).violations.map(x => x.id));
+    assert.deepEqual(v, []);
+    // [Looks fine, mark fixed]
+    await pg.click('.needs button:first-child');
+    await pg.waitForFunction(() => !document.querySelector('.needs') && [...document.querySelectorAll('.detail-head .st')].some(x => x.textContent === 'Fixed'));
+    const landed = await pg.evaluate(() => [...document.querySelectorAll('.facts-dl dt')].map(d => [d.textContent, d.nextElementSibling.textContent]).find(([k]) => k === 'Fix'));
+    assert.match(landed[1], /^Fixed by your AI in commit [0-9a-f]{7}\. To undo it, tell your AI: undo the fix of “Tap target smaller than 24px” \(nunchi fix --undo [0-9a-f]{12}\)/);
+    assert.deepEqual(s.errors, []);
+  } finally { await s.close(); }
+});
+
+test('board e2e: needs you (b) — [Try again with a note…] [Keep] [Later]; the note goes with a new Fix decision; (c) says the sentence', { timeout: 120000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = await fixProject();
+  await attempt(p, ['TINY', 'WRAP']);
+  await attempt(p, ['TINY', 'WRAP']);
+  const s = await page(p, { width: 390, height: 844 });
+  const { pg } = s;
+  try {
+    await pg.evaluate(id => { location.hash = `#/finding/${id}`; }, p.group);
+    await pg.waitForSelector('.needs .actions');
+    const m = await pg.evaluate(() => ({ text: document.querySelector('.needs').textContent, buttons: [...document.querySelectorAll('.needs button')].map(b => [b.textContent, Math.round(b.getBoundingClientRect().height)]), wide: document.documentElement.scrollWidth <= innerWidth }));
+    assert.equal(m.text, 'Needs youThe AI couldn’t fix this in 2 tries.Try again with a note…KeepLater');
+    assert.deepEqual(m.buttons.map(b => b[0]), ['Try again with a note…', 'Keep', 'Later']);
+    assert.ok(m.buttons.every(b => b[1] >= 44), 'every action is a 44 px target');
+    assert.ok(m.wide, 'no sideways scroll at 390 px');
+    await pg.click('.needs button:first-child');
+    await pg.fill('#fix-note', 'Use a 44 px min-height on the button itself');
+    await pg.click('#dialog .b-primary');
+    const note = async () => decisionsOf(p.nunchi).find(d => d.decision === 'fix' && d.note);
+    for (let i = 0; i < 50 && !(await note()); i++) await new Promise(r => setTimeout(r, 100));
+    const d = await note();
+    assert.deepEqual([d.note, d.channel, d.target.group], ['Use a 44 px min-height on the button itself', 'board', p.group]);
+    assert.deepEqual(s.errors, []);
+  } finally { await s.close(); }
+  // (c)
+  const q = await fixProject();
+  assert.equal((await F.startFix(ctxOf(q), q.group)).code, 0);
+  edit(q.root, 'app/settings/page.jsx', 'TINY', 'ROOMY');
+  commitWith(q.root, (await F.checkFix(ctxOf(q), q.group)).json.trailers);
+  q.world.fail = ['/settings'];
+  await F.verifyFix(ctxOf(q), q.group);
+  const s2 = await page(q);
+  try {
+    await s2.pg.evaluate(id => { location.hash = `#/finding/${id}`; }, q.group);
+    await s2.pg.waitForSelector('.needs');
+    const c = await s2.pg.evaluate(() => ({ text: document.querySelector('.needs').textContent, buttons: document.querySelectorAll('.needs button').length }));
+    assert.deepEqual(c, { text: 'Needs youCouldn’t re-check: the screen didn’t load.Start your app, then tell your AI “retry”.', buttons: 0 });
+  } finally { await s2.close(); }
+});
