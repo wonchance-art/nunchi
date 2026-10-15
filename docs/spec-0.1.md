@@ -1818,8 +1818,14 @@ read from its published package on 2026-10-15 KST; design §13's open item), sty
 `toMatchAriaSnapshot` when `@playwright/test` is.
 
 **The deny hook** (§7.2) protects guards.json: Write, Edit and writing Bash commands on `.nunchi/guards.json` are
-denied (reading is not: it is committed), and so are `nunchi guard --add`, `--remove` and `--baseline` (and nunchi
-under a pseudo-terminal, as before). The agent may propose a guard (`nunchi guard`, `--lint`) but never write or weaken
+denied (reading is not: it is committed), in any letter case (a case-insensitive disk opens `.NUNCHI/Guards.json` as
+the same file; paths are resolved with `realpathSync.native`), and so is the `.nunchi` folder itself named by a command
+that writes or removes what it names (`rm -rf .nunchi`, `cp g.json .nunchi/`, `git checkout <ref> -- .nunchi`, `git
+restore --source <ref> .nunchi/`; rm, rmdir, cp, mv, ln, rsync, install, tar, unzip and git checkout, restore, rm, mv,
+clean, stash: `ls .nunchi` or `--ignore-pattern .nunchi` are not writes). `nunchi guard --add`, `--remove` and
+`--baseline` are denied in the words as the shell joins them too (`nunchi guard --ad""d`, `nunchi "guard" "--add"`),
+and nunchi under a pseudo-terminal, as before. A path built at run time (a variable, inline code that joins pieces, a
+patch applied, `git stash pop`) is not seen: the hook's stated limit. The agent may propose a guard (`nunchi guard`, `--lint`) but never write or weaken
 one; where the hook does not run (Codex), `check --base` in CI catches a weakening that reaches a pull request.
 
 ### 7.4 `nunchi export --format md|json|sarif` (built 2026-10-15 KST, design 0.1-c §5, M4)

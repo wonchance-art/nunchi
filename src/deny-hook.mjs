@@ -16,7 +16,10 @@
 // Denied as writes (reading them is fine: they are committed files): `.nunchi/decisions/**`, `.nunchi/labels/**`,
 // `.nunchi/lenses/**`, `.nunchi/lenses.lock.json`, `.nunchi/config.json` (allowHosts is the user's to write, D10),
 // `.nunchi/guards.json` (the person's guards and their baseline, design §5: the agent may propose a guard, never write
-// or weaken one; CI's `nunchi check --base` catches a weakening that slips past).
+// or weaken one; matched in any letter case, as a case-insensitive disk opens it), and the `.nunchi` folder itself
+// named by a command that writes or removes what it names (rm, cp, mv, ln, rsync, install, tar, unzip; git checkout,
+// restore, rm, mv, clean, stash), which would replace or remove the file with it. CI's `nunchi check --base` catches a
+// weakening that slips past.
 // Denied commands: `nunchi … approve`, `nunchi … label` / `--label`, `nunchi fix --approve-checks`, `nunchi guard --add` /
 // `--remove` / `--baseline` (human channels
 // only), nunchi (`npx nunchi@<version>` too) under a pseudo-terminal (`script`, `unbuffer`, `expect`, tmux, screen,
@@ -51,10 +54,11 @@ const within = (p, dir) => { const a = norm(p), b = norm(dir); return !!b && (a 
 // while Git Bash, which Claude Code runs there, has a /proc with command lines; so the drive is dropped first.
 const procPath = p => norm(p).replace(/^[a-z]:(?=\/|$)/i, '') || '/';
 export const isProc = (p, sub = '') => { const n = procPath(p), base = sub ? `/proc/${sub}` : '/proc'; return n === base || n.startsWith(`${base}/`); };
+// The path as the disk has it: links followed, and (the native call) the letter case the disk keeps on macOS and Windows
 const realish = p => {
   let cur = resolve(p); const rest = [];
   for (let i = 0; i < 64; i++) { try { lstatSync(cur); break; } catch { const up = dirname(cur); if (up === cur) break; rest.unshift(basename(cur)); cur = up; } }
-  try { return join(realpathSync(cur), ...rest); } catch { return resolve(p); }
+  try { return join(realpathSync.native(cur), ...rest); } catch { return resolve(p); }
 };
 
 // Where the answer keys may be: every candidate, whichever one this machine uses.
@@ -142,12 +146,13 @@ const READ_DENY = [
   [/^\/proc\/[^/]+\/(cmdline|environ|mem|maps|fd)(\/|$)/,
     'a board is running for this project, and process memory and command lines can hold its one-time link or key (nunchi open --stop stops it)', 'board'],
 ];
+const GUARDS_WHY = '.nunchi/guards.json is the person\'s: guards are added in the board\'s card after a fix or with nunchi guard --add in their own terminal (you may propose one: nunchi guard, nunchi guard --lint)';
 const WRITE_DENY = [
   [/(^|\/)\.nunchi\/decisions(\/|$)/, 'decisions are recorded with nunchi decide (or in the board), never written by hand'],
   [/(^|\/)\.nunchi\/labels(\/|$)/, 'labels are made by a person in the board (nunchi open --label)'],
   [/(^|\/)\.nunchi\/lenses(\/|$)|(^|\/)\.nunchi\/lenses\.lock\.json$/, 'lens packs are approved by the person; edit them only when they ask, in their own editor'],
   [/(^|\/)\.nunchi\/config\.json$/, '.nunchi/config.json (allowHosts) is written by the user, never by the AI'],
-  [/(^|\/)\.nunchi\/guards\.json$/, '.nunchi/guards.json is the person\'s: guards are added in the board\'s card after a fix or with nunchi guard --add in their own terminal (you may propose one: nunchi guard, nunchi guard --lint)'],
+  [/(^|\/)\.nunchi\/guards\.json$/i, GUARDS_WHY],
 ];
 export function pathRule(p, prot, { write = false } = {}) {
   const abs = isAbsolute(p) ? resolve(p) : resolve(prot.cwd, p);
@@ -169,6 +174,7 @@ export function pathRule(p, prot, { write = false } = {}) {
 
 // nunchi by name (`npx nunchi@latest`, `npx -y nunchi@0.1.0` too) or by its CLI file
 const NUNCHI = /(^|[\s;&|(`'"/])(nunchi(@[\w.^~<>=*-]+)?|cli\.mjs)(?=[\s;&|)`'"]|$)/;
+const GUARD_CHANGE = /(nunchi|cli\.mjs)\b[^;&|\n]*\sguard\b[^;&|\n]*\s--(add|remove|baseline)\b/;
 // a variable that moves where nunchi writes its answer keys (or its home), set in a command that runs nunchi
 const KEY_HOME = /(^|[\s;&|(`'"])(export\s+|env\s+(-\S+\s+)*|setx?\s+)?(XDG_STATE_HOME|LOCALAPPDATA|HOME|USERPROFILE|APPDATA)=|\$env:(XDG_STATE_HOME|LOCALAPPDATA|HOME|USERPROFILE|APPDATA)\s*=/i;
 // what gives a command a pseudo-terminal: terminal multiplexers and detachers, script/expect-style wrappers, a pty
@@ -178,6 +184,11 @@ const READ_ONLY = new Set(['cat', 'ls', 'head', 'tail', 'less', 'more', 'wc', 'g
 const GIT_READ = new Set(['diff', 'log', 'show', 'status', 'add', 'commit', 'blame', 'ls-files', 'grep']);
 // The board is started by `nunchi open` only: run directly, or asked for its link, it could hand a session to the agent.
 const BOARD_SCRIPT = /(^|[\s;&|(`'"/=])board\/(server|launch)\.mjs\b/;
+// Commands that write to or remove the paths they name: one of them naming the `.nunchi` folder itself writes guards.json
+// (`rm -rf .nunchi`, `cp g.json .nunchi/`, `git checkout <ref> -- .nunchi`, `git restore --source <ref> .nunchi/`)
+const FOLDER_WRITERS = new Set(['rm', 'rmdir', 'cp', 'mv', 'ln', 'rsync', 'install', 'tar', 'unzip']);
+const GIT_FOLDER_WRITERS = new Set(['checkout', 'restore', 'rm', 'mv', 'clean', 'stash']);
+const nunchiFolder = p => [p, realish(p)].some(c => /(^|\/)\.nunchi$/i.test(norm(c)));
 const RUNS_CODE = /(^|\/)(node|nodejs|bun|deno|tsx|ts-node|npx|pnpx|bunx)(\.exe)?$/i;
 // words before the command itself: they run what follows them
 const WRAPPERS = new Set(['env', 'nohup', 'setsid', 'nice', 'ionice', 'time', 'exec', 'command', 'builtin', 'sudo', 'doas', 'stdbuf', 'chronic', 'caffeinate']);
@@ -522,11 +533,12 @@ export function bashRule(command, prot, { depth = 0, cwd: start = prot.cwd } = {
       if ((/\.git\b/.test(c) && /nunchi/.test(c)) || (/\.nunchi\b/.test(c) && /\b(state|canaries|auth|key)/.test(c)) || (prot.boards.length && /\/proc\b/.test(c) && /cmdline|environ/.test(c))) return PIECES_WHY;
     }
   }
+  // in the words as the shell joins them too (`nunchi guard --ad""d`, `nunchi "guard" "--add"`)
+  if ([flat, ...joined].some(t => NUNCHI.test(t) && GUARD_CHANGE.test(t))) return 'guards are added, removed and re-baselined by the person (the board\'s card after a fix, or nunchi guard in their own terminal); you may propose one: nunchi guard, nunchi guard --lint';
   if (NUNCHI.test(flat)) {
     if (/\b(approve)\b/.test(flat) && /(nunchi|cli\.mjs)\b[^;&|\n]*\sapprove\b/.test(flat)) return 'approving decisions is the person\'s (the board, or nunchi approve in their own terminal)';
     if (/(nunchi|cli\.mjs)\b[^;&|\n]*\s(label\b|--label\b)/.test(flat)) return 'labelling is done by a person in the board (they run nunchi open --label themselves)';
     if (/--approve-checks\b/.test(flat)) return 'check scripts are approved by the person in the board';
-    if (/(nunchi|cli\.mjs)\b[^;&|\n]*\sguard\b[^;&|\n]*\s--(add|remove|baseline)\b/.test(flat)) return 'guards are added, removed and re-baselined by the person (the board\'s card after a fix, or nunchi guard in their own terminal); you may propose one: nunchi guard, nunchi guard --lint';
     if (PTY.test(flat)) return 'running nunchi under a pseudo-terminal would pass for the person\'s own terminal';
     if (KEY_HOME.test(flat)) return 'nunchi keeps its answer keys under your state folder; moving it for one command would put them where the AI can read them';
   }
@@ -545,6 +557,7 @@ export function bashRule(command, prot, { depth = 0, cwd: start = prot.cwd } = {
     const args = w.slice(at + 1);
     // writes: a redirection into a file (not into /dev/null, not a copy of a descriptor)
     const writes = />/.test(text.replace(/\d*>&\d*-?|&>>?\s*\/dev\/null\b|\d*>>?\s*\/dev\/null\b/g, ''));
+    const folderWrite = FOLDER_WRITERS.has(name) || (name === 'git' && GIT_FOLDER_WRITERS.has(args.find(a => !a.startsWith('-'))));
     const readsOnly = !writes && (READ_ONLY.has(name) || (name === 'git' && GIT_READ.has(args.find(a => !a.startsWith('-')))) || (name === 'find' && !args.some(a => /^-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/.test(a))));
     // path-like words, and pieces of words (`readFileSync('.git/nunchi/…')`); a glob as the files it names
     const cands = new Set();
@@ -557,6 +570,7 @@ export function bashRule(command, prot, { depth = 0, cwd: start = prot.cwd } = {
       const p = raw.replace(/^~(?=\/|$)/, home).replace(/^\$\{?HOME\}?(?=\/|$)/, home);
       if (/\$\{?(XDG_STATE_HOME|LOCALAPPDATA)\}?|%LOCALAPPDATA%/i.test(p) && /nunchi/.test(text)) return 'the answer keys are kept out of reach of the AI';
       for (const x of GLOB_CHARS.test(p) || BRACES.test(p) ? expandGlob(p, cwd) : [p]) {
+        if (folderWrite && nunchiFolder(resolve(cwd, x))) return GUARDS_WHY;
         const why = pathRule(resolve(cwd, x), prot, { write: !readsOnly });
         if (why) return why;
       }

@@ -208,11 +208,27 @@ test('deny hook: the agent cannot write guards.json or add, remove or re-baselin
     ['Bash', { command: 'node "${CLAUDE_SKILL_DIR}/../../src/cli.mjs" guard --baseline' }],
     ['Bash', { command: 'npx nunchi@latest guard --remove dead-href' }],
     ['Bash', { command: 'script -q /dev/null nunchi guard --add raw-message' }],
+    // the folder that holds it: removed, copied into, checked out or restored from another commit
+    ['Bash', { command: 'rm -rf .nunchi' }],
+    ['Bash', { command: 'cp /tmp/weaker.json .nunchi/' }],
+    ['Bash', { command: 'git checkout origin/main -- .nunchi' }],
+    ['Bash', { command: 'git restore --source=HEAD~1 .nunchi/' }],
+    ['Bash', { command: `cp /tmp/weaker.json ${join(root, '.nunchi')}` }],
+    // in any letter case (a case-insensitive disk opens the same file)
+    ['Write', { file_path: join(root, '.nunchi', 'Guards.json'), content: '{}' }],
+    ['Bash', { command: 'echo {} > .NUNCHI/GUARDS.JSON' }],
+    // the guard command in the words as the shell joins them
+    ['Bash', { command: 'nunchi guard --ad""d native-dialog' }],
+    ['Bash', { command: 'nunchi "guard" "--add" raw-message' }],
+    ['Bash', { command: "nun''chi guard --base'line'" }],
   ]) assert.ok(call(tool, input), `${tool} ${JSON.stringify(input)} is denied`);
   for (const [tool, input] of [
     ['Read', { file_path: join(root, '.nunchi', 'guards.json') }], ['Bash', { command: 'cat .nunchi/guards.json' }],
     ['Bash', { command: 'nunchi guard' }], ['Bash', { command: 'nunchi guard --lint' }], ['Bash', { command: 'nunchi check --base origin/main --sarif out.sarif' }],
     ['Bash', { command: 'git add .nunchi/guards.json && git commit -m guards' }],
+    ['Bash', { command: 'ls .nunchi' }], ['Bash', { command: 'cd .nunchi && ls' }], ['Bash', { command: 'git add .nunchi && git diff --cached -- .nunchi' }],
+    ['Bash', { command: 'npx eslint . --ignore-pattern .nunchi' }], ['Bash', { command: 'cp .nunchi/../package.json /tmp/pkg.json' }],
+    ['Write', { file_path: join(root, '.nunchi', 'notes.md'), content: 'x' }],
   ]) assert.equal(call(tool, input), null, `${tool} ${JSON.stringify(input)} is allowed`);
 });
 
