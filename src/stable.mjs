@@ -249,7 +249,11 @@ function release(dir, token) {
 const TICKET_STALE_MS = 1000, TICKET_RENEW_MS = 200, STALE_CHECK_MS = 100;
 const TICKET = /^wait-(\d{15})-([0-9a-f]{16})$/;
 const ticketName = l => `${basename(l.dir)}.wait-${String(l.t0).padStart(15, '0')}-${l.token}`;
-// the lowest ticket that counts (ours always counts), or null
+// the lowest ticket that counts (ours always counts), or null. A ticket counts while its waiter renews it, not while its
+// process merely exists: a waiter that has not run for TICKET_STALE_MS (stopped with Ctrl-Z, or set aside that long by
+// the machine) is passed until it runs again, and is then first again (its ticket keeps its name). Judged by its process
+// instead, one stopped waiter would hold up every other until each failed with LOCKED. The heaviest load measured
+// (40 busy processes on the waiters' core) left at most 0.5 s between renewals (follow-ups, 2026-10-15 KST).
 function firstTicket(l, staleMs) {
   const base = `${basename(l.dir)}.`;
   let names;

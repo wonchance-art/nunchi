@@ -65,7 +65,10 @@ export function paramsFromRows(kind, rows) {
   }
   return {};
 }
-export const hrefValue = v => { const s = v.replace(/[\t\n\r]/g, '').trim(); return s === '#' ? '#' : /^javascript:/i.test(s) ? 'javascript:' : null; };
+// An href as a browser reads it (the URL standard): leading and trailing C0 controls and spaces stripped
+// (`"\u0001javascript:…"` still runs), tabs and line breaks dropped anywhere, and nothing else (`String.trim` would
+// also strip a no-break space, which a browser keeps: `"\u00a0#"` is a path, not `#`).
+export const hrefValue = v => { const s = v.replace(/[\t\n\r]/g, '').replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, ''); return s === '#' ? '#' : /^javascript:/i.test(s) ? 'javascript:' : null; };
 export function defaultParams(kind) {
   if (kind === 'native-dialog') return { calls: [...CALLS] };
   if (kind === 'dead-href') return { values: [...HREFS] };
