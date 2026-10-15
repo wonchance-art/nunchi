@@ -132,3 +132,17 @@ test('a sweep whose folder cannot be found now is said, never read: fix --plan g
     assert.deepEqual([r.code, r.lines], [1, ['The last capture (run 0001) was made in another folder of this repository, which nunchi cannot find now: capture again (nunchi capture --url <your local server>) on the branch you ship from.']]);
   } finally { renameSync(join(p.nunchi, 'runs-away'), join(p.nunchi, 'runs')); }
 });
+
+test('one app server whatever it is called: localhost, 127.0.0.0/8, [::1] and 0.0.0.0 on one port are one address for the URL rule (M6 review)', () => {
+  const sd = tmp('nunchi-loopback-state-'), one = tmp('nunchi-loopback-one-'), two = tmp('nunchi-loopback-two-');
+  const held = C.acquireClaim(sd, { group: 'aaaaaaaaaaaa', worktree: one, branch: 'nunchi/fixes-1', url: 'http://127.0.0.1:3001', files: ['a.js'], agent: 'Claude Code' });
+  assert.equal(held.ok, true);
+  for (const url of ['http://localhost:3001', 'http://127.0.0.2:3001/', 'http://[::1]:3001', 'http://0.0.0.0:3001', 'http://app.localhost:3001', 'https://LOCALHOST:3001']) {
+    const r = C.acquireClaim(sd, { group: 'bbbbbbbbbbbb', worktree: two, branch: 'nunchi/fixes-2', url, files: ['b.js'], agent: 'Codex' });
+    assert.deepEqual([r.ok, r.why, r.group], [false, 'url', 'aaaaaaaaaaaa'], url);
+  }
+  const other = C.acquireClaim(sd, { group: 'bbbbbbbbbbbb', worktree: two, branch: 'nunchi/fixes-2', url: 'http://localhost:3002', files: ['b.js'], agent: 'Codex' });
+  assert.equal(other.ok, true, 'another port is another server');
+  assert.deepEqual([C.moveClaimUrl(sd, 'bbbbbbbbbbbb', other.token, 'http://[::1]:3001').why, C.readClaim(sd, 'bbbbbbbbbbbb').url], ['url', 'http://localhost:3002'], 'moving onto it is refused too');
+  assert.equal(C.addressKey('http://192.168.1.5:3001') === C.addressKey('http://127.0.0.1:3001'), false, 'another machine is another server');
+});

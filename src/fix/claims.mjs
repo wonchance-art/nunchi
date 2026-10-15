@@ -26,8 +26,21 @@ const read = p => { try { if (!lstatSync(p).isFile()) return null; return JSON.p
 // Live by the reader's clock (design §7).
 export const claimLive = (c, now = Date.now()) => { const at = Date.parse(c?.lastRenewal); return Number.isFinite(at) && now - at <= CLAIM_TTL_MS; };
 export const claimMinutes = (c, now = Date.now()) => { const s = Date.parse(c?.startedAt); return Number.isFinite(s) ? Math.max(0, Math.round((now - s) / 60e3)) : null; };
-// A URL's origin as claims compare them.
+// A URL's origin, as said to the person.
 export const originOf = url => { try { return new URL(url).origin; } catch { return null; } };
+// The app server a URL reaches, as claims compare them (M6 review): its host and port, every name of this machine one
+// host (localhost and *.localhost, 127.0.0.0/8, [::1], 0.0.0.0, [::] and IPv4-mapped loopback), so
+// http://localhost:3001 and http://127.0.0.1:3001 are one server. A port is one server whatever the scheme. → a key or
+// null when it is no URL.
+const LOOPBACK = h => h === 'localhost' || h.endsWith('.localhost') || /^127\.\d+\.\d+\.\d+$/.test(h) || h === '0.0.0.0' || h === '[::1]' || h === '[::]'
+  || /^\[::ffff:(7f[0-9a-f]{2}:[0-9a-f]{1,4}|127\.\d+\.\d+\.\d+)\]$/.test(h);
+export function addressKey(url) {
+  let u;
+  try { u = new URL(url); } catch { return null; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  const host = u.hostname.toLowerCase().replace(/\.$/, '');
+  return `${LOOPBACK(host) ? 'loopback' : host}:${u.port || (u.protocol === 'https:' ? '443' : '80')}`;
+}
 // Two worktree paths as one folder (M6): compared as real paths (a link, Windows' 8.3 names), and on Windows whatever
 // the slashes or the case (the version control tool says `D:/a/b`, node `D:\a\b`). `platform`, `real`: for tests.
 export function samePath(a, b, { platform = process.platform, real = realpathSync.native } = {}) {
@@ -82,8 +95,8 @@ export function acquireClaim(stateDir, { group, worktree, branch, url, files = [
     const here = all.find(x => x.group !== group && x.live && samePath(x.claim.worktree, worktree));
     if (here) return { ok: false, why: 'folder', claim: here.claim, group: here.group };
     // each worktree runs its own app server: a URL another live claim uses is refused
-    const o = originOf(url);
-    const sameUrl = o && all.find(x => x.group !== group && x.live && !samePath(x.claim.worktree, worktree) && originOf(x.claim.url) === o);
+    const o = addressKey(url);
+    const sameUrl = o && all.find(x => x.group !== group && x.live && !samePath(x.claim.worktree, worktree) && addressKey(x.claim.url) === o);
     if (sameUrl) return { ok: false, why: 'url', claim: sameUrl.claim, group: sameUrl.group };
     // expired claims are taken over (theirs and their markers removed)
     for (const x of all) if (!x.live) dropClaim(stateDir, x.group, x.claim);
@@ -134,8 +147,8 @@ export function moveClaimUrl(stateDir, group, token, url, { now = Date.now() } =
   return withLock(lockOf(stateDir), () => {
     const c = read(claimFile(stateDir, group));
     if (!c || c.token !== token) return { ok: false, why: 'gone' };
-    const o = originOf(url);
-    const other = o && listClaims(stateDir, now).find(x => x.group !== group && x.live && originOf(x.claim.url) === o);
+    const o = addressKey(url);
+    const other = o && listClaims(stateDir, now).find(x => x.group !== group && x.live && addressKey(x.claim.url) === o);
     if (other) return { ok: false, why: 'url', claim: other.claim, group: other.group };
     const claim = { ...c, url: url ?? null, lastRenewal: kst(now) };
     writeAtomic(claimFile(stateDir, group), stableJson(claim), { mode: 0o600 });

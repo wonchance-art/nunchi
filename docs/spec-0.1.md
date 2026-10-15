@@ -1264,7 +1264,10 @@ app server.
   carry the stream of the folder that captured P1.
 - A `--url` another live claim uses is refused when the claim is taken (M3) and now also at `--verify` and on a
   resumed `--start` ("Another fix (branch …) is checking the app at http://127.0.0.1:3002. Start the app from this
-  folder on a free port …"); a free one moves the claim (`moveClaimUrl`) and the record.
+  folder on a free port …"); a free one moves the claim (`moveClaimUrl`) and the record. Addresses are compared as
+  the app server they reach (`addressKey`): host and port, every name of this machine one host (localhost and
+  `*.localhost`, 127.0.0.0/8, `[::1]`, 0.0.0.0, `[::]`, IPv4-mapped loopback), whatever the scheme, so
+  `http://localhost:3001` is refused while `http://127.0.0.1:3001` is claimed (M6 review, tested).
 - An attempt open in another folder is that agent's: `fix --start` there gives the claim's refusal ("Codex is already
   fixing this finding in another folder (branch …, N min). Wait for it, or decide something else in the board:
   deciding and capturing still work here."), never "edit, then check"; and `fix --checks` runs on the attempt's branch
