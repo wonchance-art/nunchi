@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { normalizeSelector, fingerprintOf, annotate, foldRun, view, groups, writeDecision, readDecisions, trust, approvalKey, buildDecision } from '../src/ledger.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const f = (route, extra = {}) => ({ lens: 'L8', rule: 'target-size-min', severity: 'medium', scene: `${route.slice(1) || '~'}.guest.normal.m`, route, viewport: 'm', selector: 'main > ul > li:nth-of-type(3) > button', box: [0, 0, 18, 18], evidence: { width: 18, height: 18, minimum: 24, name: 'Done' }, ...extra });
 const empty = () => ({ schema: 1, runs: [], items: {} });
@@ -45,7 +45,7 @@ test('ledger state: new, gone where the run looked, back again; not gone where i
 });
 
 test('decisions: append-only files, latest wins, a group decision covers new screens, git-only dismissals cannot hide a blocker', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'nunchi-dec-'));
+  const dir = tmp('nunchi-dec-');
   const st = foldRun(empty(), { id: '0001', scope: {}, findings: annotate([f('/tasks'), f('/notes'), { lens: 'L9', rule: 'secret-in-client-bundle', severity: 'blocker', scene: null, route: null, selector: null, evidence: { url: '/app.js', kind: 'stripe-live-secret-key' } }]) });
   const [tasks] = Object.values(st.items).filter(i => i.route === '/tasks');
   const secret = Object.values(st.items).find(i => i.lens === 'L9');
@@ -82,7 +82,7 @@ test('a decision note is scrubbed before it is clipped to 500 characters: no hal
 test('trust: precision from fix and false-positive decisions; intended keeps do not count against the lens', () => {
   const st = foldRun(empty(), { id: '0001', scope: {}, findings: annotate(['/a', '/b', '/c', '/d', '/e', '/f'].map(r => f(r, { evidence: { name: r } }))) });
   const items = Object.values(st.items);
-  const dir = mkdtempSync(join(tmpdir(), 'nunchi-tr-'));
+  const dir = tmp('nunchi-tr-');
   items.slice(0, 2).forEach(i => writeDecision(dir, { target: { fp: i.fp }, decision: 'fix', by: 'me' }));
   items.slice(2, 5).forEach(i => writeDecision(dir, { target: { fp: i.fp }, decision: 'false-positive', reason: 'not-a-problem', by: 'me' }));
   writeDecision(dir, { target: { fp: items[5].fp }, decision: 'keep', reason: 'intended', by: 'me' });

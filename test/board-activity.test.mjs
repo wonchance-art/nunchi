@@ -11,7 +11,8 @@ import * as Act from '../src/activity.mjs';
 import * as P from '../src/project.mjs';
 import { startBoard } from '../src/board/server.mjs';
 import { smallProject } from './fixtures/board-project.mjs';
-import { huntProject, answerAll, answerSome, tmp } from './fixtures/hunt-run.mjs';
+import { huntProject, answerAll, answerSome } from './fixtures/hunt-run.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 process.env.XDG_STATE_HOME = tmp('nunchi-activity-xdg-');

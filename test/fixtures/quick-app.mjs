@@ -4,7 +4,7 @@
 import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmp } from './board-project.mjs';
+import { tmp } from './tmp.mjs';
 
 export const ROUTES = ['/', '/about', '/app', '/app/notes', '/app/settings', '/app/tasks', '/blog', '/blog/[slug]', '/careers', '/contact', '/help', '/legal', '/pricing', '/zebra'];
 export const SAMPLES = { '/blog/[slug]': '/blog/first-light' };

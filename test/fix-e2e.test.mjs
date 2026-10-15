@@ -10,7 +10,8 @@ import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { git, tmp, edit } from './fixtures/fix-project.mjs';
+import { git, edit } from './fixtures/fix-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 import { freePort } from '../src/fix/probe.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));

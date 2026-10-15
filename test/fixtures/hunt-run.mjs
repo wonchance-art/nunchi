@@ -1,12 +1,11 @@
 // A small captured run for the AI hunt's tests (M6: answers per agent, hunts in progress): the invented Pebble Garden,
 // '/' and '/tasks' at both widths and '/tasks' in its error state, with the evidence files a hunter grounds a defect
 // in. No browser.
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadLenses } from '../../src/lenses.mjs';
+import { tmp } from './tmp.mjs';
 
-export const tmp = (prefix = 'nunchi-hunt-') => realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 const jpeg = (w, h) => Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255, 0x03, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xff, 0xd9]);
 const VP = { m: [390, 844], d: [1280, 800] };
 
@@ -39,7 +38,7 @@ export function makeRun(dir, { id = '0001', extra = {} } = {}) {
 }
 
 // A project folder holding one run (0001, latest) and the app's source the hunters ground defects in.
-export function huntProject({ prefix } = {}) {
+export function huntProject({ prefix = 'nunchi-hunt-' } = {}) {
   const cwd = tmp(prefix);
   const runDir = makeRun(join(cwd, '.nunchi', 'runs', '0001'));
   writeFileSync(join(cwd, '.nunchi', 'runs', 'latest'), '0001\n');

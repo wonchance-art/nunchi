@@ -4,8 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync, readdirSync, statSync, mkdtempSync, mkdirSync, writeFileSync, existsSync, linkSync, realpathSync, symlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, readdirSync, statSync, mkdirSync, writeFileSync, existsSync, linkSync, symlinkSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { execFileSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -14,6 +13,7 @@ import * as runs from '../src/runs.mjs';
 import * as network from '../src/network.mjs';
 import { writeStable } from '../src/stable.mjs';
 import { writeHuntMirror } from '../src/hunt.mjs';
+import { tmp as tmpDir } from './fixtures/tmp.mjs';
 
 // namespace imports: on main the new functions are missing, and each test fails on its own
 const { startRun, finishRun, workTree } = runs;
@@ -23,7 +23,7 @@ const readConfig = (...a) => runs.readConfig(...a);
 const FIX = fileURLToPath(new URL('./fixtures/safety', import.meta.url));
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const POSIX = process.platform !== 'win32';
-const tmp = p => realpathSync(mkdtempSync(join(tmpdir(), `nunchi-${p}-`)));
+const tmp = p => tmpDir(`nunchi-${p}-`);
 const files = dir => readdirSync(dir, { recursive: true }).sort();
 const mode = p => statSync(p).mode & 0o777;
 
@@ -251,9 +251,10 @@ test('D10: only a server the user runs is captured: loopback, private, *.local, 
 });
 
 test('D10: capture refuses a production-looking URL before a browser starts, and the CLI leaves no run behind', async () => {
-  await assert.rejects(capture({ baseUrl: 'https://pebbletasks.com', scenes: [{ route: '/', path: '/' }], out: tmp('prod'), browserPath: join(tmpdir(), 'no-such-browser') }), e => e.code === 'URL_NOT_ALLOWED');
+  const noBrowser = join(tmp('no-browser'), 'no-such-browser');
+  await assert.rejects(capture({ baseUrl: 'https://pebbletasks.com', scenes: [{ route: '/', path: '/' }], out: tmp('prod'), browserPath: noBrowser }), e => e.code === 'URL_NOT_ALLOWED');
   const cwd = tmp('prod-cli');
-  const run = args => promisify(execFile)('node', [CLI, 'capture', ...args, '--routes', '/', '--viewports', 'm', '--states', 'normal', '--network', 'live', '--browser-path', join(tmpdir(), 'no-such-browser')], { cwd, encoding: 'utf8' }).then(() => ({ code: 0, stderr: '' }), e => ({ code: e.code, stderr: e.stderr }));
+  const run = args => promisify(execFile)('node', [CLI, 'capture', ...args, '--routes', '/', '--viewports', 'm', '--states', 'normal', '--network', 'live', '--browser-path', noBrowser], { cwd, encoding: 'utf8' }).then(() => ({ code: 0, stderr: '' }), e => ({ code: e.code, stderr: e.stderr }));
   const refused = await run(['--url', 'https://pebbletasks.com']);
   assert.equal(refused.code, 2);
   assert.match(refused.stderr, /refusing https:\/\/pebbletasks\.com/);

@@ -3,12 +3,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parseColor, oklabOf, deltaE, familyOf, buildTokens, tokensCss, MERGE_DE } from '../src/tokens.mjs';
 import { redactSelector } from '../src/selector-secrets.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const T = 'rgba(0, 0, 0, 0)';
@@ -128,7 +128,7 @@ test('selectors in token examples never carry a secret-shaped id', () => {
 });
 
 test('CLI: a corrupt run file is a one-line error and exit code 2, not a stack trace', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'nunchi-tokens-bad-'));
+  const dir = tmp('nunchi-tokens-bad-');
   writeFileSync(join(dir, 'manifest.json'), '{"schema": 1, "scenes": [');
   let err;
   try { execFileSync('node', [CLI, 'tokens', '--run', dir], { encoding: 'utf8', stdio: 'pipe' }); } catch (e) { err = e; }

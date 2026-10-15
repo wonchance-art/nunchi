@@ -7,7 +7,8 @@ import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
 import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 import * as F from '../src/fix/loop.mjs';
-import { fixProject, edit, commitWith, tmp } from './fixtures/fix-project.mjs';
+import { fixProject, edit, commitWith } from './fixtures/fix-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 import { ctxOf, attempt, board, decisionsOf } from './fixtures/board-fix-helpers.mjs';
 
 process.env.XDG_STATE_HOME = tmp('nunchi-board-fix-e2e-xdg-');

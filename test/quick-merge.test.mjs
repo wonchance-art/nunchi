@@ -8,7 +8,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { capture, launch } from '../src/capture.mjs';
 import { quickServer } from './fixtures/quick-app.mjs';
-import { tmp } from './fixtures/board-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 let srv, browserOk = true;
 before(async () => {

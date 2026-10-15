@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import * as P from '../src/project.mjs';
 import { readKey } from '../src/state.mjs';
 import { verdictsFromKey, claimHash, roundsStillValid } from '../src/verify.mjs';
-import { huntProject, answerAll, tmp } from './fixtures/hunt-run.mjs';
+import { huntProject, answerAll } from './fixtures/hunt-run.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 process.env.XDG_STATE_HOME = tmp('nunchi-verdicts-agents-xdg-');

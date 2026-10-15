@@ -2,17 +2,17 @@
 // commands that need no browser keep working.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, cpSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { dependencyState } from '../src/setup.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 test('fresh install without node_modules: setup --check says what is missing, capture points at setup', () => {
-  const copy = mkdtempSync(join(tmpdir(), 'nunchi-fresh-'));
+  const copy = tmp('nunchi-fresh-');
   for (const f of ['src', 'package.json', 'package-lock.json']) cpSync(join(ROOT, f), join(copy, f), { recursive: true });
   const cli = (...a) => spawnSync(process.execPath, [join(copy, 'src', 'cli.mjs'), ...a], { cwd: copy, encoding: 'utf8', env: { ...process.env, NUNCHI_BROWSER: '' } });
   const check = cli('setup', '--check', '--json');

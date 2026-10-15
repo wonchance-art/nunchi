@@ -8,7 +8,8 @@ import { writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, statSy
 import { join } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { tmp, writeRun, scene } from './fixtures/board-project.mjs';
+import { writeRun, scene } from './fixtures/board-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 import { sarifProblems, githubProblems } from './fixtures/sarif/validate.mjs';
 import * as G from '../src/guards.mjs';
 import { guardsAt, fetchHint } from '../src/check.mjs';

@@ -33,7 +33,8 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo node node_modules/playwright-core/cli.js install-deps chromium
       - run: node src/cli.mjs setup
-      - run: npm test
+      # the tests in a temporary folder of their own, which must be empty after them (scripts/tmp-leftovers.mjs)
+      - run: node scripts/tmp-leftovers.mjs npm test
 
   fresh-install:
     name: fresh install (as a plugin user gets it)

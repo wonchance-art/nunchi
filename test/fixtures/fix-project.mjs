@@ -1,16 +1,15 @@
 // A synthetic app in a git repository for the fix loop's tests (M3): three Next.js-style routes, a sweep already
 // captured, and a stand-in for capture() that writes probe runs in capture's own format from what the working tree
 // holds (markers in the source decide what the "screens" show). Invented content only; no browser.
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { deflateSync } from 'node:zlib';
 import { annotate } from '../../src/ledger.mjs';
 import { stableJson, sha } from '../../src/stable.mjs';
 import * as P from '../../src/project.mjs';
+import { tmp } from './tmp.mjs';
 
-export const tmp = prefix => realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 const write = (p, v) => { mkdirSync(join(p, '..'), { recursive: true }); writeFileSync(p, typeof v === 'string' || Buffer.isBuffer(v) ? v : stableJson(v)); };
 // git for the test itself (the engine uses its own hardened runner); signing off, an identity of its own
 export const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=Tester', '-c', 'user.email=tester@example.invalid', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();

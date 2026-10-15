@@ -6,6 +6,7 @@ import { chmodSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createInterface } from 'node:readline';
 import { chromium } from 'playwright-core';
+import { missingBrowser } from './capture.mjs';
 
 const PRODUCTION_HINT = /^(www\.)?[a-z0-9-]+\.(com|io|app|co|net|org|ai|dev)$/i;
 
@@ -19,10 +20,14 @@ export function loginWarnings(url) {
 
 export async function login({ url, out, browserPath, waitForEnter = true }) {
   const proxyServer = process.env.HTTPS_PROXY || process.env.https_proxy;
+  const executablePath = browserPath || process.env.NUNCHI_BROWSER || undefined;
   let browser;
   try {
+    // a path that names no file is said before Playwright makes (and leaves) its temporary folders
+    const missing = missingBrowser(executablePath);
+    if (missing) throw new Error(missing);
     // A normal window with normal networking: sign-in may go through Google, GitHub or email links.
-    browser = await chromium.launch({ headless: false, executablePath: browserPath || process.env.NUNCHI_BROWSER || undefined, ...(proxyServer ? { proxy: { server: proxyServer, bypass: 'localhost,127.0.0.1,::1' } } : {}) });
+    browser = await chromium.launch({ headless: false, executablePath, ...(proxyServer ? { proxy: { server: proxyServer, bypass: 'localhost,127.0.0.1,::1' } } : {}) });
   } catch (e) {
     throw Object.assign(new Error(`could not open a browser window (${String(e.message).split('\n')[0]}). ` +
       'Run `nunchi login` on a machine with a display, or install Chromium with `nunchi setup`.'), { code: 'NO_BROWSER' });

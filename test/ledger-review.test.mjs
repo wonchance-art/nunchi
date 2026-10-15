@@ -2,20 +2,19 @@
 // it reviewed (branch head 86ff694). Namespace imports, so a function that did not exist then fails its own test.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, utimesSync, realpathSync, renameSync, rmSync, symlinkSync, chmodSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, utimesSync, renameSync, rmSync, symlinkSync, chmodSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as L from '../src/ledger.mjs';
 import * as S from '../src/stable.mjs';
 import * as R from '../src/runs.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const url = p => pathToFileURL(fileURLToPath(new URL(p, import.meta.url))).href;
 const LEDGER = url('../src/ledger.mjs'), STABLE = url('../src/stable.mjs'), RUNS = url('../src/runs.mjs');
 const POSIX = process.platform !== 'win32';
-const tmp = p => realpathSync(mkdtempSync(join(tmpdir(), p)));
 const empty = () => ({ schema: 1, runs: [], items: {} });
 const slug = route => route.slice(1).replace(/\//g, '~') || '~';
 const fnd = (route, cell, name, extra = {}) => ({ lens: 'L8', rule: 'target-size-min', severity: 'medium', scene: route === null ? null : `${slug(route)}.${cell}`, route, viewport: cell ? cell.split('.')[2] : null, selector: 'main > button', box: null, evidence: { name }, ...extra });
