@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { tmp, writeRun, scene } from './fixtures/board-project.mjs';
 import { sarifProblems } from './fixtures/sarif/validate.mjs';
 import * as G from '../src/guards.mjs';
-import { guardsAt } from '../src/check.mjs';
+import { guardsAt, fetchHint } from '../src/check.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 process.env.XDG_STATE_HOME = tmp('nunchi-check-xdg-');
@@ -208,21 +208,37 @@ test('--sarif: new hits and weakened guards as results, valid against the vendor
 test('--base reads the blob by git\'s own path (forward slashes, the prefix git gives), never a checkout or a local path', () => {
   const calls = [];
   const doc = { schema: 1, guards: [{ kind: 'native-dialog', params: { calls: ['confirm'] } }], baseline: [] };
+  const C = 'a'.repeat(40), B = 'b'.repeat(40);
   const fake = (args, opts = {}) => {
     calls.push(args.join(' '));
+    assert.equal(opts.env?.GIT_NO_LAZY_FETCH, '1', 'never a lazy fetch');
     if (args[0] === 'rev-parse' && args.includes('--show-prefix')) return 'web/\n';
-    if (args[0] === 'rev-parse') return `${'a'.repeat(40)}\n`;
-    if (args[0] === 'cat-file' && args[1] === '-e') return '';
+    if (args[0] === 'rev-parse') return `${C}\n`;
+    if (args[0] === 'ls-tree') return `100644 blob ${B}\tweb/.nunchi/guards.json\0`;
     if (args[0] === 'cat-file' && args[1] === 'blob') return JSON.stringify(doc);
+    if (args[0] === 'remote') return 'origin\nupstream\n';
     throw new Error(`unexpected git ${args.join(' ')}`);
   };
   // the project's own path in Windows' spelling does not reach git: only the prefix git printed does
   assert.deepEqual(guardsAt('D:\\a\\repo\\web', 'origin/main', { git: fake }), G.validateGuards(doc));
-  assert.deepEqual(calls, [`rev-parse --verify --quiet --end-of-options origin/main^{commit}`, 'rev-parse --show-prefix', `cat-file -e ${'a'.repeat(40)}:web/.nunchi/guards.json`, `cat-file blob ${'a'.repeat(40)}:web/.nunchi/guards.json`]);
-  const none = (args) => { if (args[0] === 'cat-file' && args[1] === '-e') throw new Error('missing'); return fake(args); };
-  assert.equal(guardsAt('/repo', 'main', { git: none }), null, 'no guards file at the ref');
+  assert.deepEqual(calls, ['rev-parse --verify --quiet --end-of-options origin/main^{commit}', 'rev-parse --show-prefix', `ls-tree -z --full-tree ${C} -- web/.nunchi/guards.json`, `cat-file blob ${B}`]);
+  const none = (args, o) => (args[0] === 'ls-tree' ? '' : fake(args, o));
+  assert.equal(guardsAt('/repo', 'main', { git: none }), null, 'no guards file in the ref\'s tree');
+  // a partial clone: the tree lists the file, the blob is not here. An error (exit 2), never "no guards file then"
+  const blobless = (args, o) => { if (args[0] === 'cat-file') throw new Error('fatal: missing blob object'); return fake(args, o); };
+  assert.throws(() => guardsAt('/repo', 'main', { git: blobless }), e => e.code === 'BAD_STATE' && /not in this clone/.test(e.message));
+  const treeless = (args, o) => { if (args[0] === 'ls-tree') throw new Error('fatal: not a tree object'); return fake(args, o); };
+  assert.throws(() => guardsAt('/repo', 'main', { git: treeless }), e => e.code === 'BAD_STATE');
+  const link = (args, o) => (args[0] === 'ls-tree' ? `120000 blob ${B}\tweb/.nunchi/guards.json\0` : fake(args, o));
+  assert.throws(() => guardsAt('/repo', 'main', { git: link }), e => e.code === 'BAD_STATE' && /not a plain file/.test(e.message));
   for (const bad of ['-x', '', 'a b', 'x\ny']) assert.throws(() => guardsAt('/repo', bad, { git: fake }), e => e.code === 'BAD_ARGS', JSON.stringify(bad));
-  assert.throws(() => guardsAt('/repo', 'main', { git: () => { throw new Error('not a commit'); } }), e => e.code === 'BAD_STATE');
+  // an unknown ref: the fetch hint names the remote's branch, not the remote-tracking name
+  const unknown = (args, o) => { if (args[0] === 'rev-parse') throw new Error('not a commit'); return fake(args, o); };
+  assert.throws(() => guardsAt('/repo', 'origin/main', { git: unknown }), e => e.code === 'BAD_STATE' && /git fetch --depth=1 origin main\)$/.test(e.message));
+  assert.throws(() => guardsAt('/repo', 'upstream/release/2', { git: unknown }), e => /git fetch --depth=1 upstream release\/2\)$/.test(e.message));
+  assert.equal(fetchHint('main'), 'git fetch --depth=1 origin main');
+  assert.equal(fetchHint('refs/remotes/origin/main'), 'git fetch --depth=1 origin main');
+  assert.equal(fetchHint('refs/heads/main'), 'git fetch --depth=1 origin main');
 });
 
 test('check reads only: the project tree is the same after it', () => {

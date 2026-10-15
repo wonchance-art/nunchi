@@ -27,22 +27,46 @@ export function ledgerPresent(project) {
   return !!(root.legacy && existsSync(join(root.legacy, 'ledger.json')));
 }
 
-// The guards file at <ref>: `git rev-parse --verify <ref>^{commit}`, then the blob `<commit>:<path>` (cat-file: no
-// textconv, no filters, no checkout). → the document, or null when the file did not exist there.
+// How to fetch <ref> in CI: a remote-tracking name (`origin/main`, `refs/remotes/origin/main`) is fetched as its
+// branch from that remote (`git fetch --depth=1 origin main`); anything else from origin.
+export function fetchHint(ref, remotes = ['origin']) {
+  const r = String(ref).replace(/^refs\/remotes\//, '');
+  const remote = [...remotes].sort((a, b) => b.length - a.length).find(x => r.startsWith(`${x}/`));
+  return remote ? `git fetch --depth=1 ${remote} ${r.slice(remote.length + 1)}` : `git fetch --depth=1 origin ${r.replace(/^refs\/heads\//, '')}`;
+}
+const firstLine = e => String(e?.message || e).split('\n')[0].slice(0, 200);
+
+// The guards file at <ref>: `git rev-parse --verify <ref>^{commit}`, its entry in that commit's tree (`ls-tree`), then
+// that blob (cat-file: no textconv, no filters, no checkout). → the document, or null when the tree has no such file.
+// Never a lazy fetch (GIT_NO_LAZY_FETCH, git 2.44+): in a partial clone a blob or tree that is not here is an error
+// (exit 2), never "no guards file then", which would let a removed guard pass.
 export function guardsAt(project, ref, { git = null } = {}) {
   if (typeof ref !== 'string' || !ref || ref.startsWith('-') || /[\u0000-\u001f\s]/.test(ref)) throw fail('BAD_ARGS', '--base takes a git ref (a branch, a tag or a commit)');
   let run = git;
-  try { run ||= gitRunner(project); } catch (e) { throw fail('BAD_STATE', `--base needs git: ${String(e.message).split('\n')[0]}`); }
+  try { run ||= gitRunner(project); } catch (e) { throw fail('BAD_STATE', `--base needs git: ${firstLine(e)}`); }
+  const env = { GIT_NO_LAZY_FETCH: '1' };
+  const git1 = args => run(args, { encoding: 'utf8', env });
   let commit, prefix;
   try {
-    commit = run(['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`], { encoding: 'utf8' }).trim();
-    prefix = run(['rev-parse', '--show-prefix'], { encoding: 'utf8' }).trim();
-  } catch { throw fail('BAD_STATE', `--base ${ref}: not a commit in this repository (in CI, fetch it first: git fetch --depth=1 origin ${ref})`); }
+    commit = git1(['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`]).trim();
+    prefix = git1(['rev-parse', '--show-prefix']).trim();
+  } catch {
+    let remotes = ['origin'];
+    try { remotes = git1(['remote']).split('\n').map(s => s.trim()).filter(Boolean); } catch {}
+    throw fail('BAD_STATE', `--base ${ref}: not a commit in this repository (in CI, fetch it first: ${fetchHint(ref, remotes)})`);
+  }
   if (!/^[0-9a-f]{40,64}$/.test(commit)) throw fail('BAD_STATE', `--base ${ref}: not a commit in this repository`);
   const path = `${prefix}.nunchi/guards.json`;
-  try { run(['cat-file', '-e', `${commit}:${path}`]); } catch { return null; }
+  let entry;
+  try { entry = git1(['ls-tree', '-z', '--full-tree', commit, '--', path]); }
+  catch (e) { throw fail('BAD_STATE', `--base ${ref}: its tree is not in this clone (${firstLine(e)}); a partial or shallow clone leaves it out: fetch the ref with its files first`); }
+  if (!entry) return null;
+  const m = /^(\d{6}) (\w+) ([0-9a-f]{40,64})\t/.exec(entry);
+  if (!m) throw fail('BAD_STATE', `--base ${ref}: git listed ${path} in a form nunchi does not read`);
+  if (m[2] !== 'blob' || m[1] === '120000') throw fail('BAD_STATE', `--base ${ref}: ${path} is not a plain file there`);
   let text;
-  try { text = run(['cat-file', 'blob', `${commit}:${path}`], { encoding: 'utf8' }); } catch (e) { throw fail('BAD_STATE', `--base ${ref}: ${path} cannot be read (${String(e.message).split('\n')[0]})`); }
+  try { text = git1(['cat-file', 'blob', m[3]]); }
+  catch (e) { throw fail('BAD_STATE', `--base ${ref}: ${path} is not in this clone (${firstLine(e)}); a partial clone (--filter=blob:none) leaves it out: fetch the ref with its files first`); }
   return parseGuards(text, `${path} at ${ref}`);
 }
 
