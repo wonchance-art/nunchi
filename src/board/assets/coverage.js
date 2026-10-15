@@ -9,17 +9,24 @@ import * as W from './shared.mjs';
 
 const C = W.COVERAGE;
 let X = null;
-export function init(ctx) { X = ctx; }
+// Below this width of the view (not the window: the sidebar takes its part) the map is a list of pages.
+const LIST_BELOW = 760;
+export function init(ctx) {
+  X = ctx;
+  const main = X.main();
+  if (main && typeof ResizeObserver === 'function') new ResizeObserver(() => { if (X.S.route.view === 'coverage' && V().data?.run && narrowNow() !== V().narrow) render(); }).observe(main);
+}
 const V = () => X.S.cov;
+const narrowNow = () => { const m = X.main(); const w = m ? m.clientWidth : 0; return w ? w < LIST_BELOW : X.narrow(); };
 
 const where = (p, v, st) => `${W.WHO[p] || p}, ${W.WIDTH[v] || v}${st ? `, ${W.STATE_LABEL[st] || st}` : ''}`;
-const label = (p, v) => `${W.WHO[p] || p}·${W.WIDTH[v] || v}`;
 const byState = (a, b) => W.STATES.indexOf(a.state) - W.STATES.indexOf(b.state);
 
 export async function load(route, { reload = true } = {}) {
   if (reload || !V().data) { try { V().data = await X.api('/api/coverage'); } finally { V().updating = false; } }
   const D = V().data;
   if (!route.scene) V().sel = null;
+  V().missing = null;
   if (route.scene && D.run) {
     // a link to one screen's coverage (Progress, Finding detail, Screen detail): its page, its column, its state
     const at = locate(D, `${route.run}/${route.scene}`);
@@ -28,6 +35,10 @@ export async function load(route, { reload = true } = {}) {
       V().sel = { ri: at.ri, ci: at.ci };
       V().focus = `cv-${at.ri}-${at.ci}`;
       V().open.add(at.ri);
+    } else {
+      // a screen of another run (a first look, a partial run, an older run): not in the run shown, said in words
+      V().sel = null;
+      V().missing = route.run;
     }
   }
   render(true);
@@ -50,7 +61,7 @@ function view(D, r, col, f) {
   if (col.other) {
     const others = r.cells.filter(c => c.state !== f.state);
     const marks = others.map(c => W.coverageMark(c, f.checks));
-    return { text: W.markCounts(marks), parts: W.markParts(marks), gap: marks.some(m => m.gap), name: `${r.route}, ${C.otherStates.toLowerCase()}: ${countWords(marks)}.`, scenes: others, other: true };
+    return { text: W.markCounts(marks), parts: W.markParts(marks), gap: marks.some(m => m.gap), name: `${r.route}, ${C.otherStates.toLowerCase()}: ${countWords(marks)}.`, scenes: others, other: true, kinds: marks };
   }
   if (f.state === 'all') {
     const scenes = r.cells.filter(c => c.person === col.person && c.viewport === col.vp).sort(byState);
@@ -91,12 +102,16 @@ export function render(focus = false) {
   const states = D.scope.states;
   if (!f.state || (f.state !== 'all' && !states.includes(f.state))) f.state = states.includes('normal') ? 'normal' : states[0] || 'all';
   if (f.checks !== 'all' && f.checks !== 'rules' && !Object.hasOwn(D.ai.names || {}, f.checks)) f.checks = 'all';
-  const narrow = X.narrow();
+  const narrow = narrowNow();
+  V().narrow = narrow;
   const banners = [
     D.running?.length ? h('p', { class: 'banner', role: 'note' }, C.running(D.running[D.running.length - 1], D.run)) : null,
     S.summary?.treeChanged ? h('p', { class: 'banner banner-warn', role: 'note' }, W.WORDS['tree-differs']) : null,
-    // a first look (M5): the summary's line while the full check after it runs, as Progress says it; else the mock-up's
+    // the latest capture when it is a first look (M5): the summary's line while the full check after it runs, as Progress
+    // says it, else the mock-up's; a newer partial run than the one shown: "Run 0005 · Not a full check: …"
     D.quick ? h('p', { class: 'banner', role: 'note', id: 'cv-first-look' }, D.quick.text || C.quick(D.quick.screens)) : null,
+    D.newer ? h('p', { class: 'banner', role: 'note', id: 'cv-newer' }, D.newer.text) : null,
+    V().missing ? h('p', { class: 'banner', role: 'note', id: 'cv-missing' }, W.SCREENS.gone(D.run)) : null,
   ];
   X.show(h('section', { id: 'coverage', class: 'view', 'aria-labelledby': 'h-coverage' }, h('div', { class: 'stack' },
     h('div', null, h('h1', { id: 'h-coverage' }, C.title), h('p', { class: 'muted' }, C.sub(D.run, D.fullCheck)), V().updating ? h('p', { class: 'muted small', role: 'status' }, 'Updating…') : null),
@@ -118,7 +133,7 @@ function totals(D) {
     row(C.aiLooked, ai ? [h('span', { class: 'cv-num' }, C.ofCells(ai.seen, ai.of)), meter(ai.seen, ai.of), ai.of > ai.seen ? h('span', { class: 'muted small' }, C.notN(ai.of - ai.seen)) : null]
       : D.ai.error ? h('span', { class: 'warn' }, C.aiUnreadable(D.ai.run))
         // a first look has no AI review (it hunts the full check): no sentence to tell, the banner says what comes
-        : D.quick ? h('span', null, C.aiNotRun(D.run))
+        : D.kind === 'quick' ? h('span', null, C.aiNotRun(D.run))
           : [h('span', null, C.aiNotRun(D.run)), ' ', h('span', { class: 'cv-say' }, C.tell(C.say.run), ' ', X.copyButton(C.say.run, 'Copy', { id: 'cv-copy-ai', name: C.copy(C.say.run) }))]),
     row(C.pagesOpened, h('span', { class: 'cv-num' }, C.of(T.pages.opened, T.pages.total))),
     row(C.wholeApp, D.wholeLine, 'cv-wide'),
@@ -169,7 +184,8 @@ function showOnMap(g) {
   if (at) { V().focus = `cv-${at.ri}-${at.ci}`; V().open.add(at.ri); }
   render();
   focusCell(V().focus);
-  X.announce(C.showing(shownRows(D, f).length, true));
+  // the pages that hold this gap's screens (not every page with some gap under these filters)
+  X.announce(C.showing(D.routes.filter(r => r.cells.some(c => want.has(c.key))).length, true));
 }
 const shownRows = (D, f) => { const cols = columns(D); return D.routes.map((r, ri) => ({ r, ri })).filter(({ r }) => f.show !== 'gaps' || rowGap(D, r, cols, f)); };
 
@@ -239,12 +255,13 @@ function grid(D, rows, cols) {
   const h = X.h, f = V().f;
   const ids = [];
   const head = h('tr', { role: 'row', 'aria-rowindex': '1' }, h('th', { role: 'columnheader', scope: 'col', class: 'cv-page-h' }, C.page),
-    cols.map(c => h('th', { role: 'columnheader', scope: 'col' }, c.other ? C.otherStates : label(c.person, c.vp))));
+    cols.map(c => h('th', { role: 'columnheader', scope: 'col' }, c.other ? C.otherStates : [`${W.WHO[c.person] || c.person}·`, h('wbr'), W.WIDTH[c.vp] || c.vp])));
   const body = rows.map(({ r, ri }, i) => {
     const th = h('th', { role: 'rowheader', scope: 'row', class: 'cv-page' }, h('span', { class: 'mono' }, r.route), r.name ? h('span', { class: 'cv-name' }, r.name) : null);
     if (!r.opened) {
       const id = `cv-${ri}-0`; ids.push(id);
-      return h('tr', { role: 'row', 'aria-rowindex': String(i + 2) }, th, h('td', { role: 'gridcell', id, 'data-cv': '1', 'data-gap': '1', 'data-ri': String(ri), 'data-ci': '0', colspan: String(cols.length), tabindex: '-1', class: 'cv-cell cv-cell-not', 'aria-label': `${r.route}: ${r.whyText}` },
+      // J/K go to cells of the map (a page × person × width), not to a page that was not opened
+      return h('tr', { role: 'row', 'aria-rowindex': String(i + 2) }, th, h('td', { role: 'gridcell', id, 'data-cv': '1', 'data-gap': '0', 'data-ri': String(ri), 'data-ci': '0', colspan: String(cols.length), tabindex: '-1', class: 'cv-cell cv-cell-not', 'aria-selected': 'false', 'aria-label': `${r.route}: ${r.whyText}` },
         h('span', { class: 'cv-mk cv-mk-not', 'aria-hidden': 'true' }, W.MARKS.not.sym), ' ', h('span', null, r.whyText)));
     }
     return h('tr', { role: 'row', 'aria-rowindex': String(i + 2) }, th, cols.map((col, ci) => {
@@ -252,8 +269,9 @@ function grid(D, rows, cols) {
       const id = `cv-${ri}-${ci}`; ids.push(id);
       const sel = V().sel && V().sel.ri === ri && V().sel.ci === ci;
       const kind = v.other || f.state === 'all' ? null : W.coverageMark(v.scenes[0] || null, f.checks).kind;
-      const td = h('td', { role: 'gridcell', id, 'data-cv': '1', 'data-gap': v.gap ? '1' : '0', 'data-ri': String(ri), 'data-ci': String(ci), tabindex: '-1',
-        class: `cv-cell${kind ? ` cv-k-${kind}` : ''}${sel ? ' cv-sel' : ''}`, 'aria-label': v.name, ...(sel ? { 'aria-selected': 'true' } : {}) },
+      // J/K: the cells with a gap of a person × width ("Other states" counts them, it is not one)
+      const td = h('td', { role: 'gridcell', id, 'data-cv': '1', 'data-gap': v.gap && !v.other ? '1' : '0', 'data-ri': String(ri), 'data-ci': String(ci), tabindex: '-1',
+        class: `cv-cell${kind ? ` cv-k-${kind}` : ''}${sel ? ' cv-sel' : ''}`, 'aria-label': v.name, 'aria-selected': sel ? 'true' : 'false' },
       kind ? marksEl(v) : h('span', { 'aria-hidden': 'true' }, marksEl(v)),
       v.scenes[0]?.changed ? h('span', { class: 'cv-changed small muted' }, ` · ${C.changedSinceAi}`) : null);
       if (!v.other) td.addEventListener('click', () => openCell(ri, ci));
@@ -262,7 +280,7 @@ function grid(D, rows, cols) {
   });
   const focusId = ids.includes(V().focus) ? V().focus : ids[0];
   V().focus = focusId;
-  const table = h('table', { class: 'cv-grid', role: 'grid', 'aria-labelledby': 'h-map', 'aria-rowcount': String(rows.length + 1), 'aria-colcount': String(cols.length + 1) },
+  const table = h('table', { class: 'cv-grid', role: 'grid', 'aria-labelledby': 'h-map', 'aria-readonly': 'true', 'aria-rowcount': String(rows.length + 1), 'aria-colcount': String(cols.length + 1) },
     h('thead', null, head), h('tbody', null, body));
   for (const id of ids) { const el = table.querySelector(`[id="${id}"]`); if (el) el.setAttribute('tabindex', id === focusId ? '0' : '-1'); }
   table.addEventListener('keydown', gridKey);
@@ -344,13 +362,14 @@ function cellPanel(D, sel) {
       h('p', { class: 'small' }, h('span', { class: 'mono' }, r.route), ` · ${W.sceneLabelText(c)}`),
       h('dl', { class: 'facts-dl' },
         h('dt', null, C.ruleChecks), h('dd', null, c.checked ? C.ranIn(D.run) : [h('span', { 'aria-hidden': 'true' }, `${W.MARKS.not.sym} `), c.why, redirect ? `. ${C.judgedAs(redirect[1])}` : '']),
-        c.checked ? [h('dt', null, C.aiReview), h('dd', null, c.ai ? C.lensesLooked(c.ai.seen, c.ai.of) : W.MARKS.rules.word, c.changed ? h('span', { class: 'muted' }, ` · ${C.changedSinceAi}`) : null)] : null,
+        c.checked ? [h('dt', null, C.aiReview), h('dd', null, c.ai ? C.lensesLooked(c.ai.seen, c.ai.of) : W.MARKS.rules.word, c.changed ? h('span', { class: 'muted' }, ` · ${C.changedSinceAi}`) : null)] : null),
+      c.ai && c.ai.lenses.length ? h('ul', { class: 'cv-lenses' }, c.ai.lenses.map(l => h('li', null, h('span', { class: 'cv-ln' }, l.name), h('span', { class: l.status === 'seen' ? '' : 'warn' }, l.text)))) : null,
+      c.checked || c.say ? h('dl', { class: 'facts-dl' },
         c.checked ? [h('dt', null, C.openHere), h('dd', null, open || 'None', ' ', h('a', { class: 'b b-quiet', id: `cv-open-${i}`, href: `#/screens/${D.run}/${encodeURIComponent(c.id)}` }, C.openScreen))] : null,
-        c.say ? [h('dt', null, C.tellAi), h('dd', null, `“${c.say.say}”`, ' ', X.copyButton(c.say.say, 'Copy', { id: `cv-copy-${i}`, name: C.copy(c.say.say) }))] : null),
-      c.ai && c.ai.lenses.length ? h('ul', { class: 'cv-lenses' }, c.ai.lenses.map(l => h('li', null, h('span', { class: 'cv-ln' }, l.name), h('span', { class: l.status === 'seen' ? '' : 'warn' }, l.text)))) : null);
+        c.say ? [h('dt', null, C.tellAi), h('dd', null, `“${c.say.say}”`, ' ', X.copyButton(c.say.say, 'Copy', { id: `cv-copy-${i}`, name: C.copy(c.say.say) }))] : null) : null);
   };
   return h('section', { class: 'cv-panel', 'aria-labelledby': 'cv-panel-h' },
-    h('div', { class: 'sp-head' }, h('h2', { id: 'cv-panel-h', tabindex: '-1' }, r.name || r.route), close),
+    h('div', { class: 'sp-head' }, h('h3', { id: 'cv-panel-h', tabindex: '-1' }, r.name || r.route), close),
     v.scenes.length ? v.scenes.map(scene) : [h('p', { class: 'small' }, h('span', { class: 'mono' }, r.route), ` · ${where(col.person, col.vp, f.state === 'all' ? null : f.state).replace(/, /g, ' · ')}`),
       h('p', null, h('span', { 'aria-hidden': 'true' }, `${W.MARKS.none.sym} `), `${C.noForced}.`)]);
 }
@@ -376,7 +395,10 @@ function list(D, rows, cols) {
       return [h('li', null, b), sel ? h('li', { class: 'cv-panel-li' }, cellPanel(D, V().sel)) : null];
     });
     const other = cols.find(c => c.other) ? view(D, r, cols.find(c => c.other), f) : null;
-    const det = h('details', { class: 'cv-page-d', id: `cv-d-${ri}`, open: V().open.has(ri) }, h('summary', null, h('span', null, h('span', { class: 'mono' }, r.route), r.name ? ` · ${r.name}` : ''), h('span', { class: 'cv-sum', 'aria-hidden': 'true' }, marksEl(sum))),
+    // the status in words for assistive technology (the marks are hidden from it), the marks and counts for the eye
+    const sumWords = new Set(kinds.map(k => k.kind)).size === 1 && f.state !== 'all' ? `${W.MARKS[kinds[0].kind].word}, ${kinds.length} of ${kinds.length}` : countWords(kinds);
+    const det = h('details', { class: 'cv-page-d', id: `cv-d-${ri}`, open: V().open.has(ri) }, h('summary', null, h('span', null, h('span', { class: 'mono' }, r.route), r.name ? ` · ${r.name}` : ''),
+      h('span', { class: 'cv-sum' }, h('span', { class: 'sr' }, `${sumWords}.`), h('span', { 'aria-hidden': 'true' }, marksEl(sum)))),
       h('ul', { class: 'cv-lines' }, lines, other ? h('li', { class: 'cv-other small' }, h('span', null, C.otherStates), h('span', { 'aria-hidden': 'true' }, marksEl(other)), h('span', { class: 'sr' }, other.name)) : null));
     det.addEventListener('toggle', () => { if (det.open) V().open.add(ri); else V().open.delete(ri); });
     return h('li', null, det);

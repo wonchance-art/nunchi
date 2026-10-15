@@ -57,11 +57,11 @@ export function renderWall(focus = false) {
       sel.addEventListener('change', () => set(key, sel.value));
       return h('label', { class: 'field', for: id }, name, sel);
     }
-    return h('div', { class: 'seg-b', role: 'group', 'aria-label': name }, vals.map(v => {
+    return h('span', { class: 'cv-fl' }, h('span', { class: 'muted small', id: `wall-l-${key}` }, name), h('div', { class: 'seg-b', role: 'group', 'aria-labelledby': `wall-l-${key}` }, vals.map(v => {
       const b = h('button', { type: 'button', id: `wall-${key}-${v}`, 'aria-pressed': F[key] === v ? 'true' : 'false' }, word(v), v === 'all' ? null : h('span', { class: 'cnt' }, ` ${count(key, v)}`));
       b.addEventListener('click', () => set(key, v));
       return b;
-    }));
+    })));
   };
   const showList = ['open', 'not', ...(base ? ['changed'] : [])];
   const search = h('input', { id: 'screen-search', type: 'search', value: F.q || '', placeholder: T.searchHint, autocomplete: 'off', spellcheck: 'false' });
@@ -95,7 +95,7 @@ export function renderWall(focus = false) {
   };
   let panel = h('p', { class: 'panels-empty muted' }, 'Select a screen to see it large, with its findings outlined and numbered.');
   if (sel) {
-    const boxes = sel.findings.filter(f => f.n).map(f => ({ box: f.box, n: f.n }));
+    const boxes = sel.findings.filter(f => f.n && !f.why).map(f => ({ box: f.box, n: f.n }));
     const close = h('button', { type: 'button', class: 'b b-quiet', id: 'sp-close' }, 'Close');
     close.addEventListener('click', () => { S.screenSel = null; history.replaceState(null, '', '/#/screens'); renderWall(); X.$(cardId(sel.key))?.focus(); });
     const open = h('button', { type: 'button', class: 'b', id: 'sp-open', 'aria-keyshortcuts': 'Enter' }, W.COVERAGE.openScreen, ' ', h('span', { class: 'kbd', 'aria-hidden': 'true' }, '↵'));
@@ -105,7 +105,7 @@ export function renderWall(focus = false) {
       sel.img ? X.shot(sel, boxes, { label: `Screenshot of ${sel.route}, ${sel.label}${boxes.length ? `, ${W.plural(boxes.length, 'finding')} outlined and numbered` : ''}`, cls: sel.viewport === 'm' ? 'shot-m' : '' }) : h('p', { class: 'pad muted' }, `Not seen: ${sel.reason || sel.status}.`),
       sel.findings.length ? h('ol', { class: 'sp-list' }, sel.findings.map(f => h('li', null, h('a', { href: `#/finding/${f.group}` },
         h('span', { class: `numb${f.n ? '' : ' numb-none'}` }, f.n ? String(f.n) : '–'),
-        h('span', { class: 'sp-text' }, h('span', { class: 'sp-what' }, f.headline), h('span', { class: 'small' }, `${W.SEV_LABEL[X.sevOf(f.severity)]} · ${f.source === 'ai' ? 'AI' : 'Rule'} · ${f.statusText}${f.n ? '' : ` · not outlined: ${f.why}`}`)))))) : sel.img ? h('p', { class: 'pad muted' }, T.nothing) : null,
+        h('span', { class: 'sp-text' }, h('span', { class: 'sp-what' }, f.headline), h('span', { class: 'small' }, `${W.SEV_LABEL[X.sevOf(f.severity)]} · ${f.source === 'ai' ? 'AI' : 'Rule'} · ${f.statusText}${f.why ? ` · not outlined: ${f.why}` : ''}`)))))) : sel.img ? h('p', { class: 'pad muted' }, T.nothing) : null,
       h('p', { class: 'pad sp-open' }, open));
   }
   const withOpen = all.filter(s => s.open > 0).length, clean = all.filter(s => s.badge === 'Clean').length, notChecked = all.filter(s => !s.checked).length;
@@ -118,7 +118,7 @@ export function renderWall(focus = false) {
     S.screens.quick ? h('p', { class: 'banner', role: 'note', id: 'wall-first-look' }, S.screens.quick.text || W.COVERAGE.quick(S.screens.quick.screens)) : null,
     h('div', { class: 'filters wall-filters' }, filter('Width', vps, W.WIDTH, 'vp'), filter('Who', whos, W.WHO, 'who'), filter('State', states, W.STATE_LABEL, 'state'),
       narrow ? (() => { const sel2 = h('select', { id: 'wall-show' }, ['all', ...showList].map(v => h('option', { value: v, selected: F.show === v }, v === 'all' ? T.all : `${{ open: T.open, not: T.not, changed: T.changed(base) }[v]} (${count('show', v)})`))); sel2.addEventListener('change', () => set('show', sel2.value)); return h('label', { class: 'field', for: 'wall-show' }, T.show, sel2); })()
-        : h('span', { class: 'cv-fl' }, h('span', { class: 'muted small' }, T.show), h('div', { class: 'seg-b', role: 'group', 'aria-label': T.show }, ['all', ...showList].map(v => {
+        : h('span', { class: 'cv-fl' }, h('span', { class: 'muted small', id: 'wall-l-show' }, T.show), h('div', { class: 'seg-b', role: 'group', 'aria-labelledby': 'wall-l-show' }, ['all', ...showList].map(v => {
           const b = h('button', { type: 'button', id: `wall-show-${v}`, 'aria-pressed': F.show === v ? 'true' : 'false' }, v === 'all' ? T.all : { open: T.open, not: T.not, changed: T.changed(base) }[v], v === 'all' ? null : h('span', { class: 'cnt' }, ` ${count('show', v)}`));
           b.addEventListener('click', () => set('show', v));
           return b;
@@ -286,11 +286,11 @@ export function renderDetail(focus = false) {
   roving(toolbar);
 
   // the screenshots, numbered by group (the same defect has the same number on both widths)
-  const figure = v => {
+  const figure = (v, withCap = true) => {
     const sc = D.widths[v];
     if (!sc) return null;
     const c = D.coverage[v];
-    const cap = both ? h('p', { class: 'sd-cap small' }, W.WIDTH[v]) : null;
+    const cap = both && withCap ? h('p', { class: 'sd-cap small' }, W.WIDTH[v]) : null;
     // a screen that was not checked shows no image (a redirect's is another page's): why, and where it is judged
     if (!sc.img || c?.checked === false) {
       const j = D.judged;
@@ -309,8 +309,8 @@ export function renderDetail(focus = false) {
     if (cur.gone) return h('div', { class: 'sd-fig' }, cap, h('p', { class: 'muted' }, T.gcd));
     const e = cur.per?.[v];
     if (!e) return figure(v);
-    if (e.missing) return h('div', { class: 'sd-fig' }, cap, h('p', { class: 'muted' }, T.notIn(cur.run)), figure(v));
-    if (e.same) return h('div', { class: 'sd-fig' }, cap, h('p', { class: 'muted' }, T.unchanged(cur.run)), figure(v));
+    if (e.missing) return h('div', { class: 'sd-fig' }, cap, h('p', { class: 'muted' }, T.notIn(cur.run)), figure(v, false));
+    if (e.same) return h('div', { class: 'sd-fig' }, cap, h('p', { class: 'muted' }, T.unchanged(cur.run)), figure(v, false));
     const firstView = x => ({ ...x, img: { ...x.img, url: x.img.thumb, h: x.img.vh } });
     const before = cur.kind === 'run' ? T.before(cur.run) : W.FIX_WORDS.before;
     const after = cur.kind === 'run' ? T.after(D.run) : cur.undone ? T.afterUndone(cur.attempt) : W.FIX_WORDS.after;
@@ -345,7 +345,7 @@ export function renderDetail(focus = false) {
       h('span', { class: 'numb', 'aria-hidden': 'true' }, String(f.n)),
       h('span', { class: 'sp-text' }, h('span', { class: 'sp-what' }, h('span', { class: 'sr' }, `${f.n}. `), `${W.SEV_LABEL[X.sevOf(f.severity)]} · ${f.source === 'ai' ? 'AI · ' : ''}${f.headline}`),
         h('span', { class: 'small' }, meta), notOutlined ? h('span', { class: 'small' }, T.notOutlined(notOutlined)) : null));
-    a.addEventListener('click', () => { S.returnTo = `#/screens/${D.run}/${encodeURIComponent(D.id)}`; });
+    a.addEventListener('click', () => { S.returnTo = `#/screens/${D.run}/${encodeURIComponent(D.id)}`; S.sd.back = a.id; });
     a.addEventListener('focus', () => mark(f.n));
     a.addEventListener('blur', () => mark(null));
     return h('li', null, a);
@@ -355,7 +355,7 @@ export function renderDetail(focus = false) {
     D.findings.length ? h('ol', { class: 'sp-list sd-list' }, items) : h('p', { class: 'muted' }, T.nothing, covLine ? ` ${covLine}` : ''),
     D.fixedHere.length && D.baseline ? [h('h3', { class: 'sd-h3' }, T.fixedHere(D.baseline, D.fixedHere.length)), h('ul', { class: 'sd-fixed' }, D.fixedHere.map(x => h('li', null, h('span', { class: 'good', 'aria-hidden': 'true' }, '✓ '), T.fixedIn(x.title, x.run))))] : null,
     D.siblings.length ? h('details', { class: 'sp-sibs', id: 'sd-sibs', open: sd.sibsOpen }, h('summary', null, `${T.samePage(D.siblings.length)} ▸`),
-      h('p', null, D.siblings.map(x => h('a', { href: `#/screens/${D.run}/${encodeURIComponent(x.id)}` }, W.sceneLabelText(x))))) : null);
+      h('ul', { class: 'sd-sibs-list' }, D.siblings.map(x => h('li', null, h('a', { href: `#/screens/${D.run}/${encodeURIComponent(x.id)}` }, W.sceneLabelText(x)))))) : null);
   side.querySelector('#sd-sibs')?.addEventListener('toggle', e => { sd.sibsOpen = e.target.open; });
 
   const pos = i >= 0 ? T.position(i + 1, list.length, fw) : '';
@@ -371,7 +371,12 @@ export function renderDetail(focus = false) {
         h('p', { class: 'muted' }, h('span', { class: 'mono' }, D.page.route), ` · ${W.WHO[D.page.person] || D.page.person}${narrow || !both ? ` · ${W.WIDTH[vp]}` : ''} · ${W.STATE_LABEL[D.page.state] || D.page.state}`)),
       toolbar,
       h('div', { class: 'sd-body' }, figures, side))));
-  if (focus) X.focusHeading();
+  if (focus) {
+    // back from a finding opened here: on its link again, else the screen's heading
+    const back = sd.back && X.$(sd.back);
+    sd.back = null;
+    if (back) back.focus(); else X.focusHeading();
+  }
 }
 
 // One toolbar, one tab stop: arrows move between its buttons (selects keep their own arrows).
@@ -396,6 +401,7 @@ function roving(bar) {
 // Finding n marked on the screenshots: its box thicker, its number inverted (shape, not colour).
 function mark(n) {
   X.S.sd.on = n;
+  for (const s of X.main().querySelectorAll('.sd-fig .shot')) s.dataset.on = n === null ? '' : String(n);
   for (const b of X.main().querySelectorAll('.sd-fig .box')) {
     const ns = String(b.getAttribute('data-ns') || '').split(' ').filter(Boolean).map(Number);
     b.classList.toggle('box-on', n !== null && ns.includes(n));

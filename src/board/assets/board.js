@@ -52,7 +52,7 @@ const S = {
   screens: null, screenSel: null, screenFilter: { vp: null, who: 'all', state: 'normal', show: 'all', q: '' }, wallFocus: null, wallReturn: null,
   // M7: the Coverage view's data and filters, and the Screen detail's choices (kept for the session while walking J/K)
   cov: { data: null, f: { state: null, checks: 'all', show: 'all' }, sel: null, focus: null, open: new Set(), lensOpen: false },
-  sd: { data: null, both: false, whole: false, cmp: 'off', view: 'slider', at: 50, on: null, tb: null, sibsOpen: false }, returnTo: null,
+  sd: { data: null, both: false, whole: false, cmp: 'off', view: 'slider', at: 50, on: null, tb: null, sibsOpen: false, back: null }, returnTo: null,
   keysOn: store.get('nunchi.keys') !== 'off',
   undo: null, clock: new W.DecisionClock(), images: new Map(), lastNow: 0, stopped: false,
   label: null,
@@ -136,20 +136,45 @@ function image(url) {
 const bg = (el, url) => { image(url).then(u => { el.style.backgroundImage = `url("${u}")`; }, () => { el.classList.add('thumb-none'); }); };
 
 // A screenshot region with its boxes (white + dark, dashed: they read on any screenshot and do not rely on colour).
-// Markers of boxes that overlap by IoU 0.5 or more are one stacked marker ("1 2"), so none hides another (M7); `on`:
-// the finding focused in a list, its box thicker and its number inverted; `first`: the first view (taller when a box
-// sits lower).
+// Markers of boxes that overlap by IoU 0.5 or more, or whose numbers would sit closer than a marker on screen (a link
+// and the small icon inside it), are one stacked marker ("1 2"), so none hides another (M7; review of PR #35): once
+// the screenshot is laid out, and again when its size changes (a narrower column, zoom). `on`: the finding focused in a
+// list, its box thicker and its number inverted; `first`: the first view (taller when a box sits lower).
 function shot(scene, boxes, { crop = false, first = false, on = null, label, cls = '' } = {}) {
   const img = scene.img;
   const g = W.shotGeometry(img, boxes, { crop, first });
   const el = h('div', { class: `shot${cls ? ' ' + cls : ''}`, role: 'img', 'aria-label': label });
   el.style.aspectRatio = `${img.w} / ${g.ch}`;
   el.style.backgroundPosition = `0 ${W.pct(g.posY)}`;
-  for (const m of W.stackMarks(g.marks)) {
-    const b = h('span', { class: `box${on !== null && m.ns.includes(on) ? ' box-on' : ''}`, 'aria-hidden': 'true', 'data-ns': m.ns.join(' ') || null },
-      m.label ? h('span', { class: `num${m.ns.length > 1 ? ' num-stack' : ''}` }, m.label) : null);
+  if (on !== null) el.dataset.on = String(on);
+  const items = g.marks.map(m => {
+    const num = m.n ? h('span', { class: 'num' }) : null;
+    const b = h('span', { class: 'box', 'aria-hidden': 'true' }, num);
     b.style.left = W.pct(m.left); b.style.top = W.pct(m.top); b.style.width = W.pct(m.width); b.style.height = W.pct(m.height);
     el.append(b);
+    return { b, num };
+  });
+  const relabel = near => {
+    const marked = el.dataset.on ? Number(el.dataset.on) : null;
+    W.stackMarks(g.marks, { near }).forEach((m, i) => {
+      const { b, num } = items[i];
+      b.setAttribute('data-ns', m.ns.join(' '));
+      b.classList.toggle('box-on', marked !== null && m.ns.includes(marked));
+      if (!num) return;
+      num.textContent = m.label || '';
+      num.style.display = m.label ? '' : 'none';
+      num.classList.toggle('num-stack', m.ns.length > 1);
+    });
+  };
+  relabel(null);
+  if (g.marks.length > 1 && typeof ResizeObserver === 'function') {
+    let size = '';
+    new ResizeObserver(() => {
+      const w = el.clientWidth, ht = el.clientHeight;
+      if (!w || !ht || size === `${w}x${ht}`) return;
+      size = `${w}x${ht}`;
+      relabel({ x: W.MARKER_PX / w, y: W.MARKER_PX / ht });
+    }).observe(el);
   }
   bg(el, img.url);
   return el;
@@ -377,7 +402,8 @@ function renderProgress(focus = false) {
   const health = h('section', { class: 'panel-box', 'aria-labelledby': 'h-health' }, h('h2', { id: 'h-health' }, s.run ? `Run ${s.run}` : 'No run yet'),
     h('div', { class: 'meter-row' }, h('span', null, 'Screens checked'), h('a', { href: '#/coverage' }, `${sc.checked} of ${sc.total}`)), meter,
     h('ul', { class: 'facts' }, h('li', null, `AI review: ${ai}`),
-      s.ai.coverage ? h('li', null, `${W.COVERAGE.aiLooked} ${W.COVERAGE.ofCells(s.ai.coverage.seen, s.ai.coverage.cells)} · `, h('a', { class: 'link-44', href: '#/coverage' }, `${W.COVERAGE.title} ▸`)) : null,
+      // Coverage's own count (one rule for both views); the run the AI reviewed when it is not this panel's run
+      s.ai.coverage ? h('li', null, `${W.COVERAGE.aiLooked} ${W.COVERAGE.ofCells(s.ai.coverage.seen, s.ai.coverage.cells)}${s.ai.coverage.aiRun && s.ai.coverage.aiRun !== s.run ? ` · ${W.COVERAGE.aiOlder(s.ai.coverage.aiRun)}` : ''} · `, h('a', { class: 'link-44', id: 'progress-cov', href: '#/coverage' }, `${W.COVERAGE.title} ▸`)) : null,
       s.health.blind ? h('li', { class: 'warn' }, `This run could not tell what was fixed (${s.health.blind}). Nothing was marked fixed by it.`) : null,
       sc.notSeen ? h('li', null, `${W.plural(sc.notSeen, 'screen')} not seen: ${sc.reasons.join(', ')}`) : null,
       s.ai.coverage?.budget ? h('li', null, `${W.plural(s.ai.coverage.budget, 'cell')} ${W.WORDS['not-seen-budget'].replace(/^Not checked/, 'not checked')}`) : null,

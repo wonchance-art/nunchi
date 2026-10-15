@@ -98,7 +98,7 @@ test('screens e2e: the wall — counts on its filters, "N shown of M", Show, sea
     await page.keyboard.press(' ');
     await page.waitForSelector('#panel-h');
     assert.equal(await focused(page), first, 'Space shows the quick look and keeps the focus on the card');
-    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.screen-panel .num')].map(n => n.textContent)), ['1 2'], 'two findings on one element: one stacked marker, ① not hidden under ②');
+    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.screen-panel .num')].filter(n => n.getClientRects().length).map(n => n.textContent)), ['1 2'], 'two findings on one element: one stacked marker, ① not hidden under ②');
     assert.match(await page.textContent('#sp-open'), /Open this screen/);
     await page.keyboard.press('Enter');
     await page.waitForSelector('#h-screen');
@@ -119,7 +119,7 @@ test('screens e2e: Screen detail — numbered by group on both widths, one stack
     await go(page, '#/screens/0004/~.guest.normal.d', '#h-screen');
     const d = await page.evaluate(() => ({
       h1: document.getElementById('h-screen').textContent, chips: document.querySelector('.sd-head .chips').textContent, focus: document.activeElement?.id,
-      nums: [...document.querySelectorAll('.sd-fig .num')].map(n => n.textContent), list: [...document.querySelectorAll('.sd-list li')].map(li => li.textContent),
+      nums: [...document.querySelectorAll('.sd-fig .num')].filter(n => n.getClientRects().length).map(n => n.textContent), list: [...document.querySelectorAll('.sd-list li')].map(li => li.textContent),
       img: document.querySelector('.sd-fig .shot').getAttribute('aria-label'), toolbar: document.querySelectorAll('[role=toolbar] button[tabindex="0"]').length,
     }));
     assert.equal(d.h1, 'Plant shelf');
@@ -136,7 +136,7 @@ test('screens e2e: Screen detail — numbered by group on both widths, one stack
     assert.deepEqual(on, { focus: 'sd-f-2', boxes: ['1 2', '1 2'], num: '1 2' }, 'the boxes of finding 2 (it shares its element with finding 1)');
     // B: both widths, the same number on each; V: back to one width
     await page.keyboard.press('b');
-    const both = await page.evaluate(() => ({ figs: [...document.querySelectorAll('.sd-fig .sd-cap')].map(x => x.textContent), nums: [...document.querySelectorAll('.sd-fig')].map(f => [...f.querySelectorAll('.num')].map(n => n.textContent)),
+    const both = await page.evaluate(() => ({ figs: [...document.querySelectorAll('.sd-fig .sd-cap')].map(x => x.textContent), nums: [...document.querySelectorAll('.sd-fig')].map(f => [...f.querySelectorAll('.num')].filter(n => n.getClientRects().length).map(n => n.textContent)),
       note: (() => { const n = document.querySelector('.sd-same'), f = document.querySelector('.sd-figs'); return n && n.getBoundingClientRect().top >= f.getBoundingClientRect().bottom - 1 ? n.textContent : null; })() }));
     assert.deepEqual(both, { figs: ['Desktop', 'Phone'], nums: [['1 2'], ['1', '3']], note: 'Same defect, same number on both widths.' }, 'the note under the images, as the mock-up has it');
     await page.keyboard.press('v');

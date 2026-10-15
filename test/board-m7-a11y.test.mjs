@@ -37,7 +37,8 @@ const decisions = nunchi => { try { return readdirSync(join(nunchi, 'decisions')
 // The contrast of what `checks` name ([selector, kind, least ratio]), queried and measured in one evaluation. Kinds:
 // `text` its colour on the background it sits on; `ring` its outline on its own background and on what is behind it
 // (both are next to the ring); `bar` its box-shadow (an inset bar) on its own background; `edge` its border on its
-// halo (a box-shadow ring), so a marker reads on any screenshot; `fill` its background on what is behind it; `shape`
+// halo (a box-shadow ring), so a marker reads on any screenshot; `inset` its box-shadow edge on its own background and on
+// what is behind it (a pressed segmented button: review of PR #35); `fill` its background on what is behind it; `shape`
 // its fill or its halo on what is behind it, whichever shows the shape. → the misses, in words.
 const contrast = (page, checks) => page.evaluate(checks => {
   const rgb = c => (String(c).match(/[\d.]+/g) || []).map(Number);
@@ -56,6 +57,7 @@ const contrast = (page, checks) => page.evaluate(checks => {
       const r = kind === 'text' ? ratio(cs.color, own(e))
         : kind === 'ring' ? Math.min(ratio(cs.outlineColor, own(e)), ratio(cs.outlineColor, behind(e)))
           : kind === 'bar' ? ratio(shadow(e), own(e))
+            : kind === 'inset' ? Math.min(ratio(shadow(e), own(e)), ratio(shadow(e), behind(e)))
             : kind === 'edge' ? ratio(cs.borderTopColor, shadow(e))
               : kind === 'fill' ? ratio(cs.backgroundColor, behind(e))
                 : Math.max(ratio(cs.backgroundColor, behind(e)), ratio(shadow(e), behind(e)));
@@ -80,7 +82,7 @@ test('M7 a11y: contrast in light and dark — the map\'s marks as text (4.5:1), 
       await page.focus('#cv-3-2');
       assert.deepEqual(await contrast(page, [['.cv-cell:focus', 'ring', 3]]), [], `${scheme}: a selected cell's focus ring`);
       await page.keyboard.press('ArrowLeft');
-      assert.deepEqual(await contrast(page, [['.cv-cell:focus', 'ring', 3], ['.seg-b button[aria-pressed=true]', 'text', 4.5]]), [], `${scheme}: a cell's focus ring`);
+      assert.deepEqual(await contrast(page, [['.cv-cell:focus', 'ring', 3], ['.seg-b button[aria-pressed=true]', 'text', 4.5], ['.seg-b button[aria-pressed=true]', 'inset', 3]]), [], `${scheme}: a cell's focus ring, the pressed buttons' edge`);
       // Screen detail, finding 2 focused by its key: the markers (the focused one too), their numbers, the list's numbers
       await go(page, '#/screens/0004/~.guest.normal.d', '#h-screen');
       await page.keyboard.press('2');
@@ -89,7 +91,7 @@ test('M7 a11y: contrast in light and dark — the map\'s marks as text (4.5:1), 
       // the toolbar's focus ring
       await page.focus('[role=toolbar] button[tabindex="0"]');
       await page.keyboard.press('ArrowRight');
-      assert.deepEqual(await contrast(page, [['[role=toolbar] button:focus-visible', 'ring', 3]]), [], `${scheme}: the toolbar`);
+      assert.deepEqual(await contrast(page, [['[role=toolbar] button:focus-visible', 'ring', 3], ['[role=toolbar] .seg-b button[aria-pressed=true]', 'inset', 3]]), [], `${scheme}: the toolbar`);
       // the wall: a card reached by J, its ring; the quick look's markers
       await go(page, '#/screens', '#h-screens');
       await page.keyboard.press('j');

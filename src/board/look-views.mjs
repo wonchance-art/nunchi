@@ -4,6 +4,9 @@
 // ink), never colour alone; every control 44 px; no sideways scroll at 390 px; the map is a list below 760 px.
 export const VIEWS_CSS = `
 .board .seg-b{display:inline-flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:10px;background:var(--seg)}
+/* the pressed button of a segmented control: a 2 px edge in ink-2 (3:1 and more on its background and on the group's,
+   both themes), not only a lighter fill and bold text (review of PR #35; M2's controls too) */
+.board .seg-b button[aria-pressed=true]{box-shadow:inset 0 0 0 2px var(--ink-2)}
 .seg-b .cnt{color:var(--muted);font-weight:400}
 .cv-fl{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px}
 .link-44{display:inline-flex;align-items:center;min-height:44px}
@@ -37,7 +40,7 @@ export const VIEWS_CSS = `
 .cv-grid-wrap{min-width:0}
 .cv-grid{width:100%;border-collapse:collapse;table-layout:fixed;font-size:14px}
 .cv-grid th,.cv-grid td{padding:4px 8px;border-top:1px solid var(--line-soft);text-align:left;vertical-align:middle;overflow-wrap:anywhere}
-.cv-grid thead th{border-top:0;font-size:12px;font-weight:600;color:var(--ink-2)}
+.cv-grid thead th{border-top:0;font-size:12px;font-weight:600;color:var(--ink-2);overflow-wrap:normal;word-break:normal}
 .cv-grid .cv-page-h{width:26%}
 .cv-page{font-weight:400}.cv-page .mono{display:block}.cv-name{display:block;font-size:12px;color:var(--muted)}
 .cv-cell{height:44px;cursor:pointer;border-radius:4px}
@@ -75,7 +78,8 @@ export const VIEWS_CSS = `
 .cv-lens-d>summary{display:flex;align-items:center;min-height:44px;cursor:pointer;font-weight:600;list-style:none}.cv-lens-d>summary::-webkit-details-marker{display:none}
 .cv-lens-d>summary::before{content:"▸";color:var(--muted);margin-right:8px}.cv-lens-d[open]>summary::before{content:"▾"}
 .cv-lens-list{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}.cv-lens-list li{display:flex;flex-direction:column;gap:2px}
-@media (max-width:760px){.cv-wide{display:none}.cv-row{grid-template-columns:minmax(0,1fr)}.cv-row .meter{flex-basis:100%;max-width:none}}
+/* a narrow window (a phone, 200% zoom): every row of the totals stays, stacked */
+@media (max-width:760px){.cv-row{grid-template-columns:minmax(0,1fr)}.cv-row .meter{flex-basis:100%;max-width:none}}
 /* Screens: the wall's groups and its quick look */
 .wall-groups{flex:999 1 520px;min-width:0;display:flex;flex-direction:column;gap:18px}
 .wall-g-h{margin:0 0 8px;font-size:14px;color:var(--ink-2);overflow-wrap:anywhere}
@@ -100,6 +104,8 @@ export const VIEWS_CSS = `
 .sd-h3{font-size:14px;margin:8px 0 0}
 .sd-fixed{list-style:none;margin:0;padding:0;font-size:14px;display:flex;flex-direction:column;gap:4px;overflow-wrap:anywhere}
 .sd .sp-sibs{padding:0 12px;border-radius:8px}
+.sd-sibs-list{list-style:none;margin:0;padding:0 0 8px;display:flex;flex-direction:column}
+.sd-sibs-list a{display:flex;align-items:center;min-height:44px}
 .box.box-on{border:4px solid #1B1D21;box-shadow:0 0 0 2px #FFFFFF}
 .box.box-on .num{background:#FFFFFF;color:#1B1D21;box-shadow:0 0 0 2px #1B1D21}
 .num.num-stack{width:auto;min-width:20px;padding:0 6px;border-radius:10px;white-space:nowrap}
@@ -107,4 +113,11 @@ export const VIEWS_CSS = `
 /* the list's numbers look like the markers on the screenshot (ringed), in the dark too */
 @media (prefers-color-scheme:dark){.board .sp-list .numb{box-shadow:0 0 0 2px #FFFFFF}}
 @media (max-width:760px){.sd-figs.sd-both{flex-direction:column}.sd-both>.sd-fig{width:100%}.sd-sbs{grid-template-columns:1fr}.sd-hint{display:none}}
+/* forced colours (Windows contrast themes): the selected cell, the edges of segmented buttons and the pressed one, and
+   the markers keep their own drawing (their dark disc and white ring read on any screenshot) */
+@media (forced-colors:active){
+.cv-cell.cv-sel{outline:3px solid Highlight;outline-offset:-3px}
+.board .seg-b{border:1px solid ButtonText}.board .seg-b button{border:1px solid ButtonText}
+.board .seg-b button[aria-pressed=true]{background:Highlight;color:HighlightText;forced-color-adjust:none}
+.box,.num,.numb{forced-color-adjust:none}}
 `;

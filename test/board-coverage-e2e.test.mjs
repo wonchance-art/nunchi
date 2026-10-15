@@ -74,14 +74,14 @@ test('coverage e2e: the view at 1280 px — totals, what to do, Copy named by it
     assert.deepEqual(v.h2, ['What wasn’t checked, and what to do6', 'Map', 'By lens']);
     assert.deepEqual(v.gaps, ['2 screens didn’t load', '20 AI cells don’t count: the AI missed a test defect nunchi planted', '10 AI cells not checked: AI budget ran out', '2 AI cells not answered',
       '1 page not opened: profile/edit — nunchi couldn’t work out its address from the code', '1 open finding can’t be marked fixed: not looked at since run 0001']);
-    assert.deepEqual(v.copy, ['Copy “capture again”', 'Copy “hunt L6 on /cart again”', 'Copy “review what the AI budget skipped”', 'Copy “finish the AI review”', 'Copy “capture profile/edit too”']);
+    assert.deepEqual(v.copy, ['Copy “capture again”', 'Copy “hunt L6 on `/cart` again”', 'Copy “review what the AI budget skipped”', 'Copy “finish the AI review”', 'Copy “capture `profile/edit` too”']);
     assert.deepEqual(v.grid, { rows: '9', cols: '6', stops: 1, rowheaders: 8 }, 'a grid with one tab stop; the header row and 8 pages; page + 4 person·width columns + other states');
     assert.equal(v.cell, '/cart, Signed in, Desktop, Normal: partly. AI 6 of 7. L6 doesn’t count: the AI missed a test defect nunchi planted.');
     assert.deepEqual(v.marks, ['true'], 'the mark is hidden from assistive technology; the words say it');
     // [Show on map] on the budget row: Checks L4, gaps only, the focus on the first cell it names
     await page.click('#gap-show-budget-0');
     const shown = await until(async () => { const a = await page.evaluate(() => document.querySelector('#announce').textContent); return /Showing/.test(a) && a; });
-    assert.equal(shown, 'Showing 5 pages with gaps');
+    assert.equal(shown, 'Showing 3 pages with gaps', 'the pages of this gap (L4 cut by the budget on /garden, /help, /login), not every page with a gap');
     const after = await page.evaluate(() => ({ focus: document.activeElement?.getAttribute('aria-label'), checks: document.getElementById('cv-checks').value, gaps: document.getElementById('cv-show-gaps').getAttribute('aria-pressed'),
       rows: [...document.querySelectorAll('[role=grid] th[scope=row] .mono')].map(x => x.textContent) }));
     assert.equal(after.focus, '/garden, Visitor, Desktop, Normal: not checked: AI budget ran out.');
@@ -128,7 +128,7 @@ test('coverage e2e: the grid\'s keys — arrows, Home/End, Ctrl+Home/End, J/K to
     assert.equal(panel.hash, '#/coverage/0004/cart.signed-in.normal.d');
     assert.ok(panel.side, 'right of the map at 1280 px and wider, one state shown');
     for (const want of ['/cart · Signed in · Desktop · Normal', 'Rule checksRan in run 0004', 'AI review6 of 7 lenses looked', 'L5 Copy consistencyLooked · 1 finding',
-      'L6 Copy qualityDoesn’t count: the AI missed a test defect nunchi planted on /cart', 'L7 Vibe-coding leftoversLooked · couldn’t judge 1 question', 'Tell your AI“hunt L6 on /cart again”', 'Open this screen']) assert.ok(panel.text.includes(want), want);
+      'L6 Copy qualityDoesn’t count: the AI missed a test defect nunchi planted on /cart', 'L7 Vibe-coding leftoversLooked · couldn’t judge 1 question', 'Tell your AI“hunt L6 on `/cart` again”', 'Open this screen']) assert.ok(panel.text.includes(want), want);
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.getElementById('cv-panel-h'));
     assert.equal(await at(), 'cv-3-2', 'Esc closes the panel and gives the focus back to the cell');
@@ -172,10 +172,12 @@ test('coverage a11y: axe finds nothing (light 1280, dark 390, dark 1440, 200% zo
       assert.equal(l.sideways, false, `${width}px: no sideways scroll`);
       if (width < 760) {
         const list = await page.evaluate(() => ({ grid: !!document.querySelector('[role=grid]'), pages: document.querySelectorAll('.cv-list > li > details').length, open: document.getElementById('cv-d-3').open,
+          sumHidden: document.querySelector('#cv-d-1 > summary .cv-sum').getAttribute('aria-hidden'),
           sum: document.querySelector('#cv-d-1 > summary').textContent, panelIn: !!document.querySelector('#cv-d-3 .cv-panel'), filters: [...document.querySelectorAll('.cv-filters select')].map(x => x.id),
           lens: document.getElementById('cv-lens-d').open, h2: document.getElementById('h-gaps').textContent }));
         assert.deepEqual([list.grid, list.pages, list.open, list.panelIn, list.lens], [false, 8, true, true, false], 'a list of pages; the cell\'s panel under its page; By lens collapsed');
-        assert.match(list.sum, /^\/garden · Garden◐ 4 of 4$/, 'a page counts its four person·width cells by mark');
+        assert.match(list.sum, /^\/garden · GardenPartly, 4 of 4\.◐ 4 of 4$/, 'a page counts its four person·width cells by mark, in words for assistive technology too');
+        assert.equal(list.sumHidden, null, 'the status is read, not hidden');
         assert.deepEqual(list.filters, ['cv-state', 'cv-show', 'cv-checks']);
         assert.equal(list.h2, 'What wasn’t checked (6)');
         await page.click('#cv-close');
@@ -213,25 +215,37 @@ test('coverage e2e: the view follows the live update — canaries --score voids 
   } finally { await s.close(); }
 });
 
-test('coverage e2e: a quick first look (M5) — Coverage and the wall say "First look", the AI row has no sentence to tell, the map\'s cells are rules only; axe finds nothing', { timeout: 90000 }, async t => {
+test('coverage e2e: a quick first look (M5) after a full check — Coverage shows the full check and says "First look", a link to the first look\'s screen says it is not in the run shown; the wall shows the first look; axe finds nothing', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = leafy({ quick: true, probes: false });
   const s = await open(p);
   const { page } = s;
   try {
-    await page.evaluate(() => { location.hash = '#/coverage'; });
+    await page.evaluate(() => { location.hash = '#/coverage/0005/~.guest.normal.d'; });
     await page.waitForSelector('#h-map');
-    const v = await page.evaluate(() => ({ banner: document.getElementById('cv-first-look')?.textContent, ai: document.querySelector('.cv-totals').textContent, copy: !!document.getElementById('cv-copy-ai'),
-      cell: document.getElementById('cv-0-0').textContent.trim(), gaps: [...document.querySelectorAll('.cv-gaps .cv-gap-line b')].map(b => b.textContent) }));
-    assert.equal(v.banner, 'First look: 3 key screens, rule checks only · the full check isn’t done yet');
-    assert.match(v.ai, /AI looked atAI review hasn’t run on run 0005Pages opened3 of 8/);
-    assert.equal(v.copy, false, 'no "run the AI review" to copy: the AI review hunts the full check');
-    assert.equal(v.cell, '○ Rules only');
-    assert.deepEqual(v.gaps, ['1 open finding can’t be marked fixed: not looked at since run 0001']);
-    assert.deepEqual(await axe(page), [], 'a first look');
+    const v = await page.evaluate(() => ({ sub: document.querySelector('#coverage .muted').textContent, banner: document.getElementById('cv-first-look')?.textContent, missing: document.getElementById('cv-missing')?.textContent,
+      panel: !!document.getElementById('cv-panel-h'), cell: document.getElementById('cv-0-0').textContent.trim(), focus: document.activeElement?.id }));
+    assert.deepEqual(v, { sub: 'What nunchi looked at in run 0004 (full check), and what it didn’t', banner: 'First look: 3 key screens, rule checks only · the full check isn’t done yet',
+      missing: 'This screen isn’t in run 0004.', panel: false, cell: '● 7 of 7', focus: 'h-coverage' });
+    assert.deepEqual(await axe(page), [], 'a first look noted');
     await page.click('a[data-nav=screens]');
     await page.waitForSelector('#h-screens');
-    assert.equal(await page.evaluate(() => document.getElementById('wall-first-look')?.textContent), 'First look: 3 key screens, rule checks only · the full check isn’t done yet');
+    assert.deepEqual(await page.evaluate(() => [document.getElementById('wall-first-look')?.textContent, document.querySelector('#screens .muted').textContent]),
+      ['First look: 3 key screens, rule checks only · the full check isn’t done yet', '3 pages, 12 screens · every one nunchi captured in run 0005, as it saw it']);
     assert.deepEqual(s.errors, []);
   } finally { await s.close(); }
+  // a first look and nothing before it: shown as it is, the AI row without a sentence to tell, the cells rules only
+  const q = leafy({ quick: true, probes: false, runs: 0, ai: 'none' });
+  const s2 = await open(q);
+  try {
+    await s2.page.evaluate(() => { location.hash = '#/coverage'; });
+    await s2.page.waitForSelector('#h-map');
+    const v = await s2.page.evaluate(() => ({ banner: document.getElementById('cv-first-look')?.textContent, ai: document.querySelector('.cv-totals').textContent, copy: !!document.getElementById('cv-copy-ai'),
+      cell: document.getElementById('cv-0-0').textContent.trim(), gaps: document.querySelectorAll('.cv-gaps .cv-gap').length }));
+    assert.equal(v.banner, 'First look: 3 key screens, rule checks only · the full check isn’t done yet');
+    assert.match(v.ai, /AI looked atAI review hasn’t run on run 0001Pages opened3 of 8/);
+    assert.deepEqual([v.copy, v.cell, v.gaps], [false, '○ Rules only', 0], 'no "run the AI review" to copy: the AI review hunts the full check');
+    assert.deepEqual(await axe(s2.page), [], 'a first look alone');
+    assert.deepEqual(s2.errors, []);
+  } finally { await s2.close(); }
 });
