@@ -21,7 +21,8 @@ function show(...nodes) {
   const was = d.activeElement, inside = was instanceof Element && was !== main() && main().contains(was);
   main().replaceChildren(...nodes);
   if (inside && !main().contains(d.activeElement)) {
-    const again = (was.id && $(was.id)) || (was.classList.contains('row') && S.focus && $(`row-${S.focus}`));
+    // (a control that is gone names where its focus goes: `data-fallback`, e.g. the guard card's heading)
+    const again = (was.id && $(was.id)) || (was.classList.contains('row') && S.focus && $(`row-${S.focus}`)) || (was.dataset?.fallback && $(was.dataset.fallback));
     if (again && /^H[1-6]$/.test(again.tagName)) again.setAttribute('tabindex', '-1');      // a heading the focus was on
     if (again) again.focus({ preventScroll: true }); else focusHeading();
   }
@@ -48,6 +49,7 @@ const S = {
   list: null,            // the frozen list: { sections, unchecked, groups, ids }
   pending: null,         // a newer list, shown on R
   focus: null, selection: new Set(), anchor: null, openUnchecked: false,
+  guardNote: null,       // what the guard card's last press said: { kind, added, text }
   detail: null, details: new Map(),
   screens: null, screenSel: null, screenFilter: { vp: null, who: 'all', state: 'normal', show: 'all', q: '' }, wallFocus: null, wallReturn: null,
   // M7: the Coverage view's data and filters, and the Screen detail's choices (kept for the session while walking J/K)
@@ -390,6 +392,7 @@ function renderProgress(focus = false) {
     s.now.length ? h('ul', { class: 'now', 'aria-label': 'Now' }, s.now.map((l, i) => h('li', { title: s.nowTitles?.[i] || null }, l))) : null);
   const confirm = s.confirm.length ? confirmPanel(s.confirm) : null;
   const checks = s.checks && s.checks.requested && !s.checks.approved ? checksPanel(s.checks) : null;
+  const guards = s.guards && s.guards.rows.length ? guardsPanel(s.guards) : null;
   const since = h('section', { class: 'panel-box', 'aria-labelledby': 'h-since' }, h('h2', { id: 'h-since' }, s.since.label),
     h('ul', { class: 'facts' }, h('li', null, h('b', { class: 'good' }, String(s.since.fixed)), ' fixed'), h('li', null, h('b', null, String(s.since.new)), ' new'),
       s.since.back ? h('li', null, h('b', { class: 'warn' }, String(s.since.back)), ' came back after a fix') : null));
@@ -414,8 +417,46 @@ function renderProgress(focus = false) {
     s.fixNeedsYou ? h('p', { class: 'warn small' }, `${s.fixNeedsYou} to fix ${s.fixNeedsYou === 1 ? 'needs' : 'need'} you: ${s.fixNeedsYou === 1 ? 'its fix waits' : 'their fixes wait'} for you here, not for your AI.`) : null,
     s.warnings.length ? h('ul', { class: 'facts muted small' }, s.warnings.map(w => h('li', null, w))) : null);
   show(h('div', { id: 'progress', class: 'view' },
-    h('div', { class: 'stack' }, hero, confirm, checks, h('div', { class: 'two' }, since, health), counts)));
+    h('div', { class: 'stack' }, hero, confirm, checks, guards, h('div', { class: 'two' }, since, health), counts)));
   if (focus) focusHeading();
+}
+
+// design §5: after a verified fix of a kind with a built-in guard, one card at the end of the batch, in the design's
+// words ("Stop these coming back? `window.confirm` (fixed twice) · `href="#"`"), with an Add toggle per row. Backticks
+// mark code; every piece is set as text.
+const codeParts = text => String(text).split('`').map((p, i) => (i % 2 ? h('code', null, p) : p)).filter(p => p !== '');
+// A toggle's name is always "Add" and its row ("Add `window.confirm` (fixed twice)"), pressed or not; pressed, it shows
+// "✓ Added", so the state is seen in forced colours too. After a press the row says what happened in the owner's words
+// (W.GUARD_WORDS: how many hits there now became the baseline, or that the kind is no longer guarded), and the polite
+// live region says the same. When guards.json cannot be read (`unreadable`: the owner's line), the card says so and the
+// rows show what was fixed, with no toggle.
+function guardsPanel(c) {
+  const plain = text => String(text).replace(/`/g, '');
+  const row = r => {
+    const label = `guard-l-${r.kind}`, add = `guard-a-${r.kind}`, id = `guard-b-${r.kind}`;
+    const what = h('span', { class: 'what', id: label }, ...codeParts(r.text));
+    if (c.unreadable) return h('li', null, what);
+    const btn = h('button', { type: 'button', class: 'b', id, 'aria-pressed': r.added ? 'true' : 'false', 'aria-labelledby': `${add} ${label}`, 'data-fallback': 'h-guards' },
+      h('span', { id: add, hidden: true }, 'Add'), r.added ? h('span', { 'aria-hidden': 'true' }, '✓ Added') : h('span', { 'aria-hidden': 'true' }, 'Add'));
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        const res = await api('/api/guard', { method: 'POST', body: { kind: r.kind, add: !r.added } });
+        const text = res.added ? W.GUARD_WORDS.added(Number(res.baselined) || 0) : W.GUARD_WORDS.takenBack(r.label);
+        S.guardNote = { kind: r.kind, added: !!res.added, text };
+        await refreshSummary(); renderProgress();
+        announce(plain(text));
+        const again = d.getElementById(id);
+        if (again) again.focus(); else { const hd = d.getElementById('h-guards'); if (hd) { hd.setAttribute('tabindex', '-1'); hd.focus(); } }
+      } catch (e) { btn.disabled = false; announce(e.message); }
+    });
+    // what the last press said, while the row is as that press left it
+    const said = S.guardNote && S.guardNote.kind === r.kind && S.guardNote.added === !!r.added ? h('p', { class: 'guard-said small', id: `guard-n-${r.kind}` }, ...codeParts(S.guardNote.text)) : null;
+    return h('li', null, h('div', { class: 'guard-row' }, what, btn), said);
+  };
+  return h('section', { class: 'panel-box', 'aria-labelledby': 'h-guards' }, h('h2', { id: 'h-guards' }, c.title),
+    c.unreadable ? h('p', { class: 'banner banner-warn', role: 'note', id: 'guard-unreadable' }, ...codeParts(c.unreadable)) : null,
+    h('ul', { class: 'confirm-list guard-list' }, c.rows.map(row)));
 }
 
 // design §1: dismissals your AI recorded (or that came through git) count once you confirm them, in one batch
@@ -556,7 +597,8 @@ function renderFindings(focus = false) {
     const all = h('button', { type: 'button', class: 'b b-quiet' }, `Decide all ${s.ids.length} ▸`);
     all.addEventListener('click', () => { S.selection = new Set(s.ids); S.focus = s.ids[0]; renderFindings(); announce(`${W.plural(s.ids.length, 'group')} selected: press a decision key or use the bar below`); d.getElementById(`row-${s.ids[0]}`)?.focus(); });
     return h('section', { class: 'sect', 'aria-labelledby': hid },
-      h('div', { class: 'sect-head' }, h('h2', { id: hid }, sevChip(s.severity), h('span', null, s.title || '—'), h('span', { class: 'muted small' }, W.plural(s.ids.length, 'group'))), all),
+      h('div', { class: 'sect-head' }, h('h2', { id: hid }, sevChip(s.severity), h('span', null, s.title || '—'), h('span', { class: 'muted small' }, W.plural(s.ids.length, 'group'))),
+        s.guard === 'available' ? h('span', { class: 'tag' }, W.WORDS['guard-available']) : null, all),
       h('ul', { class: 'rows', role: 'listbox', 'aria-labelledby': hid, 'aria-multiselectable': 'true' }, s.ids.map(id => L.groups[id]).filter(Boolean).map(rowEl)));
   };
   const listBox = h('div', { class: 'list-box' }, L.sections.length ? L.sections.map((s, i) => section(s, i, 's')) : h('p', { class: 'empty-note' }, 'Nothing here.'));

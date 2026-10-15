@@ -25,6 +25,8 @@ export const WORDS = {
   hold: 'Later', held: 'Later', 'needs-human': 'Needs you', 'caused-regression': 'Broke something else — undone',
   'not-seen-budget': 'Not checked: AI budget ran out', 'tree-differs': 'Screens are from before your latest edits: tell your AI “capture again”',
   reopen: 'Reopened',
+  // design §5: a kind with ≥ 5 open places and a built-in guard nobody added (a passive chip)
+  'guard-available': 'guard available',
   // a verification whose run had fewer decoys than its claims called for: not suspect, and no double-check (verify.mjs)
   'too-few-decoys': 'too few decoys to check the checker',
 };
@@ -183,8 +185,17 @@ export const KEY_HELP_COVERAGE = [
 // Views that are built; the rest are listed with the CLI command that shows the same data (design §3.4 views).
 export const MORE_VIEWS = [
   ['Design system', 'nunchi tokens'], ['States & messages', 'nunchi inventory'],
-  ['Copy groups', 'nunchi inventory --json'], ['AI trust', 'nunchi trust'],
+  ['Copy groups', 'nunchi inventory --json'], ['AI trust', 'nunchi trust'], ['Guards', 'nunchi guard'],
 ];
+// The guard card's words (design §5, the owner's, 2026-10-15 KST). Backticks mark code. `added`: n hits there now
+// became the baseline of what was added; `takenBack`: the row's label (code already); `unreadable`: guards.json as the
+// repository names it, and why it cannot be read — the same line on the card, in `fix --summary` and `nunchi guard`.
+export const GUARD_WORDS = {
+  added: n => (n > 0 ? `Added · the ${n === 1 ? '1 already in your code is its' : `${n} already in your code are its`} baseline; a new one fails \`nunchi check\`. Commit \`.nunchi/guards.json\`.`
+    : 'Added · none in your code now.'),
+  takenBack: label => `Taken back · ${label} isn't guarded.`,
+  unreadable: (name, reason) => `Can't read \`${name}\`: ${reason}. Guards can't be added until it's fixed — \`git checkout -- .nunchi/guards.json\` restores the committed one.`,
+};
 export const LABELS = { 1: 'correct', 2: 'wrong', 3: 'unsure' };
 export const LABEL_WORDS = { correct: 'Correct: a real defect', wrong: 'Wrong: not a defect', unsure: 'Unsure' };
 

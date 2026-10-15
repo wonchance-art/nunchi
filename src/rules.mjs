@@ -191,6 +191,8 @@ const NAMED = [
 // A long random-looking segment of a URL path (`/reset/9f8e…`, `/invite/AbC1…`): 24 characters or more of letters,
 // digits, - and _, with lower case, upper case and digits, or 32 or more hex digits with a letter and a digit.
 const PATH_TOKEN = /(?<=\/)[A-Za-z0-9_-]{24,}(?=[/?#\s"'<>)\]]|$)/g;
+// The same in a query or fragment value (`?confirm=AbC1…`, `#state=9f8e…`), whatever the parameter is called.
+const QUERY_TOKEN = /(?<=[?&#][\w.-]{1,64}=)[A-Za-z0-9_-]{24,}(?=[&#\s"'<>)\]]|$)/g;
 const randomish = s => (/[a-z]/.test(s) && /[A-Z]/.test(s) && /\d/.test(s)) || (/^[0-9a-f]{32,}$/i.test(s) && /\d/.test(s) && /[a-f]/i.test(s));
 export function scrubSecrets(text) {
   if (typeof text !== 'string') return text;
@@ -199,6 +201,7 @@ export function scrubSecrets(text) {
   out = out.replace(SCRUB_JWT, m => `[secret-shaped: ${jwtRole(m.replace(/\s+/g, '')) === 'service_role' ? 'supabase-service-role-jwt' : 'jwt'}]`);
   for (const p of NAMED) out = out.replace(p.re, (all, name, sep = '') => `${name}${typeof sep === 'string' ? sep : ''}[secret-shaped: ${p.kind}]`);
   out = out.replace(PATH_TOKEN, m => (randomish(m) ? '[secret-shaped: url-path-token]' : m));
+  out = out.replace(QUERY_TOKEN, m => (randomish(m) ? '[secret-shaped: url-query-token]' : m));
   return out;
 }
 

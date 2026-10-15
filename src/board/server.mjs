@@ -34,7 +34,9 @@ import { decidedText, CAP_MS, fixingMinutes, AGENT_WORDS } from './shared.mjs';
 import * as P from '../project.mjs';
 import { DECISIONS, protectOf, approvalKey, reasonProblem } from '../ledger.mjs';
 import { listRuns, workTree } from '../runs.mjs';
-import { readGeneration } from '../state.mjs';
+import { readGeneration, bumpGeneration } from '../state.mjs';
+import { KINDS as GUARD_KINDS } from '../guard-kinds.mjs';
+import { toggleOffer, OFFER_TITLE, rowText } from '../guard-offer.mjs';
 import { readManifest, sceneDir } from '../hunt.mjs';
 import { writeStable, privateDir, sha } from '../stable.mjs';
 import { recordDecisionTime, metricsPath } from '../metrics.mjs';
@@ -186,6 +188,9 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   const huntNow = () => { const t = now(); return runningHunts().map(x => { const n = declaredName(x.hunt.declaredAgent).name, name = n ? safe(n, 40) : null;
     return { line: safe(huntLine({ ...x.hunt, declaredAgent: name }, t), 160), title: name ? `${name} ${AGENT_WORDS.asDeclared}` : null }; }); };
   const huntsSig = () => { const h = runningHunts(); return h.length ? sha(h.map(x => `${x.id}:${x.hunt.answered}:${x.hunt.complete}:${x.hunt.units}`).join('|'), 12) : '-'; };
+  // guards.json, committed and changed by the person's terminal or through git (neither bumps the generation): its mtime
+  // and size
+  const guardsSig = () => { try { const s = statSync(join(nunchiDir, 'guards.json')); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; } };
   // the AI hunt's records: `canaries --score` rewrites a run's coverage.json without a ledger write (it bumps no
   // generation), and Coverage must still show the cells it voided (M7). Every run's (Coverage shows the last full
   // check, which the latest capture need not be), by size and time (a coarse file-system clock can leave the time as
@@ -195,7 +200,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     for (const id of listRuns(runsDir).complete) { try { const st = statSync(join(runsDir, id, 'coverage.json')); parts.push(`${id}:${st.size}:${st.mtimeMs}`); } catch {} }
     return parts.length ? sha(parts.join('|'), 12) : '-';
   };
-  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${huntsSig()}.${claimsSig()}.${coverageSig()}`;
+  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${huntsSig()}.${claimsSig()}.${coverageSig()}.${guardsSig()}`;
   // claims as they are now (their minutes too) on a cached model
   const freshClaims = m => { const c = readClaims(claimsDir, now()); m.claims = c; for (const g of m.groups) g.fixing = c.get(g.id) || null; return m; };
   let cache = null;
@@ -374,6 +379,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     if (post && path === '/api/approve-checks') return approveChecks(res, await readJsonBody(req));
     if (post && path === '/api/fix-accept') return fixAccept(res, await readJsonBody(req));
     if (post && path === '/api/fix-undo') return fixUndo(res, await readJsonBody(req));
+    if (post && path === '/api/guard') return guardToggle(res, await readJsonBody(req));
     return fail(res, 404, 'not found');
   };
 
@@ -467,6 +473,11 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
       // "Your AI" is no declared name)
       nowTitles: [...Array(nowLines.length - m.claims.size).fill(null), ...[...m.claims.values()].map(c => (c.agent !== 'Your AI' ? `${c.agent} ${AGENT_WORDS.asDeclared}` : null)), ...hunting.map(x => x.title)],
       checks: profile ? { requested, approved, profile: { hash: profile.hash, scripts: Object.fromEntries(Object.entries(profile.scripts).map(([k, v]) => [safe(k, 40), safe(v, 400)])), serve: Object.fromEntries(Object.entries(profile.serve || {}).map(([k, v]) => [safe(k, 40), safe(v, 400)])), others: Object.keys(profile.others || {}).length, files: Object.fromEntries(Object.entries(profile.files).map(([k, v]) => [safe(k, 120), v ? safe(v, 64) : null])), packageManager: profile.packageManager ? safe(profile.packageManager, 80) : null } } : null,
+      // design §5: one card at the end of a fix batch, in its words; the rows a person toggles (Add)
+      // `unreadable`: the line that says guards.json cannot be read (the rows then show without their toggles), or null;
+      // `label`: what a row guards, for the words a toggle says
+      guards: m.guardOffer?.rows.length ? { title: OFFER_TITLE, unreadable: m.guardsUnreadable ? safe(m.guardsUnreadable, 600) : null,
+        rows: m.guardOffer.rows.map(r => ({ kind: r.kind, text: safe(rowText(r), 200), label: safe(r.label, 200), added: r.added })) } : null,
       counts: { groups: m.groups.length, screens: m.latestEv?.scenes.length || 0 },
       treeChanged: !!(runTree && now && now !== runTree),
       warnings: [...warnings].map(w => safe(w, 400)),
@@ -552,6 +563,19 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
 
   // [Looks fine, mark fixed] on *needs you (a)* (design §3.4): a person's, through the board's key; the engine marks it
   // fixed only when the defect itself is gone (fix/loop.mjs acceptDrift).
+  // The guard card's Add toggle (design §5): a person's action through the board, never the agent's. Only a kind the
+  // card offers now; `add: false` takes back only what this card added. The scan for the baseline runs here.
+  async function guardToggle(res, body) {
+    if (typeof body.kind !== 'string' || !GUARD_KINDS.includes(body.kind) || typeof body.add !== 'boolean') return fail(res, 400, 'kind (a built-in guard) and add (true or false)');
+    const m = model();
+    let r;
+    try { r = await toggleOffer({ nunchiDir, stateDir, project, rows: m.rows, kind: body.kind, add: body.add, by }); }
+    catch (e) { if (['CORRUPT', 'UNSAFE_PATH', 'LOCKED', 'BAD_ARGS'].includes(e.code)) return fail(res, 409, e.message, { stale: true }); throw e; }
+    try { bumpGeneration(genFile); } catch {}
+    cache = null;
+    return r.ok ? send(res, 200, { ok: true, added: body.add, baselined: body.add ? r.baselined || 0 : 0 }) : fail(res, r.status || 409, r.error, { stale: true });
+  }
+
   async function fixAccept(res, body) {
     if (typeof body.group !== 'string' || !HEX12.test(body.group) || !Number.isInteger(body.attempt) || body.attempt < 1) return fail(res, 400, 'group and attempt of the fix');
     const { openFix, acceptDrift } = await import('../fix/loop.mjs');

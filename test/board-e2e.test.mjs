@@ -141,6 +141,9 @@ test('board e2e: batches — Space selects, S decides all with one batch id, Z u
     await page.keyboard.press('z');
     await until(() => decisions(p.nunchi).length === 4);
     assert.equal(decisions(p.nunchi).filter(d => d.decision === 'reopen').length, 2, 'Z undid the whole batch');
+    // the page is done with the undo when it says so: until then its answer can still move the focus to the reopened
+    // row (the server writes the files before it answers, so the files alone do not say the page has moved on)
+    await page.waitForFunction(() => /^Undone · back to open/.test(document.getElementById('toast')?.textContent || ''));
     // a dismissal of the blocker asks; Cancel (the focused choice) writes nothing
     await page.focus(`#row-${gid(p, 'secret-in-client-bundle')}`);
     await page.keyboard.press('x');
