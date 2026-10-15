@@ -967,7 +967,10 @@ unreadable one by one). Built in `src/ledger.mjs`:
     20 ms as at first (M6 review, 2026-10-15 KST): a waiter a busy machine set aside right after it asked had no
     place in line yet, so one that released and asked again after it went first (a macOS runner: a waiter overtaken
     4 times by 3 others; reproduced here with waiters now and then woken 300 ms late, see
-    `test/lock-ticket.test.mjs`, which drives it step by step). A free lock is still taken without one. Fairness is measured as overtakes (how many
+    `test/lock-ticket.test.mjs`, which drives it step by step). A free lock is still taken without one. Still open:
+    a waiter set aside between its request and its first try (before it has a ticket), or for over 1 s while it
+    waits (its ticket then no longer counts), can be passed; seen once at a load average of about 30 on 4 cores
+    (3, 5, 3, 3), 2026-10-15 KST. Fairness is measured as overtakes (how many
     acquisitions by others come between a request and its turn; at most N − 1 for N waiters, however fast the
     machine): 4 processes × 15 holds of 80 ms, at most 45 before, 3 after (2026-10-15 KST). A waiter renews its
     ticket's time while it waits; one not renewed for 1 s, or that cannot be read, does not count; a crash's ticket
@@ -1343,10 +1346,12 @@ never timed.
   every expired claim, so with one time for all, the first take-over removed the later rounds' claims before their
   race (M6 review: the renewal then lost 24 or 25 rounds of 25 without racing, and the expired-claim rounds took over
   no expired claim). Measured here: the renewal won 12–15 rounds of 25, the two attempts overlapping in time in 9–17.
-- *Measured (2026-10-15 17:48–18:13 KST, after the review of PR #34 and the merges of M5 and M7):* `npm test` 708
-  tests, 707 pass and 1 skipped (Windows only), on Node 22.22.0 and on Node 24.21.0, Chromium included, with bun on
+- *Measured (2026-10-15 18:26–19:06 KST, after the review of PR #34 and the merges of M5, M7 and M4):* `npm test` 786
+  tests, 785 pass and 1 skipped (Windows only), on Node 22.22.0 and on Node 24.21.0, Chromium included, with bun on
   PATH and without. Pebble `node bench/run.mjs --twice` is unchanged: rule recall 34/34, 0 false positives on 8 clean
-  scenes, determinism identical (1,141 files), fingerprints 100% (52/52), 173 s per capture.
+  scenes, determinism identical (1,141 files), fingerprints 100% (52/52), 172 s per capture. One Node 22 run, while
+  other sessions' suites held the machine at a load average of about 30 on 4 cores, saw the D5 fair-lock test
+  overtaken 3, 5, 3, 3 times (limit 3); the run again: passed (§5.1).
 
 **Limits.** Agents hunting one run share its plan: a plan with other lenses waits for the running hunt. An AI fold
 keeps the cells its hunt saw (`seen`, about 30 characters a cell). The board's before and after of a fix verified in another folder is missing (its
