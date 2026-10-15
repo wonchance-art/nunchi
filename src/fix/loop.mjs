@@ -16,7 +16,7 @@
 import { join, basename, dirname, relative, sep, resolve } from 'node:path';
 import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import * as P from '../project.mjs';
-import { titleOf, captureRuns, foldFix, unfoldFix, commitFix, byRun, looked, currentTargets, writtenAs, approvalKey, HUMAN_CHANNELS } from '../ledger.mjs';
+import { titleOf, captureRuns, latestRunOf, foldKindOf, foldFix, unfoldFix, commitFix, byRun, looked, currentTargets, writtenAs, approvalKey, HUMAN_CHANNELS } from '../ledger.mjs';
 import { runsDirOf } from '../worktrees.mjs';
 import { human } from '../board/shared.mjs';
 import { readConfig, workTree } from '../runs.mjs';
@@ -125,8 +125,8 @@ const runDirOf = (ctx, id, stream = ctx.stream) => join((stream ?? 'main') === c
 // when the one that did cannot be found now, else the sweep.
 function lastSweep(ctx) {
   const st = ctx.led.state;
-  const kindOf = (run, s) => (st.folds || []).find(f => f.run === run && f.source === 'rule' && (f.stream ?? 'main') === s)?.kind;
-  const sweepOf = s => captureRuns(st, s).filter(r => kindOf(r, s) === undefined).pop() ?? null;
+  // a quick first look (design §6) is not one: it saw a few screens in the normal state only (M5)
+  const sweepOf = s => captureRuns(st, s).filter(r => foldKindOf(st, r, s) === 'sweep').pop() ?? null;
   let stream = ctx.stream, id = sweepOf(stream);
   if (!id) {
     for (const s of [...new Set((st.folds || []).map(f => f.stream ?? 'main'))].sort()) { const r = sweepOf(s); if (r && (!id || byRun(r, id) > 0)) { id = r; stream = s; } }
@@ -440,7 +440,7 @@ async function startFixInner(ctx, id, opts = {}) {
     if (dirty.length || ctx.git.inProgress().length) return refuse([...said, `Your working tree has uncommitted changes (${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? ` +${dirty.length - 5} more` : ''}${ctx.git.inProgress().length ? `; a ${ctx.git.inProgress()[0]} is in progress` : ''}): commit them as "WIP before nunchi fixes", or stash them, before fixing.`], { dirty });
   }
   const sweep = lastSweep(ctx);
-  if (!sweep) return refuse('No capture yet: nunchi capture --url <your local server> first.');
+  if (!sweep) return refuse(latestRunOf(ctx.led.state, ctx.stream) ? 'Only a quick first look so far: the fix loop re-checks against a full check. Run nunchi capture --url <your local server> first.' : 'No capture yet: nunchi capture --url <your local server> first.');
   if (sweep.missing) return refuse(`The last capture (run ${sweep.id}) was made in another folder of this repository, which nunchi cannot find now: capture again (nunchi capture --url <your local server>) on the branch you ship from.`);
   const cause = rec?.scope ? null : causeOf(ctx, tf.fixing, sweep);
   if (!rec && !cause.groupRoutes.length) return refuse(`'${title}' belongs to the whole app, not to a screen nunchi can re-check: fix it by hand, then run a full capture.`);

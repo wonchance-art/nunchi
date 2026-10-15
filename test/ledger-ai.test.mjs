@@ -311,7 +311,8 @@ test('run files: a command writing into a run waits for the run\'s lock, and end
 test('AI fold: a verify --record whose fold could not happen (the ledger was busy) is folded by the next ledger command', async () => {
   const cwd = project();
   makeRun(cwd, '0001');
-  assert.equal((await cli(cwd, 'findings', '--all')).code, 1, 'nothing yet');
+  // nothing yet (since M5 a run that found nothing is said as such, not as "nothing captured")
+  assert.equal((await cli(cwd, 'findings', '--all')).stdout.split('\n')[0], 'run 0001 · 0 unique defects in 0 groups · groups open 0 · to fix 0 · later 0 · fixed 0 · kept 0 · not a problem 0');
   let r;
   S.withLock(join(cwd, '.nunchi', 'state', 'ledger.json'), () => {
     // the hunt and verify run while another nunchi holds the ledger (a synchronous child, so the lock stays held)
