@@ -13,6 +13,8 @@ export const VIEWS_CSS = `
 /* a select whose options are long (a fix's title) shrinks to its row, never wider than the window */
 .board .field{max-width:100%;min-width:0}.board .field select{max-width:100%;min-width:0;flex:0 1 auto}
 .keys-h{font-size:14px;margin:16px 0 4px}
+/* a heading the board moves the focus to (the cell panel's h3, as the views' h1 and h2) shows no ring: it is not a control */
+.board h3[tabindex="-1"]:focus{outline:none}
 .fig-where{display:flex;flex-wrap:wrap;align-items:center;gap:0 8px}
 /* Coverage: the totals */
 .cv-totals{margin:0;gap:10px}
