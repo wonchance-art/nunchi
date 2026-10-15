@@ -1,9 +1,9 @@
 # Gate pre-registrations (milestone G)
 
-Status: **drafts, none registered** (2026-10-15 KST, on main `8fdbc79`). Design 0.1-c §9 asks for one
-`docs/prereg-<gate>.md` per measurement, committed before it starts, holding the engine, scorer and answer-key hashes,
-the seeds and sample sizes, the primary statistic and pass rule, the exclusions and the amendment policy. These are
-those files. No gate has been run for them and none of them states a result.
+Status: **drafts, none registered**; the owner's decisions recorded (2026-10-15 KST, on main `8fdbc79`). Design 0.1-c
+§9 asks for one `docs/prereg-<gate>.md` per measurement, committed before it starts, holding the engine, scorer and
+answer-key hashes, the seeds and sample sizes, the primary statistic and pass rule, the exclusions and the amendment
+policy. These are those files. No gate has been run for them and none of them states a result.
 
 > 한국어 요약
 > - 남은 관문 6개(홀드아웃 앱 2·3, 정밀도, 수리 루프, 결정 시간, 현장 시험 2–3차, Codex)의 사전 등록 초안이다.
@@ -11,25 +11,47 @@ those files. No gate has been run for them and none of them states a result.
 > - 해시와 시드는 손으로 쓰지 않는다. 등록할 때 `scripts/prereg-hash.mjs`가 채우고, 측정 전후에 `--check`로 확인한다.
 > - 통과 규칙은 Clopper–Pearson 정확 구간의 단측 95% 경계로 다시 계산했다(`scripts/prereg-stats.mjs`, 테스트 포함).
 >   설계의 43/50 구간 「74–94%」는 틀렸고 73–94%가 맞다. 나머지 수치는 맞다.
-> - 오너가 정할 것 10개가 아래에 있다. 사람으로는 nunchi를 만들지 않은 검토자 2명과 참가자 5명이 필요하다.
+> - 오너가 2026-10-15에 결정 10개를 모두 권장안대로 승인했다(「권장대로」). 남은 것은 사람 지정이다: nunchi를 만들지 않은
+>   검토자 2명과 참가자 5명(D4). 등록 전에 만들 것 16개는 아래 목록에 있다.
 
-## Owner decisions needed
+## Decided (2026-10-15 KST, owner: as recommended)
 
-Decisions §11 already records (#1–#3, #10–#15, owner response 2026-10-14 KST) are respected and not reopened. The
-ones below are open; each names the gates that wait for it.
+The owner approved every recommendation on 2026-10-15 KST (「권장대로」). Decisions §11 already records (#1–#3,
+#10–#15, owner response 2026-10-14 KST) stand as they were; D1, D2, D3, D5 and D6 settle §11 #7, #9, #6, #8 and #4.
 
-| # | Decision | Options | Recommendation | Waits |
-|---|---|---|---|---|
-| D1 | Held-out apps 2 and 3 (design §11 #7) | (a) two new invented apps and keys written by a different vendor's model session; (b) written by a person; (c) none: AI recall stays at pegroom's, which is no longer blind, and 0.1 claims no AI recall | **(a)**: about 15M hunting tokens per app for 3 runs, plus verification, as pegroom cost | held-out, Codex (C), precision |
-| D2 | Codex CLI access (§11 #9) | (a) yes, before the held-out apps are captured; (b) yes, later: (C) is then not blind; (c) no: spec §8's compatibility row is dropped and the README says Claude Code only | **(a)** | Codex |
-| D3 | Precision target (§11 #6) | (a) 50 groups, an estimate with its interval, e.g. "86% (73–94)", no "≥ 85%" claim; (b) 150 groups from ≥ 3 apps, pass at ≥ 135 | **(b)**: the only one that can support spec §8's "≥ 85%"; each labeller labels about 374 items (≈ 3 h) instead of about 224 | precision |
-| D4 | The people. Who recruits the non-builders (role table below) | (a) the owner recruits two reviewers now and five participants by the field round; (b) the gates needing them are reported as not measured | **(a)**: reviewer A (second labeller, held-out adjudicator, diff reviewer, gold judge, second field judge), reviewer B (manual passes) | precision, held-out, fix, field, decision time |
-| D5 | Decision-time study (§11 #8) | (a) gated, ≥ 5 non-builder participants; (b) "reported, not gated" for 0.1 | **(a)** if D4 finds five people by the field round, else (b) | decision time |
-| D6 | May the engine run the repo's checks after a person approves the check profile? (§11 #4) | (a) yes, as M3 is built; (b) no: the loop changes and the fix pre-registration is redrafted | **(a)** | fix |
-| D7 | The fix gate's app | (a) pegroom now: the fix loop never ran or was tuned on it; (b) wait for held-out apps 2 and 3 | **(a)**: unblocked today | fix |
-| D8 | Who builds the fix gate's sets (30 planted regressions, 20 clean fixes, 10 out-of-scope, 60 re-check cases, the functional checks), "someone other than the fixer" | (a) a person who did not build nunchi (about 1–2 days); (b) a different vendor's model session that never read the judge, with reviewer A spot-checking 10 items | **(b)** | fix |
-| D9 | Field round 3 | (a) three fresh apps; (b) the round-2 apps again | **(a)**: round 2's findings tune the lenses, so its apps are no longer fresh | field round 3 |
-| D10 | Upstream issues (field secondary: acknowledgement within 14 days) | (a) the owner files the counted findings by hand from their account, at most 5 per repository, neutral wording, after the count is final; (b) drop the secondary | **(a)**: a maintainer's acknowledgement is the one outside check of "worth fixing" | field (secondary only) |
+| # | Decision | Chosen | Gates |
+|---|---|---|---|
+| D1 | Held-out apps 2 and 3 (§11 #7) | two new invented apps and their keys, written by a different vendor's model session that never tuned a lens; about 15M hunting tokens per app for 3 runs, plus verification | held-out, Codex (C), precision |
+| D2 | Codex CLI access (§11 #9) | yes, before the held-out apps are captured, so (C) runs on the same frozen engine and stays blind | Codex |
+| D3 | Precision target (§11 #6) | option (b): 150 confirmed groups from ≥ 3 apps, pass at ≥ 135 (one-sided 95% lower bound ≥ 85%); option (a) is struck | precision |
+| D4 | The people | **approved; awaiting the owner to name the people** (below) | precision, held-out, fix, field, decision time |
+| D5 | Decision-time study (§11 #8) | gated if D4 names ≥ 5 non-builder participants by the field round; otherwise "reported, not gated" for 0.1 | decision time |
+| D6 | The engine runs the repo's checks after a person approves the check profile (§11 #4) | yes, as M3 is built | fix |
+| D7 | The fix gate's app | pegroom, now (the fix loop never ran or was tuned on it) | fix |
+| D8 | Who builds the fix gate's sets ("someone other than the fixer") | a different vendor's model session that never read the fix judge; reviewer A spot-checks 10 items | fix |
+| D9 | Field round 3 | three fresh apps, chosen by the same registered rule | field round 3 |
+| D10 | Upstream issues (field secondary: acknowledgement within 14 days) | the owner files the counted findings by hand from their own account: at most 5 per repository, neutral wording, after the count is final | field (secondary only) |
+
+### D4: the people the owner still has to name
+
+Approved in principle; no gate that needs a person is registered until the owner names that person (by role in these
+files, never by name). Hours are rough.
+
+| Role | How many | Does | Hours |
+|---|---|---|---|
+| Reviewer A | 1 person who did not build nunchi | labels the whole precision pool, blind (374 items, about 30 s each), before seeing any verdict of those apps | ≈ 3 |
+| | | labels the confirmed AI claims on held-out clean scenes | ≈ 0.5 |
+| | | adjudicates held-out cases blind to runs and agents (location ties, seeds the app does not show) | ≤ 1 |
+| | | spot-checks 10 items of the fix gate's sets for realism (D8) | ≈ 1 |
+| | | reviews 10 kept fix diffs blind to their outcome | ≈ 1 |
+| | | second gold judge for the decision-time study: classes and gold decisions of the candidate groups | ≈ 1 |
+| | | second field judge: every confirmed and rule group of each field app, after labelling (about 2 h per app × 3) | ≈ 6 (+ 6 in round 3) |
+| | | **total** | **≈ 13.5 (+ 6)** |
+| Reviewer B | 1 person who did not build nunchi and judges nothing | reads the manual-pass briefing; uses each field app for 15 minutes before any nunchi output exists and writes down the defects seen | ≈ 1 (+ 0.75 in round 3) |
+| Participants | ≥ 5 people who did not build nunchi, have built a web app with an AI coding tool, and have not seen the study app | one moderated session each: briefing, 3 practice groups, 30 study groups, one at a time | ≈ 0.5–0.75 each |
+
+The owner's own part, for scale: labelling ≈ 3 h, field judging ≈ 6 h (+ 6 h), gold judging ≈ 1 h, Fix decisions and
+check-profile approvals for about 60 fix trials, and moderating the 5 sessions (≈ 4 h).
 
 **Later, after M5:** for the time gate, a reference machine, a lower-spec machine and an app with ≥ 25 routes that
 nunchi was not tuned on ([prereg-time.md](prereg-time.md)).
@@ -38,23 +60,46 @@ nunchi was not tuned on ([prereg-time.md](prereg-time.md)).
 
 | Gate | File | Unblocked by | Pass rule (short) | Waits for |
 |---|---|---|---|---|
-| Held-out apps 2 and 3 | [prereg-heldout.md](prereg-heldout.md) | M1 | rule recall 100%; on-checklist AI seeds found in ≥ 2 of 3 runs with a one-sided 95% lower bound ≥ 75% (48/56; n ≥ 80 here), and the same after verification with ≤ 10% of seed hits rejected; ≤ 0.1 confirmed false positives per clean scene (upper bound); determinism; fingerprints ≥ 95% (replay and live) | D1, D2, D4; plan salt, packets, location scorer, run tally, key schema |
-| Precision | [prereg-precision.md](prereg-precision.md) | M2 | (b) ≥ 135/150 marked correct by both labellers; (a) an estimate; valid only with κ ≥ 0.6, each labeller ≤ 10% decoys accepted and ≥ 90% known-true, *unsure* ≤ 10%; rule precision on field apps ≥ 85% (point) | D1, D3, D4; pool harness, label mode for harness pools |
-| Fix loop | [prereg-fix.md](prereg-fix.md) | M3 | fixed (2 attempts, functional check passing) ≥ 90% (point); no caused regression detected; ≥ 28/30 planted regressions detected and ≤ 1/20 false alarms; re-check: ≤ 1/30 false *gone* (still there), ≤ 1/30 (moved), ≤ 3/30 false *still there* | D4, D6, D7, D8; functional checks, sets, fixer mode, board approval, re-check harness |
-| Decision time | [prereg-decision-time.md](prereg-decision-time.md) | M2 | trivial and medium groups: median ≤ 10 s and agreement with gold ≥ 80% (points) | D4, D5; study mode, study scorer |
-| Field rounds 2–3 | [prereg-field.md](prereg-field.md) | M2 | each of 3 apps ≥ 5 counted findings; stop/pivot if precision < 70% or < 3 counted findings per app on average | D4, D9, D10; tally |
-| Codex CLI | [prereg-codex.md](prereg-codex.md) | M1 | (A) 0 files differ; (B) 100% valid answers, rejections ≤ Claude Code's + 5 points, ≥ 95% cells seen; (C) one-sided 95% lower bound of Codex − Claude Code recall > −15 points; (D) measured or said unmeasured | D2; Codex runner |
+| Held-out apps 2 and 3 | [prereg-heldout.md](prereg-heldout.md) | M1 | rule recall 100%; on-checklist AI seeds found in ≥ 2 of 3 runs with a one-sided 95% lower bound ≥ 75% (48/56; n ≥ 80 here), and the same after verification with ≤ 10% of seed hits rejected; ≤ 0.1 confirmed false positives per clean scene (upper bound); determinism; fingerprints ≥ 95% (replay and live) | the apps (D1), Codex access (D2), reviewer A (D4); B1–B5 |
+| Precision | [prereg-precision.md](prereg-precision.md) | M2 | ≥ 135/150 marked correct by both labellers; valid only with κ ≥ 0.6, each labeller ≤ 10% decoys accepted and ≥ 90% known-true, *unsure* ≤ 10%; rule precision on field apps ≥ 85% (point) | the held-out apps (D1), reviewer A (D4); B7, B8 |
+| Fix loop | [prereg-fix.md](prereg-fix.md) | M3 | fixed (2 attempts, functional check passing) ≥ 90% (point); no caused regression detected; ≥ 28/30 planted regressions detected and ≤ 1/20 false alarms; re-check: ≤ 1/30 false *gone* (still there), ≤ 1/30 (moved), ≤ 3/30 false *still there* | the sets (D8), reviewer A (D4); B9–B13 |
+| Decision time | [prereg-decision-time.md](prereg-decision-time.md) | M2 | trivial and medium groups: median ≤ 10 s and agreement with gold ≥ 80% (points); gated only with ≥ 5 participants (D5) | participants and reviewer A (D4); B14, B15 |
+| Field rounds 2–3 | [prereg-field.md](prereg-field.md) | M2 | each of 3 apps ≥ 5 counted findings; stop/pivot if precision < 70% or < 3 counted findings per app on average | reviewers A and B (D4); B16 |
+| Codex CLI | [prereg-codex.md](prereg-codex.md) | M1 | (A) 0 files differ; (B) 100% valid answers, rejections ≤ Claude Code's + 5 points, ≥ 95% cells seen; (C) one-sided 95% lower bound of Codex − Claude Code recall > −15 points; (D) measured or said unmeasured | Codex access (D2); B1–B4, B6 |
 | Time | [prereg-time.md](prereg-time.md) | M5 (not merged) | stub | M5 |
 
-**Order.** The fix gate depends on nothing else (D6–D8) and can go first. Held-out, Codex, precision and field are
-registered together at one engine commit: the held-out apps are captured and hunted by both agents, the field apps are
-searched and selected, the precision sweeps run on all five apps, then labelling (blind), then field judging (which
-shows verdicts), then the decision-time study on one field app.
+**Order.** The fix gate depends on nothing else and can go first, on pegroom. Held-out, Codex, precision and field
+are registered together at one engine commit: the held-out apps are captured and hunted by both agents, the field apps
+are searched and selected, the precision sweeps run on all five apps, then labelling (blind), then field judging
+(which shows verdicts), then the decision-time study on one field app.
+
+## Builds needed before registration
+
+Each lands in the engine or scorer set of the gate that needs it, so it is hashed at registration. Size: S (a day or
+less), M (a few days), L (about a week), rough.
+
+| # | Build | Gate | Size |
+|---|---|---|---|
+| B1 | Plan salt: `hunt --plan --salt <n>` enters the reference choice; salt 0 keeps today's plans byte for byte (contract test) | held-out, Codex | S |
+| B2 | Sampled packets in `bench/ai-gate.mjs`: ≥ 3 non-seed units per seed unit, interleaved, seeded order (`--order`) | held-out, Codex | S |
+| B3 | Location scorer in `bench/score.mjs`: a hit needs the seed's element or `file:line`; near misses listed for blind adjudication | held-out, Codex | M |
+| B4 | Run tally in `bench/ai-gate.mjs --score`: found in how many of 3 runs, per-lens screening, statistics through `scripts/prereg-stats.mjs` | held-out, Codex | S |
+| B5 | Answer-key schema: each AI seed's location, checklist item and `offChecklist` flag | held-out | S |
+| B6 | `bench/codex-gate.mjs`: one Codex CLI session per packet, answers in the `--score` layout, (A)'s byte comparison | Codex | M |
+| B7 | `bench/precision-gate.mjs`: `--pool` (stratified draw, decoys, known-true items, key outside the project) and `--score` | precision | L |
+| B8 | Label mode serves a harness pool: rule groups and harness items beside the AI groups, the banner counted from the pool | precision | M |
+| B9 | Functional checks in `bench/fix-gate.mjs`: declarative, run in the browser after each trial | fix | M |
+| B10 | Sets with expectations (`planted`, `clean`, `blind`) and their tally in `bench/fix-gate.mjs` | fix | S |
+| B11 | Fixer mode in `bench/fix-gate.mjs`: fresh copies seeded from one base sweep, wait for a fresh fixer session, read the record | fix | L |
+| B12 | The person approves the check profile in the board for each trial (the harness stops approving as the operator) | fix | S |
+| B13 | `bench/recheck-gate.mjs`: still-there, moved and already-fixed cases into re-check plans, key outside the project, scoring | fix | M |
+| B14 | Board study mode: a fixed list order per participant, batch keys off | decision time | M |
+| B15 | `bench/decision-study.mjs`: study copies; joins metrics, decision files and the gold file | decision time | S |
+| B16 | `bench/field-tally.mjs`: the judges' sheets into counted, counted-apart and per-app totals | field | S |
 
 ## How a draft becomes registered
 
-1. The owner decisions it waits for are in, its builds are merged, and its open choices are struck (precision (a) or
-   (b)).
+1. The people it needs are named (D4), and its builds are merged.
 2. On a clean tree: `node scripts/prereg-hash.mjs --fill docs/prereg-<gate>.md [--key <name>=<path> …]`. It reads the
    doc's `prereg-sets` block, hashes every set as git stores it at HEAD (keys outside the repository as given), derives
    the seeds from those hashes, and writes the table between the doc's `prereg-hash` markers. Nobody types a hash or a
@@ -98,14 +143,15 @@ operator, summarised in the results.
 | Reviewer A | a person who did not build nunchi | a participant; the manual-pass reviewer of an app they judge |
 | Reviewer B (manual passes) | a person who did not build nunchi | a judge of the same app |
 | Participants (≥ 5) | people who did not build nunchi, who have built a web app with an AI coding tool | a labeller or judge of the study app |
-| Seed author and key custodian | a different vendor's model session, or a person | a session that tuned the lenses; the operator |
-| Set builder | a person, or a different vendor's model session | the fixer; anyone who has read the fix judge |
+| Seed author and key custodian | a different vendor's model session (D1) | a session that tuned the lenses; the operator |
+| Set builder | a different vendor's model session (D8), spot-checked by reviewer A | the fixer; anyone who has read the fix judge |
 | Operator | an agent session or a person | (held-out) anyone who opened the apps' source or the keys |
 | Hunters, verifiers, re-checkers, fixers | fresh agent contexts | — |
 
-## Technical choices in these drafts
+## Technical choices (default unless the owner overrides)
 
-The design leaves these open; each draft makes a choice the owner can override before registering.
+The design leaves these open. Each is the **default unless the owner overrides** it before the gate is registered;
+the owner's approval of 2026-10-15 KST covered D1–D10, not these.
 
 | # | Choice | Why |
 |---|---|---|
@@ -151,16 +197,15 @@ bound is below 85%). These drafts use 73–94; the design text is left as it is 
 **Holds, with a caveat:** "50 labels cannot show ≥ 85%" is true at the expected 86%, but 47/50 (94%) would show it
 (one-sided).
 
-**Spec §8 rows these supersede when registered:** "Precision after verification: ≥ 85% on a 50-finding sample" (D3);
+**Spec §8 rows these supersede when registered:** "Precision after verification: ≥ 85% on a 50-finding sample" (D3:
+150 groups, pass at ≥ 135);
 "Recall, AI lenses: ≥ 75% per lens, mean of 3 runs" (pooled primary plus per-lens screening, design §9.1).
 
-## People, apps and cost (rough)
+## Apps and model work (rough)
+
+People and their hours: D4 above.
 
 | Need | How much |
 |---|---|
-| Reviewer A | labelling ≈ 3 h ((b)) or 2 h ((a)); held-out adjudication ≤ 1 h; 10 diffs ≈ 1 h; gold judging ≈ 1 h; field judging ≈ 2 h per app × 3 |
-| Reviewer B | 15 min per field app × 3 (×6 with round 3) |
-| Participants | 5 × about 30–45 min |
-| Owner | labelling ≈ 3 h; field judging ≈ 2 h per app × 3; gold judging ≈ 1 h; Fix decisions and check-profile approvals for about 60 trials; moderating 5 sessions |
-| New apps | 2 held-out apps with keys (D1); 3 field apps per round, found by the registered search; the study app is one of them |
-| Model work | held-out hunting ≈ 15M tokens per app for 3 runs, plus verification; the same on Codex's side (D2); 5 precision sweeps at the default budget (≈ 0.4M hunting tokens each, plus verification); about 60 fixer sessions and their re-checks (not measured yet) |
+| New apps | 2 held-out apps with keys, written by a different vendor's model session (D1); 3 field apps for round 2 and 3 fresh ones for round 3 (D9), found by the registered search; the study app is one of round 2's |
+| Model work | held-out hunting ≈ 15M tokens per app for 3 runs, plus verification; the same on Codex's side (D2); 5 precision sweeps at the default budget (≈ 0.4M hunting tokens each, plus verification); the seed author's and the set builder's sessions (D1, D8); about 60 fixer sessions and their re-checks (not measured yet) |
