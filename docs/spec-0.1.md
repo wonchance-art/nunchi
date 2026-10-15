@@ -2057,7 +2057,12 @@ started while another suite loaded the machine, found the benchmark app unreacha
 the rerun on a quiet machine is the result). The views were looked at on the "Leafy" fixture with screenshots of an
 invented page put in a temporary copy: Coverage, the wall and Screen detail at 1440 and 390 px, light and dark, and at
 200% zoom (640 × 450 at 2×). That look moved the footnote's marks into the symbol font (◐ drew as a smaller half-shape),
-"Same defect, same number on both widths." under the images, and took the focus ring off the cell panel's heading.
+"Same defect, same number on both widths." under the images, and took the focus ring off the cell panel's heading. CI on
+Windows with Node 20 then timed out `test/board-fix.test.mjs` as a file (240 s): its ten API tests took 230 s while the
+runner ran the newer browser files beside it (141 s on the run before); the file takes the same time on main and here
+(60–70 s locally), so nothing it tests got slower, and it was split in three (`board-fix.test.mjs`,
+`board-fix-cases.test.mjs`, `board-fix-e2e.test.mjs`, helpers in `test/fixtures/board-fix-helpers.mjs`), its twelve
+tests unchanged and the suite still 655 tests.
 
 **Not done in M7:** the 0.2 views (AI trust, States & messages, the trend per run: D5); Korean words (the table is
 ready); stacked markers in the static export (its bytes stay as they are).
