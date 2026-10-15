@@ -44,11 +44,13 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   // Windows: npm is npm.cmd, which only a shell starts (a path, such as node's own, is started as it is)
   const r = spawnSync(cmd, args, { stdio: 'inherit', env: { ...process.env, TMPDIR: dir, TEMP: dir, TMP: dir }, shell: process.platform === 'win32' && !/[\\/]/.test(cmd) });
   const left = leftovers(dir);
+  const named = readdirSync(dir).sort().filter(n => !left.includes(n));
+  const notCounted = named.length ? ` (not counted, by name: ${named.join(', ')})` : '';
   if (left.length) {
-    process.stderr.write(`tmp-leftovers: ${cmd} ${args.join(' ')} left ${left.length} entr${left.length === 1 ? 'y' : 'ies'} in its temporary folder:\n`);
+    process.stderr.write(`tmp-leftovers: ${cmd} ${args.join(' ')} left ${left.length} entr${left.length === 1 ? 'y' : 'ies'} in its temporary folder${notCounted}:\n`);
     for (const name of left.slice(0, 50)) process.stderr.write(`  ${describe(dir, name)}\n`);
     if (left.length > 50) process.stderr.write(`  … and ${left.length - 50} more\n`);
-  } else process.stdout.write(`tmp-leftovers: ${cmd} ${args.join(' ')} left nothing in its temporary folder\n`);
+  } else process.stdout.write(`tmp-leftovers: ${cmd} ${args.join(' ')} left nothing in its temporary folder${notCounted}\n`);
   try { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch (e) { process.stderr.write(`tmp-leftovers: could not remove ${dir}: ${e.code || e.message}\n`); }
   const code = r.error ? 2 : r.status ?? 1;
   process.exit(code || (left.length ? 1 : 0));
