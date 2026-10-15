@@ -5,7 +5,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { launch } from '../src/capture.mjs';
 import { quickApp, quickServer, SAMPLES } from './fixtures/quick-app.mjs';
@@ -24,6 +24,30 @@ before(async () => {
   try { const b = await launch(); await b.close(); } catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
 after(() => srv && srv.close());
+
+test('a capture that fails, or is stopped, takes its unfinished run folder with it: nothing is left to say it runs (review of PR #33)', async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const app = quickApp();
+  mkdirSync(join(app, '.nunchi'), { recursive: true });
+  writeFileSync(join(app, '.nunchi', 'samples.json'), JSON.stringify(SAMPLES));
+  const runs = join(app, '.nunchi', 'runs');
+  const partial = () => readdirSync(runs).filter(n => n.endsWith('.partial'));
+  const failed = await cli(app, 'capture', '--url', srv.base, '--samples', '.nunchi/samples.json', '--auth', 'no-such-login.json');
+  assert.equal(failed.code, 2, failed.stderr);
+  assert.match(failed.stderr, /signed-in scenes need a saved login state/);
+  assert.deepEqual(partial(), []);
+  if (process.platform === 'win32') return;                                   // a signal there ends the process at once
+  const child = spawn(process.execPath, [CLI, 'capture', '--url', srv.base, '--samples', '.nunchi/samples.json', '--viewports', 'm'], { cwd: app, stdio: ['ignore', 'ignore', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', d => { stderr += d; });
+  const exited = new Promise(res => child.on('exit', (code, signal) => res(code ?? signal)));
+  for (let i = 0; i < 400 && !partial().some(p => existsSync(join(runs, p, 'progress.json'))); i++) await new Promise(r => setTimeout(r, 50));
+  assert.equal(partial().length, 1, 'it is running');
+  child.kill('SIGINT');
+  assert.equal(await exited, 130, stderr);
+  assert.match(stderr, /stopped \(SIGINT\); run 0001 was not completed and is removed/);
+  assert.deepEqual(partial(), []);
+});
 
 test('capture --quick: the key screens, presence-only, rule lenses only; the full check after it merges the recording', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
@@ -64,11 +88,11 @@ test('capture --quick: the key screens, presence-only, rule lenses only; the ful
 
   // the full check: the screens the first look recorded replay, the rest are recorded and merged in; no recording-stale
   srv.set({ lowContrast: false });
-  const asked = srv.hits.get('/api/data/pricing');
+  const asked = srv.hits.get('/api/data/pricing'), zebra = srv.hits.get('/api/data/zebra') || 0;
   const full = json(await cli(app, 'capture', ...base, '--states', 'normal', '--json'));
   assert.deepEqual([full.run, full.kind, full.network, full.health.status, full.replayMisses], ['0002', 'sweep', { guest: 'merge' }, 'ok', 0]);
   assert.equal(srv.hits.get('/api/data/pricing'), asked, 'a screen the first look recorded is not asked again');
-  assert.equal(srv.hits.get('/api/data/zebra'), 1, 'one it did not is recorded');
+  assert.equal(srv.hits.get('/api/data/zebra'), zebra + 1, 'one it did not is recorded');
   assert.equal(Object.keys(read(join(app, '.nunchi', 'har', 'guest.json')).routes).length, 14);
   assert.ok(!existsSync(join(runs, '0002', 'progress.json')), 'the progress file goes before the run is complete');
   const f2 = json(await cli(app, 'findings', '--all', '--json'));

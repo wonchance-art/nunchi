@@ -3,7 +3,7 @@
 // previous run intact. Ids are sequential numbers (deterministic, no clock). `latest` names the newest
 // complete run and is replaced atomically.
 import { readdirSync, mkdirSync, readFileSync, existsSync, rmSync, statSync, lstatSync, appendFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -49,25 +49,40 @@ export function latestSweep(dir) {
 }
 
 // How far a capture that is still being written has come (design §6): `<id>.partial/progress.json`, written by the CLI
-// after each route × person × viewport and removed before the run is complete. Read as data from a folder the user's
-// own captures write: a link, a folder or a file over 64 KB is not read, and every field is checked.
-// → [{ run, kind, wholeApp, routes, done, routeMs }] for the runs being written, oldest first.
+// after each route × person × viewport and removed before the run is complete (and, with the whole `.partial` folder,
+// when the capture fails or is stopped). Read as data from a folder the user's own captures write: a link, a folder or
+// a file over 64 KB is not read, and every field is checked.
 export const PROGRESS_FILE = 'progress.json';
-export function readProgress(dir) {
+// A capture that was killed (no exit handler ran) leaves its `.partial` folder: it is not "running" once its writer is
+// gone (a progress file names its pid and host; on this host a pid that no longer runs is gone) or nothing was written
+// for STALE_MS (review of PR #33). A folder without a progress file (a fix probe, a capture of an older nunchi) counts
+// by the folder's own time.
+export const STALE_MS = 10 * 60e3;
+export function pidAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+// → [{ run, progress: { kind, wholeApp, routes, done, routeMs, skipped } | null }] for the runs still being written,
+// oldest first. `now`, `alive` and `host` are the clock, the process check and this machine's name (a test's own).
+export function runningCaptures(dir, { now = Date.now(), alive = pidAlive, host = hostname() } = {}) {
   const out = [];
   for (const p of listRuns(dir).partial) {
     const run = PARTIAL.exec(p)[1];
     try {
-      if (!lstatSync(join(dir, p)).isDirectory()) continue;                     // a link is not followed
+      const folder = lstatSync(join(dir, p));
+      if (!folder.isDirectory()) continue;                                      // a link is not followed
       const f = join(dir, p, PROGRESS_FILE);
-      const st = lstatSync(f);
-      if (!st.isFile() || st.size > 64 * 1024) continue;
+      let st = null;
+      try { st = lstatSync(f); } catch {}
+      if (!st) { if (now - folder.mtimeMs <= STALE_MS) out.push({ run, progress: null }); continue; }
+      if (!st.isFile() || st.size > 64 * 1024 || now - st.mtimeMs > STALE_MS) continue;
       const doc = JSON.parse(readFileSync(f, 'utf8'));
+      if (Number.isInteger(doc?.pid) && doc.pid > 0 && doc.host === host && !alive(doc.pid)) continue;
       const count = n => (Number.isInteger(n) && n >= 0 ? n : null);
       const routes = count(doc?.routes), done = count(doc?.done);
-      if (routes === null || done === null || done > routes || typeof doc.kind !== 'string') continue;
+      if (routes === null || done === null || done > routes || typeof doc.kind !== 'string') { out.push({ run, progress: null }); continue; }
       const routeMs = Array.isArray(doc.routeMs) ? doc.routeMs.filter(x => Number.isFinite(x) && x >= 0).slice(0, done) : [];
-      out.push({ run, kind: doc.kind, wholeApp: doc.wholeApp === true, routes, done, routeMs });
+      const skipped = Array.isArray(doc.skipped) ? doc.skipped.filter(s => s && typeof s.route === 'string' && typeof s.reason === 'string').slice(0, 200).map(s => ({ route: s.route, reason: s.reason })) : [];
+      out.push({ run, progress: { kind: doc.kind, wholeApp: doc.wholeApp === true, routesGiven: doc.routesGiven === true, routes, done, routeMs, skipped } });
     } catch {}
   }
   return out;

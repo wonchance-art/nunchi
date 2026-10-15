@@ -276,24 +276,52 @@ test('board: "First look: N key screens · full check running, i of n screens (a
   let s = await boardSummary(p);
   assert.equal(s.verdict.text, 'Too early to say · full check running');
   assert.deepEqual(s.now, ['First look: 2 key screens · full check running, 12 of 25 screens (about 6 min left)']);
-  assert.deepEqual(s.firstLook, { run: '0001', screens: 2, full: { run: '0002', done: 12, routes: 25, minutesLeft: 6 } });
+  assert.deepEqual(s.firstLook, { run: '0001', screens: 2, full: { run: '0002', done: 12, routes: 25, minutesLeft: 6, wholeApp: true } });
   // the CLI says the same
   const out = await cli(p.root, 'findings');
   assert.match(out.stdout, /ready to ship\? Too early to say · full check running\nFirst look: 2 key screens · full check running, 12 of 25 screens \(about 6 min left\)\n/);
   // nothing measured yet: no estimate
   p.progress({ ...full, done: 0, routeMs: [] });
   assert.deepEqual((await boardSummary(p)).now, ['First look: 2 key screens · full check running, 0 of 25 screens']);
-  // a capture that is not a full check (a narrower sweep, another first look): the plain line, and no word of a full check
-  for (const other of [{ ...full, wholeApp: false }, { ...full, kind: 'quick' }]) {
-    p.progress(other);
-    s = await boardSummary(p);
-    assert.deepEqual([s.verdict.text, s.now], ['Too early to say · a capture is running', ['Capture running · run 0002']]);
-  }
+  // a sweep that is not of the whole app is matched too, and says why in capture's own words (review of PR #33)
+  p.progress({ ...full, wholeApp: false, skipped: [{ route: '/posts/[id]', reason: 'needs-sample' }] });
+  assert.deepEqual((await boardSummary(p)).now, ['First look: 2 key screens · full check running, 12 of 25 screens (about 6 min left) · skipped /posts/[id] (needs-sample)']);
+  p.progress({ ...full, wholeApp: false, routesGiven: true, routes: 2, done: 0, routeMs: [] });
+  assert.deepEqual((await boardSummary(p)).now, ['First look: 2 key screens · full check running, 0 of 2 screens · only the routes given (--routes)']);
+  // another first look running: the plain line, and no word of a full check
+  p.progress({ ...full, kind: 'quick' });
+  s = await boardSummary(p);
+  assert.deepEqual([s.verdict.text, s.now], ['Too early to say · a capture is running', ['Capture running · run 0002']]);
   // nothing running: still too early, and no line about a check that is not happening
   rmSync(join(p.nunchi, 'runs', '0002.partial'), { recursive: true });
   s = await boardSummary(p);
   assert.deepEqual([s.verdict.text, s.now], ['Too early to say', []]);
   assert.match((await cli(p.root, 'findings')).stdout, /run 0001 is a quick first look \(2 key screens\): it marks nothing fixed, and no full check is running/);
+});
+
+test('board: a capture whose writer is gone, or that wrote nothing for 10 minutes, is not "running" (review of PR #33)', async () => {
+  const p = firstLookProject();
+  const dead = spawnSync(process.execPath, ['-e', '0']).pid;                              // a process that has ended
+  const full = { schema: 1, kind: 'sweep', wholeApp: true, routes: 25, done: 12, routeMs: Array(12).fill(27000), host: hostname() };
+  p.progress({ ...full, pid: process.pid });
+  assert.equal((await boardSummary(p)).verdict.text, 'Too early to say · full check running', 'its writer runs');
+  p.progress({ ...full, pid: dead });
+  let s = await boardSummary(p);
+  assert.deepEqual([s.verdict.text, s.now], ['Too early to say', []], 'killed: its folder is left, but nothing runs');
+  // another machine's writer cannot be asked: its file's time decides
+  p.progress({ ...full, pid: dead, host: 'another-machine.invalid' });
+  assert.equal((await boardSummary(p)).verdict.text, 'Too early to say · full check running');
+  const old = new Date(Date.now() - STALE_MS - 60e3);
+  utimesSync(join(p.nunchi, 'runs', '0002.partial', 'progress.json'), old, old);
+  assert.deepEqual((await boardSummary(p)).now, [], 'nothing written for over 10 minutes');
+  // a folder without a progress file (a fix probe, an older nunchi) counts by its own time
+  rmSync(join(p.nunchi, 'runs', '0002.partial', 'progress.json'));
+  assert.deepEqual((await boardSummary(p)).now, ['Capture running · run 0002']);
+  utimesSync(join(p.nunchi, 'runs', '0002.partial'), old, old);
+  s = await boardSummary(p);
+  assert.deepEqual([s.verdict.text, s.now], ['Too early to say', []]);
+  // the clock and the process check are the function's own: a test can give them
+  assert.deepEqual(R.runningCaptures(join(p.nunchi, 'runs'), { now: old.getTime() + 1000 }).map(x => x.run), ['0002']);
 });
 
 test('board: "Full check done: N new groups" once the full check lands after a first look; the verdict is the formula again', async () => {

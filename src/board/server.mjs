@@ -402,7 +402,8 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     let approved = false;
     try { approved = !!profile && approvedProfiles(scriptsApprovedPath(stateDir)).has(profile.hash); } catch {}
     const requested = existsSync(checksRequestPath(stateDir));
-    const running = listRuns(runsDir).partial.map(p => p.replace(/\.partial$/, '')).filter(x => RUN_ID.test(x));
+    // captures still being written by a writer that is still there (a killed one's folder is not "running")
+    const running = (s.runningRuns || []).filter(x => RUN_ID.test(x));
     // the AI hunt's coverage of the latest run (coverage.json), with cells the budget cut said in the board's words
     let coverage = null;
     if (s.run && RUN_ID.test(s.run)) {

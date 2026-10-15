@@ -388,6 +388,15 @@ if (cmd === 'setup') {
   }
   const run = args.out ? null : startRun(runsDir, { ids: st.root.shared ? st.files.runIds : null });
   const out = run ? run.path : resolve(args.out);
+  // A capture that fails, or is stopped (Ctrl-C, a kill that lets it exit), takes its unfinished run folder with it, so
+  // nothing says it is still running (review of PR #33); the previous runs are untouched. A kill that runs no handler
+  // leaves the folder: the board stops calling it running once its writer is gone (runs.mjs runningCaptures).
+  let finished = false;
+  const abandon = () => { if (run && !finished) { try { rmSync(run.path, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); } catch {} } };
+  if (run) {
+    process.on('exit', abandon);
+    for (const [sig, code] of [['SIGINT', 130], ['SIGTERM', 143], ['SIGHUP', 129]]) process.on(sig, () => { console.error(`nunchi capture: stopped (${sig}); run ${run.id} was not completed and is removed`); process.exit(code); });
+  }
   const viewports = (args.viewports || 'm,d').split(',');
   const { DEFAULT_CANARIES } = await import('./canary.mjs');
   const canaries = args.canaries === undefined ? 0 : Number(args.canaries);
@@ -414,6 +423,8 @@ if (cmd === 'setup') {
     // whole-app detectors (secrets, the link graph, one-offs) judged the whole app. Paths discover cannot
     // resolve are skipped by every run: they never make a run partial, and are listed here so they stay visible.
     wholeApp: !args.quick && !args.routes && !args.changedSince && !skipped.some(s => s.reason === 'needs-sample'),
+    // why a sweep is not of the whole app, in the words capture prints (the board says it: review of PR #33)
+    ...(args.routes ? { routesGiven: true } : {}), skipped: skipped.filter(s => s.reason === 'needs-sample' || s.reason === 'unchanged').map(s => ({ route: s.route, reason: s.reason })),
     unresolved: skipped.filter(s => s.reason !== 'needs-sample' && s.reason !== 'unchanged').map(s => s.route).sort(),
   };
   // A quick run captures `/` first, then the key screens chosen from its navigation (quick.mjs); which ones and why go
@@ -452,7 +463,9 @@ if (cmd === 'setup') {
   const { writeStable } = await import('./stable.mjs');
   const progressFile = run ? join(run.path, PROGRESS_FILE) : null;
   // (a progress file that cannot be written only leaves the board without the line: it never fails a capture)
-  const onProgress = progressFile ? p => { try { writeStable(progressFile, { schema: 1, kind: runMeta.kind, wholeApp: runMeta.wholeApp, routes: p.routes, done: p.done, routeMs: p.routeMs }); } catch {} } : null;
+  // (its writer, so a board can tell a capture that was killed from one still running: review of PR #33)
+  const { hostname } = await import('node:os');
+  const onProgress = progressFile ? p => { try { writeStable(progressFile, { schema: 1, kind: runMeta.kind, wholeApp: runMeta.wholeApp, ...(args.routes ? { routesGiven: true } : {}), skipped: runMeta.skipped, routes: p.routes, done: p.done, routeMs: p.routeMs, pid: process.pid, host: hostname() }); } catch {} } : null;
   if (onProgress) onProgress({ routes: new Set((quick ? quick.scenes : all).map(s => s.route)).size, done: 0, routeMs: [] });
   try {
     const r = await capture({
@@ -482,6 +495,7 @@ if (cmd === 'setup') {
       }
     }
     const final = run ? finishRun(runsDir, run.id, { latest: !fixBranch }) : out;
+    finished = true;
     // fold the run into the local ledger state (what is open, fixed, back again), with any complete run a
     // crash left unfolded; if this fails, the next ledger command folds it
     if (run) {
