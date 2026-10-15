@@ -258,9 +258,9 @@ export function renderBlock(r, { docPath = 'docs/prereg-<gate>.md', spec = null,
     ...r.keys.map(k => `| key @${k.name} | ${k.files} | \`${k.hash}\` |`),
     '',
     ...seedPart,
-    `Hashed from commit \`${r.commit}\` with Node ${process.version} (tracked files as git stores them; keys as their bytes;`,
-    `\`doc\` is this file without this block and without \`## Amendments\`). Check before and after the measurement:`,
-    `\`node scripts/prereg-hash.mjs --check ${docPath}${keyArgs}\`.`,
+    `Hashed from commit \`${r.commit}\` with Node ${process.version}: tracked files as git stores them, keys as`,
+    `their bytes, and \`doc\` is this file without this block and without \`## Amendments\`. Check before and after the`,
+    `measurement: \`node scripts/prereg-hash.mjs --check ${docPath}${keyArgs}\`.`,
   ].join('\n');
 }
 
