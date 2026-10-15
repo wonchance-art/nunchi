@@ -70,7 +70,7 @@ test('a verdict folded before its claim waits dormant (never shown), then joins 
   const [, , , , , rej] = agentFolds('b', 6);                                  // Codex's verifier rejects /disputed/5 (run 0012)
   const st = L.foldAi(L.emptyState(), rej);
   assert.equal(byRoute(st, '/disputed/5'), undefined, 'a rejection makes no item');
-  assert.ok(st.dormant && Object.values(st.dormant).some(d => d.route === '/disputed/5'));
+  assert.deepEqual(Object.values(st.dormant || {}).map(d => d.hunts.map(h => [h.status, h.examples])), [[['rejected', ['disputed~5.guest.normal.m']]]], 'it waits: the rejection only');
   assert.equal(L.view(st, []).some(r => r.route === '/disputed/5'), false);
   const claim = agentFolds('a', 6)[5];
   const both = L.foldAi(st, claim);

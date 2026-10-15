@@ -1207,9 +1207,12 @@ malicious one (design §1).
   - silent hunts (staleness, §5.1) are derived from what each AI fold's hunt saw (`seen` on its fold entry, as
     `lens|route|cell`), so a hunt folded before the claim it did not repeat still counts; a fold written before M6
     keeps the silent hunts it gave;
-  - a verdict folded before any claim of its fingerprint (rejected or insufficient only) waits *dormant* (`dormant` in
-    the ledger, never shown) and joins the item when a claim comes, as it would have the other way round; an item a
-    re-hunt no longer claims goes dormant too, and a fingerprint with nothing left is dropped;
+  - a verdict folded before any claim of its fingerprint (rejected or insufficient only), and a re-check or a fix
+    probe's re-check of a fingerprint no hunt claims right now, waits *dormant* (`dormant` in the ledger, never shown)
+    and joins the item when a claim comes, as it would have the other way round; an item a re-hunt no longer claims
+    goes dormant too, and a fingerprint with nothing left is dropped. A dormant entry is its contributions only (the
+    claim that brings it back says what it is; its silent hunts are derived again then), so it is one and the same
+    however it came about;
   - `addedAt` (first seen, what group decisions are dated against, §5.1) is the earliest time a claim that stands now
     was first claimed (`claimedAt` on its hunt: kept through a re-verify of that run, new once it stands again after a
     rejection), so a claim rejected or withdrawn since never dates the item; a verdict older than the newest claim that
@@ -1217,7 +1220,14 @@ malicious one (design §1).
     before a new claim of it cover that claim (as before M6; tested).
 
   A test folds two agents' hunts in six orders (one after the other either way, interleaved, reversed, shuffled) and
-  gets one ledger, byte for byte.
+  gets one ledger, byte for byte. A seeded property test (`test/ledger-commute.test.mjs`, fixed seed, 100 made-up
+  histories of two or three agents, each folded in 14 orders) folds claims, verdicts and re-hunts of a run, re-checks
+  (also of a fingerprint not claimed yet), fix probes (one undone and done again), and the capture folds around them,
+  sweeps and quick first looks, and gets one ledger and one view, byte for byte. Exactly what commutes: the AI,
+  re-check and fix folds, with each other and with capture folds. What keeps its order: the folds of one (run, source,
+  stream), whose keys replace each other in turn, and the capture folds among themselves (the rule fold is monotonic,
+  §5.1: an older sweep folded after a newer one only adds, and a quick first look keeps the worktree that last saw an
+  item, M5), as do a fix probe's `gone` rule items, which it marks only once a capture has folded them.
 
 **Cross-vendor verdicts** (`src/verify.mjs`). A verdict is labelled `cross-vendor` when the verifier's declared vendor
 (`--vendor`) differs from the vendor of every agent that claimed the finding; a claim its own vendor hunted is a
