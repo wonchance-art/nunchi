@@ -11,7 +11,8 @@ import { planHunt, recordHunt, writeRecord } from '../src/hunt.mjs';
 import * as H from '../src/hunt-agents.mjs';
 import * as A from '../src/agents.mjs';
 import { stableJson } from '../src/stable.mjs';
-import { huntProject, answerAll, answerSome, deleteAll, tmp } from './fixtures/hunt-run.mjs';
+import { huntProject, answerAll, answerSome, deleteAll } from './fixtures/hunt-run.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 process.env.XDG_STATE_HOME = tmp('nunchi-hunt-agents-xdg-');

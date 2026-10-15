@@ -3,8 +3,8 @@
 // Namespace imports, so a function that did not exist before M1 fails its own test, not the whole file.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, realpathSync, statSync, symlinkSync, rmSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, realpathSync, statSync, symlinkSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -12,12 +12,12 @@ import * as St from '../src/state.mjs';
 import * as L from '../src/ledger.mjs';
 import * as R from '../src/runs.mjs';
 import * as S from '../src/stable.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const url = p => pathToFileURL(fileURLToPath(new URL(p, import.meta.url))).href;
 const STATE = url('../src/state.mjs'), RUNS = url('../src/runs.mjs');
 const POSIX = process.platform !== 'win32';
-const tmp = p => realpathSync(mkdtempSync(join(tmpdir(), p)));
 process.env.XDG_STATE_HOME = tmp('nunchi-state-xdg-');
 const run = (cmd, args, { cwd, env } = {}) => new Promise(res => execFile('node', [...cmd, ...args.map(String)], { cwd, env: env ? { ...process.env, ...env } : process.env, encoding: 'utf8', timeout: 120000 }, (err, stdout, stderr) => res({ code: err ? err.code : 0, stdout, stderr })));
 const cli = (cwd, ...a) => run([CLI], a, { cwd });

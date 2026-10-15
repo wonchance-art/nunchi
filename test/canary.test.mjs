@@ -6,14 +6,14 @@ import { fileURLToPath } from 'node:url';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync, readdirSync, statSync, mkdtempSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, readdirSync, statSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { capture, launch } from '../src/capture.mjs';
 import { CANARY_KINDS, canaryMutate, canarySeed, canaryCandidates, kindOrder, kindApplies, plantCanaries, scoreCanaries, voidCoverage, sameLocation } from '../src/canary.mjs';
 import { loadLenses, BUILTIN_DIR } from '../src/lenses.mjs';
 import { DECOY_TEMPLATES } from '../src/verify.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CANARY = fileURLToPath(new URL('./fixtures/canary', import.meta.url));
 const SITE = fileURLToPath(new URL('./fixtures/site', import.meta.url));
@@ -160,7 +160,7 @@ test('canary choice is deterministic and comes from the run scope only', async (
 test('capture plants canaries in copies, tags them in the manifest and keeps them out of findings.json; deterministic', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const scenes = ['/', '/broken.html', '/trigger.html', '/plain.html'].map(p => ({ route: p, path: p }));
-  const a = mkdtempSync(join(tmpdir(), 'nunchi-canary-a-')), b = mkdtempSync(join(tmpdir(), 'nunchi-canary-b-'));
+  const a = tmp('nunchi-canary-a-'), b = tmp('nunchi-canary-b-');
   const r = await capture({ baseUrl: base, scenes, out: a, canaries: 3 });
   const planted = JSON.parse(readFileSync(join(a, 'canaries.json'), 'utf8'));
   assert.equal(planted.planted.length, 3, JSON.stringify(planted, null, 1));
@@ -192,7 +192,7 @@ test('capture plants canaries in copies, tags them in the manifest and keeps the
 
 test('without canaries nothing changes: no canaries.json, no tagged scenes', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
-  const out = mkdtempSync(join(tmpdir(), 'nunchi-nocanary-'));
+  const out = tmp('nunchi-nocanary-');
   const r = await capture({ baseUrl: base, scenes: [{ route: '/trigger.html', path: '/trigger.html' }], viewports: ['m'], out });
   assert.equal(existsSync(join(out, 'canaries.json')), false);
   assert.equal(r.manifest.scenes.filter(s => s.canary !== undefined).length, 0);
@@ -279,7 +279,7 @@ test('a canary the hunt never saw (budget, not answered) is not hunted: neither 
 });
 
 test('CLI canaries --score: per-lens hit rate, canary-score.json, coverage.json updated', () => {
-  const work = mkdtempSync(join(tmpdir(), 'nunchi-cscore-'));
+  const work = tmp('nunchi-cscore-');
   const run = join(work, '.nunchi', 'runs', '0001');
   mkdirSync(run, { recursive: true });
   writeFileSync(join(work, '.nunchi', 'runs', 'latest'), '0001\n');

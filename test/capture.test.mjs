@@ -5,16 +5,16 @@ import { fileURLToPath } from 'node:url';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync, readdirSync, statSync, mkdtempSync, writeFileSync, cpSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, readdirSync, statSync, writeFileSync, cpSync, existsSync } from 'node:fs';
 import { join, relative, extname } from 'node:path';
 import { capture, launch, isSignInPath } from '../src/capture.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript' };
 let server, base, site, browserOk = true;
 
 before(async () => {
-  site = mkdtempSync(join(tmpdir(), 'nunchi-site-'));
+  site = tmp('nunchi-site-');
   cpSync(fileURLToPath(new URL('./fixtures/site', import.meta.url)), site, { recursive: true });
   // Built at test time so no secret-shaped string is ever committed.
   const b64 = o => Buffer.from(JSON.stringify(o)).toString('base64url');
@@ -40,7 +40,7 @@ const files = dir => readdirSync(dir, { recursive: true }).filter(f => statSync(
 
 test('captures seeded defects, keeps the clean page clean, writes the evidence pack', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
-  const out = mkdtempSync(join(tmpdir(), 'nunchi-out-'));
+  const out = tmp('nunchi-out-');
   const r = await capture({ baseUrl: base, scenes: [{ route: '/', path: '/' }, { route: '/broken.html', path: '/broken.html' }], out });
   const at = (scene, rule) => r.findings.filter(f => f.scene === scene && f.rule === rule);
 
@@ -74,7 +74,7 @@ test('captures seeded defects, keeps the clean page clean, writes the evidence p
 
 test('app shell: a finding below the inner scroll area\'s fold says it is not in the image', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
-  const out = mkdtempSync(join(tmpdir(), 'nunchi-shell-'));
+  const out = tmp('nunchi-shell-');
   const r = await capture({ baseUrl: base, scenes: [{ route: '/shell.html', path: '/shell.html' }], viewports: ['m'], out });
   const img = r.findings.filter(f => f.rule === 'broken-image');
   assert.equal(img.length, 1);
@@ -88,7 +88,7 @@ test('app shell: a finding below the inner scroll area\'s fold says it is not in
 
 test('a redirected scene is flagged in the manifest and kept out of the link graph and the design system', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
-  const out = mkdtempSync(join(tmpdir(), 'nunchi-redirect-'));
+  const out = tmp('nunchi-redirect-');
   // /moved.html sends the visitor to /shell.html, which no captured screen links to
   const r = await capture({ baseUrl: base, scenes: [{ route: '/', path: '/' }, { route: '/moved.html', path: '/moved.html' }], viewports: ['m'], out,
     flow: { routes: ['/', '/broken.html', '/moved.html', '/shell.html'] } });
@@ -109,7 +109,7 @@ test('a redirected scene is flagged in the manifest and kept out of the link gra
 test('deterministic: two runs of the same site give byte-identical evidence', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const scenes = [{ route: '/', path: '/' }, { route: '/broken.html', path: '/broken.html' }];
-  const a = mkdtempSync(join(tmpdir(), 'nunchi-a-')), b = mkdtempSync(join(tmpdir(), 'nunchi-b-'));
+  const a = tmp('nunchi-a-'), b = tmp('nunchi-b-');
   await capture({ baseUrl: base, scenes, out: a });
   await capture({ baseUrl: base, scenes, out: b });
   const stable = f => f !== 'timing.json' && f !== 'run.json' && !f.endsWith('volatile.json');
@@ -127,7 +127,7 @@ test('deterministic: two runs of the same site give byte-identical evidence', as
 
 test('signed-in scenes without a saved login fail loudly instead of capturing as guest', async () => {
   await assert.rejects(
-    capture({ baseUrl: 'http://127.0.0.1:9', scenes: [{ route: '/', path: '/', person: 'signed-in' }], out: mkdtempSync(join(tmpdir(), 'nunchi-x-')), storageState: '/nope/auth.json' }),
+    capture({ baseUrl: 'http://127.0.0.1:9', scenes: [{ route: '/', path: '/', person: 'signed-in' }], out: tmp('nunchi-x-'), storageState: '/nope/auth.json' }),
     e => e.code === 'NO_AUTH',
   );
 });

@@ -15,7 +15,8 @@ import * as F from '../src/fix/loop.mjs';
 import * as R from '../src/fix/records.mjs';
 import * as P from '../src/project.mjs';
 import { FIX_WORDS, listText } from '../src/board/shared.mjs';
-import { fixProject, edit, commitWith, git, tmp } from './fixtures/fix-project.mjs';
+import { fixProject, edit, commitWith, git } from './fixtures/fix-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 import { boardRequest } from './fixtures/board-call.mjs';
 import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 

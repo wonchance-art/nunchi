@@ -1,15 +1,15 @@
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { discover } from '../src/discover.mjs';
 import { buildSourceMap, affectedRoutes, importsOf } from '../src/sourcemap.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 function tree(files) {
-  const root = mkdtempSync(join(tmpdir(), 'nunchi-map-'));
+  const root = tmp('nunchi-map-');
   for (const [p, body] of Object.entries(files)) {
     mkdirSync(dirname(join(root, p)), { recursive: true });
     writeFileSync(join(root, p), typeof body === 'string' ? body : JSON.stringify(body));

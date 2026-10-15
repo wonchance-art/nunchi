@@ -2,19 +2,19 @@
 // before M1a. Namespace imports, so a function that did not exist yet fails its own test, not the whole file.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, linkSync, utimesSync, realpathSync } from 'node:fs';
-import { tmpdir, hostname } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, linkSync, utimesSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as L from '../src/ledger.mjs';
 import * as S from '../src/stable.mjs';
 import { windowsIo } from './fixtures/windows-io.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const LEDGER = pathToFileURL(fileURLToPath(new URL('../src/ledger.mjs', import.meta.url))).href;
 const STABLE = pathToFileURL(fileURLToPath(new URL('../src/stable.mjs', import.meta.url))).href;
-const tmp = p => realpathSync(mkdtempSync(join(tmpdir(), p)));
 const empty = () => ({ schema: 1, runs: [], items: {} });
 const slug = route => route.slice(1).replace(/\//g, '~') || '~';
 // a finding seen in one cell (person.state.viewport) of a route; `name` makes it its own defect

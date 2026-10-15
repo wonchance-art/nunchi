@@ -19,7 +19,8 @@ import * as P from '../src/project.mjs';
 import * as C from '../src/fix/claims.mjs';
 import * as Act from '../src/activity.mjs';
 import { smallProject } from './fixtures/board-project.mjs';
-import { huntProject, answerAll, deleteAll, tmp } from './fixtures/hunt-run.mjs';
+import { huntProject, answerAll, deleteAll } from './fixtures/hunt-run.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 process.env.XDG_STATE_HOME = tmp('nunchi-board-agents-xdg-');

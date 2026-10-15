@@ -2,11 +2,11 @@
 // fingerprint ignores the bundle's content hash. v1 state and decisions migrate instead of being orphaned.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { secretFindings, mask } from '../src/rules.mjs';
 import * as ledger from '../src/ledger.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 const { fingerprintOf, annotate, readState, view, approvalKey, FINGERPRINT_VERSION } = ledger;
 // Approvals name a decision's content (approvalKey), and a decision counts once this machine has seen it: `now` is
 // fixed after the decisions' dates. A moved v1 decision keeps the approval of the file as written.
@@ -95,7 +95,7 @@ test('fp v2 migration: a v1 ledger is re-keyed on read, its v1 decisions keep ap
   const older = { ...storedV1(secret('/_next/static/chunks/7hq2kd0xw9zre.js', 'stripe-live-secret-key', { masked: 'sk_l…' })), lastSeen: '0001', firstSeen: '0001' };
   const target = { lens: 'L8', rule: 'target-size-min', severity: 'medium', route: '/tasks', selector: 'main > button', evidence: { width: 18, height: 18, minimum: 24, name: 'Done' } };
   const items = [storedV1(before), older, storedV1(target)];
-  const file = join(mkdtempSync(join(tmpdir(), 'nunchi-fp2-')), 'ledger.json');
+  const file = join(tmp('nunchi-fp2-'), 'ledger.json');
   writeFileSync(file, JSON.stringify({ schema: 1, fingerprintVersion: 1, runs: ['0001'], items: Object.fromEntries(items.map(i => [i.fp, i])) }));
   // Decisions made under v1: the secret dismissed (approved on this machine), the tap target kept as a group.
   const decisions = [
@@ -145,7 +145,7 @@ test('fp v2 migration: two secrets are never merged into one dismissal; merged i
   const dec = (id, target, decision, reason, m) => ({ schema: 1, id, target, decision, reason, by: 'me', at: at(m), fingerprintVersion: 1 });
   // Two different bundles (not a rebuild of one): a fix decided on one, a false positive on the other.
   const checkout = storedV1(secret('/js/checkout2.js')), payments = storedV1(secret('/js/payments2.js'));
-  const file = join(mkdtempSync(join(tmpdir(), 'nunchi-fp2c-')), 'ledger.json');
+  const file = join(tmp('nunchi-fp2c-'), 'ledger.json');
   writeFileSync(file, JSON.stringify({ schema: 1, fingerprintVersion: 1, runs: ['0001'], items: { [checkout.fp]: checkout, [payments.fp]: payments } }));
   const decisions = [dec('d1', { fp: checkout.fp }, 'fix', null, 1), dec('d2', { fp: payments.fp }, 'false-positive', 'not-a-problem', 2)];
   const st = readState(file);
@@ -154,7 +154,7 @@ test('fp v2 migration: two secrets are never merged into one dismissal; merged i
   assert.deepEqual(rows.map(r => [r.evidence.url, r.status]).sort(), [['/js/checkout2.js', 'to-fix'], ['/js/payments2.js', 'dismissed']]);
   // Two builds of one bundle do merge; if their v1 decisions disagree, the merged item is not dismissed.
   const a = storedV1(secret('/assets/index-Ab12Cd34.js')), b = { ...storedV1(secret('/assets/index-Ef56Gh78.js')), lastSeen: '0002' };
-  const file2 = join(mkdtempSync(join(tmpdir(), 'nunchi-fp2c-')), 'ledger.json');
+  const file2 = join(tmp('nunchi-fp2c-'), 'ledger.json');
   writeFileSync(file2, JSON.stringify({ schema: 1, fingerprintVersion: 1, runs: ['0001', '0002'], items: { [a.fp]: a, [b.fp]: b } }));
   const merged = readState(file2);
   assert.equal(Object.keys(merged.items).length, 1);

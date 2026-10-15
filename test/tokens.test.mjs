@@ -2,13 +2,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { parseColor, oklabOf, oklchOf, deltaE, contrastRatio, familyOf, buildTokens, readRunScenes, tokensCss, MERGE_DE } from '../src/tokens.mjs';
 import { redactSelector } from '../src/selector-secrets.mjs';
 import { stableJson } from '../src/stable.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const T = 'rgba(0, 0, 0, 0)';
@@ -131,7 +131,7 @@ test('a run captured before paint.json existed still gets a proposal, from the t
 });
 
 test('CLI: nunchi tokens --run writes tokens.json and tokens.css into the run, byte-identical on a second call', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'nunchi-tokens-'));
+  const dir = tmp('nunchi-tokens-');
   const scenes = [['~.guest.normal.d', '/', 'guest'], ['app.signed-in.normal.d', '/app', 'signed-in'], ['canary-1', '/', 'guest'], ['err.guest.normal.d', '/err', 'guest']];
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ schema: 1, scenes: scenes.map(([id, route, person]) => ({ id, route, person, state: 'normal', viewport: 'd', status: 'captured', redirected: false, httpStatus: id.startsWith('err') ? 500 : 200, ...(id.startsWith('canary') ? { canary: 'L6', of: '~.guest.normal.d' } : {}) })) }));
   for (const [id] of scenes) {

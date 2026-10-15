@@ -10,7 +10,8 @@ import * as F from '../src/fix/loop.mjs';
 import * as C from '../src/fix/claims.mjs';
 import { worktreeOf, runsDirOf } from '../src/worktrees.mjs';
 import * as P from '../src/project.mjs';
-import { fixProject, fakeCapture, edit, commitWith, git, tmp } from './fixtures/fix-project.mjs';
+import { fixProject, fakeCapture, edit, commitWith, git } from './fixtures/fix-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 import { proveOk, ctxOf, stateDir, latest, trailers, TITLE } from './fixtures/fix-loop-helpers.mjs';
 
 process.env.XDG_STATE_HOME = tmp('nunchi-fix-wt-xdg-');

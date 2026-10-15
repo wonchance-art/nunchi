@@ -1,12 +1,12 @@
 // A synthetic project for the board's tests (M2): .nunchi/runs/<id> folders as `capture` writes them (manifest,
 // run.json, findings.json, screenshots), invented content only. Not a git repository unless `git: true`, so the state
 // stays in .nunchi/state.
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { annotate, foldRun, foldAi, runForFold, emptyState, fingerprintOf } from '../../src/ledger.mjs';
 import { stableJson } from '../../src/stable.mjs';
+import { tmp } from './tmp.mjs';
 
 // A JPEG header with a SOF0 segment is all the engine reads of a screenshot (jpegSize); a browser shows it as broken,
 // which the tests do not need to see. `realJpeg` is a decodable 8×8 grey image for the browser tests.
@@ -14,7 +14,6 @@ export function jpeg(w, h, salt = 0) {
   return Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255, 0x03, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, salt & 255, 0xff, 0xd9]);
 }
 const write = (p, v) => { mkdirSync(join(p, '..'), { recursive: true }); writeFileSync(p, typeof v === 'string' || Buffer.isBuffer(v) ? v : stableJson(v)); };
-export const tmp = prefix => realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 export const slug = route => (route === '/' ? '~' : route.slice(1).replace(/\//g, '~'));
 export const scene = (route, person, state, viewport, extra = {}) => ({
   id: `${slug(route)}.${person}.${state}.${viewport}`, route, path: route, person, state, viewport,

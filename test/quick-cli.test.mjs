@@ -9,7 +9,7 @@ import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { launch } from '../src/capture.mjs';
 import { quickApp, quickServer, SAMPLES } from './fixtures/quick-app.mjs';
-import { tmp } from './fixtures/board-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 process.env.XDG_STATE_HOME = tmp('nunchi-quick-cli-xdg-');
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));

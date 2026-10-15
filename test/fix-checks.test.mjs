@@ -4,13 +4,12 @@
 // fails or its count rises. Synthetic projects in temp folders.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, realpathSync, mkdirSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as X from '../src/fix/run.mjs';
 import { checkProfile } from '../src/checks.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
-const tmp = p => realpathSync(mkdtempSync(join(tmpdir(), p)));
 function project(scripts, extra = {}) {
   const root = tmp('nunchi-checks-');
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'checks-fixture', private: true, scripts, ...extra }));

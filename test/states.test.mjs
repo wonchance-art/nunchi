@@ -4,10 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync, readdirSync, statSync, mkdtempSync, existsSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, readdirSync, statSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { capture, launch } from '../src/capture.mjs';
+import { tmp as tmpDir } from './fixtures/tmp.mjs';
 
 const SPA = fileURLToPath(new URL('./fixtures/spa', import.meta.url));
 const SITE = fileURLToPath(new URL('./fixtures/site', import.meta.url));
@@ -38,7 +38,7 @@ after(() => server && server.close());
 
 const files = dir => readdirSync(dir, { recursive: true }).filter(f => statSync(join(dir, f)).isFile()).sort();
 const text = (out, id) => readFileSync(join(out, id, 'text.txt'), 'utf8');
-const tmp = p => mkdtempSync(join(tmpdir(), `nunchi-${p}-`));
+const tmp = p => tmpDir(`nunchi-${p}-`);
 
 test('record once, replay twice: identical evidence even though the server changes every request', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');

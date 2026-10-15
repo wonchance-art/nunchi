@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { proveByFile, serveApp, snapshotRecordings, snapshotIntact, freePort, STATIC_DIRS, probeScenes } from '../src/fix/probe.mjs';
 import { checkProfile } from '../src/checks.mjs';
 import { findBinary } from '../src/fix/run.mjs';
-import { tmp } from './fixtures/fix-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const listen = handler => new Promise(res => { const s = createServer(handler); s.listen(0, '127.0.0.1', () => res({ s, url: `http://127.0.0.1:${s.address().port}` })); });
 

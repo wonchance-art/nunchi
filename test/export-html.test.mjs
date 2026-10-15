@@ -2,8 +2,7 @@
 // invented content only; no browser needed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, realpathSync, statSync, symlinkSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, statSync, symlinkSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -14,6 +13,7 @@ import { scrubSecrets } from '../src/rules.mjs';
 import { redactUrl, redactText } from '../src/network.mjs';
 import { sceneDir, sceneIndex } from '../src/hunt.mjs';
 import { stableJson } from '../src/stable.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const HOSTILE = '<script>alert(1)</script>"><img src=x onerror=alert(2)>';
@@ -26,8 +26,10 @@ function jpeg(w, h, salt = 0) {
 const write = (p, v) => { mkdirSync(join(p, '..'), { recursive: true }); writeFileSync(p, typeof v === 'string' || Buffer.isBuffer(v) ? v : stableJson(v)); };
 
 // project/.nunchi/runs/0001 with the given scenes and findings, folded into the ledger like `capture` does
-function project({ scenes, findings = [], ai = null, decide = null, fold = true }) {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-export-')));
+// `nested`: the project in a folder of its own (tmp's), for a test that writes beside it
+function project({ scenes, findings = [], ai = null, decide = null, fold = true, nested = false }) {
+  const root = nested ? join(tmp('nunchi-export-'), 'project') : tmp('nunchi-export-');
+  if (nested) mkdirSync(root);
   const nunchi = join(root, '.nunchi');
   const run = join(nunchi, 'runs', '0001');
   const vps = [{ id: 'm', width: 390, height: 844 }, { id: 'd', width: 1280, height: 800 }];
@@ -374,7 +376,7 @@ test('export --html: an older run shows the ledger as it stood after that run, n
 test('export --html: scene ids that are not one plain path segment are never opened', () => {
   const home = scene('/', 'guest', 'normal', 'd', { h1: 'Home' });
   const evil = { ...scene('/evil', 'guest', 'normal', 'd'), id: '../../../../outside', noFiles: true };
-  const p = project({ scenes: [home, evil], findings: [finding('clipped-text', 'medium', evil, { selector: 'main > b' })] });
+  const p = project({ scenes: [home, evil], findings: [finding('clipped-text', 'medium', evil, { selector: 'main > b' })], nested: true });
   write(join(p.root, '..', 'outside', 'measure.json'), { h1: 'OUTSIDE-H1' });
   write(join(p.run, '..', '..', '..', '..', 'outside', 'measure.json'), { h1: 'OUTSIDE-H1' });
   write(join(p.run, '..', '..', '..', '..', 'outside', 'controls.json'), [{ selector: 'main > b', box: [1, 2, 3, 4] }]);

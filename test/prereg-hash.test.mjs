@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -10,6 +9,7 @@ import {
   parseSets, computeHashes, deriveSeeds, renderBlock, readRegistered, compare, fillDoc, listing, isRepoTop, toLf,
   docBody, docHash, amendments, appendAmendment, main, BEGIN, END,
 } from '../scripts/prereg-hash.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../scripts/prereg-hash.mjs', import.meta.url));
 const sha = b => createHash('sha256').update(b).digest('hex');
@@ -20,7 +20,7 @@ const noBareLf = text => !/(^|[^\r])\n/.test(text);
 
 // a small repository: an engine folder, a scorer file and the pre-registration doc (in no set)
 function repo(t, doc = DOC) {
-  const dir = mkdtempSync(join(tmpdir(), 'nunchi-prereg-'));
+  const dir = tmp('nunchi-prereg-');
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   mkdirSync(join(dir, 'eng', 'sub'), { recursive: true });
   writeFileSync(join(dir, 'eng', 'a.mjs'), 'export const a = 1;\n');
@@ -71,9 +71,8 @@ test('parseSets reads the block and refuses what is not a plain path or name, re
 
 test('a set hash is the sha256 of its sha256sum listing, read from git; keys are their bytes; seeds need the beacon', t => {
   const dir = repo(t);
-  const keyFile = join(dir, '..', `${dir.split(/[\\/]/).pop()}-key.json`);
+  const keyFile = join(tmp('nunchi-prereg-key-'), `${dir.split(/[\\/]/).pop()}-key.json`);
   writeFileSync(keyFile, '{"defects": []}\n');
-  t.after(() => rmSync(keyFile, { force: true }));
   const r = computeHashes({ repo: dir, spec: parseSets(DOC), keys: { k1: keyFile } });
   const eng = `${sha('export const a = 1;\n')}  eng/a.mjs\n${sha('export const b = 2;\n')}  eng/sub/b.mjs\n`;
   assert.deepEqual(r.rows.map(x => [x.set, x.files]), [['engine', 2], ['scorer', 1], ['key', 1]]);
@@ -112,7 +111,7 @@ test('the doc row: the registered rules, without the hash block and without a fi
 
 test('a folder key is its own git repository, hashed like a set with its paths under @name/', t => {
   const dir = repo(t);
-  const app = mkdtempSync(join(tmpdir(), 'nunchi-prereg-app-'));
+  const app = tmp('nunchi-prereg-app-');
   t.after(() => rmSync(app, { recursive: true, force: true }));
   mkdirSync(join(app, 'src'));
   writeFileSync(join(app, 'src', 'page.jsx'), 'export default () => null;\n');
@@ -258,7 +257,7 @@ test('seeds: only after the registration is pushed, from the named beacon round;
   assert.match(run(dir, '--seeds', 'docs/prereg-x.md', '--beacon', RANDOMNESS).stderr, /commit and push the registration first/);
   git(dir, 'commit', '-q', '-am', 'register');
   assert.match(run(dir, '--seeds', 'docs/prereg-x.md', '--beacon', RANDOMNESS).stderr, /HEAD is on no remote branch/);
-  const remote = mkdtempSync(join(tmpdir(), 'nunchi-prereg-remote-'));
+  const remote = tmp('nunchi-prereg-remote-');
   t.after(() => rmSync(remote, { recursive: true, force: true }));
   git(remote, 'init', '-q', '--bare');
   git(dir, 'remote', 'add', 'origin', remote);
@@ -326,7 +325,7 @@ test('a checkout with core.autocrlf=true (CRLF in the working tree) hashes the s
 });
 
 test('run through a link or junction (H1), the command still runs: a missing doc exits nonzero, never 0', t => {
-  const dir = mkdtempSync(join(tmpdir(), 'nunchi-prereg-link-'));
+  const dir = tmp('nunchi-prereg-link-');
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const linked = join(dir, 'scripts');
   symlinkSync(dirname(SCRIPT), linked, 'junction');

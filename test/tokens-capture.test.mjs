@@ -5,13 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, mkdtempSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { capture, launch } from '../src/capture.mjs';
 import { collect } from '../src/collect.mjs';
 import { buildTokens, readRunScenes } from '../src/tokens.mjs';
 import { stableJson } from '../src/stable.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const SITE = fileURLToPath(new URL('./fixtures/tokens', import.meta.url));
 // Built at test time so no secret-shaped string is ever committed.
@@ -36,7 +36,7 @@ before(async () => {
 after(() => server && server.close());
 
 const run = async page => {
-  const out = mkdtempSync(join(tmpdir(), 'nunchi-tokens-'));
+  const out = tmp('nunchi-tokens-');
   await capture({ baseUrl: base, scenes: [{ route: `/${page}`, path: `/${page}` }], viewports: ['m', 'd'], out });
   return out;
 };

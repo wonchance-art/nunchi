@@ -4,8 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, mkdtempSync, readdirSync, statSync, realpathSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, existsSync, readdirSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -13,6 +12,7 @@ import { launch } from '../src/capture.mjs';
 import { discover } from '../src/discover.mjs';
 import { buildInventory } from '../src/inventory.mjs';
 import { stableJson, sha } from '../src/stable.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const SITE = fileURLToPath(new URL('./fixtures/site', import.meta.url));
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -37,7 +37,7 @@ const cli = async (cwd, ...a) => JSON.parse((await promisify(execFile)('node', [
 
 test('capture: numbered run folders, latest pointer, run.json with scope and source state', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
-  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-cli-')));          // macOS: /var is a symlink to /private/var
+  const cwd = tmp('nunchi-cli-');
   const args = ['capture', '--url', base, '--routes', '/', '--viewports', 'm', '--states', 'normal', '--network', 'live'];
   const one = await cli(cwd, ...args);
   const two = await cli(cwd, ...args);
@@ -56,7 +56,7 @@ test('capture: numbered run folders, latest pointer, run.json with scope and sou
 
 test('ledger CLI: findings by kind, decide on a group, the decision is a committed file and changes the status', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
-  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-led-')));
+  const cwd = tmp('nunchi-led-');
   await cli(cwd, 'capture', '--url', base, '--routes', '/broken.html', '--viewports', 'm', '--states', 'normal', '--network', 'live');
   const first = await cli(cwd, 'findings');
   assert.ok(first.kinds.length >= 5, JSON.stringify(first.kinds.map(k => k.rule)));
@@ -72,7 +72,7 @@ test('ledger CLI: findings by kind, decide on a group, the decision is a committ
 test('capture: inventory.json with discovered routes (same bytes twice), none with --routes; a failure only warns', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   // an invented Next.js app whose one route '/' is served by the fixture site
-  const app = realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-inv-cli-')));
+  const app = tmp('nunchi-inv-cli-');
   writeFileSync(join(app, 'package.json'), JSON.stringify({ dependencies: { next: '15.0.0', react: '19.0.0' } }));
   mkdirSync(join(app, 'app'));
   writeFileSync(join(app, 'app', 'page.tsx'), 'export default function Home() {\n  const clearAll = () => store.clear();\n  return <main><h1>Pebble Tasks</h1><button onClick={clearAll}>Delete all</button></main>;\n}\n');
@@ -106,7 +106,7 @@ test('capture: inventory.json with discovered routes (same bytes twice), none wi
 test('capture: run.json says wholeApp only when every route of the app was captured (not with --routes, not with a route skipped)', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   // an invented Next.js app: '/' and a dynamic route that needs a sample
-  const app = realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-whole-')));
+  const app = tmp('nunchi-whole-');
   writeFileSync(join(app, 'package.json'), JSON.stringify({ dependencies: { next: '15.0.0', react: '19.0.0' } }));
   mkdirSync(join(app, 'app', 'posts', '[id]'), { recursive: true });
   writeFileSync(join(app, 'app', 'page.tsx'), 'export default function Home() { return <main><h1>Home</h1></main>; }\n');
@@ -132,7 +132,7 @@ test('capture: a React Router path discover cannot resolve is listed and never m
   await new Promise(r => app.listen(0, '127.0.0.1', r));
   try {
     const url = `http://127.0.0.1:${app.address().port}`;
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-rr-')));
+    const root = tmp('nunchi-rr-');
     writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: { 'react-router-dom': '6.0.0', react: '18.0.0' } }));
     mkdirSync(join(root, 'src'));
     // `settings` is relative (nested): discover cannot resolve it, so every run skips it
@@ -155,7 +155,7 @@ test('capture: a React Router path discover cannot resolve is listed and never m
 
 test('capture: a ledger that cannot be brought up to date warns and never fails the capture', async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
-  const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-fold-fail-')));
+  const cwd = tmp('nunchi-fold-fail-');
   mkdirSync(join(cwd, '.nunchi', 'state'), { recursive: true });
   writeFileSync(join(cwd, '.nunchi', 'state', 'ledger.json'), '{"runs": [');
   const r = await promisify(execFile)('node', [CLI, 'capture', '--url', base, '--routes', '/', '--viewports', 'm', '--states', 'normal', '--network', 'live', '--json'], { cwd, encoding: 'utf8' });

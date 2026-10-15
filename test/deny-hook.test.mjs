@@ -8,7 +8,7 @@ import { homedir } from 'node:os';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { judge, keyBases, protectedOf, answer, usesNunchi, MAX_INPUT, isProc } from '../src/deny-hook.mjs';
-import { tmp } from './fixtures/board-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const HOOK = fileURLToPath(new URL('../src/deny-hook.mjs', import.meta.url));
 const ROOT = fileURLToPath(new URL('..', import.meta.url));

@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { discover, detectFramework } from '../src/discover.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 function tree(files) {
-  const root = mkdtempSync(join(tmpdir(), 'nunchi-'));
+  const root = tmp('nunchi-');
   for (const [path, body] of Object.entries(files)) {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     writeFileSync(join(root, path), typeof body === 'string' ? body : JSON.stringify(body));

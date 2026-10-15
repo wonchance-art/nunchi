@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { routeMatcher, codeNavigations, buildFlow, isRedirected } from '../src/flow.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 test('routeMatcher: literal routes win over dynamic ones, every router syntax', () => {
   const m = routeMatcher(['/', '/posts/[id]', '/posts/new', '/docs/[...slug]', '/shop/[[...rest]]', '/u/$userId', '/files/$', '/team/:id', '/opt/:id?']);
@@ -24,7 +24,7 @@ test('routeMatcher: literal routes win over dynamic ones, every router syntax', 
 });
 
 test('codeNavigations: literal navigations in the files each route renders, with file:line', () => {
-  const root = mkdtempSync(join(tmpdir(), 'nunchi-nav-'));
+  const root = tmp('nunchi-nav-');
   mkdirSync(join(root, 'app'), { recursive: true });
   writeFileSync(join(root, 'app', 'page.jsx'), [
     "import Link from 'next/link';",

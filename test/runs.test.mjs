@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync, utimesSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { startRun, finishRun, latestRun, listRuns, gcRuns, workTree, ensureGitignore } from '../src/runs.mjs';
 import { runHealth } from '../src/capture.mjs';
+import { tmp as tmpDir } from './fixtures/tmp.mjs';
 
-const tmp = p => mkdtempSync(join(tmpdir(), `nunchi-${p}-`));
+const tmp = p => tmpDir(`nunchi-${p}-`);
 
 test('runs: sequential ids, invisible until finished, latest moves only on completion', () => {
   const dir = tmp('runs');

@@ -12,6 +12,7 @@ import { execFile, spawn } from 'node:child_process';
 import { startBoard, CSP, SECURITY_HEADERS, MAX_BODY, MAX_SESSION_BODY, MAX_CONNECTIONS, LIMITS, MAX_STREAMS, openerCommand, openerEnv, sameSecret, CODE_TTL_MS } from '../src/board/server.mjs';
 import { openBoard, stopBoards, serverEnv, real, serverCwd } from '../src/board/launch.mjs';
 import { smallProject, jpeg, writeRun } from './fixtures/board-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const POSIX = process.platform !== 'win32';
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -525,7 +526,7 @@ test('§3.1 nunchi open twice at once starts one board (a launch lock); a runnin
 
 test('§3.1 nunchi open compares projects by the file system\'s own real path (macOS case, Windows long names)', { skip: !POSIX && 'symlinks need privileges on Windows' }, () => {
   const p = smallProject();
-  const link = join(p.root, '..', `${p.root.split(/[\\/]/).pop()}-link`);
+  const link = join(tmp('nunchi-link-'), `${p.root.split(/[\\/]/).pop()}-link`);
   symlinkSync(p.root, link);
   assert.equal(real(link), realpathSync.native(p.root));
   assert.equal(real(join(p.root, 'not-there')), join(p.root, 'not-there'), 'a path that does not exist is itself');

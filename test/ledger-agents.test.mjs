@@ -11,7 +11,8 @@ import { fileURLToPath } from 'node:url';
 import * as L from '../src/ledger.mjs';
 import { stableJson } from '../src/stable.mjs';
 import { AGENTS, agentFolds, foldAll } from './fixtures/agent-folds.mjs';
-import { huntProject, answerAll, deleteAll, tmp } from './fixtures/hunt-run.mjs';
+import { huntProject, answerAll, deleteAll } from './fixtures/hunt-run.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 process.env.XDG_STATE_HOME = tmp('nunchi-ledger-agents-xdg-');
