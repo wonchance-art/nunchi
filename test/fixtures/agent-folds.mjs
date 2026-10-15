@@ -9,6 +9,8 @@ export const AGENTS = { a: { agent: 'Claude Code', vendor: 'Anthropic', stream: 
 export const T0 = Date.UTC(2026, 9, 15, 3, 0, 0);
 const runOf = (who, i) => String(who === 'a' ? 2 * i + 1 : 2 * i + 2).padStart(4, '0');
 const CELL = 'guest.normal.m';
+// a name for the i-th element without digits (a fingerprint leaves digits out of a selector)
+const letters = i => String.fromCharCode(97 + Math.floor(i / 26) % 26, 97 + (i % 26));
 
 function finding(who, { route, selector, status = 'claimed', severity = 'medium', lens = 'L6', rule = 'L6.vague-error' }) {
   const f = { source: 'ai', lens, rule, route, scene: `${route.slice(1).replace(/\//g, '~')}.${CELL}`, selector, severity, evidence: { claim: `${who}: ${selector} says nothing useful` } };
@@ -26,7 +28,7 @@ export function agentFolds(who, n = 50) {
     const k = i % 10;
     const findings = [
       finding(who, { route: `/shared/${k}`, selector: 'main p.err', status: i % 3 === 0 ? 'confirmed' : 'claimed' }),
-      finding(who, { route: `/own/${who}/${i % 7}`, selector: `main p.n${i}` }),
+      finding(who, { route: `/own/${who}/${i % 7}`, selector: `main p.n-${letters(i)}` }),
     ];
     // every fifth hunt: a defect Claude Code claims and Codex's verifier rejects, folded in either order
     if (i % 5 === 0) findings.push(finding(who, { route: `/disputed/${i}`, selector: 'main button.go', lens: 'L9', rule: 'L9.destructive-without-confirm', severity: 'high', status: who === 'a' ? 'claimed' : 'rejected' }));
