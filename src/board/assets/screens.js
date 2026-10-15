@@ -329,7 +329,9 @@ export function renderDetail(focus = false) {
     return h('div', { class: 'sd-fig fix-compare', role: 'group', 'aria-label': `${W.FIX_WORDS.slider}, ${D.page.route}, ${W.WIDTH[v]}` }, cap,
       h('div', { class: 'cmp-labels', 'aria-hidden': 'true' }, h('span', null, before), h('span', null, after)), h('div', { class: 'cmp' }, b, a), slider, note);
   };
-  const figures = h('div', { class: `sd-figs${both ? ' sd-both' : ''}` }, shownVps.map(v => (cur ? compareOf(v) : figure(v))));
+  // under the figures, as the mock-up has it: both widths number a defect the same
+  const figures = h('div', { class: 'sd-main' }, h('div', { class: `sd-figs${both ? ' sd-both' : ''}` }, shownVps.map(v => (cur ? compareOf(v) : figure(v)))),
+    both ? h('p', { class: 'small muted sd-same' }, T.sameNumber) : null);
 
   // the findings on this screen, numbered as the boxes; Enter opens one (decided in Finding detail, D4)
   const widthsText = f => (f.viewports.length === W.VPS.filter(v => D.widths[v]).length && f.viewports.length > 1 ? f.viewports.map(v => W.WIDTH[v]).join(', ') : f.viewports.length === 1 ? T.onlyOn(f.viewports[0]) : '');
@@ -349,7 +351,6 @@ export function renderDetail(focus = false) {
   const side = h('section', { class: 'sd-side', 'aria-labelledby': 'sd-f-h' },
     h('h2', { id: 'sd-f-h' }, T.findingsH(D.findings.length)),
     D.findings.length ? h('ol', { class: 'sp-list sd-list' }, items) : h('p', { class: 'muted' }, T.nothing, covLine ? ` ${covLine}` : ''),
-    both ? h('p', { class: 'small muted' }, T.sameNumber) : null,
     D.fixedHere.length && D.baseline ? [h('h3', { class: 'sd-h3' }, T.fixedHere(D.baseline, D.fixedHere.length)), h('ul', { class: 'sd-fixed' }, D.fixedHere.map(x => h('li', null, h('span', { class: 'good', 'aria-hidden': 'true' }, '✓ '), T.fixedIn(x.title, x.run))))] : null,
     D.siblings.length ? h('details', { class: 'sp-sibs', id: 'sd-sibs', open: sd.sibsOpen }, h('summary', null, `${T.samePage(D.siblings.length)} ▸`),
       h('p', null, D.siblings.map(x => h('a', { href: `#/screens/${D.run}/${encodeURIComponent(x.id)}` }, W.sceneLabelText(x))))) : null);

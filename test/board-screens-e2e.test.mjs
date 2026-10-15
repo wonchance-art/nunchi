@@ -136,8 +136,9 @@ test('screens e2e: Screen detail — numbered by group on both widths, one stack
     assert.deepEqual(on, { focus: 'sd-f-2', boxes: ['1 2', '1 2'], num: '1 2' }, 'the boxes of finding 2 (it shares its element with finding 1)');
     // B: both widths, the same number on each; V: back to one width
     await page.keyboard.press('b');
-    const both = await page.evaluate(() => ({ figs: [...document.querySelectorAll('.sd-fig .sd-cap')].map(x => x.textContent), nums: [...document.querySelectorAll('.sd-fig')].map(f => [...f.querySelectorAll('.num')].map(n => n.textContent)), note: document.querySelector('.sd-side').textContent.includes('Same defect, same number on both widths.') }));
-    assert.deepEqual(both, { figs: ['Desktop', 'Phone'], nums: [['1 2'], ['1', '3']], note: true });
+    const both = await page.evaluate(() => ({ figs: [...document.querySelectorAll('.sd-fig .sd-cap')].map(x => x.textContent), nums: [...document.querySelectorAll('.sd-fig')].map(f => [...f.querySelectorAll('.num')].map(n => n.textContent)),
+      note: (() => { const n = document.querySelector('.sd-same'), f = document.querySelector('.sd-figs'); return n && n.getBoundingClientRect().top >= f.getBoundingClientRect().bottom - 1 ? n.textContent : null; })() }));
+    assert.deepEqual(both, { figs: ['Desktop', 'Phone'], nums: [['1 2'], ['1', '3']], note: 'Same defect, same number on both widths.' }, 'the note under the images, as the mock-up has it');
     await page.keyboard.press('v');
     await page.keyboard.press('v');
     await page.waitForFunction(() => location.hash === '#/screens/0004/~.guest.normal.m');

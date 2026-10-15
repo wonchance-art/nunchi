@@ -88,6 +88,7 @@ export const VIEWS_CSS = `
 .sd-tools{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px}
 .sd-tl{margin-left:6px}.sd-tl:first-child{margin-left:0}.sd-hint{margin-right:4px}
 .sd-body{display:flex;gap:20px;align-items:flex-start}
+.sd-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:4px}.sd-same{margin:0 12px}
 .sd-figs{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:16px}
 .sd-figs.sd-both{flex-direction:row;align-items:flex-start}.sd-both>.sd-fig:first-child{flex:3 1 0;min-width:0}.sd-both>.sd-fig:last-child{flex:1 1 0;min-width:0}
 .sd-fig{margin:0;display:flex;flex-direction:column;gap:6px;min-width:0}.sd-fig p{margin:0}

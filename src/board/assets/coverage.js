@@ -225,8 +225,11 @@ function mapPanel(D, narrow) {
   return h('section', { class: 'panel-box cv-map', 'aria-labelledby': 'h-map' }, h('h2', { id: 'h-map' }, C.mapH),
     filters(D, narrow), legend(f),
     h('div', { class: `cv-body${f.state === 'all' ? ' cv-all' : ''}` }, h('div', { class: 'cv-grid-wrap' }, body), panel),
-    h('p', { class: 'muted small' }, C.footnote));
+    h('p', { class: 'muted small' }, withMarks(C.footnote)));
 }
+// The footnote's marks in the map's symbol font, as the legend draws them; here they are part of the sentence, so they
+// stay readable to assistive technology.
+const withMarks = text => String(text).split(/([●◐○✕])/).map((x, i) => (i % 2 ? X.h('span', { class: 'cv-mk' }, x) : x));
 
 function grid(D, rows, cols) {
   const h = X.h, f = V().f;
