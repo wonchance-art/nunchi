@@ -147,6 +147,8 @@ class HttpError extends Error { constructor(status, message, extra = {}) { super
 // Starts a board for `projectDir` (the folder holding `.nunchi`). → { port, url, newLink(), close(), server }.
 // `mode`: 'board' or 'label' (design §9.2: label mode serves only the label endpoints and evidence).
 // `testHooks.afterBuild`: called right after a model is built (tests only: a change landing mid-build).
+// `testHooks.error`: told of an error a request hit before it is answered 500 or 503 (tests only: the e2e helper names
+// it when a page never draws, test/fixtures/board-browser.mjs).
 export async function startBoard({ projectDir, mode = 'board', port = 0, labeller = null, idleMs = IDLE_MS, onExit = null, now = () => Date.now(), testHooks = {} } = {}) {
   const project = resolve(projectDir);
   const nunchiDir = join(project, '.nunchi');
@@ -644,6 +646,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   const server = createServer({ maxHeaderSize: 16 * 1024, requireHostHeader: false }, (req, res) => {
     handle(req, res).catch(e => {
       if (e instanceof HttpError) return fail(res, e.status, e.message, e.extra);
+      try { testHooks.error?.(e); } catch {}
       if (P.LEDGER_ERRORS.includes(e.code)) return fail(res, 503, safe(e.message, 600));
       return fail(res, 500, 'the board hit an error; see nunchi findings in your terminal');
     });

@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { startBoard } from '../src/board/server.mjs';
+import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 import { reviewerText, foundByText, AGENT_WORDS } from '../src/board/shared.mjs';
 import { foldRun, foldAi, emptyState, runForFold, fingerprintOf } from '../src/ledger.mjs';
 import { stableJson } from '../src/stable.mjs';
@@ -29,7 +29,7 @@ before(async () => {
   try { browser = await chromium.launch({ executablePath: process.env.NUNCHI_BROWSER || undefined }); }
   catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
-after(async () => { await browser?.close(); });
+after(async () => { await closeBoards(); await browser?.close(); });
 
 test('words: the reviewer (the verdict word, then cross-vendor only when the ledger says so, else same model) and who found it, as declared', () => {
   const v = { status: 'confirmed', by: 'cross-vendor', vendor: 'OpenAI', suspect: false };
@@ -93,12 +93,9 @@ test('board e2e: Detail says the reviewer and who found it, as declared (two age
   // a claim and a hunt in progress, both declared
   assert.equal(C.acquireClaim(sd, { group: p.ids[0], worktree: p.root, branch: 'nunchi/fixes-1015', url: 'http://127.0.0.1:3001', files: ['app/a.js'], agent: 'Claude Code', vendor: 'Anthropic' }).ok, true);
   Act.noteHunt(sd, { agent: 'Codex', vendor: 'OpenAI', stream: 'main', run: '0001', plan: 'p1', lenses: ['L9'], units: 4, answered: 1, complete: 1 });
-  const b = await startBoard({ projectDir: p.root });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  const page = await context.newPage();
+  const s = await openBoard(browser, p);
+  const { page } = s;
   try {
-    await page.goto(b.newLink());
-    await page.waitForSelector('#h-progress');
     // one evaluate: each group's Detail facts (by its Group id in the evidence), then the Now list's lines and titles
     const seen = await page.evaluate(async ids => {
       const wait = async fn => { for (let i = 0; i < 200; i++) { const v = fn(); if (v) return v; await new Promise(r => setTimeout(r, 25)); } return null; };
@@ -123,5 +120,5 @@ test('board e2e: Detail says the reviewer and who found it, as declared (two age
     assert.deepEqual(seen.now.map(([, title]) => title), ['Claude Code (as declared)', 'Codex (as declared)']);
     assert.match(seen.now[0][0], /^Claude Code is fixing .+ · just started$/, 'the design\'s words, unchanged');
     assert.equal(seen.now[1][0], 'Codex · AI review L9 · 1/4 units · just started');
-  } finally { await context.close(); await b.close(); }
+  } finally { await s.close(); }
 });

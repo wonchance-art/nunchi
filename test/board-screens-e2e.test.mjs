@@ -12,7 +12,7 @@ import { createRequire } from 'node:module';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { startBoard } from '../src/board/server.mjs';
+import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 import { writeRun } from './fixtures/board-project.mjs';
 import { leafy, leafyScenes } from './fixtures/coverage-project.mjs';
 
@@ -25,18 +25,10 @@ before(async () => {
   try { browser = await chromium.launch({ executablePath: process.env.NUNCHI_BROWSER || undefined }); }
   catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
-after(async () => { await browser?.close(); });
+after(async () => { await closeBoards(); await browser?.close(); });
 
-async function open(p, ctx = {}) {
-  const b = await startBoard({ projectDir: p.root });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, ...ctx });
-  const page = await context.newPage();
-  const errors = [];
-  page.on('pageerror', e => errors.push(String(e)));
-  await page.goto(b.newLink());
-  await page.waitForSelector('#h-progress');
-  return { b, page, errors, close: async () => { await context.close(); await b.close(); } };
-}
+// the board, a page on it and the first view (fixtures/board-browser.mjs: closed again, and said why, when a step fails)
+const open = (p, ctx = {}) => openBoard(browser, p, { ctx: { viewport: { width: 1280, height: 900 }, ...ctx } });
 const until = async (fn, ms = 8000) => { const t = Date.now(); for (;;) { const v = await fn(); if (v) return v; if (Date.now() - t > ms) return v; await new Promise(r => setTimeout(r, 100)); } };
 const decisions = nunchi => { try { return readdirSync(join(nunchi, 'decisions'), { recursive: true }).map(String).filter(f => f.endsWith('.json')); } catch { return []; } };
 async function axe(page) {
