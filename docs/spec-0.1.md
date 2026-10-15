@@ -1314,28 +1314,36 @@ says so instead of keeping quiet (its quiet flag is for `--out` folders). A work
 of its own (§5.1 *Streams*), as a branch switch in one folder is a sweep.
 
 **Stress tests** (`test/multi-agent-stress.test.mjs`, the M6 "done when"). Two processes, each an agent in a worktree of
-its own, start together (`test/fixtures/stress-child.mjs`); everything is counted, never timed.
+its own (`test/fixtures/stress-child.mjs`), start together at a barrier on files, never at a time on the clock (each
+says it is there and waits for the other; one that fails says so and the other stops waiting); everything is counted,
+never timed.
 - *2 × 50 folds*: each process folds 50 hunts through the ledger's catch-up (`syncLedger`: a sweep's rule fold and its
   AI fold, one commit each, as `hunt --record` folds). Checked: one commit per fold (rev and generation 100), each
   fold under its own stream, the two processes' commits interleave, each of the ten shared defects one item with both
   agents and both worktrees, no dormant contribution left, and the ledger byte for byte the one the same folds give
-  one after the other. Fairness as overtakes (the other agent's commits between a fold's first read and its own
-  commit): at most 5 tries per fold (4 while the other commits, then once under the fair lock), and never overtaken
-  by half of the other agent's run (bound 25). Measured here (2026-10-15 KST, 4 cores; alone and with four copies at
-  once): overtakes at most 5–11, mean 0.9; 7–12 of 100 folds went under the lock.
-- *Claim conflicts*, 25 rounds each, both processes at once: the same group (one wins, the other is told "group"),
-  one file for two groups (one wins, the other "file", its own marker removed), an expired claim taken over (one wins,
-  the expired claim's markers gone), and a renewal racing a take-over at the moment of expiry (exactly one of them
-  wins, never both, never neither; the old holder's renewal after a take-over never brings it back). Every claim on
-  disk whole and live, every marker a live claim's.
+  one after the other. Fairness, not speed: at most 5 tries per fold (4 while the other commits, then once under the
+  fair lock), and under the lock no one else commits (its commit follows the rev it read under the lock). Overtakes
+  (the other agent's commits between a fold's first read and its own commit) depend on the machine and are said, with
+  a bound only a fold starved for most of the other agent's run reaches (40 of 50: a 2-vCPU runner that puts one
+  process aside for a while sees many). Measured here (2026-10-15 KST, 4 cores; alone and with four copies at once):
+  overtakes at most 5–11, mean 0.9; 6–13 of 100 folds went under the lock.
+- *Claim conflicts*, 25 rounds each, both processes meeting at the barrier before every round (then each waits a
+  seeded 0–2 ms, so either may go first: the one that came last would otherwise always go first): the same group (one
+  wins, the other is told "group"), one file for two groups (one wins, the other "file", its own marker removed), an
+  expired claim taken over (one wins, the expired claim's markers gone), and a renewal racing a take-over at the moment
+  of expiry (exactly one of them wins, never both, never neither; the old holder's renewal after a take-over never
+  brings it back). Every claim on disk whole and live, every marker a live claim's. Each round's expired claim expires
+  at its round (last renewed at base + i·2 s, the round reading the clock 1 s after it expired): a take-over removes
+  every expired claim, so with one time for all, the first take-over removed the later rounds' claims before their
+  race (M6 review: the renewal then lost 24 or 25 rounds of 25 without racing, and the expired-claim rounds took over
+  no expired claim). Measured here: the renewal won 12–15 rounds of 25, the two attempts overlapping in time in 9–17.
 - *Measured (2026-10-15 13:50–13:56 KST):* `npm test` 600 tests, 599 pass and 1 skipped (Windows only), on Node 22.22.0
   and on Node 24.21.0, Chromium included, with bun on PATH and without. Pebble `node bench/run.mjs --twice` is
   unchanged: rule recall 34/34, 0 false positives on 8 clean scenes, determinism identical (1,141 files), fingerprints
   100% (52/52), 171 s per capture.
 
 **Limits.** Agents hunting one run share its plan: a plan with other lenses waits for the running hunt. An AI fold
-keeps the cells its hunt saw (`seen`, about 30 characters a cell). Nothing shows an item's agents yet (a text
-mock-up is in the M6 report). The board's before and after of a fix verified in another folder is missing (its
+keeps the cells its hunt saw (`seen`, about 30 characters a cell). The board's before and after of a fix verified in another folder is missing (its
 screenshots are in that folder's runs).
 
 ## 6. Fix loop (0.1-c)
