@@ -2133,7 +2133,7 @@ guard without data flow. Tests: a fixture that triggers each guard and one of ne
 (`test/fixtures/guards/`), guards.json validation, the baseline, `--base`, `check`'s exit codes, the SARIF schema and
 what GitHub needs beyond it, redaction in every field of every format, Markdown escaping, determinism, the card's API
 and its page in Chromium with axe (light 1280 px, dark 390 px, forced colours), the owner's words, the deny hook's
-rules. `npm test`: 695 tests, 694 passing and 1 Windows-only skipped, on Node 22.22.0 and Node 24.21.0, Chromium
+rules. `npm test`: 696 tests, 695 passing and 1 Windows-only skipped, on Node 22.22.0 and Node 24.21.0, Chromium
 included, with bun on PATH and without it.
 
 **Not done in M4:** a board view of the guards and their hits (deferred to 0.2 by the owner; "More views in 0.2"
