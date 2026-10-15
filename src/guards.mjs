@@ -8,7 +8,7 @@
 //   source never reaches the output.
 // - The limits are stated: there is no data flow (`const m = e.message; <p>{m}</p>` is missed), a name is judged per
 //   file (a local `confirm` anywhere in the file is taken for the local one), files over 1 MB are skipped and counted,
-//   a file that does not parse is listed and not checked.
+//   a file that does not parse is listed and not checked. Vue, Svelte, Astro and MDX files are not read.
 // - `.nunchi/guards.json` (committed, the person's) holds built-in kinds with typed parameters only — never a regex or
 //   a selector from the file — and a baseline of the hits that were there when a guard was added, keyed by file and a
 //   hash of the hit's own source (not its line), so `check` fails only on new hits. It is validated strictly: anything
@@ -59,14 +59,18 @@ export function projectPath(project, file, path = nodePath) {
 const climbs = (r, path) => r === '..' || r.startsWith(`..${path.sep}`) || r.startsWith('../') || path.isAbsolute(r);
 export const insideProject = (project, root, path = nodePath) => !climbs(path.relative(project, root), path);
 
+// A name as it is listed: control and format characters (a line break, a bidi override) and U+FFFD (a byte that is not
+// UTF-8) written as \u{…}, so a listed name cannot rearrange the terminal or the report it is printed in.
+export const shownName = s => String(s).replace(/[\p{Cc}\p{Cf}\u2028\u2029\ufffd]/gu, c => `\\u{${c.codePointAt(0).toString(16)}}`).slice(0, 200);
 // The files a scan reads under `root`, as paths relative to `project` (posix), sorted. Folders nunchi skips, dot
-// folders and symbolic links are never entered or read; files over 1 MB are listed in `large`, files whose name a
-// baseline cannot keep in `odd` (never read).
+// folders and symbolic links are never entered or read; files over 1 MB are listed in `large`; files whose name a
+// baseline cannot keep, and files or folders that cannot be opened by their name (a name that is not UTF-8, a folder
+// that cannot be listed), in `odd` (never read). Nothing is skipped without being counted, and nothing throws.
 export function sourceFiles(project, root, { css = false } = {}) {
   const files = [], large = [], odd = [];
   const walk = dir => {
     let entries;
-    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { if (dir !== root) odd.push(`${shownName(posix(relative(project, dir)))}/`); return; }
     entries.sort((a, b) => cmp(a.name, b.name));
     for (const e of entries) {
       if (e.name.startsWith('.') || IGNORE_DIRS.has(e.name) || e.isSymbolicLink()) continue;
@@ -75,10 +79,10 @@ export function sourceFiles(project, root, { css = false } = {}) {
       if (!e.isFile()) continue;
       if (!(CODE.test(e.name) || (css && CSS.test(e.name)))) continue;
       const rel = projectPath(project, p);
-      if (rel === null) { odd.push(JSON.stringify(posix(relative(project, p))).slice(1, -1).slice(0, 200)); continue; }
+      if (rel === null) { odd.push(shownName(posix(relative(project, p)))); continue; }
       if (notApp(rel)) continue;
       let size = 0;
-      try { size = lstatSync(p).size; } catch { continue; }
+      try { size = lstatSync(p).size; } catch { odd.push(shownName(rel)); continue; }
       if (size > MAX_SOURCE_BYTES) { large.push(rel); continue; }
       files.push(rel);
     }

@@ -3,7 +3,7 @@
 // or weakened since a ref. Synthetic fixtures only (test/fixtures/guards).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, symlinkSync, cpSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, symlinkSync, cpSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -385,10 +385,27 @@ test('a file whose name a baseline cannot keep is listed and never read (POSIX n
   put(p, 'app/odd\\name.tsx', "alert('x');\n");
   put(p, 'app/ok.tsx', "alert('x');\n");
   const r = G.scanGuards({ project: p, guards: guardsOf(['native-dialog']) });
-  assert.deepEqual(r.odd, ['app/odd\\\\name.tsx']);
+  assert.deepEqual(r.odd, ['app/odd\\name.tsx']);
   assert.deepEqual(r.hits.map(h => h.file), ['app/ok.tsx']);
   const doc = G.addGuard(G.emptyGuards(), { project: p, kind: 'native-dialog', params: { calls: ['alert'] } }).doc;
   assert.deepEqual(doc.baseline.map(e => e.file), ['app/ok.tsx'], 'the baseline stays valid');
+});
+
+test('a name that is not UTF-8, a bidi override or a folder that cannot be listed is counted, never thrown or printed raw', { skip: process.platform !== 'linux' && 'only Linux keeps a name that is not UTF-8 (macOS refuses it, Windows names are UTF-16)' }, () => {
+  const p = tmp();
+  put(p, 'app/ok.tsx', "alert('x');\n");
+  put(p, 'app/bi\u202edi.tsx', "alert('x');\n");
+  writeFileSync(Buffer.concat([Buffer.from(join(p, 'app', 'bad')), Buffer.from([0xff]), Buffer.from('.tsx')]), "alert('x');\n");
+  mkdirSync(join(p, 'app', 'shut'));
+  put(p, 'app/shut/x.tsx', "alert('x');\n");
+  chmodSync(join(p, 'app', 'shut'), 0o000);
+  try {
+    const r = G.scanGuards({ project: p, guards: guardsOf(['native-dialog']) });
+    const root = process.getuid?.() === 0;                        // root lists any folder
+    assert.deepEqual(r.odd, ['app/bad\\u{fffd}.tsx', 'app/bi\\u{202e}di.tsx', ...(root ? [] : ['app/shut/'])]);
+    assert.deepEqual(r.hits.map(h => h.file), ['app/ok.tsx', ...(root ? ['app/shut/x.tsx'] : [])]);
+    assert.ok(!/[\u202e\ufffd]/.test(JSON.stringify(r.odd)));
+  } finally { chmodSync(join(p, 'app', 'shut'), 0o755); }
 });
 
 test('line endings: a CRLF checkout (Git for Windows\' core.autocrlf) gives the same hits, lines, columns and anchors as LF', () => {

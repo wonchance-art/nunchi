@@ -1710,8 +1710,10 @@ stories (`__tests__`, `__mocks__`, `__fixtures__`, `e2e`, `cypress`, `*.test.*`,
 the project's own top-level `test/`, `tests/`, `fixtures/`, `stories/`, `playwright/` and `e2e/` folders (a route
 folder called `test` inside `app/` is a page and is read), and config files (`*.config.*`). Files over 1 MB are
 skipped and counted ("skipped: 1 file over 1 MB"); a file that does not parse is listed by file:line and not checked.
-A file whose name a baseline cannot keep (a backslash, which a POSIX name may hold, or a control or bidi character)
-is listed ("not checked: 1 file whose name …") and never read. Paths are kept with forward slashes on every platform
+A file whose name a baseline cannot keep (a backslash, which a POSIX name may hold, or a control or bidi character),
+and a file or folder nunchi cannot open by its name (a name that is not UTF-8, a folder that cannot be listed), is
+listed and counted ("not checked: 1 file whose name …", with control and format characters written `\u{202e}`) and
+never read; nothing is skipped uncounted, and nothing throws. Paths are kept with forward slashes on every platform
 (`projectPath`, checked on Linux through `path.win32`: `D:\` and `D:/` alike, another drive or `..` outside), and a
 CRLF checkout (Git for Windows' `core.autocrlf`) gives the same hits, lines, columns and anchors as LF (test).
 A hit is reported by file:line:column and kind, never with its source line, so a key in the source never reaches the
@@ -1720,7 +1722,7 @@ output.
 *Limits, stated:* there is no data flow (`const m = e.message; <p>{m}</p>` is missed: a fixture pins it); a name is
 judged per file, not per scope (a parameter called `confirm` anywhere in the file makes every bare `confirm()` there
 local); a `toast(e.message)` is not JSX and not this guard; colours in CSS-in-JS templates, SCSS/Less, theme objects
-in code and `var()` fallbacks are not read; Vue, Svelte and Astro files are not read.
+in code and `var()` fallbacks are not read; Vue, Svelte, Astro and MDX (`.mdx`: Markdown with JSX, a docs site's pages) files are not read, so a `{error.message}` or an `alert()` in an `.mdx` page is not seen.
 
 **`.nunchi/guards.json`** (committed, the person's) is `{schema: 1, guards: [{kind, params}], baseline: [{kind,
 file, anchor, count, what?}]}` and nothing else. Only the built-in kinds with the typed parameters above: a regex, a
