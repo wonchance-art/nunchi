@@ -1,10 +1,11 @@
 # Pre-registration: precision after verification
 
-Status: **draft, not registered** (2026-10-15 KST). Registered when the hash table below is filled and committed,
-**before the sweeps that make the population** (§3), so the sample's seed cannot be chosen after the population is
-known. Common rules: [prereg-README.md](prereg-README.md).
+Status: **draft, not registered** (2026-10-15 KST; revised after the statistical review the same day). Registered when
+the hash table below is filled and pushed, **before the sweeps that make the population** (§3); the seeds come from a
+drand round published after the push, so nobody can choose them, or the population, to fit each other. Common rules:
+[prereg-README.md](prereg-README.md).
 
-The technical choices T1–T11 of [prereg-README.md](prereg-README.md) apply here as defaults unless the owner overrides
+The technical choices T1–T13 of [prereg-README.md](prereg-README.md) apply here as defaults unless the owner overrides
 them before registration; the owner decisions D1–D10 are recorded there (2026-10-15 KST).
 
 Covers design 0.1-c §9.2 (precision, strata, rubric, labellers, rule precision on field apps), §9.7 (D) (Codex's
@@ -18,11 +19,12 @@ gate     precision
 engine   src lenses hooks skills/nunchi/SKILL.md .claude-plugin package.json package-lock.json
 scorer   bench/precision-gate.mjs scripts/prereg-stats.mjs scripts/prereg-hash.mjs
 seeds    sample decoys known
+beacon   drand 52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971 ROUND
 ```
 
 <!-- prereg-hash:begin -->
-*Not registered.* Filled at registration by `node scripts/prereg-hash.mjs --fill docs/prereg-precision.md`; never
-typed by hand.
+*Not registered.* Filled at registration by `node scripts/prereg-hash.mjs --fill docs/prereg-precision.md`, and the
+seeds by `--seeds` after the push; never typed by hand.
 <!-- prereg-hash:end -->
 
 ## 2. Before registration
@@ -32,7 +34,9 @@ pass at ≥ 135; option (a) (50 groups, an estimate) is struck. **D1** held-out 
 Still open: **D4** the owner names reviewer A, the second labeller.
 
 To build (README builds B7 and B8: `bench/precision-gate.mjs` in the scorer set, label mode in the engine set):
-1. `--pool` (B7): draws the strata of §3 with the registered `sample` seed (`stratifiedDraw` of `scripts/prereg-stats.mjs`);
+1. `--pool` (B7): first writes the **population's hash** (the sorted group ids per app and stratum, sha256) and the
+   items whose evidence cannot be shown (excluded there, before anyone labels: §7); then draws the strata of §3 with
+   the registered `sample` seed (`stratifiedDraw` of `scripts/prereg-stats.mjs`);
    adds decoys (false claims made like `verify --plan`'s, on the pool apps' screens, seeded by `decoys`) and known-true
    items (held-out seeds phrased as a hunter would claim them, at their location, seeded by `known`; never a seed
    whose defect is also a sampled group); writes one label
@@ -49,7 +53,8 @@ none the lenses were tuned on. Pebble and pegroom are excluded (development set;
 
 **Population:** per app, one sweep as a user runs it, after registration, with the registered engine: `capture`,
 `hunt` at the default budget, `verify` in a fresh context, folded into that app's ledger. The population is the
-ledger's AI groups and the sweep's rejected and insufficient claims at that moment; it is frozen when `--pool` runs.
+ledger's AI groups and the sweep's rejected and insufficient claims at that moment; it is frozen when `--pool` runs,
+and its hash is committed with the results before labelling starts.
 
 **The pool** (unit: the ledger group; one item per group):
 
@@ -63,6 +68,10 @@ ledger's AI groups and the sweep's rejected and insufficient claims at that mome
 | decoys (false claims) | 27 |
 | known-true items | 27 |
 | at most | 374 |
+
+Decoys and known-true items are each 7.2% of the pool (27 of 374), about 10% of its AI items (27 of 274), as design
+§9.2's "~10%" means them. The main stratum takes an equal share per app, so the estimate is **an average across apps
+with equal weight**, not weighted by how many groups each app has; the per-app rates are reported.
 
 If an app set has fewer confirmed groups than the main stratum asks for, all are taken (a census) and the pass count
 is recomputed for that n (§4).
@@ -87,7 +96,10 @@ is reported beside it. (Option (a), 50 groups published as an estimate such as "
 show a lower bound ≥ 85% only at ≥ 47/50.)
 
 **The measurement is valid only if all hold**, else it is *inconclusive* (no claim either way):
-- Cohen's κ between the two labellers on the main stratum (three categories) ≥ 0.6;
+- Cohen's κ between the two labellers over **the whole pool** (three categories: correct, wrong, unsure) ≥ 0.6, with the
+  prevalence- and bias-adjusted κ (PABAK, `pabak`) and the main stratum's own κ reported beside it. *Why the whole
+  pool:* the main stratum is expected to be mostly *correct*, and κ collapses when one category dominates even when
+  the labellers agree; the pool's other strata, decoys and known-true items give κ the variation it needs (T12);
 - each labeller accepts ≤ 10% of decoys (≤ 2 of 27) and marks ≥ 90% of known-true items correct (≥ 25 of 27);
 - *unsure* is ≤ 10% of either labeller's main-stratum labels.
 
@@ -106,13 +118,15 @@ show a lower bound ≥ 85% only at ≥ 47/50.)
 
 The rule groups of the three field round-2 apps, rules frozen (the engine hash above): 100 drawn with the `sample`
 seed, an equal share per app, labelled in the same pool by the same two labellers. Correct only if both agree. **Pass
-iff k/100 ≥ 85%** (a point estimate, as the design says), with the one-sided 95% lower bound reported (85/100 → 77.9%;
-a lower bound ≥ 85% would need 92/100). Fewer than 100 rule groups: all of them, the rate and bound reported for that n.
+iff k/100 ≥ 85%** (a point estimate, as the design says), with its two-sided 95% interval reported, as every reported
+interval (T1): 85/100 → 76.5–91.4%; a one-sided lower bound ≥ 85% would need 92/100. Fewer than 100 rule groups: all of
+them, the rate and interval reported for that n.
 
 ## 7. Exclusions
 
-- An item whose screenshot or element cannot be shown (evidence missing) is excluded and listed; more than 5% of the
-  main stratum excluded makes the measurement inconclusive.
+- An item whose screenshot or element cannot be shown (evidence missing) is excluded by `--pool` when it builds the
+  pool, before any label exists, and listed; a labeller never excludes an item (*unsure* is a label). More than 5% of
+  the main stratum's population excluded makes the measurement inconclusive.
 - Two items of one group (a duplicate the draw cannot make, but a pool built twice could) count once.
 - A labeller who stops before the end is not replaced silently: their partial labels are reported, and a replacement
   labels the whole pool from the start.
@@ -126,7 +140,12 @@ a lower bound ≥ 85% would need 92/100). Fewer than 100 rule groups: all of the
 | Operator | an agent session or a person | runs the sweeps, `--pool` and `--score`; never labels |
 | Verifiers | fresh agent contexts | the sweeps' `verify` step |
 
-## 9. Amendments
+## 9. Amendment policy
 
 The common policy holds. A rubric clarification asked by a labeller during labelling is answered in writing to both
 labellers and listed; it is not a scoring change unless it changes a label already given, which is then an amendment.
+
+## Amendments
+
+| When (KST) | What | Why |
+|---|---|---|

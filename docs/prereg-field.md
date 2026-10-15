@@ -1,9 +1,9 @@
 # Pre-registration: field test, rounds 2 and 3
 
-Status: **draft, not registered** (2026-10-15 KST). Registered when the hash table below is filled and committed,
-before the search of §3 is run. Common rules: [prereg-README.md](prereg-README.md).
+Status: **draft, not registered** (2026-10-15 KST; revised after the statistical review the same day). Registered when
+the hash table below is filled and pushed, before the search of §3 is run; the seed comes after the push. Common rules: [prereg-README.md](prereg-README.md).
 
-The technical choices T1–T11 of [prereg-README.md](prereg-README.md) apply here as defaults unless the owner overrides
+The technical choices T1–T13 of [prereg-README.md](prereg-README.md) apply here as defaults unless the owner overrides
 them before registration; the owner decisions D1–D10 are recorded there (2026-10-15 KST).
 
 Covers design 0.1-c §9.8 and §9.9 (stop/pivot) and spec §8 "Field test: 3 public vibe-coded apps: ≥ 5 findings per
@@ -18,6 +18,7 @@ gate     field
 engine   src lenses hooks skills/nunchi/SKILL.md .claude-plugin package.json package-lock.json
 scorer   bench/field-tally.mjs scripts/prereg-stats.mjs scripts/prereg-hash.mjs
 seeds    judge-order
+beacon   drand 52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971 ROUND
 ```
 
 The apps are not hashed here: they are chosen after registration by §3's rule, and each one's repository and commit
@@ -25,8 +26,8 @@ are recorded in the round's log before it is captured. Round 3 is registered on 
 field-3`), with the engine of that round.
 
 <!-- prereg-hash:begin -->
-*Not registered.* Filled at registration by `node scripts/prereg-hash.mjs --fill docs/prereg-field.md`; never typed
-by hand.
+*Not registered.* Filled at registration by `node scripts/prereg-hash.mjs --fill docs/prereg-field.md`, and the seed by
+`--seeds` after the push; never typed by hand.
 <!-- prereg-hash:end -->
 
 ## 2. Before registration
@@ -48,8 +49,9 @@ To build (README build B16): `bench/field-tally.mjs`, a tally of the judges' she
   2. the README names the AI builder used to make it;
   3. a web app (not a library, template or mobile app), with an English or Korean interface;
   4. ≥ 10 routes, counted by `nunchi discover`;
-  5. builds and starts locally from its own README within 30 minutes of the operator's time, without a paid service
-     or a real account (stub values the README documents are fine);
+  5. builds and starts locally: following only the README's commands (each command tried at most 3 times), the time
+     from `git clone` to the first route answering HTTP 200 is at most 30 minutes of wall-clock time, measured and
+     logged; no paid service or real account is needed (stub values the README documents are fine);
   6. not one of round 1's apps, and not an app any nunchi session has opened before;
   7. no adult content; no real people's data needed to use it.
 - **The first 3 eligible apps** are the round's apps. An app that fails later (it stops building) is logged, and the
@@ -98,7 +100,8 @@ with (d) yes that would otherwise count are **counted apart** (reported, not in 
 ## 7. Exclusions
 
 - A group whose screen the judges cannot load from the evidence is left out and listed.
-- An app the operator cannot sweep (capture fails on most routes) is replaced by the next eligible one; logged.
+- An app whose sweep fails on more than 50% of its routes (every scene of the route failed or redirected away) is
+  replaced by the next eligible one; logged with the counts.
 
 ## 8. Who does what
 
@@ -109,7 +112,12 @@ with (d) yes that would otherwise count are **counted apart** (reported, not in 
 | Manual-pass reviewer | reviewer B, a person who did not build nunchi and is neither judge | 15 minutes per app before any output |
 | Operator | an agent session or a person | runs the search, the eligibility checks and the sweeps |
 
-## 9. Amendments
+## 9. Amendment policy
 
 The common policy holds. The search is run once; running it again (to get other apps) is an amendment, reported with
 both result lists.
+
+## Amendments
+
+| When (KST) | What | Why |
+|---|---|---|

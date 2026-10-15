@@ -1,9 +1,9 @@
 # Pre-registration: fix loop, detector sensitivity, re-check validation
 
-Status: **draft, not registered** (2026-10-15 KST). Registered when the hash table below is filled and committed,
-before the base sweep of §3. Common rules: [prereg-README.md](prereg-README.md).
+Status: **draft, not registered** (2026-10-15 KST; revised after the statistical review the same day). Registered when
+the hash table below is filled and pushed, before the base sweep of §3; the seeds come after the push (§1). Common rules: [prereg-README.md](prereg-README.md).
 
-The technical choices T1–T11 of [prereg-README.md](prereg-README.md) apply here as defaults unless the owner overrides
+The technical choices T1–T13 of [prereg-README.md](prereg-README.md) apply here as defaults unless the owner overrides
 them before registration; the owner decisions D1–D10 are recorded there (2026-10-15 KST).
 
 Covers design 0.1-c §9.4 (trials, functional checks, reporting, field sample, detector sensitivity, re-check
@@ -19,6 +19,7 @@ scorer   bench/fix-gate.mjs bench/recheck-gate.mjs scripts/prereg-stats.mjs scri
 app      bench/heldout/pegroom bench/answers/pegroom.json
 sets     @fix-sets
 seeds    order order-seq dev-sample review canaries
+beacon   drand 52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971 ROUND
 ```
 
 `@fix-sets` is the set builder's folder, a git repository of its own, kept outside nunchi's repository until the last
@@ -28,7 +29,7 @@ trial ends, so no fixer session can read it: `functional.json` (one check per se
 
 <!-- prereg-hash:begin -->
 *Not registered.* Filled at registration by `node scripts/prereg-hash.mjs --fill docs/prereg-fix.md --key
-fix-sets=<folder>`; never typed by hand.
+fix-sets=<folder>`, and the seeds by `--seeds` after the push; never typed by hand.
 <!-- prereg-hash:end -->
 
 ## 2. Before registration
@@ -88,7 +89,7 @@ The gate passes only if every line holds:
 | # | What | Rule |
 |---|---|---|
 | A1 | Fixed rate | F = fixed / n over §3 step 3's trials; pass iff **F ≥ 90%** (a point estimate, spec §8), its two-sided 95% Clopper–Pearson interval reported |
-| A2 | No caused regression | over every kept fix of steps 3, 4 and 6: no functional check fails, step 4's final sweep shows no new rule finding by element identity on a route in the fixes' scopes, and no reviewed diff is judged to break something (confirmed by the owner) |
+| A2 | No caused regression | over every kept fix of steps 3, 4 and 6: no functional check fails, step 4's final sweep shows no new rule finding by element identity on a route in the fixes' scopes, and the blind diff reviewer judges no kept fix to break or change something else. The owner cannot overrule the reviewer: a disagreement is reported beside the reviewer's judgement, which stands |
 | B | Detector sensitivity | ≥ 28 of 30 planted in-scope regressions detected **and** ≤ 1 false alarm in 20 clean fixes (§5) |
 | C | Re-check validation | §6's three rules |
 
@@ -146,7 +147,9 @@ the agent reports them.
 ## 8. Exclusions
 
 - A trial the harness could not run (an edit that does not apply, a copy that does not build at all) is a harness
-  error: fixed and rerun once; listed. Engine refusals are outcomes, never exclusions.
+  error: rerun once; listed. A change to the harness to make it run is a scorer change during the measurement, so it
+  is an **amendment** (logged under ## Amendments, the registered and amended numbers reported side by side). Engine
+  refusals are outcomes, never exclusions.
 - A seed whose functional check the set builder marks broken before any trial ran is rewritten then; after the first
   trial, check changes are amendments.
 
@@ -161,6 +164,11 @@ the agent reports them.
 | Diff reviewer | reviewer A, a person who did not build nunchi | reviews 10 diffs blind to outcome (≈ 1 h) |
 | Operator | an agent session or a person | runs the harness; never edits a fix |
 
-## 10. Amendments
+## 10. Amendment policy
 
 The common policy holds. The order seeds are printed by the harness; a trial run out of order is reported as such.
+
+## Amendments
+
+| When (KST) | What | Why |
+|---|---|---|
