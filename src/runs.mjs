@@ -54,16 +54,24 @@ export function latestSweep(dir) {
 // a file over 64 KB is not read, and every field is checked.
 export const PROGRESS_FILE = 'progress.json';
 // A capture that was killed (no exit handler ran) leaves its `.partial` folder: it is not "running" once its writer is
-// gone (a progress file names its pid and host; on this host a pid that no longer runs is gone) or nothing was written
+// gone (a progress file names its pid and host; on this host a pid that no longer runs is gone) or it made no progress
 // for STALE_MS (review of PR #33). A folder without a progress file (a fix probe, a capture of an older nunchi) counts
 // by the folder's own time.
+// *No progress* (M5b): its last progress is the progress file's modification time (the CLI rewrites it after each route ×
+// person × viewport), or the folder's own when it has none yet; a capture has made no progress for STALE_MS when
+// now − that time ≥ STALE_MS (9:59 is still running, 10:00 is not).
 export const STALE_MS = 10 * 60e3;
 export function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
-// → [{ run, progress: { kind, wholeApp, routes, done, routeMs, skipped } | null }] for the runs still being written,
-// oldest first. `now`, `alive` and `host` are the clock, the process check and this machine's name (a test's own).
-export function runningCaptures(dir, { now = Date.now(), alive = pidAlive, host = hostname() } = {}) {
+// Every `.partial` folder that is a capture the board can speak of, oldest first: → [{ run, state: 'running' |
+// 'stopped', why, progress: { kind, wholeApp, routesGiven, routes, done, routeMs, skipped } | null }].
+// `stopped` (M5b): a capture of `nunchi capture` (its folder has a progress file) that is not running any more: `why` is
+// 'no-progress' (none for STALE_MS) or 'ended' (sooner: its writer, on this host, no longer runs). A folder without a
+// progress file is running by its own time and is never called stopped: a fix probe's attempt says when it was
+// interrupted (§6.3). A link, a folder, a progress file over 64 KB or one that does not parse is not read.
+// `now`, `alive` and `host` are the clock, the process check and this machine's name (a test's own).
+export function captureStates(dir, { now = Date.now(), alive = pidAlive, host = hostname() } = {}) {
   const out = [];
   for (const p of listRuns(dir).partial) {
     const run = PARTIAL.exec(p)[1];
@@ -73,20 +81,24 @@ export function runningCaptures(dir, { now = Date.now(), alive = pidAlive, host 
       const f = join(dir, p, PROGRESS_FILE);
       let st = null;
       try { st = lstatSync(f); } catch {}
-      if (!st) { if (now - folder.mtimeMs <= STALE_MS) out.push({ run, progress: null }); continue; }
-      if (!st.isFile() || st.size > 64 * 1024 || now - st.mtimeMs > STALE_MS) continue;
+      if (!st) { if (now - folder.mtimeMs < STALE_MS) out.push({ run, state: 'running', why: null, progress: null }); continue; }
+      if (!st.isFile() || st.size > 64 * 1024) continue;
       const doc = JSON.parse(readFileSync(f, 'utf8'));
-      if (Number.isInteger(doc?.pid) && doc.pid > 0 && doc.host === host && !alive(doc.pid)) continue;
+      const quiet = now - st.mtimeMs >= STALE_MS;
+      const gone = Number.isInteger(doc?.pid) && doc.pid > 0 && doc.host === host && !alive(doc.pid);
+      const state = quiet || gone ? 'stopped' : 'running', why = quiet ? 'no-progress' : gone ? 'ended' : null;
       const count = n => (Number.isInteger(n) && n >= 0 ? n : null);
       const routes = count(doc?.routes), done = count(doc?.done);
-      if (routes === null || done === null || done > routes || typeof doc.kind !== 'string') { out.push({ run, progress: null }); continue; }
+      if (routes === null || done === null || done > routes || typeof doc.kind !== 'string') { out.push({ run, state, why, progress: null }); continue; }
       const routeMs = Array.isArray(doc.routeMs) ? doc.routeMs.filter(x => Number.isFinite(x) && x >= 0).slice(0, done) : [];
       const skipped = Array.isArray(doc.skipped) ? doc.skipped.filter(s => s && typeof s.route === 'string' && typeof s.reason === 'string').slice(0, 200).map(s => ({ route: s.route, reason: s.reason })) : [];
-      out.push({ run, progress: { kind: doc.kind, wholeApp: doc.wholeApp === true, routesGiven: doc.routesGiven === true, routes, done, routeMs, skipped } });
+      out.push({ run, state, why, progress: { kind: doc.kind, wholeApp: doc.wholeApp === true, routesGiven: doc.routesGiven === true, routes, done, routeMs, skipped } });
     } catch {}
   }
   return out;
 }
+// → [{ run, progress }] for the runs still being written (captureStates' running ones), oldest first.
+export const runningCaptures = (dir, opts) => captureStates(dir, opts).filter(c => c.state === 'running').map(({ run, progress }) => ({ run, progress }));
 
 // Reserves the next id. mkdir without `recursive` fails if the folder exists, so two captures started
 // at the same moment get different ids. A capture that finished between the listing and the mkdir has already

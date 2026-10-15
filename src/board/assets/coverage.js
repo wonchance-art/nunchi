@@ -105,7 +105,8 @@ export function render(focus = false) {
   const narrow = narrowNow();
   V().narrow = narrow;
   const banners = [
-    D.running?.length ? h('p', { class: 'banner', role: 'note' }, C.running(D.running[D.running.length - 1], D.run)) : null,
+    // a capture running (the summary's line, M5b: how far it is) or stopped ("tell your AI “capture again”")
+    D.capture ? h('p', { class: 'banner', role: 'note', id: 'cv-capture' }, D.capture.state === 'running' ? C.running(D.capture.text, D.run) : D.capture.text) : null,
     S.summary?.treeChanged ? h('p', { class: 'banner banner-warn', role: 'note' }, W.WORDS['tree-differs']) : null,
     // the latest capture when it is a first look (M5): the summary's line while the full check after it runs, as Progress
     // says it, else the mock-up's; a newer partial run than the one shown: "Run 0005 · Not a full check: …"

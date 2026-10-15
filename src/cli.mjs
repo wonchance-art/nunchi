@@ -450,6 +450,10 @@ if (cmd === 'setup') {
   if (!args.routes && !args.quick) {
     const routes = discover(root).routes;
     flow = { routes: routes.filter(r => !r.needsResolution).map(r => r.path).sort(), wholeApp: !args.changedSince, code: codeNavigations(root, buildSourceMap(root, routes)) };
+  } else if (args.quick) {
+    // a first look's flow.json names every page too, captured or not (M5b): the board's wall says which ones it has not
+    // checked yet. Its link-graph findings stay off (whole-app detectors), as before.
+    flow = { routes: discover(root).routes.filter(r => !r.needsResolution).map(r => r.path).sort(), wholeApp: false };
   }
   if (auth) {
     try {
@@ -605,9 +609,9 @@ if (cmd === 'setup') {
       const b = sum.byStatus;
       console.log(`run ${latest} · ${rows.length} unique defects in ${gs.length} groups · groups open ${b.open} · to fix ${b['to-fix']} · later ${b.held} · fixed ${b.fixed} · kept ${b.kept} · not a problem ${b.dismissed}`);
       console.log(`ready to ship? ${sum.verdict.text}`);
-      // the fast first run (design §6): the board's words
+      // the fast first run (design §6) and the captures running or stopped (M5b): the board's Now lines, its words
       if (sum.firstLook?.text) console.log(sum.firstLook.text);
-      else if (sum.firstLook) console.log(`run ${sum.firstLook.run} is a quick first look (${sum.firstLook.screens} key screen${sum.firstLook.screens === 1 ? '' : 's'}): it marks nothing fixed, and no full check is running`);
+      for (const c of sum.captures) console.log(c.text);
       if (sum.fullCheckDone) console.log(sum.fullCheckDone.text);
       const blindWhy = { 'app-unreachable': 'the app did not load', 'recording-stale': 'the recording no longer had the data', 'one-page': 'most screens showed one and the same page (another app or an error page at that address?)' };
       if (blind) console.log(`run ${latest} marked nothing fixed: ${blindWhy[blind] || blind}`);

@@ -262,7 +262,7 @@ export const COVERAGE = {
   lookedText: (findings, cannot) => ['Looked', findings ? plural(findings, 'finding') : null, cannot ? `couldn’t judge ${plural(cannot, 'question')}` : null, !findings && !cannot ? 'nothing found' : null].filter(Boolean).join(' · '),
   // states of the view (§3.5)
   loading: 'Loading coverage…', noRun: 'Nothing captured yet. Tell your AI “capture my app”.',
-  running: (run, shown) => `A capture is running (run ${run}). This shows run ${shown} until it finishes.`,
+  running: (line, shown) => `${line}. This shows run ${shown} until it finishes.`,
   quick: n => `First look: ${plural(n, 'key screen')}, rule checks only · the full check isn’t done yet`,
   prev: 'This is the first cell with a gap', next: 'This is the last cell with a gap',
 };
@@ -335,6 +335,7 @@ export const SCREENS = {
   nothing: 'Nothing found on this screen.', notOutlined: why => `Not outlined: ${why}`, whole: 'Whole screen', firstView: 'First view',
   first: 'This is the first screen', last: 'This is the last screen', loading: 'Loading screens…',
   said: (name, label, badge, i, n) => `${name}, ${label}: ${badge}. ${i} of ${n}.`,
+  firstLook: 'First look', notYet: 'Not checked yet',   // during a first look (M5b): its key screens, and the others
 };
 
 // ---- screenshot geometry (shared by the static export's markup and the board's DOM) -----------------------------

@@ -30,6 +30,8 @@ export const shownScenes = () => {
 };
 const aiLine = s => (!s.checked ? null : !s.ai || !s.ai.of ? T.rulesOnly : s.ai.budget ? T.aiBudget : T.ai(s.ai.seen, s.ai.of));
 const cardId = key => `card-${String(key).replace(/\s/g, '_')}`;
+// "First look" or "Not checked yet" (M5b): text in the board's chip style, never colour alone
+const lookChip = s => X.h('span', { class: `tag tag-look tag-${s.look === 'not-yet' ? 'notyet' : 'first'}` }, s.look === 'not-yet' ? T.notYet : T.firstLook);
 const BADGES = ['blocker', 'high', 'medium', 'low', 'clean', 'dark'];
 
 export function renderWall(focus = false) {
@@ -83,11 +85,14 @@ export function renderWall(focus = false) {
     if (s.img) lazy(th, s.img.thumb); else { th.classList.add('thumb-none'); th.textContent = 'No screenshot'; }
     const ai = aiLine(s);
     const extra = [ai, s.changed === true ? T.changedWord : null].filter(Boolean).join(' · ');
+    // during a first look (M5b): a text chip, "First look" on its key screens, "Not checked yet" on the pages it did not
+    // open (no screenshot, no finding: the chip is its badge); said in the card's name too
+    const notYet = s.look === 'not-yet', look = notYet ? T.notYet : s.look === 'first' ? T.firstLook : null;
     const b = h('button', { type: 'button', id: cardId(s.key), 'data-key': s.key, tabindex: s.key === S.wallFocus ? '0' : '-1', 'aria-pressed': sel?.key === s.key ? 'true' : 'false',
-      'aria-label': `${s.h1 || s.route}, ${s.label}: ${s.badge}${extra ? `. ${extra}` : ''}` },
-    h('span', { class: 'thumb-wrap' }, th, h('span', { class: `badge badge-${BADGES.includes(s.kind) ? s.kind : 'low'}` }, s.badge)),
+      'aria-label': notYet ? `${s.route}, ${s.label}: ${T.notYet}` : `${s.h1 || s.route}, ${s.label}: ${s.badge}${look ? `. ${look}` : ''}${extra ? `. ${extra}` : ''}` },
+    h('span', { class: 'thumb-wrap' }, th, notYet ? null : h('span', { class: `badge badge-${BADGES.includes(s.kind) ? s.kind : 'low'}` }, s.badge)),
     h('span', { class: 'card-body' }, h('span', { class: 'card-name' }, s.h1 || s.route), h('span', { class: 'mono muted small' }, s.route), h('span', { class: 'small muted' }, s.label),
-      h('span', { class: `small ${s.kind === 'dark' ? 'warn' : 'muted'}` }, s.note), extra ? h('span', { class: 'small muted' }, extra) : null));
+      look ? lookChip(s) : null, s.note ? h('span', { class: `small ${s.kind === 'dark' ? 'warn' : 'muted'}` }, s.note) : null, extra ? h('span', { class: 'small muted' }, extra) : null));
     // a click looks at it in the side panel; the keyboard's Space does the same, Enter opens the screen (wallKey)
     b.addEventListener('click', e => { quickLook(s.key); if (e.detail > 0) X.$('panel-h')?.focus(); });
     b.addEventListener('focus', () => { S.wallFocus = s.key; for (const c of X.main().querySelectorAll('.card button')) c.setAttribute('tabindex', c === b ? '0' : '-1'); });
@@ -102,18 +107,22 @@ export function renderWall(focus = false) {
     open.addEventListener('click', () => openScreen(sel));
     panel = h('section', { class: 'screen-panel', 'aria-labelledby': 'panel-h' },
       h('div', { class: 'sp-head' }, h('div', null, h('h2', { id: 'panel-h', tabindex: '-1' }, sel.h1 || sel.route), h('p', { class: 'muted small' }, h('span', { class: 'mono' }, sel.route), ` · ${sel.label}`)), close),
-      sel.img ? X.shot(sel, boxes, { label: `Screenshot of ${sel.route}, ${sel.label}${boxes.length ? `, ${W.plural(boxes.length, 'finding')} outlined and numbered` : ''}`, cls: sel.viewport === 'm' ? 'shot-m' : '' }) : h('p', { class: 'pad muted' }, `Not seen: ${sel.reason || sel.status}.`),
+      sel.img ? X.shot(sel, boxes, { label: `Screenshot of ${sel.route}, ${sel.label}${boxes.length ? `, ${W.plural(boxes.length, 'finding')} outlined and numbered` : ''}`, cls: sel.viewport === 'm' ? 'shot-m' : '' })
+        // a page the first look did not open (M5b): what it is, and the first look's line (what comes next)
+        : sel.look === 'not-yet' ? h('p', { class: 'pad sp-notyet' }, lookChip(sel), S.screens.quick?.text ? h('span', { class: 'small muted' }, S.screens.quick.text) : null)
+          : h('p', { class: 'pad muted' }, `Not seen: ${sel.reason || sel.status}.`),
       sel.findings.length ? h('ol', { class: 'sp-list' }, sel.findings.map(f => h('li', null, h('a', { href: `#/finding/${f.group}` },
         h('span', { class: `numb${f.n ? '' : ' numb-none'}` }, f.n ? String(f.n) : '–'),
         h('span', { class: 'sp-text' }, h('span', { class: 'sp-what' }, f.headline), h('span', { class: 'small' }, `${W.SEV_LABEL[X.sevOf(f.severity)]} · ${f.source === 'ai' ? 'AI' : 'Rule'} · ${f.statusText}${f.why ? ` · not outlined: ${f.why}` : ''}`)))))) : sel.img ? h('p', { class: 'pad muted' }, T.nothing) : null,
-      h('p', { class: 'pad sp-open' }, open));
+      sel.look === 'not-yet' ? null : h('p', { class: 'pad sp-open' }, open));
   }
   const withOpen = all.filter(s => s.open > 0).length, clean = all.filter(s => s.badge === 'Clean').length, notChecked = all.filter(s => !s.checked).length;
+  const captured = all.filter(s => s.look !== 'not-yet');
   const groups = S.screens.groups.map(g => ({ g, list: shown.filter(s => s.group === g.id) })).filter(x => x.list.length);
   const clear = h('button', { type: 'button', class: 'b', id: 'wall-clear' }, W.COVERAGE.clear);
   clear.addEventListener('click', () => { Object.assign(F, { vp: 'all', who: 'all', state: 'all', show: 'all', q: '' }); renderWall(); X.focusHeading(); });
   X.show(h('section', { id: 'screens', class: 'view', 'aria-labelledby': 'h-screens' }, h('div', { class: 'stack' },
-    h('div', { class: 'head-row' }, h('div', null, h('h1', { id: 'h-screens' }, 'Screens'), h('p', { class: 'muted' }, `${W.plural(new Set(all.map(s => s.route)).size, 'page')}, ${W.plural(all.length, 'screen')} · every one nunchi captured in run ${S.screens.run || '—'}, as it saw it`))),
+    h('div', { class: 'head-row' }, h('div', null, h('h1', { id: 'h-screens' }, 'Screens'), h('p', { class: 'muted' }, `${W.plural(new Set(captured.map(s => s.route)).size, 'page')}, ${W.plural(captured.length, 'screen')} · every one nunchi captured in run ${S.screens.run || '—'}, as it saw it`))),
     // a quick first look (M5) says so, as Coverage does
     S.screens.quick ? h('p', { class: 'banner', role: 'note', id: 'wall-first-look' }, S.screens.quick.text || W.COVERAGE.quick(S.screens.quick.screens)) : null,
     h('div', { class: 'filters wall-filters' }, filter('Width', vps, W.WIDTH, 'vp'), filter('Who', whos, W.WHO, 'who'), filter('State', states, W.STATE_LABEL, 'state'),
@@ -170,8 +179,10 @@ export function wallKey(e, k) {
     to(row[0]?.c);
     return true;
   }
-  if (k === ' ') { quickLook(cur.getAttribute('data-key')); X.announce(`${cur.getAttribute('aria-label')}`); return true; }
-  if (k === 'Enter') { const s = S.screens.scenes.find(x => x.key === cur.getAttribute('data-key')); if (s) openScreen(s); return true; }
+  const s = S.screens.scenes.find(x => x.key === cur.getAttribute('data-key'));
+  // (a page the first look did not open has no screen to open: Enter shows what it is, as Space does)
+  if (k === ' ' || (k === 'Enter' && s?.look === 'not-yet')) { quickLook(cur.getAttribute('data-key')); X.announce(`${cur.getAttribute('aria-label')}`); return true; }
+  if (k === 'Enter') { if (s) openScreen(s); return true; }
   return false;
 }
 
@@ -201,15 +212,16 @@ export async function refreshDetail() {
   renderDetail(had && !data);
 }
 
+// (the pages a first look did not open are on the wall only: Screen detail walks the screens it has)
 const order = () => {
   const S = X.S;
-  const list = shownScenes();
+  const list = shownScenes().filter(s => s.look !== 'not-yet');
   const key = S.sd.data?.key;
   if (list.some(s => s.key === key)) return { list, filtered: true };
   // a screen the filters hide (opened from Coverage or a finding): the whole wall, in the order it shows it
   const F = S.screenFilter, was = { ...F };
   Object.assign(F, { vp: 'all', who: 'all', state: 'all', show: 'all', q: '' });
-  const all = shownScenes();
+  const all = shownScenes().filter(s => s.look !== 'not-yet');
   Object.assign(F, was);
   return { list: all, filtered: false };
 };

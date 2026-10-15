@@ -225,13 +225,13 @@ test('coverage e2e: a quick first look (M5) after a full check — Coverage show
     await page.waitForSelector('#h-map');
     const v = await page.evaluate(() => ({ sub: document.querySelector('#coverage .muted').textContent, banner: document.getElementById('cv-first-look')?.textContent, missing: document.getElementById('cv-missing')?.textContent,
       panel: !!document.getElementById('cv-panel-h'), cell: document.getElementById('cv-0-0').textContent.trim(), focus: document.activeElement?.id }));
-    assert.deepEqual(v, { sub: 'What nunchi looked at in run 0004 (full check), and what it didn’t', banner: 'First look: 3 key screens, rule checks only · the full check isn’t done yet',
+    assert.deepEqual(v, { sub: 'What nunchi looked at in run 0004 (full check), and what it didn’t', banner: 'First look: 3 key screens · the full check has not started — tell your AI “full check”',
       missing: 'This screen isn’t in run 0004.', panel: false, cell: '● 7 of 7', focus: 'h-coverage' });
     assert.deepEqual(await axe(page), [], 'a first look noted');
     await page.click('a[data-nav=screens]');
     await page.waitForSelector('#h-screens');
     assert.deepEqual(await page.evaluate(() => [document.getElementById('wall-first-look')?.textContent, document.querySelector('#screens .muted').textContent]),
-      ['First look: 3 key screens, rule checks only · the full check isn’t done yet', '3 pages, 12 screens · every one nunchi captured in run 0005, as it saw it']);
+      ['First look: 3 key screens · the full check has not started — tell your AI “full check”', '3 pages, 12 screens · every one nunchi captured in run 0005, as it saw it']);
     assert.deepEqual(s.errors, []);
   } finally { await s.close(); }
   // a first look and nothing before it: shown as it is, the AI row without a sentence to tell, the cells rules only
@@ -242,7 +242,7 @@ test('coverage e2e: a quick first look (M5) after a full check — Coverage show
     await s2.page.waitForSelector('#h-map');
     const v = await s2.page.evaluate(() => ({ banner: document.getElementById('cv-first-look')?.textContent, ai: document.querySelector('.cv-totals').textContent, copy: !!document.getElementById('cv-copy-ai'),
       cell: document.getElementById('cv-0-0').textContent.trim(), gaps: document.querySelectorAll('.cv-gaps .cv-gap').length }));
-    assert.equal(v.banner, 'First look: 3 key screens, rule checks only · the full check isn’t done yet');
+    assert.equal(v.banner, 'First look: 3 key screens · the full check has not started — tell your AI “full check”');
     assert.match(v.ai, /AI looked atAI review hasn’t run on run 0001Pages opened3 of 8/);
     assert.deepEqual([v.copy, v.cell, v.gaps], [false, '○ Rules only', 0], 'no "run the AI review" to copy: the AI review hunts the full check');
     assert.deepEqual(await axe(s2.page), [], 'a first look alone');

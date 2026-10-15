@@ -33,7 +33,7 @@ import { VIEWS_CSS } from './look-views.mjs';
 import { decidedText, CAP_MS, fixingMinutes } from './shared.mjs';
 import * as P from '../project.mjs';
 import { DECISIONS, protectOf, approvalKey, reasonProblem } from '../ledger.mjs';
-import { listRuns, workTree } from '../runs.mjs';
+import { listRuns, workTree, captureStates } from '../runs.mjs';
 import { readGeneration } from '../state.mjs';
 import { readManifest, sceneDir } from '../hunt.mjs';
 import { writeStable, privateDir, sha } from '../stable.mjs';
@@ -183,7 +183,10 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     for (const id of listRuns(runsDir).complete) { try { const st = statSync(join(runsDir, id, 'coverage.json')); parts.push(`${id}:${st.size}:${st.mtimeMs}`); } catch {} }
     return parts.length ? sha(parts.join('|'), 12) : '-';
   };
-  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${claimsSig()}.${coverageSig()}`;
+  // the captures being written or stopped, and how far (M5b): a capture writes no generation until it is folded, and one
+  // that stops writes nothing at all (it turns stopped by the reader's clock), so its words change the version
+  const capturesSig = () => { const c = captureStates(runsDir); return c.length ? sha(c.map(x => `${x.run}:${x.state}:${x.why}:${x.progress ? `${x.progress.kind}:${x.progress.done}/${x.progress.routes}:${x.progress.routeMs.length}` : '-'}`).join('|'), 12) : '-'; };
+  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${claimsSig()}.${coverageSig()}.${capturesSig()}`;
   // claims as they are now (their minutes too) on a cached model
   const freshClaims = m => { const c = readClaims(claimsDir, now()); m.claims = c; for (const g of m.groups) g.fixing = c.get(g.id) || null; return m; };
   let cache = null;
@@ -427,17 +430,14 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     let approved = false;
     try { approved = !!profile && approvedProfiles(scriptsApprovedPath(stateDir)).has(profile.hash); } catch {}
     const requested = existsSync(checksRequestPath(stateDir));
-    // captures still being written by a writer that is still there (a killed one's folder is not "running")
-    const running = (s.runningRuns || []).filter(x => RUN_ID.test(x));
     // the AI hunt's coverage of the latest run, counted on checked screens only (M7 decision D2: a screen that did not
     // load is counted once, under Screens checked), with the cells the budget cut
     let coverage = null;
     try { coverage = aiOnChecked(m); } catch { coverage = null; }
     // the fast first run (design §6): the first look and the full check after it say how far they are, in the agreed
-    // words, instead of "Capture running" for that full check (summary.mjs)
-    const firstLookRun = s.firstLook?.full?.run ?? null;
+    // words; any other capture running or stopped says so (M5b): the summary's lines (summary.mjs)
     const nowLines = [...(s.fullCheckDone ? [s.fullCheckDone.text] : []), ...(s.firstLook?.text ? [s.firstLook.text] : []),
-      ...running.filter(r => r !== firstLookRun).map(r => `Capture running · run ${r}`), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)} · ${fixingMinutes(c.minutes)}`)];
+      ...(s.captures || []).map(c => c.text), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)} · ${fixingMinutes(c.minutes)}`)];
     return {
       version: version(), mode, project: safe(basename(project), 80), run: s.run, kind: s.kind, commit: s.commit ? safe(String(s.commit).slice(0, 7), 7) : null, dirty: s.dirty,
       verdict: s.verdict, bySeverity: s.bySeverity, byStatus: s.byStatus, toDecide: s.toDecide, decideNow: s.decideNow, toFix: s.toFix, fixNeedsYou: s.fixNeedsYou || 0, handoff: s.handoff, since: s.since, running: s.running,
