@@ -1358,10 +1358,11 @@ never timed.
   every expired claim, so with one time for all, the first take-over removed the later rounds' claims before their
   race (M6 review: the renewal then lost 24 or 25 rounds of 25 without racing, and the expired-claim rounds took over
   no expired claim). Measured here: the renewal won 12–15 rounds of 25, the two attempts overlapping in time in 9–17.
-- *Measured (2026-10-15 19:24–19:52 KST, after the review of PR #34 and the merges of M5, M7 and M4):* `npm test` 787
-  tests, 786 pass and 1 skipped (Windows only), on Node 22.22.0 and on Node 24.21.0, Chromium included, with bun on
-  PATH and without. Pebble `node bench/run.mjs --twice` is unchanged: rule recall 34/34, 0 false positives on 8 clean
-  scenes, determinism identical (1,141 files), fingerprints 100% (52/52), 178 s per capture. One Node 22 run
+- *Measured (2026-10-15 20:04–20:31 KST, after the review of PR #34 and the merges of M5, M7, M4 and the follow-ups):*
+  `npm test` 790 tests, 789 pass and 1 skipped (Windows only), on Node 22.22.0 and on Node 24.21.0, Chromium required
+  (`NUNCHI_REQUIRE_BROWSER=1`), with bun on PATH and without. Pebble `node bench/run.mjs --twice` is unchanged: rule
+  recall 34/34, 0 false positives on 8 clean scenes, determinism identical (1,141 files), fingerprints 100% (52/52),
+  169 s per capture. One Node 22 run
   (18:26 KST), while other sessions' suites held the machine at a load average of about 30 on 4 cores, saw the D5
   fair-lock test overtaken 3, 5, 3, 3 times (limit 3), counted from asking as the test then did; the run again:
   passed. The follow-ups (§5.1) count from the ticket since, which is what the lock orders.
