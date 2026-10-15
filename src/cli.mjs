@@ -145,10 +145,11 @@ Usage:
                                             text, AI claims, control names from signed-in screens) only with
                                             --include-page-text. Paths are repository-relative, routes are templates.
                                             Default statuses: open, came back, to fix, later
-  nunchi check [--fail-on blocker|high|medium|low] [--sarif <file>] [--base <ref>] [--root <dir>] [--json]
+  nunchi check [--fail-on blocker|high|medium|low] [--sarif <file>] [--base <ref>] [--strict] [--root <dir>] [--json]
                                             For CI: no capture, browser or network. Runs the guards of
                                             .nunchi/guards.json over the source (a hit not in the baseline fails); with
-                                            --base, a guard removed or weakened since <ref> fails too; with a local
+                                            --base, a guard removed or weakened since <ref> fails too; with --strict, a
+                                            baselined hit that is gone (the baseline can be tightened); with a local
                                             ledger, open findings at or above --fail-on fail. Exit 0 clean, 1 a guard
                                             hit or such findings, 2 a usage or state error (--fail-on and no ledger: 2)
   nunchi guard [--json] | --lint | --add <kind> | --remove <kind> | --baseline   [--root <dir>]
@@ -186,6 +187,7 @@ function parse(argv) {
     else if (a === '--include-page-text') args.includePageText = true;
     else if (a === '--baseline') args.baseline = true;
     else if (a === '--lint') args.lint = true;
+    else if (a === '--strict') args.strict = true;
     else if (['--start', '--brief', '--verify', '--undo', '--abort', '--serve', '--agent'].includes(a)) args[a.slice(2)] = argv[++i];
     else if (a === '--checks') args.checks = argv[++i];
     else if (a === '--status') args.status = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : true;
@@ -980,7 +982,7 @@ if (cmd === 'setup') {
   // one. Never a capture, a browser or the network. Exit 0 clean, 1 a hit or findings at or above --fail-on, 2 usage
   // or state.
   const usage = m => { console.error(`nunchi check: ${m}`); process.exit(2); };
-  if (args._.length > 1) usage(`unexpected ${JSON.stringify(args._[1])} (nunchi check [--fail-on <severity>] [--sarif <file>] [--base <ref>] [--root <dir>] [--json])`);
+  if (args._.length > 1) usage(`unexpected ${JSON.stringify(args._[1])} (nunchi check [--fail-on <severity>] [--sarif <file>] [--base <ref>] [--strict] [--root <dir>] [--json])`);
   for (const k of ['failOn', 'sarif', 'base', 'root']) if (k in args && (typeof args[k] !== 'string' || !args[k] || args[k].startsWith('--'))) usage(`--${k.replace(/[A-Z]/g, c => '-' + c.toLowerCase())} takes a value`);
   if (args.failOn && !['blocker', 'high', 'medium', 'low'].includes(args.failOn)) usage('--fail-on takes blocker, high, medium or low');
   const { runCheck } = await engine('./check.mjs');
@@ -1005,7 +1007,7 @@ if (cmd === 'setup') {
   const { ledgerPresent } = await import('./check.mjs');
   const loaded = args.failOn && ledgerPresent(project) ? await loadCheckLedger() : null;
   let r;
-  try { r = runCheck({ project, root, failOn: args.failOn ?? null, base: args.base ?? null, sarif: !!args.sarif, version: pkg.version, ledger: loaded ? () => loaded : null }); }
+  try { r = runCheck({ project, root, failOn: args.failOn ?? null, base: args.base ?? null, strict: !!args.strict, sarif: !!args.sarif, version: pkg.version, ledger: loaded ? () => loaded : null }); }
   catch (e) {
     if (['CORRUPT', 'UNSAFE_PATH', 'BAD_ARGS', 'BAD_STATE', 'NO_LEDGER', 'NO_SOURCE', 'GIT_UNSAFE', ...LEDGER_ERRORS].includes(e.code)) usage(e.message);
     throw e;
@@ -1199,7 +1201,19 @@ if (cmd === 'setup') {
     else if (args.undo) say(F.undoFix(ctx, args.undo));
     else if (args.abort) say(F.abortFix(ctx, args.abort));
     else if (args.status) say(F.statusFix(ctx, typeof args.status === 'string' ? args.status : null));
-    else if (args.summary) say(F.summaryFix(ctx));
+    else if (args.summary) {
+      // the baselined hits of the fixed kinds that are gone now (the parser's scan; nothing when it cannot run)
+      let G = null;
+      try { G = await import('./guards.mjs'); } catch {}
+      const tighten = kinds => {
+        const doc = G?.readGuards(G.guardsPath(resolve('.nunchi')));
+        const guards = (doc?.guards || []).filter(g => kinds.includes(g.kind));
+        if (!guards.length) return 0;
+        const { hits } = G.scanGuards({ project: process.cwd(), root, guards });
+        return G.compareBaseline(hits, doc.baseline.filter(e => kinds.includes(e.kind))).gone.reduce((n, e) => n + e.count - e.now, 0);
+      };
+      say(F.summaryFix(ctx, { tighten }));
+    }
     else { console.error('nunchi fix: use --plan, --start <group>, --checks <group>, --verify <group>, --undo <group>, --abort <group>, --status or --summary (nunchi --help)'); process.exit(1); }
   } catch (e) {
     if (LEDGER_ERRORS.includes(e.code) || e.code === 'GIT_UNSAFE') { console.error('nunchi: ' + e.message); process.exit(2); }

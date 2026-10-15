@@ -72,7 +72,7 @@ export function guardsAt(project, ref, { git = null } = {}) {
 
 // → { code, lines, json, sarif: { text, kept, of, truncated } | null }. `ledger`: a function that loads the ledger
 // (project.mjs loadLedger) and returns { rows, groups, standing(g) }; called only when one exists.
-export function runCheck({ project, root = project, failOn = null, base = null, sarif = false, version = '0', ledger = null, git = null }) {
+export function runCheck({ project, root = project, failOn = null, base = null, strict = false, sarif = false, version = '0', ledger = null, git = null }) {
   project = resolve(project); root = resolve(root);
   if (failOn !== null && !SEVERITIES.includes(failOn)) throw fail('BAD_ARGS', `--fail-on takes ${SEVERITIES.join(', ')}`);
   const nunchiDir = join(project, '.nunchi');
@@ -91,7 +91,10 @@ export function runCheck({ project, root = project, failOn = null, base = null, 
     for (const h of cmpd.fresh) lines.push(`  ${h.file}:${h.line}:${h.column}  ${hitLabel(h)}`);
   } else if (guards.length) lines.push('new guard hits: 0');
   if (cmpd.known.length) lines.push(`baselined: ${cmpd.known.length} (there when the guard was added)`);
-  if (cmpd.gone.length) lines.push(`gone from the baseline: ${cmpd.gone.reduce((n, e) => n + e.count - e.now, 0)} (nunchi guard --baseline, in your own terminal, tightens it)`);
+  // a baselined hit that is gone leaves room for a new one with the same anchor: --strict fails on it
+  const slack = cmpd.gone.reduce((n, e) => n + e.count - e.now, 0);
+  if (slack) lines.push(`gone from the baseline: ${slack} (nunchi guard --baseline, in your own terminal, tightens it)${strict ? '' : '; --strict fails on this'}`);
+  if (strict) for (const e of cmpd.gone) lines.push(`  ${e.file}  ${e.what ? hitLabel(e) : labelOf(e.kind)}: ${e.count} baselined, ${e.now} there now`);
   if (base) {
     if (!weakened.length) lines.push(`since ${base}: no guard removed or weakened`);
     for (const w of weakened) lines.push(`  since ${base}: ${w.why === 'removed' ? `guard removed: ${w.label}` : w.why === 'narrowed' ? `guard weakened: ${w.label} (${w.detail})` : `baseline grew: ${w.files.join(', ')} (${w.what ? hitLabel({ kind: w.kind, what: w.what }) : w.label}, +${w.count})`}`);
@@ -114,9 +117,10 @@ export function runCheck({ project, root = project, failOn = null, base = null, 
     lines.push(`ledger: run ${led.run ?? '—'} · ${plural(standing.length, 'group')} at or above ${failOn} still stand${standing.length === 1 ? 's' : ''} in the way${bySev.length ? ` (${bySev.map(([s, n]) => `${n} ${s}`).join(', ')}: nunchi findings)` : ''}`);
   }
 
-  const failed = cmpd.fresh.length + weakened.length;
+  const stale = strict ? slack : 0;
+  const failed = cmpd.fresh.length + weakened.length + stale;
   const code = failed || standing.length ? 1 : 0;
-  lines.push(code ? `exit 1: ${[cmpd.fresh.length && plural(cmpd.fresh.length, 'guard hit'), weakened.length && `${plural(weakened.length, 'guard change')} since ${base} that let${weakened.length === 1 ? 's' : ''} hits through`, standing.length && `${plural(standing.length, 'open finding group')} at or above ${failOn}`].filter(Boolean).join(', ')}` : 'exit 0: clean');
+  lines.push(code ? `exit 1: ${[cmpd.fresh.length && plural(cmpd.fresh.length, 'guard hit'), stale && `${plural(stale, 'baselined hit')} gone (--strict: the baseline can be tightened)`,weakened.length && `${plural(weakened.length, 'guard change')} since ${base} that let${weakened.length === 1 ? 's' : ''} hits through`, standing.length && `${plural(standing.length, 'open finding group')} at or above ${failOn}`].filter(Boolean).join(', ')}` : 'exit 0: clean');
 
   let sarifOut = null;
   // paths in SARIF are the repository's: the project folder's place in it (no git: the project's own)
@@ -138,6 +142,10 @@ export function runCheck({ project, root = project, failOn = null, base = null, 
       results.push({ ruleId: `nunchi.guard/${w.kind}`, severity: 'high', message: w.why === 'removed' ? `Guard removed since ${base}: ${w.label.replace(/`/g, '')}.` : w.why === 'narrowed' ? `Guard weakened since ${base}: ${w.label.replace(/`/g, '')} (${w.detail.replace(/`/g, '')}).` : `Baseline grew since ${base}: ${w.count} more ${w.label.replace(/`/g, '')} allowed in ${w.file}.`,
         path: `${prefix}${file}`, line: 1, logical: [], fingerprints: { 'nunchi/guard/v1': `${w.kind}:${w.why}:${w.anchor ?? ''}`, 'nunchi/fp/v1': `${w.kind}:${w.why}:${w.file ?? ''}:${w.anchor ?? ''}` } });
     }
+    if (stale) for (const e of cmpd.gone) {
+      results.push({ ruleId: `nunchi.guard/${e.kind}`, severity: 'high', message: `Baseline can be tightened: ${e.count} ${(e.what ? hitLabel(e) : labelOf(e.kind)).replace(/`/g, '')} baselined in ${e.file}, ${e.now} there now (nunchi guard --baseline).`,
+        path: `${prefix}.nunchi/guards.json`, line: 1, logical: [], fingerprints: { 'nunchi/guard/v1': `${e.kind}:stale:${e.anchor}`, 'nunchi/fp/v1': `${e.kind}:stale:${e.file}:${e.anchor}` } });
+    }
     if (led && standing.length && led.results) {
       const more = led.results(new Set(standing.map(g => g.group)));
       for (const [id, r] of more.rules) rules.set(id, r);
@@ -149,7 +157,7 @@ export function runCheck({ project, root = project, failOn = null, base = null, 
   }
   const json = {
     code, guards: guards.map(g => ({ kind: g.kind, params: g.params, label: labelOf(g.kind, g.params) })), files: scan.files,
-    hits: { new: cmpd.fresh, baselined: cmpd.known.length, gone: cmpd.gone }, ...(base ? { base, weakened } : {}),
+    hits: { new: cmpd.fresh, baselined: cmpd.known.length, gone: cmpd.gone }, strict, ...(base ? { base, weakened } : {}),
     skipped: { large: scan.large, unparsed: scan.unparsed, odd: scan.odd },
     ledger: present ? { present: true, run: led?.run ?? null, failOn, standing: standing.map(g => ({ group: g.group, rule: g.rule, severity: g.severity })) } : { present: false },
     ...(sarifOut ? { sarif: { results: sarifOut.kept, of: sarifOut.of, truncated: sarifOut.truncated } } : {}),

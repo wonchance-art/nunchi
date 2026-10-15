@@ -33,7 +33,7 @@ import { randomBytes } from 'node:crypto';
 import { probeView, probeProblems, judgeRules, judgeAi, MAX_ATTEMPTS, FLAKY, DRIFT_PIXELS } from './judge.mjs';
 import { diffPolicy, depsOf, rootCauseFiles } from './policy.mjs';
 import { fixBrief } from './brief.mjs';
-import { readGuards, guardsPath } from '../guard-kinds.mjs';
+import { readGuards, guardsPath, guardKindOf } from '../guard-kinds.mjs';
 import { guardOffer, offerLine } from '../guard-offer.mjs';
 import { runChecks as runChecksReal, compareChecks } from './run.mjs';
 import { snapshotRecordings, snapshotIntact, proveByFile, serveApp, captureProbe, recaptureScenes, measureDrift, readProbe, controlsReader, sweepProbeFiles } from './probe.mjs';
@@ -916,18 +916,20 @@ function statusFixInner(ctx, id = null) {
   return out(0, lines, { attempts: json });
 }
 
-export function summaryFix(ctx) {
+// `tighten(kinds)`: how many baselined hits of those guard kinds are gone from the source now (the CLI scans with the
+// parser, guards.mjs); a fix that took some away is followed by the proposal to tighten the baseline.
+export function summaryFix(ctx, { tighten = null } = {}) {
   const plan = readPlan(ctx.stateDir);
   if (!plan) return refuse('No fix plan yet: nunchi fix --plan.');
   let fixed = 0, screens = 0, broke = 0, unseen = 0;
-  const needs = [], other = [];
+  const needs = [], other = [], fixedGroups = new Set();
   for (const g of plan.groups) {
     const recs = allRecords(ctx.stateDir, g).filter(r => (r.phases?.[0]?.at || '') >= plan.at);
     if (!recs.length) { other.push(g); continue; }
     const last = recs[recs.length - 1];
     broke += recs.filter(r => r.verdict?.outcome === 'regression').length;
     const title = last.title || g;
-    if (last.phase === 'fixed') { fixed++; screens += last.screens || 0; }
+    if (last.phase === 'fixed') { fixed++; screens += last.screens || 0; fixedGroups.add(g); }
     else if (last.phase === 'needs-you') { needs.push(title); if (last.outcome?.needsYou === 'unbaselined') unseen++; }
     else other.push(g);
   }
@@ -941,8 +943,13 @@ export function summaryFix(ctx) {
   let offer = null;
   try { offer = guardOffer({ stateDir: ctx.stateDir, rows: ctx.rows, doc: readGuards(guardsPath(ctx.nunchiDir)) }); } catch { offer = null; }
   const offered = (offer?.rows || []).filter(r => !r.added);
-  const lines = [line, ...(offered.length ? [`${offerLine(offered)} → the board (nunchi open).`] : [])];
-  return out(0, lines, { fixed, of: n, screens, needsYou: needs, broke, open: other, guards: offered.map(r => ({ kind: r.kind, params: r.params, label: r.label, fixed: r.fixed })) });
+  // a verified fix that took baselined hits away: the baseline can be tightened so they cannot come back unseen
+  const kinds = [...new Set(ctx.rows.filter(r => fixedGroups.has(r.group)).map(guardKindOf).filter(Boolean))].sort();
+  let gone = 0;
+  if (kinds.length && tighten) { try { gone = tighten(kinds) || 0; } catch { gone = 0; } }
+  const lines = [line, ...(offered.length ? [`${offerLine(offered)} → the board (nunchi open).`] : []),
+    ...(gone ? [`${gone} baselined guard hit${gone === 1 ? ' is' : 's are'} gone with these fixes: tighten the baseline so ${gone === 1 ? 'it cannot come' : 'they cannot come'} back unseen (nunchi guard --baseline, in your own terminal; commit .nunchi/guards.json).`] : [])];
+  return out(0, lines, { fixed, of: n, screens, needsYou: needs, broke, open: other, guards: offered.map(r => ({ kind: r.kind, params: r.params, label: r.label, fixed: r.fixed })), tighten: gone });
 }
 export const startFix = guarded(startFixInner);
 export const checkFix = guarded(checkFixInner);

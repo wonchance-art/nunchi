@@ -70,7 +70,16 @@ test('a hit in the baseline passes; a new hit fails with file:line:column; the o
   put(root, 'app/remove.tsx', 'export const Remove = () => <button>Remove</button>;\n');
   const clean = check(root);
   assert.equal(clean.status, 0);
-  assert.match(clean.stdout, /gone from the baseline: 1 \(nunchi guard --baseline/);
+  assert.match(clean.stdout, /gone from the baseline: 1 \(nunchi guard --baseline, in your own terminal, tightens it\); --strict fails on this$/m);
+  // --strict: the slack a gone hit leaves fails, in the output and in SARIF
+  const out = join(tmp('nunchi-check-out-'), 'strict.sarif');
+  const strict = check(root, '--strict', '--sarif', out);
+  assert.equal(strict.status, 1, strict.stdout);
+  assert.match(strict.stdout, /^ {2}app\/remove\.tsx {2}`window\.confirm`: 1 baselined, 0 there now$/m);
+  assert.match(strict.stdout, /^exit 1: 1 baselined hit gone \(--strict: the baseline can be tightened\)$/m);
+  const log = JSON.parse(readFileSync(out, 'utf8'));
+  assert.deepEqual(sarifProblems(log), []);
+  assert.deepEqual(log.runs[0].results.map(x => [x.ruleId, x.locations[0].physicalLocation.artifactLocation.uri]), [['nunchi.guard/native-dialog', '.nunchi/guards.json']]);
 });
 
 test('a malformed guards file, an unknown --base, bad usage: exit 2, never 0', () => {

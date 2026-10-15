@@ -89,6 +89,28 @@ test('no offer without a verified fix in this batch, or when a guard covers the 
   assert.equal(F.summaryFix(F.openFix({ cwd: p.root })).lines.length, 1, 'only the batch line when nothing is offered');
 });
 
+test('a verified fix that took baselined hits away: the summary proposes tightening the baseline', () => {
+  const p = project();
+  const [c1, c2] = p.by('native-dialog');
+  writeFileSync(join(p.root, 'remove.jsx'), "export const R = () => <button onClick={() => confirm('Remove?')}>x</button>;\nexport const W = () => <button onClick={() => confirm('Water now?')}>y</button>;\n");
+  G.writeGuards(join(p.nunchi, 'guards.json'), G.addGuard(G.emptyGuards(), { project: p.root, kind: 'native-dialog', params: { calls: ['confirm'] } }).doc);
+  plan(p, [c1, c2]);
+  attempt(p, c1, 'fixed');
+  attempt(p, c2, 'fixed');
+  writeFileSync(join(p.root, 'remove.jsx'), 'export const R = () => <button>x</button>;\n');
+  const kindsAsked = [];
+  const tighten = kinds => { kindsAsked.push(...kinds); const doc = G.readGuards(join(p.nunchi, 'guards.json')); return G.compareBaseline(G.scanGuards({ project: p.root, guards: doc.guards }).hits, doc.baseline).gone.reduce((n, e) => n + e.count - e.now, 0); };
+  const sum = F.summaryFix(F.openFix({ cwd: p.root }), { tighten });
+  assert.deepEqual(kindsAsked, ['native-dialog'], 'only the kinds this batch fixed');
+  assert.equal(sum.lines.at(-1), '2 baselined guard hits are gone with these fixes: tighten the baseline so they cannot come back unseen (nunchi guard --baseline, in your own terminal; commit .nunchi/guards.json).');
+  assert.equal(sum.json.tighten, 2);
+  // through the CLI, which scans with the parser
+  const cli = spawnSync(process.execPath, [CLI, 'fix', '--summary'], { cwd: p.root, encoding: 'utf8' });
+  assert.match(cli.stdout, /2 baselined guard hits are gone with these fixes/);
+  // nothing gone, or no guard of the fixed kinds: no proposal
+  assert.ok(!F.summaryFix(F.openFix({ cwd: p.root }), { tighten: () => 0 }).lines.some(l => /tighten/.test(l)));
+});
+
 test('the Add toggle adds the guard with today\'s hits as its baseline, and takes back only what it added', async () => {
   const p = project();
   const [c1] = p.by('native-dialog');
