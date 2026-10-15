@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 import { execFile } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
-import { startBoard } from '../src/board/server.mjs';
+import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 import { exportHtml } from '../src/export-html.mjs';
 import * as P from '../src/project.mjs';
 import { smallProject, withAi, writeRun, HOSTILE } from './fixtures/board-project.mjs';
@@ -24,7 +24,7 @@ before(async () => {
   try { browser = await chromium.launch({ executablePath: process.env.NUNCHI_BROWSER || undefined }); }
   catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
-after(async () => { await browser?.close(); });
+after(async () => { await closeBoards(); await browser?.close(); });
 
 const decisions = nunchi => { try { return readdirSync(join(nunchi, 'decisions'), { recursive: true }).map(String).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(nunchi, 'decisions', f), 'utf8'))); } catch { return []; } };
 function project() {
@@ -33,17 +33,9 @@ function project() {
     { lens: 'L2', rule: 'L2.inconsistent-term', scene: p.scenes[0], selector: 'main > a.more', box: [40, 900, 120, 32], claim: 'Two words for one thing', status: 'claimed', severity: 'medium' }]);
   return { ...p, ai };
 }
-async function open(p, ctx = {}, opts = {}) {
-  const b = await startBoard({ projectDir: p.root, ...opts });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, ...ctx });
-  const page = await context.newPage();
-  const requests = [], dialogs = [], errors = [];
-  page.on('request', r => requests.push(r.url()));
-  page.on('dialog', d => { dialogs.push(d.message()); d.dismiss().catch(() => {}); });
-  page.on('pageerror', e => errors.push(String(e)));
-  await page.goto(b.newLink());
-  return { b, context, page, requests, dialogs, errors, close: async () => { await context.close(); await b.close(); } };
-}
+// the board, a page on it and its first view: Progress, or the label view in label mode (fixtures/board-browser.mjs:
+// closed again, and said why, when a step fails). Every dialog is dismissed and kept in `dialogs`.
+const open = (p, ctx = {}, opts = {}) => openBoard(browser, p, { ctx: { viewport: { width: 1280, height: 900 }, ...ctx }, board: opts, wait: opts.mode === 'label' ? '#h-label' : '#h-progress' });
 const gid = (p, rule) => p.findings.find(f => f.rule === rule).group;
 const until = async (fn, ms = 8000) => { const t = Date.now(); for (;;) { const v = await fn(); if (v) return v; if (Date.now() - t > ms) return v; await new Promise(r => setTimeout(r, 100)); } };
 async function axe(page) {
@@ -299,13 +291,9 @@ test('board e2e: on a view without a dock the toast is inside main (axe region);
 test('board e2e: the toast waits while the pointer is over it or the focus is in it (WCAG 2.2.1); hidden with the focus inside, the focus goes back to the row', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = project();
-  const b = await startBoard({ projectDir: p.root });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  const page = await context.newPage();
+  const s = await openBoard(browser, p, { setup: ({ page: pg }) => pg.clock.install() });
+  const { page } = s;
   try {
-    await page.clock.install();
-    await page.goto(b.newLink());
-    await page.waitForSelector('#h-progress');
     await page.click('a[data-nav=findings]');
     await page.waitForSelector('#h-findings');
     await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
@@ -333,7 +321,7 @@ test('board e2e: the toast waits while the pointer is over it or the focus is in
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => /Undone/.test(document.getElementById('toast').textContent));
     assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('row')), true);
-  } finally { await context.close(); await b.close(); }
+  } finally { await s.close(); }
 });
 
 test('board e2e: on a phone the Keys dialog and "More views in 0.2" are in the header, 44 px, and open', { timeout: 90000 }, async t => {
@@ -537,17 +525,15 @@ test('board e2e: Z pressed while the decision is still on its way undoes that de
 test('board e2e: live updates outlast a board that does not answer for a while; only 4 misses in a row say it is not running; the stream is tried again', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = smallProject();
-  const b = await startBoard({ projectDir: p.root });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  const page = await context.newPage();
-  try {
-    await page.clock.install();
-    let down = true, streams = 0, polls = 0;
+  let down = true, streams = 0, polls = 0;
+  const s = await openBoard(browser, p, { setup: async ({ page: pg }) => {
+    await pg.clock.install();
     // the stream never opens here; the polling gets no answer while `down`
-    await page.route('**/api/live', r => { streams++; return r.abort('connectionrefused'); });
-    await page.route('**/api/generation', r => { polls++; return down ? r.abort('connectionrefused') : r.continue(); });
-    await page.goto(b.newLink());
-    await page.waitForSelector('#h-progress');
+    await pg.route('**/api/live', r => { streams++; return r.abort('connectionrefused'); });
+    await pg.route('**/api/generation', r => { polls++; return down ? r.abort('connectionrefused') : r.continue(); });
+  } });
+  const { page } = s;
+  try {
     const advance = async (ms, until = () => false) => { for (let i = 0; i < ms / 500 && !until(); i++) { await page.clock.runFor(500); await new Promise(r => setTimeout(r, 30)); } };
     const lostText = () => page.evaluate(() => document.getElementById('lost-h')?.textContent || null);
     await advance(20000, () => polls >= 2);
@@ -564,18 +550,15 @@ test('board e2e: live updates outlast a board that does not answer for a while; 
     down = true;
     await advance(90000, () => false);
     assert.equal(await lostText(), 'The board is not running.', 'four misses in a row say so');
-  } finally { await context.close(); await b.close(); }
+  } finally { await s.close(); }
 });
 
 test('board e2e: a board killed hard says "Reconnecting…" within about 3 s (said politely), then "not running" after 4 misses', { timeout: 60000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = smallProject();
-  const b = await startBoard({ projectDir: p.root });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  const page = await context.newPage();
+  const s = await openBoard(browser, p);
+  const { b, page } = s;
   try {
-    await page.goto(b.newLink());
-    await page.waitForSelector('#h-progress');
     await page.waitForFunction(() => document.getElementById('live-status') && document.getElementById('live-status').textContent === '');
     // killed hard: no goodbye on the stream, every connection dropped, nothing listening
     const t0 = Date.now();
@@ -587,7 +570,7 @@ test('board e2e: a board killed hard says "Reconnecting…" within about 3 s (sa
     assert.equal(await page.evaluate(() => document.getElementById('lost-h')), null, 'one miss does not say the board is gone');
     await page.waitForFunction(() => document.getElementById('lost-h')?.textContent === 'The board is not running.', null, { timeout: 20000 });
     assert.equal(await page.evaluate(() => document.getElementById('live-status').textContent), '', 'the status gives way to the message');
-  } finally { await context.close(); await b.close().catch(() => {}); }
+  } finally { await s.close().catch(() => {}); }
 });
 
 test('board e2e: the list holds still while you work; new findings wait behind a banner until R', { timeout: 90000 }, async t => {

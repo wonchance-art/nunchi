@@ -22,8 +22,9 @@ const cli = (cwd, ...a) => new Promise(res => execFile('node', [CLI, ...a], { cw
 async function board(p, opts = {}) {
   const b = await startBoard({ projectDir: p.root, ...opts });
   const origin = b.origin;
-  const r = await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) });
-  const s = await r.json();
+  // a trade that fails closes the board first (a board left listening keeps this file's process alive to the runner's limit)
+  const s = await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) })
+    .then(r => r.json()).catch(async e => { await b.close(); throw e; });
   const call = async (path, body) => {
     const res = await fetch(origin + path, body === undefined ? { headers: { 'x-nunchi-token': s.token } }
       : { method: 'POST', headers: { 'x-nunchi-token': s.token, 'content-type': 'application/json', origin }, body: JSON.stringify(body) });
@@ -441,11 +442,25 @@ test('api: live updates — the stream says when the ledger changes (a CLI decis
     assert.equal((await cli(p.root, 'decide', gid(p, 'dead-href'), 'fix')).code, 0);
     assert.ok(await wait(2), 'a decision from the terminal shows up');
     assert.notEqual(events.at(-1), v0);
-    assert.equal((await call('/api/generation')).json.version, events.at(-1), 'polling sees the same version');
+    // A decision bumps the generation twice (its approvals, then its files: project.mjs recordDecisions), so the stream
+    // may say the first before the second lands (it did on a Windows runner, M5b CI): it ends on the version polling
+    // sees, and then says nothing more until the next change.
+    const settled = async () => {
+      let seen = -1;
+      for (const t = Date.now(); Date.now() - t < 8000; await new Promise(r => setTimeout(r, 300))) {
+        const v = (await call('/api/generation')).json.version;
+        if (events.at(-1) === v && events.length === seen) return v;
+        seen = events.length;
+      }
+      return null;
+    };
+    const v1 = await settled();
+    assert.ok(v1 && v1 !== v0, 'polling sees the same version');
+    const n = events.length;
     // a decision file that arrived through git bumps no generation; the decision folders are watched too
     const d = L.buildDecision({ target: { group: gid(p, 'target-size-min') }, decision: 'hold', by: 'someone else' });
     L.saveDecision(join(p.nunchi, 'decisions'), d);
-    assert.ok(await wait(3), 'a decision from git shows up');
+    assert.ok(await wait(n + 1), 'a decision from git shows up');
     req.destroy();
   } finally { await b.close(); }
 });

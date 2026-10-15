@@ -38,7 +38,8 @@ async function board(opts = {}) {
   const origin = b.origin;
   const code = () => b.newLink().split('#t=')[1];
   const session = async () => (await raw(b.port, { method: 'POST', path: '/api/session', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: code() }) })).json.token;
-  return { p, b, origin, code, session, token: await session() };
+  // a trade that fails closes the board first (a board left listening keeps this file's process alive to the runner's limit)
+  return { p, b, origin, code, session, token: await session().catch(async e => { await b.close(); throw e; }) };
 }
 const auth = (token, extra = {}) => ({ 'x-nunchi-token': token, ...extra });
 

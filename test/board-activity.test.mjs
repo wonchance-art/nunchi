@@ -120,9 +120,9 @@ test('board: "Now" lists the running hunts with their progress after captures an
   let t = T;
   const b = await startBoard({ projectDir: p.root, now: () => t });
   const origin = b.origin;
-  const s = await (await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) })).json();
-  const get = async path => (await fetch(origin + path, { headers: { 'x-nunchi-token': s.token } })).json();
   try {
+    const s = await (await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) })).json();
+    const get = async path => (await fetch(origin + path, { headers: { 'x-nunchi-token': s.token } })).json();
     const v0 = (await get('/api/generation')).version;
     Act.noteHunt(b.stateDir, hunt({ now: t - 3 * 60e3, answered: 0, complete: 0 }));
     Act.noteHunt(b.stateDir, hunt({ now: t }));

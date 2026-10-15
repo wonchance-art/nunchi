@@ -5,7 +5,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
-import { startBoard } from '../src/board/server.mjs';
+import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 import * as F from '../src/fix/loop.mjs';
 import * as R from '../src/fix/records.mjs';
 import * as P from '../src/project.mjs';
@@ -26,16 +26,12 @@ before(async () => {
   try { browser = await chromium.launch({ executablePath: process.env.NUNCHI_BROWSER || undefined }); }
   catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
-after(async () => { await browser?.close(); });
-// one board, one page at 390 px; `look(group)` opens Detail and measures it in one evaluation
+after(async () => { await closeBoards(); await browser?.close(); });
+// one board, one page at 390 px (fixtures/board-browser.mjs: closed again, and said why, when a step fails);
+// `look(group)` opens Detail and measures it in one evaluation
 async function open(p) {
-  const b = await startBoard({ projectDir: p.root });
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
-  const pg = await context.newPage();
-  const errors = [];
-  pg.on('pageerror', e => errors.push(String(e)));
-  await pg.goto(b.newLink());
-  await pg.waitForSelector('#h-progress');
+  const s = await openBoard(browser, p, { ctx: { viewport: { width: 390, height: 844 } } });
+  const pg = s.page;
   const look = async (group, wait = '#h-detail') => {
     await pg.evaluate(id => { location.hash = `#/finding/${id}`; }, group);
     await pg.waitForSelector(wait);
@@ -49,7 +45,7 @@ async function open(p) {
         rows, wide: document.documentElement.scrollWidth <= innerWidth };
     });
   };
-  return { b, pg, errors, look, close: async () => { await context.close(); await b.close(); } };
+  return { ...s, pg, look };
 }
 
 test('board e2e: interrupted says the sentence (no buttons); revert says why and the git command with [Copy]; unbaselined names the route and what it shows, with [Undo this fix] [Try again with a note…]; (a)\'s [Undo this fix] undoes', { timeout: 180000 }, async t => {

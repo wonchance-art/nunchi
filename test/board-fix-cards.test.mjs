@@ -17,6 +17,7 @@ import * as P from '../src/project.mjs';
 import { FIX_WORDS, listText } from '../src/board/shared.mjs';
 import { fixProject, edit, commitWith, git, tmp } from './fixtures/fix-project.mjs';
 import { boardRequest } from './fixtures/board-call.mjs';
+import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 
 process.env.XDG_STATE_HOME = tmp('nunchi-board-cards-xdg-');
 const require = createRequire(import.meta.url);
@@ -34,7 +35,9 @@ async function attempt(p, { edits = [['app/settings/page.jsx', 'TINY', 'ROOMY']]
 async function board(p) {
   const b = await startBoard({ projectDir: p.root });
   const origin = b.origin;
-  const s = await (await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) })).json();
+  // a trade that fails closes the board first (a board left listening keeps this file's process alive to the runner's limit)
+  const s = await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) })
+    .then(r => r.json()).catch(async e => { await b.close(); throw e; });
   // a fresh connection per request: the fix loop and git run between calls (fixtures/board-call.mjs)
   const call = (path, body) => boardRequest(origin, path, { token: s.token, body });
   return { b, call };
@@ -130,19 +133,15 @@ before(async () => {
   try { browser = await chromium.launch({ executablePath: process.env.NUNCHI_BROWSER || undefined }); }
   catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
-after(async () => { await browser?.close(); });
+after(async () => { await closeBoards(); await browser?.close(); });
+// the board, a page on it and the first view (fixtures/board-browser.mjs: closed again, and said why, when a step fails)
 async function page(p, viewport = { width: 390, height: 844 }) {
-  const b = await startBoard({ projectDir: p.root });
-  const context = await browser.newContext({ viewport });
-  await context.grantPermissions(['clipboard-write'], { origin: b.origin });
-  const pg = await context.newPage();
-  // what the page hands the clipboard (the board's own policy blocks reading it back: clipboard-read=())
-  await pg.addInitScript(() => { const w = navigator.clipboard.writeText.bind(navigator.clipboard); globalThis.__copied = []; navigator.clipboard.writeText = t => { globalThis.__copied.push(t); return w(t); }; });
-  const errors = [];
-  pg.on('pageerror', e => errors.push(String(e)));
-  await pg.goto(b.newLink());
-  await pg.waitForSelector('#h-progress');
-  return { b, pg, errors, close: async () => { await context.close(); await b.close(); } };
+  const s = await openBoard(browser, p, { ctx: { viewport }, setup: async ({ b, context, page: pg }) => {
+    await context.grantPermissions(['clipboard-write'], { origin: b.origin });
+    // what the page hands the clipboard (the board's own policy blocks reading it back: clipboard-read=())
+    await pg.addInitScript(() => { const w = navigator.clipboard.writeText.bind(navigator.clipboard); globalThis.__copied = []; navigator.clipboard.writeText = t => { globalThis.__copied.push(t); return w(t); }; });
+  } });
+  return { ...s, pg: s.page };
 }
 // the card, measured in one evaluation (live redraws make separate handle round trips flaky)
 const CARD = () => {
