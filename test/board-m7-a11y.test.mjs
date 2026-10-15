@@ -176,9 +176,15 @@ test('M7 a11y: the focus never falls to the page — filters, Copy, Show on map 
     assert.deepEqual(await state('cv-show-gaps'), { focus: 'cv-show-gaps', pressed: ['true'] });
     await press('cv-st-normal', 'Enter');
     await press('cv-show-all', 'Enter');
-    await press('cv-checks', 'ArrowDown');
-    assert.deepEqual(await page.evaluate(() => [document.activeElement?.id, document.getElementById('cv-checks').value]), ['cv-checks', 'rules']);
-    await press('cv-checks', 'ArrowUp');
+    // the Checks select changed while it has the focus. ArrowDown on a closed select changes it on Linux and Windows
+    // but opens the menu on macOS, so the choice is made as the menu makes it everywhere: the option set, `input` and
+    // `change` sent (selectOption moves no focus; the select keeps the one it was given)
+    const checks = () => page.evaluate(() => [document.activeElement?.id, document.getElementById('cv-checks').value]);
+    await page.focus('#cv-checks');
+    await page.selectOption('#cv-checks', 'rules');
+    assert.deepEqual(await checks(), ['cv-checks', 'rules']);
+    await page.selectOption('#cv-checks', 'all');
+    assert.deepEqual(await checks(), ['cv-checks', 'all']);
     await press('gap-copy-budget-0', 'Enter');
     assert.equal((await state()).focus, 'gap-copy-budget-0', 'Copy keeps the focus');
     await press('gap-show-canary-0', 'Enter');
