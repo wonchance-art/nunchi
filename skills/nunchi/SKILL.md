@@ -76,14 +76,14 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
 
 After step 6, when the user wants the deeper sweep. The engine cuts the work and checks the answers; you judge.
 
-1. `hunt --plan --agent "<who you are, e.g. Claude Code>" --vendor "<your vendor>"` (`--lens L5,L6` to narrow; `--run
-   <id>` for an older run): the board shows your hunt in progress under that name. If it says another agent is hunting
-   this run right now, do not plan again: answer the units of the plan in `hunt-plan.json` (agents hunting one run share
-   its plan), or wait until that agent is done. Without `--budget` it plans within the
+1. `hunt --plan` (`--lens L5,L6` to narrow; `--run <id>` for an older run). Without `--budget` it plans within the
    default 400,000 tokens, spent lens by lens, worst defects first (L1 broken, L9 data loss, L6 copy, then L2,
    L10, L7, L5, L4). Before you start, tell the user the estimate, which lenses the budget covers on every screen
    and which it leaves *not seen: budget*. Raise it (`--budget <tokens>`) or lift it (`--budget all`) only when
    the user says so. Then read `hunt-plan.json` in the run folder.
+   Say who you are with `--agent "<e.g. Claude Code>" --vendor "<your vendor>"`: the board shows your hunt in progress
+   under that name. If it says another agent is hunting this run right now, do not plan again: answer the units of the
+   plan in `hunt-plan.json` (agents hunting one run share its plan), or wait until that agent is done.
 2. For each unit with `status: "planned"` — in a fresh context per unit when you can (a subagent) — read its lens
    from the plan's `lenses` (definition, examples, severityRubric) and the unit's `files` in the order given, paths
    relative to the run folder: the reference scene (another screen of the same app, for comparison) comes first,
