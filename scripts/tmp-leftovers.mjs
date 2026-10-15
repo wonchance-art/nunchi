@@ -26,6 +26,13 @@ export function leftovers(dir) {
   return readdirSync(dir).sort().filter(name => !notOurs(name));
 }
 
+// `name`, and for a folder what is in it (the first few names): what was left says who left it
+export function describe(dir, name) {
+  let inside;
+  try { inside = readdirSync(join(dir, name)).sort(); } catch { return name; }
+  return inside.length ? `${name}/ (${inside.length}: ${inside.slice(0, 5).join(', ')}${inside.length > 5 ? ', …' : ''})` : `${name}/`;
+}
+
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const [cmd, ...args] = process.argv.slice(2);
   if (!cmd) { process.stderr.write('usage: node scripts/tmp-leftovers.mjs <command> [args…]\n'); process.exit(2); }
@@ -35,7 +42,7 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   const left = leftovers(dir);
   if (left.length) {
     process.stderr.write(`tmp-leftovers: ${cmd} ${args.join(' ')} left ${left.length} entr${left.length === 1 ? 'y' : 'ies'} in its temporary folder:\n`);
-    for (const name of left.slice(0, 50)) process.stderr.write(`  ${name}\n`);
+    for (const name of left.slice(0, 50)) process.stderr.write(`  ${describe(dir, name)}\n`);
     if (left.length > 50) process.stderr.write(`  … and ${left.length - 50} more\n`);
   } else process.stdout.write(`tmp-leftovers: ${cmd} ${args.join(' ')} left nothing in its temporary folder\n`);
   try { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch (e) { process.stderr.write(`tmp-leftovers: could not remove ${dir}: ${e.code || e.message}\n`); }

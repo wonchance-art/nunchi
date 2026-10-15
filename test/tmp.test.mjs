@@ -200,12 +200,12 @@ test('the leftover check: anything left trips it (a socket in the board\'s socke
 test('the leftover check around a command: a folder left in its temporary folder fails it and is named; a command that leaves nothing passes', () => {
   const dir = tmp('nunchi-left-cmd-');
   const leaves = join(dir, 'leaves.mjs'), clean = join(dir, 'clean.mjs');
-  writeFileSync(leaves, `import { mkdirSync } from 'node:fs';\nimport { ${TD} } from 'node:os';\nmkdirSync(\`\${${TD}()}/nunchi-left-behind\`);\n`);
+  writeFileSync(leaves, `import { mkdirSync, writeFileSync } from 'node:fs';\nimport { ${TD} } from 'node:os';\nconst d = \`\${${TD}()}/nunchi-left-behind\`;\nmkdirSync(d);\nwriteFileSync(d + '/b', '');\nwriteFileSync(d + '/a.sock', '');\n`);
   writeFileSync(clean, `import { tmp } from ${url('tmp.mjs')};\ntmp('nunchi-gone-');\n`);
   const run = file => spawnSync(process.execPath, [LEFTOVERS, process.execPath, file], { encoding: 'utf8' });
   const a = run(leaves);
   assert.equal(a.status, 1, a.stdout + a.stderr);
-  assert.match(a.stderr, /left 1 entry in its temporary folder:\n {2}nunchi-left-behind\n/);
+  assert.match(a.stderr, /left 1 entry in its temporary folder:\n {2}nunchi-left-behind\/ \(2: a\.sock, b\)\n/, 'a folder is named with what is in it');
   const b = run(clean);
   assert.equal(b.status, 0, b.stdout + b.stderr);
   assert.match(b.stdout, /left nothing in its temporary folder/);
