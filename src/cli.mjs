@@ -9,7 +9,7 @@ import { startRun, finishRun, gcRuns, latestRun, workTree, ensureGitignore, ensu
 import { baseUrlRefusal } from './network.mjs';
 import { codeNavigations } from './flow.mjs';
 import { readDecisions, approvalKey, buildDecision, view, DECISIONS, NOT_LOOKED_RUNS, STALE_HUNTS, latestRunOf } from './ledger.mjs';
-import { ensureStateDir, writeKey, readKey, removeKey, removeKeys, keyPath } from './state.mjs';
+import { ensureStateDir, writeKey, readKey, removeKey, removeKeys, keyPath, peekKey } from './state.mjs';
 import { runIdentity, routeHashes } from './ai-fold.mjs';
 import { withLock } from './stable.mjs';
 import * as P from './project.mjs';
@@ -648,6 +648,7 @@ if (cmd === 'setup') {
   const { planHuntWithKey, writeHuntMirror, writeRecord, readAnswers, formatPlan, formatRecord } = await import('./hunt.mjs');
   const { recordHunts, readAgentRecords, writeAgentRecords, formatAgents } = await import('./hunt-agents.mjs');
   const { noteHunt, huntProgress, huntInTheWay, huntLine } = await import('./activity.mjs');
+  const V = await import('./verify.mjs');
   const { declaredName } = await import('./agents.mjs');
   const { writeStable } = await import('./stable.mjs');
   const fail = (msg, code = 1) => { console.error(`nunchi hunt: ${msg}`); process.exit(code); };
@@ -706,10 +707,13 @@ if (cmd === 'setup') {
         // a plan made for a run with canaries names scenes by alias: without its key nothing can be mapped back
         const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
         if (!key && (manifest.scenes || []).some(s => s.canary !== undefined)) throw Object.assign(new Error(`the answer key of this plan (hunt-key.json) is missing from ${dirname(keyPath(runDir, 'hunt-key.json'))}: run hunt --plan again`), { code: 'STALE_ANSWERS' });
-        // answers per agent (design §7): each agent's latest record stands beside the others'
-        const r = recordHunts({ runDir, plan, key, answers: readAnswers(answersPath), root: resolve(args.root || process.cwd()), prior: readAgentRecords(runDir) });
+        // answers per agent (design §7): each agent's latest record stands beside the others'; the claims the verify key
+        // holds verdicts for speak for their defects, and keep their statuses in ai-findings.json (M6 review)
+        const { backedClaims, verdictsFromKey } = V;
+        const vkey = peekKey(runDir, 'verify-key.json');
+        const r = recordHunts({ runDir, plan, key, answers: readAnswers(answersPath), root: resolve(args.root || process.cwd()), prior: readAgentRecords(runDir), backed: backedClaims(vkey) });
         writeAgentRecords(runDir, r.records);
-        writeRecord(runDir, r);
+        writeRecord(runDir, vkey ? { ...r, findings: verdictsFromKey(r.findings, vkey) } : r);
         return r;
       });
       // the hunt into the ledger as (run, "ai"): its claims (not double-checked yet) and the cells it saw, so a hunt

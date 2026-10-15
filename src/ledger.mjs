@@ -611,7 +611,7 @@ export function deriveAi(item) {
     fp: item.fp, group: latest.group || item.group, source: 'ai', stream: lastStream || streamOf(latest), lens: item.lens, rule: item.rule, route: item.route ?? null, inputs: item.inputs, addedAt: item.addedAt ?? null,
     // displayed: the severity a verifier that confirmed it gave; rejected and insufficient keep the claimed one
     severity: (chosen.status === 'confirmed' ? chosen.verdictSeverity : null) || latest.claimedSeverity,
-    claimedSeverity: latest.claimedSeverity, protect: worst(present.flatMap(h => [h.claimedSeverity, h.verdictSeverity])) || latest.claimedSeverity,
+    claimedSeverity: latest.claimedSeverity, protect: worst(present.flatMap(h => [h.claimedSeverity, h.verdictSeverity, h.protectSeverity])) || latest.claimedSeverity,
     verification, cells, persons: [...new Set(parts.map(p => p[0]))].sort(), states: [...new Set(parts.map(p => p[1]))].sort(), viewports: [...new Set(parts.map(p => p[2]))].sort(),
     places: (latest.examples || []).length, examples: (latest.examples || []).slice(0, 5), selector: latest.selector ?? null, box: latest.box ?? null,
     evidence: latest.evidence || {}, identity: latest.identity || null, seen,
@@ -712,13 +712,14 @@ export function foldAi(state, { run, stream = 'main', key = null, findings = [],
     const scenes = {};
     for (const f of list) if (f.cell && f.sceneHash) scenes[f.cell] = { scene: f.scene, ...f.sceneHash, selector: f.selector ?? null, box: f.box ?? null };
     const agents = agentList(list.flatMap(f => f.agents || []));
+    const protectSeverity = worst(list.map(f => f.protectSeverity));
     const entry = {
       run, stream, at: now, claimed: true, status: best.status, suspect: list.some(f => !!f.suspect), ...(list.some(f => !!f.tooFewDecoys) ? { tooFewDecoys: true } : {}),
       by: best.by ?? null, ...(best.vendor ? { vendor: best.vendor } : {}),
       claimedSeverity: worst(list.map(f => f.claimedSeverity)), verdictSeverity: worst(list.filter(f => AI_VERDICTS.has(f.status)).map(f => f.verdictSeverity)),
       cells: [...new Set(list.map(f => f.cell).filter(Boolean))].sort(), scenes, group: best.group,
       examples: [...new Set(list.map(f => f.scene).filter(Boolean))].sort().slice(0, 20), selector: best.selector ?? null, box: best.box ?? null,
-      evidence: best.evidence || {}, identity: best.identity || null, ...(agents.length ? { agents } : {}),
+      evidence: best.evidence || {}, identity: best.identity || null, ...(agents.length ? { agents } : {}), ...(protectSeverity ? { protectSeverity } : {}),
     };
     items[fp] = { ...it, hunts: [...(it.hunts || []).filter(h => !mine(h)), entry].sort(byEvent) };
     touched.add(fp);

@@ -67,12 +67,19 @@ test('two agents: a cell is seen when any agent answered it completely; a re-hun
   assert.deepEqual(r.findings.map(f => [f.rule, f.agents]), [['L9.destructive-without-confirm', [CLAUDE]]], 'Codex\'s record left Claude Code\'s answers standing');
   assert.equal(r.coverage.summary.units.seen, 2);
   assert.deepEqual(r.coverage.agents.map(a => [a.agent, a.units]), [['Claude Code', 1], ['Codex', 1]]);
-  // Codex claims the same defect, lower: one finding, both agents, the more severe claim speaks for it
+  // Codex claims the same defect, lower: one finding, both agents; with no verdict yet the first agent's claim speaks
+  // for it (M6 review: the claim a verdict backs would, test/verdicts-agents.test.mjs)
   r = record(p, plan, [{ plan: plan.id, ...CODEX, units: [answerAll(l6, 'none'), answerAll(l9, 'none', deleteAll('tasks.guest.normal.m', { severity: 'medium', claim: 'No confirm step.' }))] }]);
-  assert.deepEqual(r.findings.map(f => [f.severity, f.evidence.claim, f.agents]), [['high', 'Deletes every task at once, with no confirmation or undo.', [CLAUDE, CODEX]]]);
+  assert.deepEqual(r.findings.map(f => [f.severity, f.evidence.claim, f.agents, f.protect]), [['high', 'Deletes every task at once, with no confirmation or undo.', [CLAUDE, CODEX], undefined]]);
   // Claude Code re-hunts L9 and finds nothing: its claim goes, Codex's stands
   r = record(p, plan, [{ plan: plan.id, ...CLAUDE, units: [answerAll(l9, 'none')] }]);
   assert.deepEqual(r.findings.map(f => [f.severity, f.agents]), [['medium', [CODEX]]]);
+  // …and claims it again, higher: Claude Code's comes first still, Codex's lower claim cannot lower what protects it
+  r = record(p, plan, [{ plan: plan.id, ...CLAUDE, units: [answerAll(l9, 'none', deleteAll('tasks.guest.normal.m', { severity: 'blocker' }))] }]);
+  assert.deepEqual(r.findings.map(f => [f.severity, f.protect]), [['blocker', undefined]]);
+  r = record(p, plan, [{ plan: plan.id, ...CLAUDE, units: [answerAll(l9, 'none', deleteAll('tasks.guest.normal.m', { severity: 'low' }))] }]);
+  assert.deepEqual(r.findings.map(f => [f.severity, f.protect]), [['low', 'medium']], 'shown as the first agent claimed it, protected as the most severe claim');
+  r = record(p, plan, [{ plan: plan.id, ...CLAUDE, units: [answerAll(l9, 'none')] }]);
   // in one call, a later file replaces a unit's answer only within the same agent
   const q = huntProject();
   const qp = planHunt({ runDir: q.runDir, lenses: q.lenses, lensIds: ['L9'], runId: '0001' });

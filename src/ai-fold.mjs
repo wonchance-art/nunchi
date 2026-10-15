@@ -102,6 +102,8 @@ export function foldFinding(f, scene = null, { suspect = false, src = null } = {
     sceneHash: scene ? { top: str(scene.top), full: str(scene.full), textHash: str(scene.textHash), src: str(src) } : null,
     // who claimed it, as declared (M6: hunt answers per agent); a name that is not one is left out
     ...(agentList(f.agents).length ? { agents: agentList(f.agents) } : {}),
+    // another agent claimed the same defect more severe: what protects it (never what is shown or verified)
+    ...(SEVERITIES.includes(f.protect) ? { protectSeverity: f.protect } : {}),
   };
 }
 

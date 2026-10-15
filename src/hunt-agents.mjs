@@ -20,7 +20,7 @@ import { recordHunt } from './hunt.mjs';
 import { lensNumber } from './lenses.mjs';
 import { stableJson, writeStable } from './stable.mjs';
 import { present, readJsonFile } from './state.mjs';
-import { asClaim } from './verify.mjs';
+import { asClaim, claimHash } from './verify.mjs';
 import { declaredName, nameKey, agentList } from './agents.mjs';
 
 export const AGENTS_FILE = 'hunt-agents.json';
@@ -87,10 +87,11 @@ const rejectedKey = a => stableJson([a.unit ?? '', a.item ?? '', a.scene ?? '', 
 // The units of `plan` an agent's record saw (every cell of the unit seen: recordHunt marks a unit's cells together).
 const unitsSeen = (cells, ids) => new Set(cells.filter(c => c.status === 'seen' && ids.has(c.unit)).map(c => c.unit));
 
-// answers: the files of this call (in name order). prior: readAgentRecords(runDir). → { findings, rejected, coverage,
-// records, agents: [{ agent, vendor, units }] (this call's agents, each with the units of the plan it saw) }.
+// answers: the files of this call (in name order). prior: readAgentRecords(runDir). `backed`: the claim hashes the
+// run's verify key holds a verdict for (verify.mjs backedClaims). → { findings, rejected, coverage, records, agents:
+// [{ agent, vendor, units }] (this call's agents, each with the units of the plan it saw) }.
 // Throws BAD_ANSWERS when no file of the call says who wrote it in a way that can be read (nothing is recorded).
-export function recordHunts({ runDir, plan, answers, root, key = null, prior = [] }) {
+export function recordHunts({ runDir, plan, answers, root, key = null, prior = [], backed = new Set() }) {
   const docs = Array.isArray(answers) ? answers : [answers];
   const headerProblems = [];
   const groups = new Map();
@@ -119,20 +120,29 @@ export function recordHunts({ runDir, plan, answers, root, key = null, prior = [
     const r = fresh.get('');
     return { findings: r.findings, rejected: [...r.rejected, ...headerProblems].sort((a, b) => cmp(rejectedKey(a), rejectedKey(b))), coverage: r.coverage, records: list, agents };
   }
-  // findings: one per defect, with every agent that claimed it; the most severe claim speaks for it (a lower one
-  // never lowers what protects it)
+  // findings: one per defect, with every agent that claimed it. The claim that speaks for it is the one the verify key
+  // holds a verdict for (so a verdict outlives another agent's record, M6 review), else the first agent's; a more
+  // severe claim of another agent raises only what protects it (`protect`), never what is shown or verified.
   const byKey = new Map();
   for (const r of list) {
     const who = r.agent || r.vendor ? [{ agent: r.agent, vendor: r.vendor }] : [];
     for (const f of r.findings) {
       const k = defectKey(f);
       const have = byKey.get(k);
-      if (!have) { byKey.set(k, { f, agents: [...(f.agents || []), ...who] }); continue; }
+      if (!have) { byKey.set(k, { f, agents: [...(f.agents || []), ...who], sevs: [f.severity, f.protect], undeclared: !who.length }); continue; }
       have.agents.push(...(f.agents || []), ...who);
-      if (SEV[f.severity] < SEV[have.f.severity]) have.f = f;
+      have.sevs.push(f.severity, f.protect);
+      if (!who.length) have.undeclared = true;
+      if (!backed.has(claimHash(have.f)) && backed.has(claimHash(f))) have.f = f;
     }
   }
-  const findings = [...byKey.values()].map(({ f, agents: a }) => { const { agents: _drop, ...rest } = f; const names = agentList(a); return names.length ? { ...rest, agents: names } : rest; }).sort(byFinding);
+  const findings = [...byKey.values()].map(({ f, agents: a, sevs, undeclared }) => {
+    const { agents: _drop, protect: _p, undeclaredHunter: _u, ...rest } = f;
+    const names = agentList(a);
+    const top = sevs.filter(s => Object.hasOwn(SEV, s)).sort((x, y) => SEV[x] - SEV[y])[0];
+    // a hunter that did not say who it is: no verifier counts as another vendor's for this claim (verify.mjs)
+    return { ...rest, ...(names.length ? { agents: names } : {}), ...(names.length && undeclared ? { undeclaredHunter: true } : {}), ...(top && SEV[top] < SEV[rest.severity] ? { protect: top } : {}) };
+  }).sort(byFinding);
   const rejected = [...list.flatMap(r => r.rejected.map(x => (r.agent ? { ...x, agent: r.agent } : x))), ...headerProblems].sort((a, b) => cmp(rejectedKey(a), rejectedKey(b)));
   // cells: seen when any agent saw it; otherwise the most telling reason it was not
   const cells = new Map();
