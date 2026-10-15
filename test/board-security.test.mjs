@@ -480,7 +480,9 @@ test('§3.1 the link never reaches stdout: the server started directly, with any
     });
     return { child, line };
   };
-  const stop = c => new Promise(r => { c.on('exit', r); c.kill('SIGTERM'); });
+  // Windows: a kill ends a process without its exit handlers (its record, its folder in the temp folder stay): it is
+  // asked to stop through its control pipe instead
+  const stop = c => new Promise(r => { c.on('exit', r); if (POSIX) c.kill('SIGTERM'); else stopBoards(join(p.nunchi, 'state'), p.root).catch(() => c.kill()); });
   // no fd 3: the port, nothing else
   const a = start(['ignore', 'pipe', 'ignore']);
   const out = await a.line;
