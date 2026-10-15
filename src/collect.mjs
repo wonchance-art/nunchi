@@ -298,7 +298,13 @@ export function collect() {
     if (url.origin !== location.origin) continue;
     const lm = a.closest('nav,header,footer,[role="navigation"],[role="banner"],[role="contentinfo"]');
     const landmark = !lm ? null : lm.getAttribute('role') === 'navigation' ? 'nav' : lm.getAttribute('role') === 'banner' ? 'header' : lm.getAttribute('role') === 'contentinfo' ? 'footer' : lm.localName;
-    links.push({ path: url.pathname, selector: sel(a), visible: vis(a), landmark });
+    // The site's navigation (the quick run's key screens, M5 review): inside a nav, or inside the page banner — a
+    // header that is not part of an article, aside, main, nav or section (a card's header is not), or role=banner —
+    // and never inside a footer.
+    const header = a.closest('header,[role="banner"]');
+    const banner = !!header && (header.getAttribute('role') === 'banner' || (header.localName === 'header' && !header.parentElement?.closest('article,aside,main,nav,section')));
+    const navigation = !a.closest('footer,[role="contentinfo"]') && (!!a.closest('nav,[role="navigation"]') || banner);
+    links.push({ path: url.pathname, selector: sel(a), visible: vis(a), landmark, navigation });
   }
 
   const fonts = [...document.fonts].map(f => ({ family: f.family.replace(/["']/g, ''), weight: f.weight, style: f.style, status: f.status }));
