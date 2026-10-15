@@ -1740,7 +1740,8 @@ key. A second `nunchi open` pings this project's records (a record whose board d
 a live board of the same mode; the check and the start run under a lock (`state/boards/launch.lock.d`, the state's
 lock, waited for without blocking), so two `nunchi open` at once start one board. A running board keeps its port: a
 `--port` that differs is ignored, and said ("--port N is ignored: the running board keeps port M"). The board stops after 2 hours without a request (the live stream and the polling
-fallback do not count), telling an open tab. The link is printed only when stdin and stdout are the person's
+fallback do not count; a request counts from when it arrives until it is answered, so a slow answer never stops it
+right after: CI Windows, 2026-10-15 KST), telling an open tab. The link is printed only when stdin and stdout are the person's
 terminal and no browser is opened (`--no-browser`); run by an agent, the output is `board open on 127.0.0.1:<port>`
 and nothing secret. The server never writes a link to its stdout (which carries `{"port"}` only): `nunchi open`
 hands it an extra pipe as fd 3 and asks for the link with `--link-to-parent`, and the link goes over that pipe (a

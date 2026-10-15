@@ -338,8 +338,11 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     if (!limits.req.hit(t)) return fail(res, 429, 'too many requests');
     if (req.method === 'POST' && !limits.write.hit(t)) return fail(res, 429, 'too many changes at once');
     // the live stream and its polling fallback are not the person doing something: they do not keep the board up
-    if (path !== '/api/live' && path !== '/api/generation') lastActive = t;
-    return route(req, res, u, path);
+    const person = path !== '/api/live' && path !== '/api/generation';
+    if (person) lastActive = t;
+    // and the time spent answering the person is not idle time: a machine slow enough to take longer than the idle
+    // time over one answer (the first builds the model) never stops the board right after it (CI Windows, 2026-10-15)
+    try { return await route(req, res, u, path); } finally { if (person) lastActive = Math.max(lastActive, now()); }
   };
 
   // ---- routes (all with the token) -------------------------------------------------------------------------------------
