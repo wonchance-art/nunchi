@@ -470,14 +470,15 @@ Now lines, the version (how far, why) and Coverage's newest capture (`test/board
 "Full check done" and inside the 10 s, and the search kept through a live redraw (`test/board-m5b-e2e.test.mjs`); the
 CLI's progress file naming its machine (`test/quick-cli.test.mjs`). Each fails without its fix (checked by undoing it).
 
-*Measured (M5b, 2026-10-15 KST, this development container, shared with other sessions).* On the merged head
-`54ecffa` (M4 merged in): 742 tests on Node 22.22.0 (18:20–18:26), on Node 24.21.0 (18:26–18:34) and on Node 22 with
-bun off `PATH` (18:42–18:50), Chromium included: 741 pass and 1 skipped (Windows only) each time; `npm run
-validate:plugin` passes; `node bench/run.mjs --twice` (18:59–19:04) unchanged: rule recall 34/34, 0 false positives on
-8 clean scenes, determinism identical (1,141 files), fingerprints 100% (52/52), 176.7 s per capture. An attempt at
-18:50–18:56, with the load average near 30 on 4 CPUs, found 22 screens of the replay run unreachable (browser error
-pages), so its evidence differed; the rerun on a quieter machine is the result. Before the merge (18:14–18:19) the bench
-was the same, at 153.4 s per capture.
+*Measured (M5b, 2026-10-15 KST, this development container, shared with other sessions).* With the review of PR #36,
+on the merged head `6ffdcb1` (M4 and #37 merged in): 753 tests on Node 22.22.0 (20:08–20:15), on Node 24.21.0
+(20:15–20:21) and on Node 22 with bun off `PATH` (20:21–20:28), Chromium required (`NUNCHI_REQUIRE_BROWSER`): 752 pass
+and 1 skipped (Windows only) each time; `npm run validate:plugin` passes; `node bench/run.mjs --twice` (20:32–20:38)
+unchanged: rule recall 34/34, 0 false positives on 8 clean scenes, determinism identical (1,141 files), fingerprints
+100% (52/52), 155.2 s per capture. Two bench attempts found the benchmark app unreachable in the replay run (18:50, with
+the load average near 30 on 4 CPUs; 20:28, while another session's benchmark used the same port), so their evidence
+differed; each rerun on a quiet machine is the result. Before the review (18:20–19:04, head `54ecffa`) the same gates
+gave 742 tests, 741 pass, and the same bench.
 
 **Skill.** A first look, then the full check: `capture --quick`, `findings`, then `capture` started in the background
 and `open` (review of PR #36: so the board opens on the full check running, not on "has not started" and two more
