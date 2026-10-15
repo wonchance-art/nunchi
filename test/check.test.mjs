@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { tmp, writeRun, scene } from './fixtures/board-project.mjs';
 import { sarifProblems } from './fixtures/sarif/validate.mjs';
 import * as G from '../src/guards.mjs';
+import { guardsAt } from '../src/check.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 process.env.XDG_STATE_HOME = tmp('nunchi-check-xdg-');
@@ -172,6 +173,26 @@ test('--sarif: new hits and weakened guards as results, valid against the vendor
   const out2 = join(tmp('nunchi-check-out-'), 'sub.sarif');
   assert.equal(check(join(outer, 'web'), '--sarif', out2).status, 1);
   assert.equal(JSON.parse(readFileSync(out2, 'utf8')).runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri, 'web/app/a.tsx');
+});
+
+test('--base reads the blob by git\'s own path (forward slashes, the prefix git gives), never a checkout or a local path', () => {
+  const calls = [];
+  const doc = { schema: 1, guards: [{ kind: 'native-dialog', params: { calls: ['confirm'] } }], baseline: [] };
+  const fake = (args, opts = {}) => {
+    calls.push(args.join(' '));
+    if (args[0] === 'rev-parse' && args.includes('--show-prefix')) return 'web/\n';
+    if (args[0] === 'rev-parse') return `${'a'.repeat(40)}\n`;
+    if (args[0] === 'cat-file' && args[1] === '-e') return '';
+    if (args[0] === 'cat-file' && args[1] === 'blob') return JSON.stringify(doc);
+    throw new Error(`unexpected git ${args.join(' ')}`);
+  };
+  // the project's own path in Windows' spelling does not reach git: only the prefix git printed does
+  assert.deepEqual(guardsAt('D:\\a\\repo\\web', 'origin/main', { git: fake }), G.validateGuards(doc));
+  assert.deepEqual(calls, [`rev-parse --verify --quiet --end-of-options origin/main^{commit}`, 'rev-parse --show-prefix', `cat-file -e ${'a'.repeat(40)}:web/.nunchi/guards.json`, `cat-file blob ${'a'.repeat(40)}:web/.nunchi/guards.json`]);
+  const none = (args) => { if (args[0] === 'cat-file' && args[1] === '-e') throw new Error('missing'); return fake(args); };
+  assert.equal(guardsAt('/repo', 'main', { git: none }), null, 'no guards file at the ref');
+  for (const bad of ['-x', '', 'a b', 'x\ny']) assert.throws(() => guardsAt('/repo', bad, { git: fake }), e => e.code === 'BAD_ARGS', JSON.stringify(bad));
+  assert.throws(() => guardsAt('/repo', 'main', { git: () => { throw new Error('not a commit'); } }), e => e.code === 'BAD_STATE');
 });
 
 test('check reads only: the project tree is the same after it', () => {

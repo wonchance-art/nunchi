@@ -77,7 +77,7 @@ export const guardsPath = nunchiDir => join(nunchiDir, 'guards.json');
 const ANCHOR = /^[0-9a-f]{16}$/;
 export const WHAT = /^[#a-z0-9 ().,%/:{}_+-]{1,60}$/i;
 export const whatOf = t => { const w = String(t).replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 60); return WHAT.test(w) ? w : null; };
-const SAFE_PATH = p => typeof p === 'string' && p.length > 0 && p.length <= 1024 && !p.startsWith('/') && !/^[a-z]:/i.test(p) && !p.includes('\\')
+export const safePath = p => typeof p === 'string' && p.length > 0 && p.length <= 1024 && !p.startsWith('/') && !/^[a-z]:/i.test(p) && !p.includes('\\')
   && !/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029\ufeff]/.test(p) && !p.split('/').some(s => s === '' || s === '.' || s === '..');
 const exact = (o, keys) => o && typeof o === 'object' && !Array.isArray(o) && Object.keys(o).every(k => keys.includes(k));
 const subset = (v, allowed) => Array.isArray(v) && v.length > 0 && v.length <= allowed.length && v.every(x => allowed.includes(x)) && new Set(v).size === v.length;
@@ -120,7 +120,7 @@ export function validateGuards(doc, file = 'guards.json') {
   for (const e of doc.baseline) {
     if (!exact(e, ['kind', 'file', 'anchor', 'count', 'what'])) bad('a baseline entry is { "kind", "file", "anchor", "count", "what" } and nothing else');
     if (!guards.some(g => g.kind === e.kind)) bad(`a baseline entry names ${String(e.kind).slice(0, 40)}, which is not among the guards`);
-    if (!SAFE_PATH(e.file)) bad('a baseline file must be a plain relative path (no "..", no leading "/", forward slashes)');
+    if (!safePath(e.file)) bad('a baseline file must be a plain relative path (no "..", no leading "/", forward slashes)');
     if (typeof e.anchor !== 'string' || !ANCHOR.test(e.anchor)) bad('a baseline anchor is 16 hex digits');
     if (!Number.isInteger(e.count) || e.count < 1 || e.count > 100000) bad('a baseline count is a whole number from 1');
     if (e.what !== undefined && (typeof e.what !== 'string' || !WHAT.test(e.what))) bad('a baseline "what" is a short description');

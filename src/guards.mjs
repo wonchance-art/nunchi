@@ -14,11 +14,12 @@
 //   hash of the hit's own source (not its line), so `check` fails only on new hits. It is validated strictly: anything
 //   unexpected is a state error (exit 2), never a silent pass.
 import { readFileSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
+import * as nodePath from 'node:path';
 import { join, relative, resolve, sep, isAbsolute, extname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseSource, traverse, unwrap, calleeName, tagOf, attrName, TEST_FILE, CONFIG_FILE, IGNORE_DIRS } from './inventory.mjs';
 import { parseColor, oklabOf, deltaE, MERGE_DE, ALPHA_TOLERANCE } from './tokens.mjs';
-import { KINDS, MAX_SOURCE_BYTES, MAX_COLORS, CALLS, hrefValue, whatOf, TOKEN_COLOR, paramsProblem, normParams, validateGuards, widening, union, keyOf, baselineOf, defaultParams } from './guard-kinds.mjs';
+import { KINDS, MAX_SOURCE_BYTES, MAX_COLORS, CALLS, hrefValue, whatOf, TOKEN_COLOR, paramsProblem, normParams, validateGuards, widening, union, keyOf, baselineOf, defaultParams, safePath } from './guard-kinds.mjs';
 export * from './guard-kinds.mjs';
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -34,10 +35,25 @@ const CSS = /\.css$/i;
 const NOT_APP = /^(tests?|fixtures?|stories|storybook-static|playwright|e2e)\/|(^|\/)__snapshots__\//;
 export const SKIPPED_DIRS = [...IGNORE_DIRS].sort();
 
+// A file's path as guards.json keeps it: relative to the project, with forward slashes on every platform, or null when
+// it lies outside the project (`..`, another drive) or its name holds what a baseline path may not (a backslash, which
+// POSIX allows in a name; a control or bidi character). `path`: node:path, or path.win32 / path.posix in a test, so
+// Windows' `D:\` and `D:/` are checked on Linux too.
+export function projectPath(project, file, path = nodePath) {
+  const r = path.relative(project, file);
+  if (!r || climbs(r, path)) return null;
+  const p = r.split(path.sep).join('/');
+  return safePath(p) ? p : null;
+}
+// Is `root` the project folder or inside it?
+const climbs = (r, path) => r === '..' || r.startsWith(`..${path.sep}`) || r.startsWith('../') || path.isAbsolute(r);
+export const insideProject = (project, root, path = nodePath) => !climbs(path.relative(project, root), path);
+
 // The files a scan reads under `root`, as paths relative to `project` (posix), sorted. Folders nunchi skips, dot
-// folders and symbolic links are never entered or read; files over 1 MB are listed in `large`.
+// folders and symbolic links are never entered or read; files over 1 MB are listed in `large`, files whose name a
+// baseline cannot keep in `odd` (never read).
 export function sourceFiles(project, root, { css = false } = {}) {
-  const files = [], large = [];
+  const files = [], large = [], odd = [];
   const walk = dir => {
     let entries;
     try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
@@ -47,8 +63,9 @@ export function sourceFiles(project, root, { css = false } = {}) {
       const p = join(dir, e.name);
       if (e.isDirectory()) { walk(p); continue; }
       if (!e.isFile()) continue;
-      const rel = posix(relative(project, p));
-      if (!(CODE.test(rel) || (css && CSS.test(rel)))) continue;
+      if (!(CODE.test(e.name) || (css && CSS.test(e.name)))) continue;
+      const rel = projectPath(project, p);
+      if (rel === null) { odd.push(JSON.stringify(posix(relative(project, p))).slice(1, -1).slice(0, 200)); continue; }
       if (TEST_FILE.test(rel) || NOT_APP.test(rel) || CONFIG_FILE.test(rel) || /\.config\.[cm]?[jt]sx?$/.test(rel)) continue;
       let size = 0;
       try { size = lstatSync(p).size; } catch { continue; }
@@ -57,7 +74,7 @@ export function sourceFiles(project, root, { css = false } = {}) {
     }
   };
   walk(root);
-  return { files, large };
+  return { files, large, odd };
 }
 
 const anchorOf = (kind, text) => createHash('sha256').update(`${kind}\0${text.replace(/\s+/g, ' ').trim().slice(0, 4000)}`).digest('hex').slice(0, 16);
@@ -346,10 +363,9 @@ export function scanGuards({ project, root = project, guards }) {
   // compared on their real paths (a symlinked temp folder such as macOS's /var → /private/var; Windows' D:/ and D:\)
   const real = p => { try { return realpathSync.native(resolve(p)); } catch { return resolve(p); } };
   project = real(project); root = real(root);
-  const r = relative(project, root);
-  if (r.startsWith('..') || isAbsolute(r)) throw fail('BAD_ARGS', `--root ${root} is outside the project folder ${project}`);
+  if (!insideProject(project, root)) throw fail('BAD_ARGS', `--root ${root} is outside the project folder ${project}`);
   const css = guards.some(g => g.kind === 'colour-literal');
-  const { files, large } = guards.length ? sourceFiles(project, root, { css }) : { files: [], large: [] };
+  const { files, large, odd } = guards.length ? sourceFiles(project, root, { css }) : { files: [], large: [], odd: [] };
   const hits = [], unparsed = [];
   for (const file of files) {
     let src;
@@ -363,7 +379,7 @@ export function scanGuards({ project, root = project, guards }) {
     }
   }
   hits.sort((a, b) => cmp(a.file, b.file) || a.line - b.line || a.column - b.column || KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind) || cmp(a.anchor, b.anchor));
-  return { hits, files: files.length, large, unparsed };
+  return { hits, files: files.length, large, unparsed, odd };
 }
 
 // Adds a guard (or widens one): only the hits of what it adds join the baseline, so a hit the guard already catches

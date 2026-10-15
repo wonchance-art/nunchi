@@ -72,6 +72,7 @@ export function runCheck({ project, root = project, failOn = null, base = null, 
   }
   if (scan.large.length) lines.push(`skipped: ${plural(scan.large.length, 'file')} over 1 MB (${scan.large.slice(0, 3).join(', ')}${scan.large.length > 3 ? ', …' : ''})`);
   if (scan.unparsed.length) lines.push(`not checked: ${plural(scan.unparsed.length, 'file')} that do not parse (${scan.unparsed.slice(0, 3).map(u => `${u.file}${u.line ? `:${u.line}` : ''}`).join(', ')}${scan.unparsed.length > 3 ? ', …' : ''})`);
+  if (scan.odd.length) lines.push(`not checked: ${plural(scan.odd.length, 'file')} whose name a baseline cannot keep (a backslash or a control character in it): ${scan.odd.slice(0, 3).map(n => JSON.stringify(n)).join(', ')}${scan.odd.length > 3 ? ', …' : ''}`);
 
   // the ledger (local only)
   let led = null;
@@ -123,7 +124,7 @@ export function runCheck({ project, root = project, failOn = null, base = null, 
   const json = {
     code, guards: guards.map(g => ({ kind: g.kind, params: g.params, label: labelOf(g.kind, g.params) })), files: scan.files,
     hits: { new: cmpd.fresh, baselined: cmpd.known.length, gone: cmpd.gone }, ...(base ? { base, weakened } : {}),
-    skipped: { large: scan.large, unparsed: scan.unparsed },
+    skipped: { large: scan.large, unparsed: scan.unparsed, odd: scan.odd },
     ledger: present ? { present: true, run: led?.run ?? null, failOn, standing: standing.map(g => ({ group: g.group, rule: g.rule, severity: g.severity })) } : { present: false },
     ...(sarifOut ? { sarif: { results: sarifOut.kept, of: sarifOut.of, truncated: sarifOut.truncated } } : {}),
   };

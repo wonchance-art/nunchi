@@ -1061,7 +1061,7 @@ if (cmd === 'setup') {
     catch (e) { if (e.code === 'BAD_ARGS') usage(e.message); throw e; }
     const cmpd = G.compareBaseline(scan.hits.filter(h => doc?.guards.some(g => g.kind === h.kind)), doc?.baseline || []);
     const out = all.map(x => ({ ...x, hits: scan.hits.filter(h => h.kind === x.kind).length, new: cmpd.fresh.filter(h => h.kind === x.kind).length }));
-    if (args.json) { console.log(JSON.stringify({ guards: out, files: scan.files, skipped: { large: scan.large, unparsed: scan.unparsed } }, null, 2)); process.exit(0); }
+    if (args.json) { console.log(JSON.stringify({ guards: out, files: scan.files, skipped: { large: scan.large, unparsed: scan.unparsed, odd: scan.odd } }, null, 2)); process.exit(0); }
     console.log(`.nunchi/guards.json: ${doc ? `${doc.guards.length} guard(s), ${doc.baseline.reduce((n, e) => n + e.count, 0)} baselined hit(s)` : 'none yet'} · ${scan.files} file(s) read`);
     for (const x of out) console.log(`${x.inGuards ? 'on ' : 'off'}  ${x.kind.padEnd(15)} ${x.label}${x.available ? ` — ${x.hits} hit(s) now${x.inGuards ? `, ${x.new} new` : ''}` : ` — ${UNAVAILABLE}`}`);
     console.log('A guard is added by you: the card the board shows after a fix (nunchi open), or nunchi guard --add <kind> in your own terminal. nunchi guard --lint prints the same checks as an ESLint config to paste.');

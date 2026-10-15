@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, symlinkSync, cpSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
+import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as G from '../src/guards.mjs';
 
@@ -56,7 +56,7 @@ test('a guard runs only for its own kind and parameters', () => {
   put(p, 'app/b.tsx', fixture('dead-href', 'hit.tsx'));
   const only = G.scanGuards({ project: p, guards: [{ kind: 'native-dialog', params: { calls: ['alert'] } }, { kind: 'dead-href', params: { values: ['javascript:'] } }] });
   assert.deepEqual(only.hits.map(h => `${h.kind}:${h.what}`), ['native-dialog:alert', 'native-dialog:alert', 'dead-href:javascript:', 'dead-href:javascript:']);
-  assert.deepEqual(G.scanGuards({ project: p, guards: [] }), { hits: [], files: 0, large: [], unparsed: [] });
+  assert.deepEqual(G.scanGuards({ project: p, guards: [] }), { hits: [], files: 0, large: [], unparsed: [], odd: [] });
 });
 
 test('tests, fixtures, config files, node_modules, dot folders and symbolic links are never read; a route called test is', () => {
@@ -261,4 +261,44 @@ test('the offer of a fixed kind: what was fixed, in the design\'s words', () => 
   assert.equal(G.labelOf('native-dialog', { calls: ['confirm'] }), '`window.confirm`');
   assert.equal(G.labelOf('dead-href', G.paramsFromRows('dead-href', [{ evidence: { href: '#' } }])), '`href="#"`');
   assert.equal(G.labelOf('native-dialog', { calls: ['alert', 'confirm'] }), '`alert` / `window.confirm`');
+});
+
+// ---- across platforms (Windows' rules checked on Linux through path.win32) ------------------------------------------------
+
+test('paths in guards.json have forward slashes on every platform; Windows\' D:\\ and D:/ alike, another drive or .. is outside', () => {
+  const W = path.win32, X = path.posix;
+  assert.equal(G.projectPath('D:\\a\\shelf', 'D:\\a\\shelf\\app\\x.tsx', W), 'app/x.tsx');
+  assert.equal(G.projectPath('D:\\a\\shelf', 'D:/a/shelf/app/x.tsx', W), 'app/x.tsx');
+  assert.equal(G.projectPath('D:/a/shelf', 'd:\\a\\shelf\\app\\[id]\\page.tsx', W), 'app/[id]/page.tsx');
+  assert.equal(G.projectPath('D:\\a\\shelf', 'E:\\a\\shelf\\x.tsx', W), null, 'another drive');
+  assert.equal(G.projectPath('D:\\a\\shelf', 'D:\\a\\other\\x.tsx', W), null);
+  assert.equal(G.projectPath('/a/shelf', '/a/shelf/app/x.tsx', X), 'app/x.tsx');
+  assert.equal(G.projectPath('/a/shelf', '/a/shelf/app/a\\b.tsx', X), null, 'a backslash POSIX allows in a name');
+  assert.equal(G.projectPath('/a/shelf', '/a/shelf/app/a\u202eb.tsx', X), null, 'a bidi override');
+  assert.equal(G.projectPath('/a/shelf', '/a/shelf', X), null);
+  assert.ok(G.insideProject('D:\\a\\shelf', 'D:/a/shelf/app', W) && G.insideProject('D:\\a\\shelf', 'D:\\a\\shelf', W) && G.insideProject('/a/shelf', '/a/shelf/..fern', X));
+  assert.ok(!G.insideProject('D:\\a\\shelf', 'E:\\a\\shelf', W) && !G.insideProject('/a/shelf', '/a/other', X) && !G.insideProject('/a/shelf', '/a', X));
+});
+
+test('a file whose name a baseline cannot keep is listed and never read (POSIX names may hold a backslash)', { skip: process.platform === 'win32' && 'Windows names cannot hold a backslash (the rule itself is checked through path.win32 above)' }, () => {
+  const p = tmp();
+  put(p, 'app/odd\\name.tsx', "alert('x');\n");
+  put(p, 'app/ok.tsx', "alert('x');\n");
+  const r = G.scanGuards({ project: p, guards: guardsOf(['native-dialog']) });
+  assert.deepEqual(r.odd, ['app/odd\\\\name.tsx']);
+  assert.deepEqual(r.hits.map(h => h.file), ['app/ok.tsx']);
+  const doc = G.addGuard(G.emptyGuards(), { project: p, kind: 'native-dialog', params: { calls: ['alert'] } }).doc;
+  assert.deepEqual(doc.baseline.map(e => e.file), ['app/ok.tsx'], 'the baseline stays valid');
+});
+
+test('line endings: a CRLF checkout (Git for Windows\' core.autocrlf) gives the same hits, lines, columns and anchors as LF', () => {
+  for (const [kind, f] of CASES.flatMap(([k, h, m]) => [[k, h], [k, m]])) {
+    const lf = fixture(kind, f);
+    const p = tmp(), q = tmp();
+    put(p, `app/${f}`, lf);
+    put(q, `app/${f}`, lf.replace(/\n/g, '\r\n'));
+    const a = G.scanGuards({ project: p, guards: guardsOf(G.KINDS) }), b = G.scanGuards({ project: q, guards: guardsOf(G.KINDS) });
+    assert.deepEqual(b.hits, a.hits, `${kind} ${f}`);
+    assert.deepEqual(b.unparsed, []);
+  }
 });

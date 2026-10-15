@@ -1710,6 +1710,10 @@ stories (`__tests__`, `__mocks__`, `__fixtures__`, `e2e`, `cypress`, `*.test.*`,
 the project's own top-level `test/`, `tests/`, `fixtures/`, `stories/`, `playwright/` and `e2e/` folders (a route
 folder called `test` inside `app/` is a page and is read), and config files (`*.config.*`). Files over 1 MB are
 skipped and counted ("skipped: 1 file over 1 MB"); a file that does not parse is listed by file:line and not checked.
+A file whose name a baseline cannot keep (a backslash, which a POSIX name may hold, or a control or bidi character)
+is listed ("not checked: 1 file whose name …") and never read. Paths are kept with forward slashes on every platform
+(`projectPath`, checked on Linux through `path.win32`: `D:\` and `D:/` alike, another drive or `..` outside), and a
+CRLF checkout (Git for Windows' `core.autocrlf`) gives the same hits, lines, columns and anchors as LF (test).
 A hit is reported by file:line:column and kind, never with its source line, so a key in the source never reaches the
 output.
 
