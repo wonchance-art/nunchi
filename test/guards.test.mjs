@@ -195,6 +195,58 @@ test('the baseline is keyed by file and content: moved lines stay baselined, a n
   assert.ok(c.fresh.some(h => h.file === 'app/b.tsx'));
 });
 
+test('anchors survive a formatter: reflowed lines, quote style, parentheses, comments, classes moved beside a colour', () => {
+  const anchors = (files, kinds = G.KINDS) => {
+    const p = tmp();
+    for (const [rel, text] of Object.entries(files)) put(p, rel, text);
+    return G.scanGuards({ project: p, guards: guardsOf(kinds) }).hits.map(h => `${h.kind} ${h.anchor}`).sort();
+  };
+  const before = {
+    'app/a.tsx': [
+      "export function A({ error, open }: any) {",
+      "  if (window.confirm('Remove this fern?')) go();",
+      '  return <div className="p-2 bg-[#abcdef] rounded" style={{ color: "#ff0000", boxShadow: "0 1px 2px rgba(0,0,0,.5)" }}>',
+      '    <a href="#">Home</a><p>{error.message}</p><p>Hello &#123;&#123;name&#125;&#125; and welcome</p>',
+      '  </div>;',
+      '}',
+    ].join('\n'),
+    'app/a.css': '.card{color:#F00;box-shadow:0 0 0 1px rgba(0,0,0,.5)}\n',
+  };
+  const after = {
+    'app/a.tsx': [
+      '// formatted',
+      'export function A({ error, open }: any) {',
+      '  if (',
+      '    window.confirm(',
+      '      "Remove this fern?", // asked once',
+      '    )',
+      '  )',
+      '    go();',
+      '  return (',
+      '    <div',
+      '      className="rounded bg-[#ABCDEF] p-4"',
+      "      style={{ color: '#ff0000', boxShadow: '0 1px 2px rgba(0, 0, 0, 0.5)' }}",
+      '    >',
+      "      <a href='#'>Home</a>",
+      '      <p>{(error).message}</p>',
+      '      <p>',
+      '        Hello &#123;&#123;name&#125;&#125;',
+      '        and welcome',
+      '      </p>',
+      '    </div>',
+      '  );',
+      '}',
+    ].join('\n'),
+    'app/a.css': '.card {\n  color: #f00;\n  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);\n}\n',
+  };
+  const a = anchors(before), b = anchors(after);
+  assert.equal(a.length, 9, a.join('\n'));
+  assert.deepEqual(b, a);
+  // what the hit is changes its anchor: other words in the dialog, another colour
+  const changed = anchors({ ...before, 'app/a.tsx': before['app/a.tsx'].replace('Remove this fern?', 'Delete this fern?').replace('#abcdef', '#abcdee') });
+  assert.equal(changed.filter(x => !a.includes(x)).length, 2);
+});
+
 test('adding a guard baselines what is there; widening it baselines only what it adds', () => {
   const p = tmp();
   put(p, 'app/a.tsx', "alert('a');\nconfirm('b');\nprompt('c');\n");

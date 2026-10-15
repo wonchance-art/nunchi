@@ -77,7 +77,32 @@ export function sourceFiles(project, root, { css = false } = {}) {
   return { files, large, odd };
 }
 
-const anchorOf = (kind, text) => createHash('sha256').update(`${kind}\0${text.replace(/\s+/g, ' ').trim().slice(0, 4000)}`).digest('hex').slice(0, 16);
+// A hit's anchor: what it is, never where it is or how it is formatted. Code is hashed as its syntax tree (node types,
+// names, values, operators), so reflowed lines, quote style, parentheses, trailing commas and comments (Prettier's
+// churn) keep the anchor; a changed name or text makes a new one. A colour is anchored on where it is set (the
+// property, the attribute, the class token) and the colour itself, read as a colour (`#F00` and `#f00` alike).
+const anchorOf = (kind, text) => createHash('sha256').update(`${kind}\0${text}`).digest('hex').slice(0, 16);
+const NOT_SYNTAX = new Set(['type', 'loc', 'start', 'end', 'range', 'extra', 'leadingComments', 'trailingComments', 'innerComments', 'comments', 'errors', 'tokens']);
+function canon(node, out = []) {
+  if (node === null || node === undefined) out.push('_');
+  else if (Array.isArray(node)) { out.push('['); for (const x of node) canon(x, out); out.push(']'); }
+  else if (typeof node !== 'object') out.push(JSON.stringify(node));
+  else {
+    out.push(`(${node.type ?? ''}`);
+    for (const k of Object.keys(node).sort()) {
+      if (NOT_SYNTAX.has(k)) continue;
+      out.push(k);
+      // JSX text is rendered with its whitespace collapsed: a reflowed line is the same text
+      if (node.type === 'JSXText' && k === 'value') out.push(JSON.stringify(node.value.replace(/\s+/g, ' ').trim()));
+      else canon(node[k], out);
+    }
+    out.push(')');
+  }
+  return out;
+}
+const syntaxOf = node => canon(node).join(' ');
+// A colour as a colour (OKLab and alpha, rounded): the spelling of a literal does not move its anchor.
+const colourKey = text => { const c = literalColour(text); return c ? `${oklabOf(c).map(v => Math.round(v * 1e4)).join(',')}/${Math.round(c.alpha * 1e3)}` : String(text).toLowerCase(); };
 
 // Names declared anywhere in the file (a local `confirm`, a parameter called `window`): judged per file, no scopes.
 function declaredNames(ast) {
@@ -182,11 +207,12 @@ export function scanCode(src, file, guards) {
   const ast = parseSource(src, file);
   const names = want.has('native-dialog') ? declaredNames(ast) : new Set();
   const hits = [];
-  const hit = (kind, node, what, extra = '') => hits.push({ kind, line: node.loc.start.line, column: node.loc.start.column + 1, what, anchor: anchorOf(kind, `${src.slice(node.start, node.end)}\0${extra}`) });
+  // `key`: the anchor's text when it is not the node's syntax (a colour's place and value)
+  const hit = (kind, node, what, key = null) => hits.push({ kind, line: node.loc.start.line, column: node.loc.start.column + 1, what, anchor: anchorOf(kind, key ?? syntaxOf(node)) });
   const colour = want.get('colour-literal');
   const allowed = colour ? allowedColours(colour) : null;
-  const colourHits = (node, text, named, at = '') => {
-    coloursIn(text, { named }).forEach((c, i) => { if (!colourAllowed(c.text, allowed)) hit('colour-literal', node, whatOf(c.text), `${at}\0${c.text.toLowerCase()}\0${i}`); });
+  const colourHits = (node, text, named, at) => {
+    coloursIn(text, { named }).forEach((c, i) => { if (!colourAllowed(c.text, allowed)) hit('colour-literal', node, whatOf(c.text), `${at}\0${colourKey(c.text)}\0${i}`); });
   };
   // `{{` in <code> is a sample; a `.message` in <pre> is still raw text on screen (only <style>/<script> are not text)
   const rawAncestor = (anc, tags = RAW_TAGS) => anc.some(a => a.type === 'JSXElement' && tags.has(tagOf(a)));
@@ -221,12 +247,12 @@ export function scanCode(src, file, guards) {
             if (p.type !== 'ObjectProperty') continue;
             const key = p.key.type === 'Identifier' ? p.key.name : p.key.type === 'StringLiteral' ? p.key.value : '';
             if (/^--/.test(key)) continue;                                 // a custom property defines a token
-            for (const s of stringsUnder(p.value)) colourHits(p, s.text, COLORISH.test(key), key);
+            for (const s of stringsUnder(p.value)) colourHits(p, s.text, COLORISH.test(key), `style\0${key}`);
           }
         } else if (CLASS_ATTR.has(name)) {
-          for (const s of stringsUnder(v)) for (const c of arbitraryColours(s.text)) if (!colourAllowed(c.text, allowed)) hit('colour-literal', s.node, whatOf(c.text), `class\0${c.raw}\0${c.index}`);
+          for (const s of stringsUnder(v)) for (const c of arbitraryColours(s.text)) if (!colourAllowed(c.text, allowed)) hit('colour-literal', s.node, whatOf(c.text), `class\0${c.token}\0${c.nth}`);
         } else if (COLOR_ATTR.has(name)) {
-          for (const t of texts) colourHits(t.node, t.text, true, name);
+          for (const t of texts) colourHits(t.node, t.text, true, `attr\0${name}`);
         }
       }
     }
@@ -257,7 +283,7 @@ export function scanCss(src, guards) {
       if (colourAllowed(c.text, allowed)) return;
       const at = d.valueStart + c.index;
       const line = lineOf(lines, at);
-      hits.push({ kind: 'colour-literal', line, column: at - lines[line - 1] + 1, what: whatOf(c.text), anchor: anchorOf('colour-literal', `${d.prop}:${d.value}\0${c.text.toLowerCase()}\0${i}`) });
+      hits.push({ kind: 'colour-literal', line, column: at - lines[line - 1] + 1, what: whatOf(c.text), anchor: anchorOf('colour-literal', `css\0${d.prop}\0${colourKey(c.text)}\0${i}`) });
     });
   }
   return hits;
@@ -340,12 +366,17 @@ export function coloursIn(value, { named = false } = {}) {
   return out;
 }
 const matchParen = (s, open) => { let d = 0; for (let j = open; j < s.length; j++) { if (s[j] === '"' || s[j] === "'") { j = endOfString(s, j); continue; } if (s[j] === '(') d++; else if (s[j] === ')' && --d === 0) return j; } return s.length - 1; };
-// Tailwind arbitrary values in a class list: `bg-[#1f2937]`, `text-[rgb(0_0_0)]` (`_` is a space there).
+// Tailwind arbitrary values in a class list: `bg-[#1f2937]`, `text-[rgb(0_0_0)]` (`_` is a space there). Each with
+// its class token (lowercased: the anchor, so another class added or moved beside it changes nothing) and its place
+// among the token's colours.
 function arbitraryColours(text) {
   const out = [];
-  for (const m of String(text).matchAll(/\[(#[0-9a-fA-F]{3,8}|(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\([^\]\s]*\))\]/g)) {
-    const t = m[1].replace(/_/g, ' ');
-    if (literalColour(t)) out.push({ text: t, raw: m[1], index: m.index });
+  for (const token of String(text).split(/\s+/).filter(Boolean)) {
+    let nth = 0;
+    for (const m of token.matchAll(/\[(#[0-9a-fA-F]{3,8}|(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\([^\]\s]*\))\]/g)) {
+      const t = m[1].replace(/_/g, ' ');
+      if (literalColour(t)) out.push({ text: t, token: token.toLowerCase(), nth: nth++ });
+    }
   }
   return out;
 }
