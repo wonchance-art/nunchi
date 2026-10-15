@@ -760,30 +760,41 @@ export function noteDecisions(state, decisions, now = Date.now()) {
 // an older schema or fingerprint version is written back migrated. Nothing to do: nothing is written.
 // `generation`: the state's generation file, bumped when something is written.
 export function syncLedger(stateFile, runsDir, { decisions = null, now = Date.now(), timeoutMs, stream = 'main', generation = null, loaders = {} } = {}) {
-  const runs = () => listRuns(runsDir).complete.slice().sort(byRun);
   const out = updateDoc(stateFile, (doc, { lock }) => {
-    const s0 = doc === null ? emptyState() : migrateAll(doc, stream);
-    let s = s0;
-    const ids = runs();
-    for (const id of ids) if (!foldOf(s, id, 'rule', stream)) { s = foldRun(s, { ...runForFold(join(runsDir, id)), stream }); lock?.touch(); }
-    for (const [source, fold] of [['ai', foldAi], ['recheck', foldRecheck]]) {
-      const l = loaders[source];
-      if (!l) continue;
-      for (const id of ids) {
-        const dir = join(runsDir, id);
-        const key = l.key(dir);
-        if (key === null) continue;
-        if (foldOf(s, id, source, stream)?.key === key) continue;
-        const input = l.input(dir);
-        if (!input) continue;
-        s = fold(s, { ...input, run: id, key, stream, now });
-        lock?.touch();
-      }
-    }
-    if (decisions) s = noteDecisions(s, decisions, now);
+    const { s0, s } = catchUp(doc, runsDir, { decisions, now, stream, loaders, touch: () => lock?.touch() });
     return s !== s0 || (doc !== null && s0 !== doc) ? s : doc;
   }, { read: { fix: REBUILD, validate: isLedger, why: 'is not a nunchi ledger' }, timeoutMs, generation });
   return out === null ? emptyState() : migrateAll(out, stream);
+}
+// What syncLedger folds, in memory: → { s0 (the state read, migrated), s (with the runs, verdicts and decisions not
+// folded yet) }.
+function catchUp(doc, runsDir, { decisions = null, now = Date.now(), stream = 'main', loaders = {}, touch = () => {} } = {}) {
+  const s0 = doc === null ? emptyState() : migrateAll(doc, stream);
+  let s = s0;
+  const ids = listRuns(runsDir).complete.slice().sort(byRun);
+  for (const id of ids) if (!foldOf(s, id, 'rule', stream)) { s = foldRun(s, { ...runForFold(join(runsDir, id)), stream }); touch(); }
+  for (const [source, fold] of [['ai', foldAi], ['recheck', foldRecheck]]) {
+    const l = loaders[source];
+    if (!l) continue;
+    for (const id of ids) {
+      const dir = join(runsDir, id);
+      const key = l.key(dir);
+      if (key === null) continue;
+      if (foldOf(s, id, source, stream)?.key === key) continue;
+      const input = l.input(dir);
+      if (!input) continue;
+      s = fold(s, { ...input, run: id, key, stream, now });
+      touch();
+    }
+  }
+  if (decisions) s = noteDecisions(s, decisions, now);
+  return { s0, s };
+}
+// The ledger as syncLedger would leave it, without writing anything (`nunchi check`, which only reads): the file as it
+// is, with what is not folded yet folded in memory. A file that cannot be read is the same error as for syncLedger.
+export function peekLedger(stateFile, runsDir, { decisions = null, now = Date.now(), stream = 'main', loaders = {} } = {}) {
+  const { doc } = readDoc(stateFile, { fix: REBUILD, validate: isLedger, why: 'is not a nunchi ledger' });
+  return catchUp(doc, runsDir, { decisions, now, stream, loaders }).s;
 }
 
 // ---- decisions (committed, append-only) ------------------------------------------------------------

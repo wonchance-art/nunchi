@@ -4,7 +4,7 @@
 // and --sarif writes a file valid against the vendored schema. Nothing else is written. Synthetic projects only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -141,6 +141,25 @@ test('--fail-on without a ledger exits 2; with one, open findings at or above it
   const d = spawnSync(process.execPath, [CLI, 'decide', g, 'later', '--from-chat'], { cwd: root, encoding: 'utf8' });
   assert.equal(d.status, 0, d.stderr);
   assert.equal(check(root, '--fail-on', 'low').status, 1, 'Later still counts for shipping');
+  // read-only: a newer run not folded yet is read as findings would read it, and nothing is written for it
+  writeRun(root, '0002', { scenes: [sc], findings: [] });
+  const files = () => {
+    const out = [];
+    const walk = dir => { for (const e of readdirSync(dir, { withFileTypes: true })) { const p = join(dir, e.name); if (e.isDirectory()) walk(p); else { const s = statSync(p); out.push(`${p} ${s.size} ${s.mtimeMs}`); } } };
+    for (const d of [join(root, '.git', 'nunchi'), join(root, '.nunchi')]) if (existsSync(d)) walk(d);
+    return out.sort();
+  };
+  const before = files();
+  const after2 = check(root, '--fail-on', 'high');
+  assert.equal(after2.status, 0, after2.stdout + after2.stderr);
+  assert.match(after2.stdout, /^ledger: run 0002 · 0 groups at or above high still stand in the way$/m);
+  assert.deepEqual(files(), before, 'check --fail-on wrote nothing');
+  // a ledger that cannot be read: exit 2, said, never a pass
+  const ledgerFile = before.map(l => l.split(' ')[0]).find(p => p.endsWith(`${join('state', 'ledger.json')}`));
+  writeFileSync(ledgerFile, '{not json');
+  const broken = check(root, '--fail-on', 'high');
+  assert.equal(broken.status, 2);
+  assert.match(broken.stderr, /not valid JSON/);
 });
 
 test('--base: a guard removed, narrowed or with a grown baseline since the ref fails; an unchanged one passes', () => {

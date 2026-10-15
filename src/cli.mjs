@@ -989,10 +989,10 @@ if (cmd === 'setup') {
   const project = process.cwd();
   const root = resolve(args.root || project);
   const nunchiDir = resolve('.nunchi');
-  // the ledger, loaded only when this machine has one (project.mjs, as findings reads it)
-  // (the verdict's own count of what stands in the way, summary.mjs standingOf); a ledger error exits 2
+  // the ledger, loaded only when this machine has one, read-only (project.mjs readLedgerOnly: what findings would show,
+  // nothing written) (the verdict's own count of what stands in the way, summary.mjs standingOf); a ledger error exits 2
   const loadCheckLedger = async () => {
-    const led = loadLedger(nunchiDir, { root });
+    const led = P.readLedgerOnly(nunchiDir, { root });
     const { rows, groups } = P.ledgerView(led);
     const { standingOf, fixNeedsOf } = await import('./summary.mjs');
     const { latestRecords } = await import('./fix/records.mjs');
@@ -1005,9 +1005,10 @@ if (cmd === 'setup') {
     };
   };
   const { ledgerPresent } = await import('./check.mjs');
-  const loaded = args.failOn && ledgerPresent(project) ? await loadCheckLedger() : null;
   let r;
-  try { r = runCheck({ project, root, failOn: args.failOn ?? null, base: args.base ?? null, strict: !!args.strict, sarif: !!args.sarif, version: pkg.version, ledger: loaded ? () => loaded : null }); }
+  try {
+    const loaded = args.failOn && ledgerPresent(project) ? await loadCheckLedger() : null;
+    r = runCheck({ project, root, failOn: args.failOn ?? null, base: args.base ?? null, strict: !!args.strict, sarif: !!args.sarif, version: pkg.version, ledger: loaded ? () => loaded : null }); }
   catch (e) {
     if (['CORRUPT', 'UNSAFE_PATH', 'BAD_ARGS', 'BAD_STATE', 'NO_LEDGER', 'NO_SOURCE', 'GIT_UNSAFE', ...LEDGER_ERRORS].includes(e.code)) usage(e.message);
     throw e;
