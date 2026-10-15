@@ -654,12 +654,15 @@ const silentOf = hunts => JSON.stringify(hunts.filter(h => h.silent).map(refOf))
 // re-hunt replaced): its contributions, so a later claim, folded in whatever order, finds them (M6). Never shown.
 const dormantOf = it => ({ fp: it.fp, group: it.group, source: 'ai', lens: it.lens, rule: it.rule, route: it.route ?? null, inputs: it.inputs,
   ...(Number.isFinite(it.addedAt) ? { addedAt: it.addedAt } : {}), hunts: it.hunts || [], rechecks: it.rechecks || [] });
+// A dormant fingerprint with nothing left (no contribution, never claimed) is no fingerprint at all: gone, so a state is
+// one and the same however it came about. One that was claimed once keeps when (`addedAt`).
+const keepDormant = (dormant, fp) => { const d = dormant[fp]; if (d && !d.hunts?.length && !d.rechecks?.length && !Number.isFinite(d.addedAt)) delete dormant[fp]; };
 // Derive the touched AI items (one no hunt claims any more goes dormant), then every AI item's silence from what the
 // folds saw. Changes `items` and `dormant` in place (both the caller's copies).
 function settleAi(items, dormant, touched, folds) {
   for (const fp of touched) {
     const d = deriveAi(items[fp]);
-    if (d) { items[fp] = d; delete dormant[fp]; } else { dormant[fp] = dormantOf(items[fp]); delete items[fp]; }
+    if (d) { items[fp] = d; delete dormant[fp]; } else { dormant[fp] = dormantOf(items[fp]); delete items[fp]; keepDormant(dormant, fp); }
   }
   const seen = seenIndex(folds);
   for (const [fp, it] of Object.entries(items)) {
@@ -691,7 +694,7 @@ export function foldAi(state, { run, stream = 'main', key = null, findings = [],
   const mine = h => h.run === run && (h.stream ?? 'main') === stream;
   if (prior) {
     for (const [fp, it] of Object.entries(items)) if (isAi(it) && (it.hunts || []).some(mine)) { items[fp] = { ...it, hunts: it.hunts.filter(h => !mine(h)) }; touched.add(fp); }
-    for (const [fp, d] of Object.entries(dormant)) if ((d.hunts || []).some(mine)) dormant[fp] = { ...d, hunts: d.hunts.filter(h => !mine(h)) };
+    for (const [fp, d] of Object.entries(dormant)) if ((d.hunts || []).some(mine)) { dormant[fp] = { ...d, hunts: d.hunts.filter(h => !mine(h)) }; keepDormant(dormant, fp); }
   }
   const byFp = new Map();
   for (const f of findings) { if (!byFp.has(f.fp)) byFp.set(f.fp, []); byFp.get(f.fp).push(f); }
@@ -737,7 +740,7 @@ export function foldRecheck(state, { run, stream = 'main', key = null, suspect =
   const mine = r => r.run === run && (r.stream ?? 'main') === stream;
   if (prior) for (const [fp, it] of Object.entries(items)) if (isAi(it) && (it.rechecks || []).some(mine)) { items[fp] = { ...it, rechecks: it.rechecks.filter(r => !mine(r)) }; touched.add(fp); }
   const dormant = { ...(st.dormant || {}) };
-  if (prior) for (const [fp, d] of Object.entries(dormant)) if ((d.rechecks || []).some(mine)) dormant[fp] = { ...d, rechecks: d.rechecks.filter(r => !mine(r)) };
+  if (prior) for (const [fp, d] of Object.entries(dormant)) if ((d.rechecks || []).some(mine)) { dormant[fp] = { ...d, rechecks: d.rechecks.filter(r => !mine(r)) }; keepDormant(dormant, fp); }
   for (const r of results.slice().sort((a, b) => cmp(a.fp, b.fp))) {
     const it = items[r.fp] ?? dormant[r.fp];
     if (!it || !isAi(it)) continue;

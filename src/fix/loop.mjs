@@ -274,7 +274,8 @@ export function reconcile(ctx, group) {
 export function planFixes(ctx, { url = null } = {}) {
   const rows = ctx.rows;
   const want = ctx.groups.filter(g => rows.some(r => r.group === g.group && r.status === 'to-fix' && !r.goneAt && r.decision?.decision === 'fix'));
-  const sweep = lastSweep(ctx);
+  const found = lastSweep(ctx);
+  const sweep = found?.missing ? null : found;                              // another folder's sweep, gone: no scope from it
   const items = [];
   for (const g of want.sort((a, b) => SEV[a.severity] - SEV[b.severity] || b.routes.length - a.routes.length || cmp(a.group, b.group))) {
     const mine = rows.filter(r => r.group === g.group);
@@ -303,7 +304,7 @@ export function planFixes(ctx, { url = null } = {}) {
     items.forEach((i, n) => lines.push(`  ${n + 1}. ${i.severity.padEnd(7)} ${i.title} — ${i.routes.length ? i.routes.slice(0, 3).join(', ') + (i.routes.length > 3 ? ` +${i.routes.length - 3}` : '') : 'the whole app'} · fix in ${i.rootFiles.length ? i.rootFiles.join(', ') : 'the code that renders it'}${i.attemptsUsed ? ` · ${i.attemptsUsed} of ${MAX_ATTEMPTS} attempts used` : ''}${i.needsApproval ? ' · came through git: needs nunchi approve first' : ''}${i.notDoubleChecked ? ' · not double-checked' : ''}${i.routeless ? ' · no screen to re-check: fix by hand' : ''}  (group ${i.group})`));
     lines.push(checks.length ? `Checks nunchi runs before each fix is committed: ${checks.join(', ')}${approved ? ' (approved).' : ' — not approved yet: approve them in the board (a card shows the exact lines) or run `nunchi fix --approve-checks` in your own terminal.'}` : 'No build, typecheck, lint or test script: nunchi relies on re-capture.');
     if (dirty && dirty.length) lines.push(`Your working tree has ${dirty.length} uncommitted change${dirty.length === 1 ? '' : 's'}. Choose once: 1. commit them as "WIP before nunchi fixes" (recommended), 2. stash them, or 3. stop.`);
-    lines.push(base ? `The app must answer at ${base} (or start it with --serve dev|start), with the data the last capture recorded.` : sweep && !sweep.here && !sweep.missing ? OWN_SERVER('start') : 'Start the app and give its address with --url (never production).');
+    lines.push(base ? `The app must answer at ${base} (or start it with --serve dev|start), with the data the last capture recorded.` : sweep && !sweep.here ? OWN_SERVER('start') : 'Start the app and give its address with --url (never production).');
   }
   return out(0, lines, { plan: items, branch, dirty: dirty ? dirty.length : null, checks: { names: checks, approved, hash: profile?.hash ?? null }, url: base });
 }

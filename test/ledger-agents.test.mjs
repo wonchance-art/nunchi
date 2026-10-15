@@ -95,3 +95,17 @@ test('cli: two agents\' answers in one run fold into one item with both agents (
   assert.equal(groups.length, 1, 'the phone and the desktop claim are one fingerprint: one item');
   assert.deepEqual([groups[0].fps.length, groups[0].agents], [1, [A, B]]);
 });
+
+test('dormant: a fingerprint with nothing left is gone; one claimed once keeps when it was first claimed, whatever the order', () => {
+  const [, , , , , five] = agentFolds('b', 6);
+  const rej = { ...five, findings: five.findings.filter(f => f.status === 'rejected') };   // Codex's rejection only
+  assert.ok(L.foldAi(L.emptyState(), rej).dormant);
+  assert.equal(L.foldAi(L.foldAi(L.emptyState(), rej), { ...rej, key: 'withdrawn', findings: [] }).dormant, undefined, 'the rejection withdrawn: nothing dormant');
+  // Claude Code claims /shared/0 at T0 and then withdraws it; Codex claims it an hour later
+  const [a] = agentFolds('a', 1), withdrawn = { ...a, key: 'withdrawn', findings: [] };
+  const b = { ...agentFolds('b', 1)[0], now: a.now + 3600e3 };
+  const one = foldAll(L.emptyState(), [a, withdrawn, b]), two = foldAll(L.emptyState(), [b, a, withdrawn]);
+  assert.equal(stableJson(one), stableJson(two));
+  assert.equal(byRoute(one, '/shared/0').addedAt, a.now, 'first claimed at T0, by the claim since withdrawn');
+  assert.deepEqual(byRoute(one, '/shared/0').agents, [B]);
+});

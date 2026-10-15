@@ -4,7 +4,7 @@
 // with that sweep's scope and recordings. Synthetic repositories and a fake capture, as the M3 fix-loop tests.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, realpathSync, mkdirSync, symlinkSync } from 'node:fs';
+import { cpSync, realpathSync, mkdirSync, symlinkSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import * as F from '../src/fix/loop.mjs';
 import * as C from '../src/fix/claims.mjs';
@@ -120,4 +120,15 @@ test('the single-agent path never mentions worktrees: the same folder\'s second 
   const again = await F.startFix(ctxOf(p), p.group, { agent: 'Claude Code' });
   assert.doesNotMatch(again.lines.join('\n'), /worktree/);
   assert.doesNotMatch(C.refusalText({ why: 'url', group: 'aaaaaaaaaaaa', claim: { branch: 'b', url: 'http://127.0.0.1:3000', lastRenewal: new Date().toISOString() } }), /worktree/);
+});
+
+test('a sweep whose folder cannot be found now is said, never read: fix --plan goes on, fix --start refuses', async () => {
+  const p = await fixProject();
+  const two = linked(p, 'two');
+  renameSync(join(p.nunchi, 'runs'), join(p.nunchi, 'runs-away'));
+  try {
+    assert.equal(F.planFixes(two.ctx()).code, 0);
+    const r = await F.startFix(two.ctx(), p.group, { url: 'http://127.0.0.1:3001' });
+    assert.deepEqual([r.code, r.lines], [1, ['The last capture (run 0001) was made in another folder of this repository, which nunchi cannot find now: capture again (nunchi capture --url <your local server>) on the branch you ship from.']]);
+  } finally { renameSync(join(p.nunchi, 'runs-away'), join(p.nunchi, 'runs')); }
 });

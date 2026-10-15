@@ -42,7 +42,7 @@ if (mode === 'folds') {
     const s = L.syncLedger(ledger, runsDir, { stream: AGENTS[who].stream, generation, now: f.now, timeoutMs: 120000, loaders: { ai: loader } });
     out.push({ run: f.run, before, rev: s.rev, tries: tries.get(dir) || 0 });
   }
-} else if (mode.startsWith('claim-')) {
+} else if (typeof mode === 'string' && mode.startsWith('claim-')) {
   const [stateDir, who, rounds, at] = args;
   wait(at);
   for (let i = 0; i < Number(rounds); i++) {
@@ -65,4 +65,4 @@ if (mode === 'folds') {
     else { const r = C.acquireClaim(stateDir, { group: g, worktree: `/w/t-${i}`, branch: `nunchi/fix-t-${i}`, url: `http://127.0.0.1:${5000 + i}`, files: [`app/t-${i}.tsx`], agent: 'Codex', now: Date.now() }); out.push({ round: i, ok: r.ok, why: r.why ?? null, token: r.token ?? null }); }
   }
 }
-process.stdout.write(JSON.stringify(out));
+if (mode) process.stdout.write(JSON.stringify(out));   // none when the test runner loads this file as a test
