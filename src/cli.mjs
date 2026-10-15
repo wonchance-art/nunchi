@@ -139,6 +139,25 @@ Usage:
                                             index.html (one file). Offline, no scripts or fonts from anywhere;
                                             open it in a browser. It shows screenshots of your app: sharing it
                                             sends them off this machine
+  nunchi export --format md|json|sarif [--status open,to-fix,…|all] [--include-page-text] [--out <file>] [--root <dir>]
+                                            The findings as a file to share: Markdown, JSON or SARIF (code scanning).
+                                            Secret-shaped strings become [secret-shaped: <kind>]; page text (evidence
+                                            text, AI claims, control names from signed-in screens) only with
+                                            --include-page-text. Paths are repository-relative, routes are templates.
+                                            Default statuses: open, came back, to fix, later
+  nunchi check [--fail-on blocker|high|medium|low] [--sarif <file>] [--base <ref>] [--root <dir>] [--json]
+                                            For CI: no capture, browser or network. Runs the guards of
+                                            .nunchi/guards.json over the source (a hit not in the baseline fails); with
+                                            --base, a guard removed or weakened since <ref> fails too; with a local
+                                            ledger, open findings at or above --fail-on fail. Exit 0 clean, 1 a guard
+                                            hit or such findings, 2 a usage or state error (--fail-on and no ledger: 2)
+  nunchi guard [--json] | --lint | --add <kind> | --remove <kind> | --baseline   [--root <dir>]
+                                            The built-in guards (window.confirm / alert, href="#" and javascript:
+                                            links, .message in JSX, {{ }} in JSX text, colour literals outside the
+                                            measured tokens) and what they find now. --lint prints an ESLint config
+                                            object to paste (nunchi never writes yours). --add, --remove and --baseline
+                                            change .nunchi/guards.json: yours to run, in your own terminal (or the card
+                                            the board shows after a fix); your AI cannot
   nunchi tokens [--run <id>] [--json]      Tidy: cluster the colours (text, backgrounds, borders, SVG), radii and
                                             font sizes the screens use into a token proposal with roles and WCAG
                                             contrast → tokens.json and tokens.css in the run (never your code)
@@ -164,6 +183,9 @@ function parse(argv) {
     else if (a === '--from-chat') args.fromChat = true;
     else if (a === '--stop') args.stop = true;
     else if (a === '--label') args.label = true;
+    else if (a === '--include-page-text') args.includePageText = true;
+    else if (a === '--baseline') args.baseline = true;
+    else if (a === '--lint') args.lint = true;
     else if (['--start', '--brief', '--verify', '--undo', '--abort', '--serve', '--agent'].includes(a)) args[a.slice(2)] = argv[++i];
     else if (a === '--checks') args.checks = argv[++i];
     else if (a === '--status') args.status = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : true;
@@ -171,7 +193,7 @@ function parse(argv) {
     else if (a === '--approve-checks') args.approveChecks = true;
     else if (['--reason', '--note', '--run', '--rule', '--labeller'].includes(a)) args[a.slice(2)] = argv[++i];
     else if (a === '--port') args.port = Number(argv[++i]);
-    else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since', '--lens', '--budget', '--record', '--vendor', '--canaries', '--html'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
+    else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since', '--lens', '--budget', '--record', '--vendor', '--canaries', '--html', '--fail-on', '--sarif', '--base', '--format', '--add', '--remove'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
     else if (a === '--help' || a === '-h') args.help = true;
     else if (a === '--version' || a === '-v') args.version = true;
     else args._.push(a);
@@ -501,6 +523,15 @@ if (cmd === 'setup') {
       if (SEV[g.severity] < SEV[k.severity]) k.severity = g.severity;
     }
     kinds.sort((a, b) => SEV[a.severity] - SEV[b.severity] || b.routes.size - a.routes.size || (a.rule < b.rule ? -1 : 1));
+    // design §5: a kind with ≥ 5 open places and a built-in guard nobody added: "guard available" (passive)
+    {
+      const { guardAvailable, AVAILABLE } = await import('./guard-offer.mjs');
+      const { readGuards, guardsPath } = await import('./guard-kinds.mjs');
+      let gdoc = null;
+      try { gdoc = readGuards(guardsPath(nunchiDir)); } catch (e) { warn(`.nunchi/guards.json: ${e.message}`); }
+      const avail = guardAvailable(rows, gdoc);
+      for (const k of kinds) if (avail.has(k.rule)) k.guard = AVAILABLE;
+    }
     // this worktree's latest run (another worktree's newer run is not what this one sees, §7)
     const latest = latestRunOf(state, st.root.stream);
     // what a run could not tell, and what no run has looked at again: said, so "open" is not read as "checked"
@@ -529,7 +560,7 @@ if (cmd === 'setup') {
       const stale = rows.filter(r => r.notLookedAt).length;
       if (stale) console.log(`${stale} open defect(s) not looked at again for ${NOT_LOOKED_RUNS}+ runs (their screens, states or viewports were not captured like for like): they cannot be marked fixed until a run covers them`);
       if (!args.rule) {
-        for (const k of kinds) console.log(`${k.severity.padEnd(7)} ${k.title} — ${k.groups} group(s) on ${k.routes.size || 'no'} screen(s), ${k.places} place(s)   nunchi findings --rule ${k.rule}`);
+        for (const k of kinds) console.log(`${k.severity.padEnd(7)} ${k.title} — ${k.groups} group(s) on ${k.routes.size || 'no'} screen(s), ${k.places} place(s)${k.guard ? ` · ${k.guard}` : ''}   nunchi findings --rule ${k.rule}`);
         if (collapsed.length) console.log(`AI, not double-checked: ${collapsed.length} group(s) (claimed only, or a verdict that was suspect, rejected or insufficient, or from a run with too few decoys to check the checker) — nunchi findings --all lists them`);
         const fewDecoys = new Set(rows.filter(r => r.source === 'ai' && !r.goneAt && r.verification?.tooFewDecoys === true).map(r => r.group)).size;
         if (fewDecoys) console.log(`${fewDecoys} AI group(s) verified in a run with too few decoys to check the checker: not suspect, and not double-checked either`);
@@ -896,9 +927,180 @@ if (cmd === 'setup') {
       if (res.recheck.suspect) console.log(`SUSPECT: ${res.recheck.suspectReason}. Nothing this batch said gone is marked fixed; re-check again in a fresh context.`);
     }
   }
+} else if (cmd === 'export' && 'format' in args) {
+  // The findings as Markdown, JSON or SARIF (design §5, spec §7.4): redacted at export time, page text only on request,
+  // repo-relative paths and route templates, byte-identical for the same ledger.
+  const E = await import('./export-findings.mjs');
+  const usage = m => { console.error(`nunchi export: ${m}`); process.exit(1); };
+  if ('html' in args) usage('use either --html <dir> (the review page) or --format md|json|sarif');
+  if (!E.exportFormats.includes(args.format)) usage('--format takes md, json or sarif');
+  let statuses = E.DEFAULT_STATUSES;
+  if (args.status !== undefined) {
+    if (typeof args.status !== 'string') usage(`--status takes a list: ${E.STATUSES.join(',')} (or all)`);
+    const asked = args.status.split(',').map(s => s.trim()).filter(Boolean).map(s => E.STATUS_ALIASES[s] || s);
+    if (asked.includes('all')) statuses = E.STATUSES;
+    else {
+      const bad = asked.filter(s => !E.STATUSES.includes(s));
+      if (bad.length || !asked.length) usage(`unknown status ${bad.join(', ') || '(none)'}: use ${E.STATUSES.join(', ')}, later, not-a-problem or all`);
+      statuses = [...new Set(asked)];
+    }
+  }
+  if ('out' in args && (typeof args.out !== 'string' || !args.out || args.out.startsWith('--'))) usage('--out takes a file name');
+  const nunchiDir = resolve('.nunchi');
+  if (!existsSync(nunchiDir)) usage('nothing captured yet (run nunchi capture first)');
+  const root = resolve(args.root || process.cwd());
+  const led = loadLedger(nunchiDir, { root });
+  const model = E.findingsModel({ led, view: P.ledgerView(led), root, project: process.cwd(), statuses, pageText: !!args.includePageText });
+  let text, notes = [];
+  if (args.format === 'md') text = E.exportMarkdown(model);
+  else if (args.format === 'json') text = E.exportJson(model);
+  else {
+    const s = E.exportSarif(model, { version: pkg.version });
+    text = s.text;
+    const { truncationLine } = await import('./sarif.mjs');
+    if (s.truncated) notes.push(truncationLine(s.truncated));
+    if (s.unlocated) notes.push(`${s.unlocated} place(s) left out of the SARIF file: no file of the app to point at (no page file for the route, no package.json)`);
+  }
+  if (!model.pageText && model.counts.pageTextLeftOut) notes.push(`page text left out (${model.counts.pageTextLeftOut} field(s)): --include-page-text adds it`);
+  if (args.out) {
+    const { writeAtomic, refuseLink } = await import('./stable.mjs');
+    const { within } = await import('./export-html.mjs');
+    const out = resolve(args.out);
+    if (within(join(nunchiDir, 'runs'), out)) usage('write the export outside .nunchi/runs (runs are evidence and are never edited)');
+    try { refuseLink(out); writeAtomic(out, text); } catch (e) { usage(`${out}: ${e.message}`); }
+    console.log(`${args.format === 'md' ? 'Markdown' : args.format === 'json' ? 'JSON' : 'SARIF'} → ${out} · ${model.counts.groups} group(s), ${model.counts.items} place(s)`);
+    for (const n of notes) console.log(n);
+  } else {
+    process.stdout.write(text);
+    for (const n of notes) console.error(`nunchi: ${n}`);
+  }
+} else if (cmd === 'check') {
+  // For CI (design §5): guards over the source, a weakened guard since --base, the ledger's open findings when there is
+  // one. Never a capture, a browser or the network. Exit 0 clean, 1 a hit or findings at or above --fail-on, 2 usage
+  // or state.
+  const usage = m => { console.error(`nunchi check: ${m}`); process.exit(2); };
+  if (args._.length > 1) usage(`unexpected ${JSON.stringify(args._[1])} (nunchi check [--fail-on <severity>] [--sarif <file>] [--base <ref>] [--root <dir>] [--json])`);
+  for (const k of ['failOn', 'sarif', 'base', 'root']) if (k in args && (typeof args[k] !== 'string' || !args[k] || args[k].startsWith('--'))) usage(`--${k.replace(/[A-Z]/g, c => '-' + c.toLowerCase())} takes a value`);
+  if (args.failOn && !['blocker', 'high', 'medium', 'low'].includes(args.failOn)) usage('--fail-on takes blocker, high, medium or low');
+  const { runCheck } = await engine('./check.mjs');
+  const project = process.cwd();
+  const root = resolve(args.root || project);
+  const nunchiDir = resolve('.nunchi');
+  // the ledger, loaded only when this machine has one (project.mjs, as findings reads it)
+  // (the verdict's own count of what stands in the way, summary.mjs standingOf); a ledger error exits 2
+  const loadCheckLedger = async () => {
+    const led = loadLedger(nunchiDir, { root });
+    const { rows, groups } = P.ledgerView(led);
+    const { standingOf, fixNeedsOf } = await import('./summary.mjs');
+    const { latestRecords } = await import('./fix/records.mjs');
+    let fixNeeds = new Set();
+    try { fixNeeds = fixNeedsOf(latestRecords(led.st.root.dir), rows); } catch {}
+    const E = await import('./export-findings.mjs');
+    return {
+      run: latestRunOf(led.state, led.st.root.stream), groups, standing: g => standingOf(g, rows, fixNeeds) !== null,
+      results: ids => E.findingResults(E.findingsModel({ led, view: { rows: rows.filter(r => ids.has(r.group) && !r.goneAt) }, root, project, statuses: E.STATUSES })),
+    };
+  };
+  const { ledgerPresent } = await import('./check.mjs');
+  const loaded = args.failOn && ledgerPresent(project) ? await loadCheckLedger() : null;
+  let r;
+  try { r = runCheck({ project, root, failOn: args.failOn ?? null, base: args.base ?? null, sarif: !!args.sarif, version: pkg.version, ledger: loaded ? () => loaded : null }); }
+  catch (e) {
+    if (['CORRUPT', 'UNSAFE_PATH', 'BAD_ARGS', 'BAD_STATE', 'NO_LEDGER', 'GIT_UNSAFE', ...LEDGER_ERRORS].includes(e.code)) usage(e.message);
+    throw e;
+  }
+  if (args.sarif) {
+    const { writeAtomic, refuseLink } = await import('./stable.mjs');
+    const out = resolve(args.sarif);
+    try { refuseLink(out); writeAtomic(out, r.sarif.text); } catch (e) { usage(`--sarif ${out}: ${e.message}`); }
+    r.lines.push(`SARIF → ${out} (${r.sarif.kept} result${r.sarif.kept === 1 ? '' : 's'})`);
+  }
+  if (args.json) console.log(JSON.stringify({ ...r.json, ...(args.sarif ? { sarif: { ...r.json.sarif, path: resolve(args.sarif) } } : {}) }, null, 2));
+  else for (const l of r.lines) console.log(l);
+  process.exit(r.code);
+} else if (cmd === 'guard') {
+  // The built-in guards (design §5): listed, proposed as an ESLint config, and — only by the person, in their own
+  // terminal with a typed code — added, removed or re-baselined in the committed .nunchi/guards.json.
+  const G = await engine('./guards.mjs');
+  const usage = m => { console.error(`nunchi guard: ${m}`); process.exit(2); };
+  for (const k of ['add', 'remove', 'root']) if (k in args && (typeof args[k] !== 'string' || !args[k] || args[k].startsWith('--'))) usage(`--${k} takes a value`);
+  const project = process.cwd();
+  const root = resolve(args.root || project);
+  const nunchiDir = resolve('.nunchi');
+  const path = G.guardsPath(nunchiDir);
+  let doc;
+  try { doc = G.readGuards(path); } catch (e) { usage(e.message); }
+  // the colour guard's allowed set: the measured tokens of the latest run (nunchi tokens), else unavailable
+  const tokensNow = () => {
+    const id = latestRun(join(nunchiDir, 'runs'));
+    const p = id ? join(nunchiDir, 'runs', id, 'tokens.json') : null;
+    if (!p || !existsSync(p)) return null;
+    try { const t = G.tokenColours(JSON.parse(readFileSync(p, 'utf8'))); return t.colors.length ? t : null; } catch { return null; }
+  };
+  const UNAVAILABLE = 'unavailable: no tokens.json in the latest run (nunchi tokens measures them)';
+  if (args.lint) {
+    let appPkg = null;
+    try { appPkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')); } catch {}
+    const installed = name => existsSync(join(root, 'node_modules', name, 'package.json'));
+    const r = G.lintProposal({ guards: doc?.guards || [], pkg: appPkg, installed });
+    process.stdout.write(r.text);
+    for (const n of r.notes) console.log(`// ${n}`);
+    process.exit(0);
+  }
+  const changing = args.add || args.remove || args.baseline;
+  if (!changing) {
+    // read-only: what each built-in kind finds now (the agent may run this, and propose)
+    const all = G.KINDS.map(kind => {
+      const have = doc?.guards.find(g => g.kind === kind);
+      const params = have?.params || (kind === 'colour-literal' ? tokensNow() : G.defaultParams(kind));
+      return { kind, label: G.labelOf(kind, params || {}), inGuards: !!have, params, available: !!params };
+    });
+    let scan;
+    try { scan = G.scanGuards({ project, root, guards: all.filter(x => x.available).map(x => ({ kind: x.kind, params: x.params })) }); }
+    catch (e) { if (e.code === 'BAD_ARGS') usage(e.message); throw e; }
+    const cmpd = G.compareBaseline(scan.hits.filter(h => doc?.guards.some(g => g.kind === h.kind)), doc?.baseline || []);
+    const out = all.map(x => ({ ...x, hits: scan.hits.filter(h => h.kind === x.kind).length, new: cmpd.fresh.filter(h => h.kind === x.kind).length }));
+    if (args.json) { console.log(JSON.stringify({ guards: out, files: scan.files, skipped: { large: scan.large, unparsed: scan.unparsed } }, null, 2)); process.exit(0); }
+    console.log(`.nunchi/guards.json: ${doc ? `${doc.guards.length} guard(s), ${doc.baseline.reduce((n, e) => n + e.count, 0)} baselined hit(s)` : 'none yet'} · ${scan.files} file(s) read`);
+    for (const x of out) console.log(`${x.inGuards ? 'on ' : 'off'}  ${x.kind.padEnd(15)} ${x.label}${x.available ? ` — ${x.hits} hit(s) now${x.inGuards ? `, ${x.new} new` : ''}` : ` — ${UNAVAILABLE}`}`);
+    console.log('A guard is added by you: the card the board shows after a fix (nunchi open), or nunchi guard --add <kind> in your own terminal. nunchi guard --lint prints the same checks as an ESLint config to paste.');
+    process.exit(0);
+  }
+  // a person's channel only (design §5, like --approve-checks): their own terminal and a code they type back
+  if (!process.stdin.isTTY || !process.stdout.isTTY) { console.error('nunchi guard: guards are added, removed and re-baselined by a person: the card the board shows after a fix (nunchi open), or this command in your own terminal. Your AI cannot.'); process.exit(1); }
+  if ([args.add, args.remove, args.baseline].filter(Boolean).length > 1) usage('use one of --add <kind>, --remove <kind> or --baseline');
+  const kind = args.add || args.remove || null;
+  if (kind && !G.KINDS.includes(kind)) usage(`${kind} is not a built-in guard (${G.KINDS.join(', ')})`);
+  let params = null;
+  if (args.add) {
+    params = kind === 'colour-literal' ? tokensNow() : G.defaultParams(kind);
+    if (!params) { console.error(`nunchi guard: colour literals outside the measured tokens: ${UNAVAILABLE}`); process.exit(1); }
+  }
+  const what = args.add ? `add the guard ${G.labelOf(kind, params)} to .nunchi/guards.json (what it finds now becomes its baseline)`
+    : args.remove ? `remove the guard ${kind} and its baseline from .nunchi/guards.json` : 'set the baseline of .nunchi/guards.json to the hits there are now (new hits are accepted, gone ones dropped)';
+  const { randomInt } = await import('node:crypto');
+  const { createInterface } = await import('node:readline');
+  const ABC = 'ACDEFHJKMNPRTUVWXY34679';
+  const code = Array.from({ length: 4 }, () => ABC[randomInt(ABC.length)]).join('');
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise(res => { rl.on('close', () => res(null)); rl.question(`nunchi will ${what}.\nType ${code} to go ahead (anything else cancels): `, a => { res(a); rl.close(); }); });
+  if (String(answer ?? '').trim().toUpperCase() !== code) { console.error('nunchi: nothing changed (the confirmation code was not typed)'); process.exit(1); }
+  ensureGitignore(nunchiDir);
+  const st = openState(nunchiDir);
+  const { changeGuards } = await import('./guard-offer.mjs');
+  let r;
+  try {
+    r = changeGuards({ nunchiDir, stateDir: st.root.dir, change: d => (args.add ? G.addGuard(d, { project, root, kind, params })
+      : args.remove ? G.removeGuard(d, { kind }) : { doc: G.rebaseline(d, { project, root }) }) });
+  } catch (e) { if (['CORRUPT', 'UNSAFE_PATH', 'BAD_ARGS', 'LOCKED'].includes(e.code)) usage(e.message); throw e; }
+  if (args.add) console.log(r.added ? `added ${G.labelOf(kind, params)}: ${r.baselined.reduce((n, e) => n + e.count, 0)} hit(s) there now are its baseline; nunchi check fails on new ones` : 'that guard is in .nunchi/guards.json already');
+  else if (args.remove) console.log(r.removed ? `removed ${kind} and its baseline` : `${kind} was not in .nunchi/guards.json`);
+  else console.log(`baseline set: ${r.doc.baseline.reduce((n, e) => n + e.count, 0)} hit(s)`);
+  console.log('Commit .nunchi/guards.json so CI runs the same guards (nunchi check).');
+  process.exit(0);
 } else if (cmd === 'export') {
   // A static review page (spec §7): read-only, offline, byte-identical for the same run and ledger.
-  if (typeof args.html !== 'string' || !args.html || args.html.startsWith('--')) { console.error('nunchi export: use --html <dir> (writes <dir>/index.html and <dir>/img/)'); process.exit(1); }
+  if (typeof args.html !== 'string' || !args.html || args.html.startsWith('--')) { console.error('nunchi export: use --html <dir> (writes <dir>/index.html and <dir>/img/), or --format md|json|sarif'); process.exit(1); }
   const { exportHtml } = await import('./export-html.mjs');
   const dir = runDirOf(args, 'export');
   let r;

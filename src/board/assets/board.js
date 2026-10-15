@@ -343,6 +343,7 @@ function renderProgress(focus = false) {
     s.now.length ? h('ul', { class: 'now', 'aria-label': 'Now' }, s.now.map(l => h('li', null, l))) : null);
   const confirm = s.confirm.length ? confirmPanel(s.confirm) : null;
   const checks = s.checks && s.checks.requested && !s.checks.approved ? checksPanel(s.checks) : null;
+  const guards = s.guards && s.guards.rows.length ? guardsPanel(s.guards) : null;
   const since = h('section', { class: 'panel-box', 'aria-labelledby': 'h-since' }, h('h2', { id: 'h-since' }, s.since.label),
     h('ul', { class: 'facts' }, h('li', null, h('b', { class: 'good' }, String(s.since.fixed)), ' fixed'), h('li', null, h('b', null, String(s.since.new)), ' new'),
       s.since.back ? h('li', null, h('b', { class: 'warn' }, String(s.since.back)), ' came back after a fix') : null));
@@ -364,8 +365,27 @@ function renderProgress(focus = false) {
     s.fixNeedsYou ? h('p', { class: 'warn small' }, `${s.fixNeedsYou} to fix ${s.fixNeedsYou === 1 ? 'needs' : 'need'} you: ${s.fixNeedsYou === 1 ? 'its fix waits' : 'their fixes wait'} for you here, not for your AI.`) : null,
     s.warnings.length ? h('ul', { class: 'facts muted small' }, s.warnings.map(w => h('li', null, w))) : null);
   show(h('div', { id: 'progress', class: 'view' },
-    h('div', { class: 'stack' }, hero, confirm, checks, h('div', { class: 'two' }, since, health), counts)));
+    h('div', { class: 'stack' }, hero, confirm, checks, guards, h('div', { class: 'two' }, since, health), counts)));
   if (focus) focusHeading();
+}
+
+// design §5: after a verified fix of a kind with a built-in guard, one card at the end of the batch, in the design's
+// words ("Stop these coming back? `window.confirm` (fixed twice) · `href="#"`"), with an Add toggle per row. Backticks
+// mark code; every piece is set as text.
+const codeParts = text => String(text).split('`').map((p, i) => (i % 2 ? h('code', null, p) : p)).filter(p => p !== '');
+function guardsPanel(c) {
+  const row = r => {
+    const label = `guard-l-${r.kind}`, id = `guard-b-${r.kind}`;
+    const btn = h('button', { type: 'button', class: 'b', id, 'aria-pressed': r.added ? 'true' : 'false', 'aria-describedby': label }, 'Add');
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try { await api('/api/guard', { method: 'POST', body: { kind: r.kind, add: !r.added } }); await refreshSummary(); renderProgress(); d.getElementById(id)?.focus(); }
+      catch (e) { btn.disabled = false; announce(e.message); }
+    });
+    return h('li', null, h('span', { class: 'what', id: label }, ...codeParts(r.text)), btn);
+  };
+  return h('section', { class: 'panel-box', 'aria-labelledby': 'h-guards' }, h('h2', { id: 'h-guards' }, c.title),
+    h('ul', { class: 'confirm-list guard-list' }, c.rows.map(row)));
 }
 
 // design §1: dismissals your AI recorded (or that came through git) count once you confirm them, in one batch
@@ -506,7 +526,8 @@ function renderFindings(focus = false) {
     const all = h('button', { type: 'button', class: 'b b-quiet' }, `Decide all ${s.ids.length} ▸`);
     all.addEventListener('click', () => { S.selection = new Set(s.ids); S.focus = s.ids[0]; renderFindings(); announce(`${W.plural(s.ids.length, 'group')} selected: press a decision key or use the bar below`); d.getElementById(`row-${s.ids[0]}`)?.focus(); });
     return h('section', { class: 'sect', 'aria-labelledby': hid },
-      h('div', { class: 'sect-head' }, h('h2', { id: hid }, sevChip(s.severity), h('span', null, s.title || '—'), h('span', { class: 'muted small' }, W.plural(s.ids.length, 'group'))), all),
+      h('div', { class: 'sect-head' }, h('h2', { id: hid }, sevChip(s.severity), h('span', null, s.title || '—'), h('span', { class: 'muted small' }, W.plural(s.ids.length, 'group'))),
+        s.guard === 'available' ? h('span', { class: 'tag' }, W.WORDS['guard-available']) : null, all),
       h('ul', { class: 'rows', role: 'listbox', 'aria-labelledby': hid, 'aria-multiselectable': 'true' }, s.ids.map(id => L.groups[id]).filter(Boolean).map(rowEl)));
   };
   const listBox = h('div', { class: 'list-box' }, L.sections.length ? L.sections.map((s, i) => section(s, i, 's')) : h('p', { class: 'empty-note' }, 'Nothing here.'));

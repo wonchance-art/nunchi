@@ -25,6 +25,8 @@ export const WORDS = {
   hold: 'Later', held: 'Later', 'needs-human': 'Needs you', 'caused-regression': 'Broke something else — undone',
   'not-seen-budget': 'Not checked: AI budget ran out', 'tree-differs': 'Screens are from before your latest edits: tell your AI “capture again”',
   reopen: 'Reopened',
+  // design §5: a kind with ≥ 5 open places and a built-in guard nobody added (a passive chip)
+  'guard-available': 'guard available',
   // a verification whose run had fewer decoys than its claims called for: not suspect, and no double-check (verify.mjs)
   'too-few-decoys': 'too few decoys to check the checker',
 };

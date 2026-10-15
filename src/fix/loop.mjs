@@ -33,6 +33,8 @@ import { randomBytes } from 'node:crypto';
 import { probeView, probeProblems, judgeRules, judgeAi, MAX_ATTEMPTS, FLAKY, DRIFT_PIXELS } from './judge.mjs';
 import { diffPolicy, depsOf, rootCauseFiles } from './policy.mjs';
 import { fixBrief } from './brief.mjs';
+import { readGuards, guardsPath } from '../guard-kinds.mjs';
+import { guardOffer, offerLine } from '../guard-offer.mjs';
 import { runChecks as runChecksReal, compareChecks } from './run.mjs';
 import { snapshotRecordings, snapshotIntact, proveByFile, serveApp, captureProbe, recaptureScenes, measureDrift, readProbe, controlsReader, sweepProbeFiles } from './probe.mjs';
 
@@ -933,7 +935,14 @@ export function summaryFix(ctx) {
   const tail = broke ? `${broke} fix${broke === 1 ? '' : 'es'} broke something else and ${broke === 1 ? 'was' : 'were'} undone` : unseen ? `${unseen} fix${unseen === 1 ? '' : 'es'} showed something new on a screen with nothing to compare against` : 'nothing else broke';
   const head = `Fixed ${fixed} of ${n}${fixed ? ` (re-checked ${screens} screen${screens === 1 ? '' : 's'}, ${tail})` : ''}.`;
   const line = `${head}${needs.length ? ` ${needs.length} need${needs.length === 1 ? 's' : ''} you: ${needs.map(t => `'${t}'`).join(', ')} → the board (nunchi open).` : ''}${other.length ? ` ${other.length} not finished yet.` : ''}`;
-  return out(0, line, { fixed, of: n, screens, needsYou: needs, broke, open: other });
+  // design §5: after a verified fix of a kind with a built-in guard, one offer at the end of the batch; adding one is
+  // the person's (the board's card), so the line points there. A guards file that cannot be read offers nothing
+  // (nunchi check says why).
+  let offer = null;
+  try { offer = guardOffer({ stateDir: ctx.stateDir, rows: ctx.rows, doc: readGuards(guardsPath(ctx.nunchiDir)) }); } catch { offer = null; }
+  const offered = (offer?.rows || []).filter(r => !r.added);
+  const lines = [line, ...(offered.length ? [`${offerLine(offered)} → the board (nunchi open).`] : [])];
+  return out(0, lines, { fixed, of: n, screens, needsYou: needs, broke, open: other, guards: offered.map(r => ({ kind: r.kind, params: r.params, label: r.label, fixed: r.fixed })) });
 }
 export const startFix = guarded(startFixInner);
 export const checkFix = guarded(checkFixInner);

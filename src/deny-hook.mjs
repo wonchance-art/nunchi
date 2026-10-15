@@ -14,8 +14,11 @@
 //   lives in its memory only), and any `/proc/<n>/cmdline|environ|mem` (a browser's command line holds the one-time
 //   link for a moment).
 // Denied as writes (reading them is fine: they are committed files): `.nunchi/decisions/**`, `.nunchi/labels/**`,
-// `.nunchi/lenses/**`, `.nunchi/lenses.lock.json`, `.nunchi/config.json` (allowHosts is the user's to write, D10).
-// Denied commands: `nunchi … approve`, `nunchi … label` / `--label`, `nunchi fix --approve-checks` (human channels
+// `.nunchi/lenses/**`, `.nunchi/lenses.lock.json`, `.nunchi/config.json` (allowHosts is the user's to write, D10),
+// `.nunchi/guards.json` (the person's guards and their baseline, design §5: the agent may propose a guard, never write
+// or weaken one; CI's `nunchi check --base` catches a weakening that slips past).
+// Denied commands: `nunchi … approve`, `nunchi … label` / `--label`, `nunchi fix --approve-checks`, `nunchi guard --add` /
+// `--remove` / `--baseline` (human channels
 // only), nunchi (`npx nunchi@<version>` too) under a pseudo-terminal (`script`, `unbuffer`, `expect`, tmux, screen,
 // dtach, abduco, zellij, a pty module): that would pass for the person's own terminal (the `cli-tty` channel); and
 // the board's script run directly, or asked for its link (`--link-to-parent`).
@@ -144,6 +147,7 @@ const WRITE_DENY = [
   [/(^|\/)\.nunchi\/labels(\/|$)/, 'labels are made by a person in the board (nunchi open --label)'],
   [/(^|\/)\.nunchi\/lenses(\/|$)|(^|\/)\.nunchi\/lenses\.lock\.json$/, 'lens packs are approved by the person; edit them only when they ask, in their own editor'],
   [/(^|\/)\.nunchi\/config\.json$/, '.nunchi/config.json (allowHosts) is written by the user, never by the AI'],
+  [/(^|\/)\.nunchi\/guards\.json$/, '.nunchi/guards.json is the person\'s: guards are added in the board\'s card after a fix or with nunchi guard --add in their own terminal (you may propose one: nunchi guard, nunchi guard --lint)'],
 ];
 export function pathRule(p, prot, { write = false } = {}) {
   const abs = isAbsolute(p) ? resolve(p) : resolve(prot.cwd, p);
@@ -522,6 +526,7 @@ export function bashRule(command, prot, { depth = 0, cwd: start = prot.cwd } = {
     if (/\b(approve)\b/.test(flat) && /(nunchi|cli\.mjs)\b[^;&|\n]*\sapprove\b/.test(flat)) return 'approving decisions is the person\'s (the board, or nunchi approve in their own terminal)';
     if (/(nunchi|cli\.mjs)\b[^;&|\n]*\s(label\b|--label\b)/.test(flat)) return 'labelling is done by a person in the board (they run nunchi open --label themselves)';
     if (/--approve-checks\b/.test(flat)) return 'check scripts are approved by the person in the board';
+    if (/(nunchi|cli\.mjs)\b[^;&|\n]*\sguard\b[^;&|\n]*\s--(add|remove|baseline)\b/.test(flat)) return 'guards are added, removed and re-baselined by the person (the board\'s card after a fix, or nunchi guard in their own terminal); you may propose one: nunchi guard, nunchi guard --lint';
     if (PTY.test(flat)) return 'running nunchi under a pseudo-terminal would pass for the person\'s own terminal';
     if (KEY_HOME.test(flat)) return 'nunchi keeps its answer keys under your state folder; moving it for one command would put them where the AI can read them';
   }
