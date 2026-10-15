@@ -27,6 +27,7 @@ import { aiIdentity, ariaRoleName } from './ai-identity.mjs';
 import { SEVERITIES } from './lenses.mjs';
 import { recheckInput, recordRecheck } from './recheck.mjs';
 import { verdictsFromKey } from './verify.mjs';
+import { agentList } from './agents.mjs';
 
 const RUN_ID = /^\d{4,}$/;
 const HEX16 = /^[0-9a-f]{16}$/;
@@ -99,6 +100,10 @@ export function foldFinding(f, scene = null, { suspect = false, src = null } = {
     // a run with too few decoys to check the checker: its verdict is no double-check (verify.mjs)
     ...(judged && !v?.suspect && !suspect && v?.tooFewDecoys === true ? { tooFewDecoys: true } : {}),
     sceneHash: scene ? { top: str(scene.top), full: str(scene.full), textHash: str(scene.textHash), src: str(src) } : null,
+    // who claimed it, as declared (M6: hunt answers per agent); a name that is not one is left out
+    ...(agentList(f.agents).length ? { agents: agentList(f.agents) } : {}),
+    // another agent claimed the same defect more severe: what protects it (never what is shown or verified)
+    ...(SEVERITIES.includes(f.protect) ? { protectSeverity: f.protect } : {}),
   };
 }
 

@@ -256,9 +256,11 @@ export function recordRecheck({ key, packets, verdicts }) {
 // mirrors are replaced. `runsDir` holds the runs the scenes come from (the old evidence may be in an earlier run).
 export function writeRecheckMirror(runDir, runsDir, mirror) {
   const dir = join(runDir, 'recheck');
+  // `runsDir`: the runs folder, or run id → its folder (the fix loop's P0 may be another worktree's, M6)
+  const runFolder = run => (typeof runsDir === 'function' ? runsDir(run) : join(runsDir, run));
   if (existsSync(dir)) for (const n of readdirSync(dir)) if (ALIAS.test(n)) rmSync(join(dir, n), { recursive: true, force: true });
   for (const m of mirror) {
-    const from = sceneDir(join(runsDir, m.run), m.scene);
+    const from = sceneDir(runFolder(m.run), m.scene);
     if (!from || !/^\d{4,}$/.test(m.run) || !existsSync(from)) continue;
     privateDir(join(dir, m.alias));                                  // 0700, like the run it mirrors (D12)
     for (const n of RECHECK_FILES) {

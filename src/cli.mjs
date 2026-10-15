@@ -9,11 +9,13 @@ import { startRun, finishRun, gcRuns, latestRun, latestSweep, PROGRESS_FILE, wor
 import { baseUrlRefusal } from './network.mjs';
 import { codeNavigations } from './flow.mjs';
 import { readDecisions, approvalKey, buildDecision, view, DECISIONS, NOT_LOOKED_RUNS, STALE_HUNTS, latestRunOf, latestSweepOf } from './ledger.mjs';
-import { ensureStateDir, writeKey, readKey, removeKey, removeKeys, keyPath } from './state.mjs';
+import { ensureStateDir, writeKey, readKey, removeKey, removeKeys, keyPath, peekKey } from './state.mjs';
 import { runIdentity, routeHashes } from './ai-fold.mjs';
 import { withLock } from './stable.mjs';
 import * as P from './project.mjs';
 import { LEDGER_ERRORS } from './project.mjs';
+import { agentList } from './agents.mjs';
+import { AGENT_WORDS } from './board/shared.mjs';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -127,16 +129,19 @@ Usage:
   nunchi login --url <base> [--path /login] [--out .nunchi/auth.json]
                                             open a browser window, sign in once with a test account,
                                             save the login for signed-in scenes
-  nunchi hunt --plan [--run <id>] [--lens L1,L6] [--budget <tokens>|all] [--json]
+  nunchi hunt --plan [--run <id>] [--lens L1,L6] [--budget <tokens>|all] [--agent <name>] [--vendor <name>] [--json]
                                             Cut a run into AI-lens work units (1–3 scenes × 1 lens + a reference
                                             scene), estimate tokens, write hunt-plan.json into the run.
                                             Units over the budget (default 400000 tokens, normal screens
-                                            first; all = no cap) are listed as not seen: budget
+                                            first; all = no cap) are listed as not seen: budget. The board shows
+                                            the hunt in progress under the agent and vendor declared
   nunchi hunt --record <answers.json|dir> [--run <id>] [--root <dir>] [--json]
                                             Check the hunter's answers (every item answered, every defect
                                             grounded in a selector of the scene or a file:line under --root),
                                             write ai-findings.json and coverage.json into the run, and fold the
-                                            hunt into the ledger (claims not double-checked yet; screens it saw)
+                                            hunt into the ledger (claims not double-checked yet; screens it saw).
+                                            Each answers file may say "agent" and "vendor": every agent's latest
+                                            answers stand side by side
   nunchi export --html <dir> [--run <id>] [--inline] [--json]
                                             A static review page of one run and the ledger: <dir>/index.html plus
                                             <dir>/img/ (screenshots, copied). --inline puts the images inside
@@ -282,11 +287,12 @@ const loadLedger = (nunchiDir, { root } = {}) => ledgerGuard(() => P.loadLedger(
 const runLock = (runDir, fn) => withLock(join(runDir, 'run-files'), fn, { timeoutMs: 15000 });
 // Folding a run's AI findings or re-check verdicts after they were recorded: a ledger that cannot be brought up to
 // date only warns (the verdicts are in the run; the next ledger command folds them).
-// `quiet`: a run that may not fold is not said (the hunt: an --out folder is hunted and verified before it would be).
+// `quiet`: a folder without a run id is not said (the hunt: an --out folder is hunted and verified before it would be);
+// a run of another kind always is (design §7: a fix probe, on a fix branch, never folds as a sweep, M6).
 function foldAfterRecord(runDir, what, root, { quiet = false } = {}) {
   const who = runIdentity(runDir);
   const nunchiDir = resolve('.nunchi');
-  if (who.why) { if (!quiet) console.error(`nunchi: ${what} not folded into the ledger: ${who.why}`); return false; }
+  if (who.why) { if (!quiet || who.kind) console.error(`nunchi: ${what} not folded into the ledger: ${who.why}`); return false; }
   if (resolve(dirname(runDir)) !== join(nunchiDir, 'runs')) { if (!quiet) console.error(`nunchi: ${what} not folded into the ledger: run ${who.id} is not in this project's .nunchi/runs`); return false; }
   try {
     const st = openState(nunchiDir);
@@ -605,8 +611,9 @@ if (cmd === 'setup') {
     const kinds = [];
     for (const g of shown) {
       let k = kinds.find(x => x.rule === g.rule);
-      if (!k) kinds.push((k = { rule: g.rule, lens: g.lens, source: g.source, title: g.source === 'ai' ? `AI · ${g.rule}` : g.title, severity: g.severity, groups: 0, routes: new Set(), places: 0 }));
+      if (!k) kinds.push((k = { rule: g.rule, lens: g.lens, source: g.source, title: g.source === 'ai' ? `AI · ${g.rule}` : g.title, severity: g.severity, groups: 0, routes: new Set(), places: 0, ...(g.source === 'ai' ? { agents: [] } : {}) }));
       k.groups++; k.places += g.places; g.routes.forEach(r => k.routes.add(r));
+      if (k.agents) k.agents = agentList([...k.agents, ...(g.agents || [])]);
       if (SEV[g.severity] < SEV[k.severity]) k.severity = g.severity;
     }
     kinds.sort((a, b) => SEV[a.severity] - SEV[b.severity] || b.routes.size - a.routes.size || (a.rule < b.rule ? -1 : 1));
@@ -652,7 +659,8 @@ if (cmd === 'setup') {
       const stale = rows.filter(r => r.notLookedAt).length;
       if (stale) console.log(`${stale} open defect(s) not looked at again for ${NOT_LOOKED_RUNS}+ runs (their screens, states or viewports were not captured like for like): they cannot be marked fixed until a run covers them`);
       if (!args.rule) {
-        for (const k of kinds) console.log(`${k.severity.padEnd(7)} ${k.title} — ${k.groups} group(s) on ${k.routes.size || 'no'} screen(s), ${k.places} place(s)${k.guard ? ` · ${k.guard}` : ''}   nunchi findings --rule ${k.rule}`);
+        // several agents' groups say so (M6, the mock-up approved 2026-10-15 KST): "(found by 2 agents, as declared)"
+        for (const k of kinds) console.log(`${k.severity.padEnd(7)} ${k.title} — ${k.groups} group(s)${k.agents?.length > 1 ? ` (${AGENT_WORDS.agentsFound(k.agents.length)})` : ''} on ${k.routes.size || 'no'} screen(s), ${k.places} place(s)${k.guard ? ` · ${k.guard}` : ''}   nunchi findings --rule ${k.rule}`);
         if (collapsed.length) console.log(`AI, not double-checked: ${collapsed.length} group(s) (claimed only, or a verdict that was suspect, rejected or insufficient, or from a run with too few decoys to check the checker) — nunchi findings --all lists them`);
         const fewDecoys = new Set(rows.filter(r => r.source === 'ai' && !r.goneAt && r.verification?.tooFewDecoys === true).map(r => r.group)).size;
         if (fewDecoys) console.log(`${fewDecoys} AI group(s) verified in a run with too few decoys to check the checker: not suspect, and not double-checked either`);
@@ -764,7 +772,11 @@ if (cmd === 'setup') {
 } else if (cmd === 'hunt') {
   // AI lenses, engine side (spec §4): the plan and the record are deterministic; the judgement is the skill's.
   const { loadLenses } = await import('./lenses.mjs');
-  const { planHuntWithKey, writeHuntMirror, recordHunt, writeRecord, readAnswers, formatPlan, formatRecord } = await import('./hunt.mjs');
+  const { planHuntWithKey, writeHuntMirror, writeRecord, readAnswers, formatPlan, formatRecord } = await import('./hunt.mjs');
+  const { recordHunts, readAgentRecords, writeAgentRecords, formatAgents } = await import('./hunt-agents.mjs');
+  const { noteHunt, huntProgress, huntInTheWay, huntLine } = await import('./activity.mjs');
+  const V = await import('./verify.mjs');
+  const { declaredName, vendorOnly } = await import('./agents.mjs');
   const { writeStable } = await import('./stable.mjs');
   const fail = (msg, code = 1) => { console.error(`nunchi hunt: ${msg}`); process.exit(code); };
   if (!!args.plan === !!args.record) fail('use either --plan or --record <answers.json>');
@@ -783,6 +795,14 @@ if (cmd === 'setup') {
   try { kindHere = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8')).kind ?? null; } catch {}
   if (kindHere === 'quick') fail(`run ${runId ?? runDir} is a quick first look (rule lenses only): the AI lenses hunt a full check (nunchi capture --url <your local server>)`);
   const planPath = join(runDir, 'hunt-plan.json');
+  // the board's "Now" (design §7): a hunt in progress, per worktree, run and declared agent; only for a run of this
+  // project's runs folder. It never fails a hunt: a state that cannot be written is said and the hunt goes on.
+  const ownRun = !!runId && resolve(dirname(runDir)) === runsDir;
+  const activity = fn => {
+    if (!ownRun) return null;
+    try { return fn(P.openState(resolve('.nunchi'), { warn })); }
+    catch (e) { if (!LEDGER_ERRORS.includes(e.code) && e.code !== 'EACCES' && e.code !== 'EPERM') throw e; console.error(`nunchi: the board will not show this hunt in progress (${e.message})`); return null; }
+  };
   try {
     if (args.plan) {
       const { DEFAULT_BUDGET } = await import('./hunt.mjs');
@@ -792,6 +812,17 @@ if (cmd === 'setup') {
       const { lenses } = loadLenses({ root: process.cwd() });
       const lensIds = args.lens ? args.lens.split(',').map(x => x.trim().toUpperCase()).filter(Boolean) : null;
       const { plan, key } = planHuntWithKey({ runDir, lenses, lensIds, budget, budgetDefault, runId });
+      const me = declaredName(args.agent, '--agent'), myVendor = declaredName(args.vendor, '--vendor');
+      if (me.error || myVendor.error) fail(me.error || myVendor.error);
+      const alone = vendorOnly(me.name, myVendor.name, '--agent');
+      if (alone) fail(`--vendor: ${alone}`);
+      // another agent hunting this run with the plan on disk would be left answering an old one: one plan per run
+      let current = null;
+      try { current = JSON.parse(readFileSync(planPath, 'utf8')).id ?? null; } catch {}
+      const way = activity(st => huntInTheWay(st.root.dir, { stream: st.root.stream, run: runId, agent: me.name, plan: plan.id, current }));
+      // the name as declared (M6 review): said so
+      const theirs = declaredName(way?.hunt.declaredAgent).name;
+      if (way) fail(`${theirs ? `${theirs} (as declared)` : 'Another AI'} is hunting this run right now (${huntLine(way.hunt).split(' · ').slice(1).join(' · ')}) with the plan in hunt-plan.json (plan ${current}). Answer that plan's units (agents hunting one run share its plan), or wait until it is done: a new plan would leave its answers for an old one.`);
       runLock(runDir, () => {
         writeStable(planPath, plan);
         // a run with canaries: scene aliases, their answer key (kept outside the project, design §2.2) and the
@@ -799,6 +830,7 @@ if (cmd === 'setup') {
         if (key) writeKey(runDir, 'hunt-key.json', key); else removeKey(runDir, 'hunt-key.json');
         writeHuntMirror(runDir, key);
       });
+      activity(st => { let records = []; try { records = readAgentRecords(runDir); } catch {} noteHunt(st.root.dir, { agent: me.name, vendor: myVendor.name, stream: st.root.stream, run: runId, plan: plan.id, ...huntProgress(plan, records, me.name), generation: st.files.generation, adopt: !records.some(x => !x.agent) }); });
       console.log(args.json ? JSON.stringify(plan, null, 2) : formatPlan(plan, planPath));
     } else {
       if (!existsSync(planPath)) fail(`no hunt-plan.json in ${runDir}: run hunt --plan first`);
@@ -810,14 +842,22 @@ if (cmd === 'setup') {
         // a plan made for a run with canaries names scenes by alias: without its key nothing can be mapped back
         const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
         if (!key && (manifest.scenes || []).some(s => s.canary !== undefined)) throw Object.assign(new Error(`the answer key of this plan (hunt-key.json) is missing from ${dirname(keyPath(runDir, 'hunt-key.json'))}: run hunt --plan again`), { code: 'STALE_ANSWERS' });
-        const r = recordHunt({ runDir, plan, key, answers: readAnswers(answersPath), root: resolve(args.root || process.cwd()) });
-        writeRecord(runDir, r);
+        // answers per agent (design §7): each agent's latest record stands beside the others'; the claims the verify key
+        // holds verdicts for speak for their defects, and keep their statuses in ai-findings.json (M6 review)
+        const { backedClaims, verdictsFromKey } = V;
+        const vkey = peekKey(runDir, 'verify-key.json');
+        const r = recordHunts({ runDir, plan, key, answers: readAnswers(answersPath), root: resolve(args.root || process.cwd()), prior: readAgentRecords(runDir), backed: backedClaims(vkey) });
+        writeAgentRecords(runDir, r.records);
+        writeRecord(runDir, vkey ? { ...r, findings: verdictsFromKey(r.findings, vkey) } : r);
         return r;
       });
       // the hunt into the ledger as (run, "ai"): its claims (not double-checked yet) and the cells it saw, so a hunt
       // that claims nothing counts towards staleness too (design §2.2, §2.4)
       foldAfterRecord(runDir, 'the AI hunt', args.root || process.cwd(), { quiet: true });
-      console.log(args.json ? JSON.stringify({ plan: plan.id, run: runId, summary: result.coverage.summary, findings: result.findings.length, rejected: result.rejected }, null, 2) : formatRecord(result, runDir));
+      // a plan made without a name becomes the hunt of the agent whose answers name it, while the undeclared agent holds none
+      const adopt = !result.records.some(x => !x.agent);
+      activity(st => { for (const a of result.agents) noteHunt(st.root.dir, { agent: a.agent, vendor: a.vendor, stream: st.root.stream, run: runId, plan: plan.id, ...huntProgress(plan, result.records, a.agent), generation: st.files.generation, adopt }); });
+      console.log(args.json ? JSON.stringify({ plan: plan.id, run: runId, summary: result.coverage.summary, findings: result.findings.length, rejected: result.rejected, agents: result.coverage.agents ?? null }, null, 2) : [formatRecord(result, runDir), formatAgents(result)].filter(Boolean).join('\n'));
     }
   } catch (e) {
     if (['BAD_LENS', 'LENS_HASH_MISMATCH', 'BAD_ARGS', 'BAD_RUN', 'BAD_ANSWERS', 'STALE_ANSWERS', 'CORRUPT', 'LOCKED', 'UNSAFE_PATH'].includes(e.code)) fail(e.message, 2);
@@ -859,6 +899,10 @@ if (cmd === 'setup') {
   const known = new Set(manifest.scenes.map(s => s.id));
   const canaryScenes = new Set(manifest.scenes.filter(s => s.canary !== undefined).map(s => s.id));
   const guard = fn => { try { return runLock(dir, fn); } catch (e) { if (!['CORRUPT', 'LOCKED', 'UNSAFE_PATH'].includes(e.code)) throw e; console.error('nunchi verify: ' + e.message); process.exit(2); } };
+  // the verifier's vendor, as declared (a name like any agent's: one line, no control characters, M6 review)
+  const { declaredName } = await import('./agents.mjs');
+  const vendor = declaredName(args.vendor, '--vendor');
+  if (vendor.error) { console.error(`nunchi verify: ${vendor.error}`); process.exit(1); }
   if (args.plan) {
     const controlsOf = scene => (known.has(scene) && existsSync(join(dir, scene, 'controls.json')) ? readJson(join(dir, scene, 'controls.json')) : null);
     const filesOf = scene => (known.has(scene) ? ['top.jpg', 'full.jpg', 'aria.yml', 'text.txt', 'controls.json', 'styles.json', 'links.json', 'measure.json'].filter(f => existsSync(join(dir, scene, f))).map(f => `${scene}/${f}`) : []);
@@ -898,12 +942,12 @@ if (cmd === 'setup') {
       const given = readJson(resolve(args.record));
       const list = Array.isArray(given) ? given : given?.verdicts;
       const { recorded: _replaced, ...plan } = key;
-      const res = V.recordVerdicts({ findings, key, verdicts: given, vendor: args.vendor || null });
+      const res = V.recordVerdicts({ findings, key, verdicts: given, vendor: vendor.name });
       if (res.problems.length) return res;
       // the verdicts go into the key first (outside the project): what the ledger folds; ai-findings.json and
       // verify.json are copies for people and the review page
       const kept = list.map(v => ({ packet: v.packet, verdict: v.verdict, ...(v.severity != null ? { severity: v.severity } : {}), reason: v.reason.trim() }));
-      writeKey(dir, 'verify-key.json', { ...plan, recorded: { verdicts: kept, vendor: args.vendor || null } });
+      writeKey(dir, 'verify-key.json', { ...plan, recorded: { verdicts: kept, vendor: vendor.name } });
       writeStable(aiPath, Array.isArray(doc) ? res.findings : { ...doc, findings: res.findings });
       writeStable(join(dir, 'verify.json'), res.verify);
       return res;
@@ -914,7 +958,8 @@ if (cmd === 'setup') {
     if (args.json) console.log(JSON.stringify({ ...r.verify, folded }, null, 2));
     else {
       const c = r.verify.claims, d = r.verify.decoys;
-      console.log(`verified by ${r.verify.verifier.label}${r.verify.verifier.vendor ? ` (${r.verify.verifier.vendor})` : ''}: confirmed ${c.confirmed} · rejected ${c.rejected} · insufficient ${c.insufficient}${c.unanswered ? ` · unanswered ${c.unanswered}` : ''}`);
+      const w = r.verify.verifier, apart = [w.sameVendor ? `the ${w.sameVendor} claim(s) its own vendor hunted` : null, w.undeclaredVendor ? `the ${w.undeclaredVendor} claim(s) whose hunters did not declare a vendor` : null].filter(Boolean);
+      console.log(`verified by ${w.label}${w.vendor ? ` (${w.vendor}, as declared)` : ''}${apart.length ? `, a same-model check for ${apart.join(' and ')}` : ''}: confirmed ${c.confirmed} · rejected ${c.rejected} · insufficient ${c.insufficient}${c.unanswered ? ` · unanswered ${c.unanswered}` : ''}`);
       console.log(`decoys passed through: ${d.passedThrough}/${d.answered}${d.answered < d.total ? ` (${d.total - d.answered} unanswered)` : ''}`);
       if (r.verify.suspect) console.log(`SUSPECT: ${r.verify.suspectReason}. This run's verifications are marked suspect; verify again in a fresh context (verify --plan --again).`);
       else if (r.verify.outcome === 'too-few-decoys') console.log(`NOT DOUBLE-CHECKED: ${r.verify.tooFewDecoys}. The verdicts are recorded, but they count as no double-check: \`findings\` keeps these AI findings with those not double-checked. A run that captures more screens offers more decoys.`);

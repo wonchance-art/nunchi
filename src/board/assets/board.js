@@ -389,7 +389,7 @@ function renderProgress(focus = false) {
     h('div', { class: 'hero-top' }, h('div', null, h('p', { class: 'eyebrow' }, 'Ready to ship?'), h('h1', { id: 'h-progress' }, s.verdict.text)), decideBtn),
     handoff, s.treeChanged ? h('p', { class: 'banner banner-warn', role: 'note' }, W.WORDS['tree-differs']) : null, h('div', { class: 'tiles' }, tiles),
     h('p', { class: 'muted small' }, 'Open findings by severity: groups still open, to fix, or held for later. A group is one defect, however many screens show it.'),
-    s.now.length ? h('ul', { class: 'now', 'aria-label': 'Now' }, s.now.map(l => h('li', null, l))) : null);
+    s.now.length ? h('ul', { class: 'now', 'aria-label': 'Now' }, s.now.map((l, i) => h('li', { title: s.nowTitles?.[i] || null }, l))) : null);
   const confirm = s.confirm.length ? confirmPanel(s.confirm) : null;
   const checks = s.checks && s.checks.requested && !s.checks.approved ? checksPanel(s.checks) : null;
   const guards = s.guards && s.guards.rows.length ? guardsPanel(s.guards) : null;
@@ -714,14 +714,19 @@ async function undo() {
   const u = S.undo;
   if (!u) return announce('Nothing to undo');
   hideToast();
+  // where the person was when they pressed Z: the answer takes them to what it reopened only if they are still there.
+  // One who moved on meanwhile keeps their place, so a decision key pressed next acts on the row they chose, never on
+  // one the answer moved them to (CI macOS, 2026-10-15 KST: X dismissed the reopened row instead of the blocker)
+  const from = { hash: location.hash, focus: S.focus };
   try { await api('/api/undo', { method: 'POST', body: { decisions: u.decisions } }); }
   catch (e) {
     if (e.status === 409) { announce('Not undone: it was decided again since'); await loadList(); return renderFindings(true); }
     return announce(`Not undone: ${e.message}`);
   }
   for (const id of u.ids) { const g = S.list?.groups[id]; if (g) S.list.groups[id] = { ...g, status: 'open', statuses: { open: 1 }, decision: null }; }
-  if (S.route.view === 'findings') { updateRowsInPlace(); setFocus(u.ids[0]); }
-  else if (S.route.view === 'detail') go('#/finding/' + u.ids[0]);       // back to the finding it reopened, its heading focused
+  const stayed = location.hash === from.hash && S.focus === from.focus;
+  if (S.route.view === 'findings') { updateRowsInPlace(); if (stayed) setFocus(u.ids[0]); }
+  else if (S.route.view === 'detail' && stayed) go('#/finding/' + u.ids[0]);       // back to the finding it reopened, its heading focused
   announce(`Undone: ${W.plural(u.ids.length, 'group')} back to open`);
   toast('Undone · back to open', null);
 }
@@ -872,7 +877,8 @@ function renderDetail(focus = false) {
     decision ? [h('dt', null, 'Decision'), h('dd', null, `${W.decidedText(decision.decision, decision.reason)} · ${decision.by || ''} · ${when(decision.at)}`, decision.channelText ? h('span', { class: decision.human ? 'muted' : 'warn' }, ` · ${decision.channelText}`) : null)] : null,
     g.notes.map(n => [h('dt', null, 'Note'), h('dd', { class: 'warn' }, n)]),
     g.notLookedAt ? [h('dt', null, 'Looked at'), h('dd', { class: 'warn' }, `Not looked at since run ${g.notLookedAt}: no run since has captured every screen it was on, so it cannot be marked fixed.`)] : null,
-    g.verification ? [h('dt', null, 'Reviewer'), h('dd', null, `${g.verification.status}${g.verification.by ? ` · ${g.verification.by}` : ''}${g.verification.suspect ? ' · suspect' : ''}${g.verification.tooFewDecoys ? ` · ${W.WORDS['too-few-decoys']}: not a double-check` : ''}`)] : null,
+    g.verification ? [h('dt', null, 'Reviewer'), h('dd', null, W.reviewerText(g.verification))] : null,
+    g.agents?.length ? [h('dt', null, 'Found by'), h('dd', null, W.foundByText(g.agents))] : null,
     // a fix that landed is undone by the AI (`fix --undo`): the sentence to say (design §3.4 "Undo and reopen")
     g.fix?.landed && !UNDO_ON_CARD.has(g.fix.needs) ? [h('dt', null, 'Fix'), h('dd', null, W.FIX_WORDS.landed(g.fix.commit), ' ', h('code', null, W.FIX_WORDS.undoSay(g.kindTitle, g.id)), ' ', copyButton(W.FIX_WORDS.undoSay(g.kindTitle, g.id)))] : null);
   const evidence = h('details', { class: 'evidence' }, h('summary', null, 'Evidence details'), h('dl', { class: 'facts-dl' },

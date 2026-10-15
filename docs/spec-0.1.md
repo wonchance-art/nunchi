@@ -687,8 +687,9 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   packet → `status` and `verification` on each finding in `ai-findings.json` (confirmed takes the corrected
   severity); `verify.json` has counts, decoy pass-through (confirmed decoys ÷ answered decoys) and `suspect`
   when it is above 10% or no decoy was answered (then every verification of the run carries `suspect: true`).
-  The verifier is recorded as *same-model check* unless `--vendor` names another vendor; nothing is sent
-  anywhere. A plan refuses verdicts once the claims it was built from changed.
+  The verifier is recorded as *same-model check* unless `--vendor` names another vendor (since M6, another than
+  every vendor the claim's hunters declared, §5.2); nothing is sent anywhere. A plan refuses verdicts once the
+  claims it was built from changed.
 - *M1 (2026-10-14 KST, design 0.1-c §2.2):*
   - **Fewer decoys than planned is no double-check.** The key records `decoysPlanned` (max(3, ⌈n/4⌉) for n claims)
     and `verify.json` says it too, so a run with no decoy target can no longer pass unchecked. *Changed (review of PR
@@ -1169,8 +1170,9 @@ else is derived from those, the same whatever order the folds come in:
   an open item's status is `stale` (shown apart; still decidable; not re-checked unless decided *fix*). A claim
   makes it open again. `lastHunted` and `silentHunts` are on the item.
 - *Needs you:* a re-check that said `insufficient` and nothing still there (`needsYou: {reason, run}`).
-- *Not done yet:* a different vendor's verifier labelled `cross-vendor` on items (recorded as `by`, M6 for several
-  agents); a lock per person for recordings (their saves are atomic since M1a). (the board's live view of `generation` came with M2.)
+- *Not done yet:* a lock per person for recordings (their saves are atomic since M1a). (The board's live view of
+  `generation` came with M2; a different vendor's verifier labelled `cross-vendor` on items, recorded as `by`, and AI
+  items from several agents came with M6, §5.2.)
 - *Answers name `evidence.file` (M3, 2026-10-15 KST, design §2.5).* A hunter grounds a defect in the source with
   `"evidence": {"file": "app/tasks.tsx", "line": 2}`, the shape recorded findings and fix records already carry
   (`source` on a finding means `rule` or `ai`). An answer written before says `"source": "app/tasks.tsx:2"`: it is read
@@ -1181,6 +1183,193 @@ else is derived from those, the same whatever order the folds come in:
 - *Measured (2026-10-14 21:24 KST, after M1):* Pebble `node bench/run.mjs --twice` is unchanged: rule recall 34/34,
   0 false positives on 8 clean scenes, determinism identical (1,140 files), fingerprints 100% (52/52), 152 s per
   capture. Rule fingerprints do not move (the AI recipe is gated on `source: "ai"`).
+
+### 5.2 Several agents at once (built 2026-10-15 KST, design 0.1-c §7, M6)
+
+M3 built the claims (§6.2). M6 builds the rest of design §7: hunt answers per agent, one item per fingerprint whoever
+claimed it, cross-vendor verdicts, the board's activity, the per-worktree URL rules, and stress tests of all of it.
+Agents and vendors are declared, never checked: claims and answers coordinate cooperating agents, they do not stop a
+malicious one (design §1).
+
+**Hunt answers per agent** (`src/hunt-agents.mjs`, `src/agents.mjs`).
+- An answers file says who wrote it in its header: `{"plan", "agent", "vendor", "units"}` (a unit answer still refuses
+  unknown keys, `agent` included). A declared name is one line of at most 40 characters without control characters
+  (C0, C1, bidi marks, line separators), its whitespace collapsed, compared without regard to case: everywhere a
+  name is given (`hunt --agent/--vendor`, `fix --agent/--vendor`, `verify --vendor`: one that is no name is refused)
+  or compared (a claim's refusal takes "codex" and "Codex" for one agent, M6 review). A vendor without
+  an agent names no one (two agents of one vendor would share one record, M6 review): a header with one is refused, as
+  is `hunt --plan --vendor` without `--agent` ("… a vendor without an agent: name the agent too (--agent), so two
+  agents of one vendor keep answers of their own"). A file whose header holds anything else is refused, said in
+  `rejected` ("answers file N: …; its answers were not used"); a call with no readable file records nothing (exit 2).
+  A file without a header is the undeclared agent's.
+- The run keeps each agent's latest record (`hunt-agents.json`: per agent the plan, the findings, the rejected answers
+  and the cells), and `hunt --record` makes `ai-findings.json` and `coverage.json` from all of them:
+  - *a re-hunt replaces answers within the same agent only*: in one call a later file replaces a unit's earlier answer
+    only when both files are the same agent's, and a call replaces only the records of the agents it holds answers of;
+  - *a cell is seen when any agent answered its unit completely*; otherwise its reason is the most telling one
+    (incomplete, canary missed, not answered, then the plan's own);
+  - *the same defect* (rule, scene, element, file:line) claimed by several agents is one finding with
+    `agents: [{agent, vendor}]`, so the verifier gets one packet for it; the claim the verify key holds a verdict on
+    speaks for it (its wording, severity and status kept in `ai-findings.json`), else the first agent's, and a more
+    severe claim of another agent only raises what protects it (`protect`, never what is shown);
+  - rejected answers say their agent; `coverage.json` lists each agent's part (`agents`: units of the plan it saw,
+    the plan it answered), and `hunt --record` says it in one line: "by agent, as declared: Claude Code (Anthropic)
+    20/40 units seen · Codex (OpenAI) 12/40 units seen (recorded now)".
+- *Migration.* A run only the undeclared agent hunted records exactly what it recorded before (no `hunt-agents.json`,
+  no `agents`; a test pins it). A run recorded before M6 (`ai-findings.json` and `coverage.json`, no
+  `hunt-agents.json`) is taken as the undeclared agent's record, its findings as claimed (verdicts are the verify
+  key's, §4), so another agent's answers are added to it, never written over it. A `hunt-agents.json` that cannot be
+  read is an error (exit 2), never "no other agent".
+- Agents hunting one run share its plan (one `hunt-plan.json` per run). `hunt --plan` that would replace the plan
+  another agent is hunting right now is refused: "Codex (as declared) is hunting this run right now (AI review L9 ·
+  12/40 units · 3 min) with the plan in hunt-plan.json (plan …). Answer that plan's units (agents hunting one run share
+  its plan), or wait until it is done: a new plan would leave its answers for an old one." The same plan, or the same
+  agent, goes on.
+
+**One item per fingerprint, whoever claimed it** (`src/ledger.mjs`).
+- The same fingerprint from two agents, in one run or in two worktrees, is one item with `agents` (every agent of a
+  claim that still stands, as declared); rows and groups carry them (`findings --json`).
+- *Shown* (the mock-up the owner approved 2026-10-15 KST; the words in the one strings table, `AGENT_WORDS`,
+  `reviewerText` and `foundByText` in `src/board/shared.mjs`):
+  - Detail of an AI group, two rows of its facts list: `Reviewer   confirmed · cross-vendor (OpenAI, as declared)`,
+    the verdict word (confirmed, rejected, insufficient, or not double-checked for a claim), then `cross-vendor
+    (<vendor>, as declared)` only when the ledger labels the verdict cross-vendor (below), else `same model`, then
+    suspect or too few decoys as before; and `Found by   Claude Code (Anthropic) and Codex (OpenAI), as declared`
+    (one agent: `Codex (OpenAI), as declared`; a vendor not known: the name only). Names are clipped to 40
+    characters and shown as text.
+  - `nunchi findings`, a kind's line: `AI · L9.destructive-without-confirm — 2 group(s) (found by 2 agents, as
+    declared) on 3 screen(s), 4 place(s)`, the parenthetical only when more than one declared agent found the kind's
+    groups (the line's own words, `group(s)` and the screens, are the ones it had).
+  - Tested with two agents, one agent, cross-vendor, same vendor and no vendor, the board in one `page.evaluate`
+    (`test/board-agents.test.mjs`).
+- *Folds commute.* With two agents folding at once, one run's fold can land before or after another's, and the
+  ledger must not depend on it. It did: the `foldAi` before M6 gave three different ledgers for one set of folds folded in
+  three orders (found while writing the stress test). Now:
+  - silent hunts (staleness, §5.1) are derived from what each AI fold's hunt saw (`seen` on its fold entry, as
+    `lens|route|cell`), so a hunt folded before the claim it did not repeat still counts; a fold written before M6
+    keeps the silent hunts it gave;
+  - a verdict folded before any claim of its fingerprint (rejected or insufficient only), and a re-check or a fix
+    probe's re-check of a fingerprint no hunt claims right now, waits *dormant* (`dormant` in the ledger, never shown)
+    and joins the item when a claim comes, as it would have the other way round; an item a re-hunt no longer claims
+    goes dormant too, and a fingerprint with nothing left is dropped. A dormant entry is its contributions only (the
+    claim that brings it back says what it is; its silent hunts are derived again then), so it is one and the same
+    however it came about;
+  - `addedAt` (first seen, what group decisions are dated against, §5.1) is the earliest time a claim that stands now
+    was first claimed (`claimedAt` on its hunt: kept through a re-verify of that run, new once it stands again after a
+    rejection), so a claim rejected or withdrawn since never dates the item; a verdict older than the newest claim that
+    stands is not the item's verdict. A rejected L9 claim waiting dormant thus never lets a group dismissal made
+    before a new claim of it cover that claim (as before M6; tested).
+
+  A test folds two agents' hunts in six orders (one after the other either way, interleaved, reversed, shuffled) and
+  gets one ledger, byte for byte. A seeded property test (`test/ledger-commute.test.mjs`, fixed seed, 100 made-up
+  histories of two or three agents, each folded in 14 orders) folds claims, verdicts and re-hunts of a run, re-checks
+  (also of a fingerprint not claimed yet), fix probes (one undone and done again), and the capture folds around them,
+  sweeps and quick first looks, and gets one ledger and one view, byte for byte. Exactly what commutes: the AI,
+  re-check and fix folds, with each other and with capture folds. What keeps its order: the folds of one (run, source,
+  stream), whose keys replace each other in turn, and the capture folds among themselves (the rule fold is monotonic,
+  §5.1: an older sweep folded after a newer one only adds, and a quick first look keeps the worktree that last saw an
+  item, M5), as do a fix probe's `gone` rule items, which it marks only once a capture has folded them.
+
+**Cross-vendor verdicts** (`src/verify.mjs`). A verdict is labelled `cross-vendor` only when the verifier declared a
+vendor (`--vendor`, a declared name like an agent's: whitespace collapsed, one with control characters refused) and
+every agent that claimed the finding declared a vendor, none of them the verifier's. Anything else is a `same-model
+check`: a claim its own vendor hunted, and (M6 review) a claim one of whose hunters did not declare a vendor (answers
+without a header, an agent that gave no vendor, or the undeclared agent's answers beside declared ones,
+`undeclaredHunter`): a vendor that is not known is never another one. The label is per finding
+(`verification.verifier`); an item's (`verification.by`) is a same-model check when any of its findings in that run's
+fold was one, never cross-vendor because the finding that ranks first was. `verify.json`'s verifier is `cross-vendor`
+unless no judged claim was hunted by other vendors only, with `sameVendor: N` and `undeclaredVendor: N` for the rest
+("verified by cross-vendor (OpenAI, as declared), a same-model check for the 2 claim(s) its own vendor hunted and the
+1 claim(s) whose hunters did not declare a vendor"). The ledger recomputes it from the verify key's recorded vendor
+and the findings. Packets never say who hunted (a decoy has no hunter). A cross-vendor confirmation approves nothing:
+the item stays open, to decide (0.1 never auto-approves).
+
+**Board activity** (`src/activity.mjs`, design §3 "Now").
+- `hunt --plan [--agent <name>] [--vendor <name>]` starts a hunt record (`state/hunts/<id>.json`, one per worktree, run
+  and declared agent: the agent and vendor as declared, run, plan, lenses, planned units, units this agent answered,
+  units any agent answered, `startedAt`, `lastActivity`; no app text), and every `hunt --record` moves its agents'
+  records on. A plan made without `--agent` is the hunt of the agent whose answers then name it (same worktree, run
+  and plan, nothing answered under no name, and the undeclared agent holding no answers of the run): one record under
+  that name, started when the plan was made, never a "Your AI" line beside it (M6 review). A state that cannot be
+  written is said; the hunt goes on.
+- The Now line lists captures, claims and the running hunts, in the design's words: "Codex · AI review L6 · 12/40
+  units · 3 min": the lenses of this agent's part so far (else the plan's; more than three as the first three and
+  "+N"), "Your AI" for an agent that did not say (or whose recorded name is no name), "just started" under a minute. A
+  hunt runs while some planned unit is unanswered by every agent and its last word is under 30 minutes old by the
+  reader's clock; the running hunts are part of the board's version, as claims are, so one that goes quiet drops out
+  without a write. Announced through M2's Now line (every 10 s at most). The lines keep the design's words; a claim's
+  and a hunt's line has the declared name with "(as declared)" as its title (`nowTitles` beside `now` in
+  `/api/summary`: "Codex (as declared)"; none for "Your AI"). The CLI says it where it prints a name outside the
+  design's copy: "Codex (as declared) is hunting this run right now …", "by agent, as declared: …", "verified by
+  cross-vendor (OpenAI, as declared)".
+
+**Per-worktree URL rules** (`src/fix/loop.mjs`, `src/fix/claims.mjs`, `src/worktrees.mjs`). Each worktree runs its own
+app server.
+- The sweep `fix --start` copies is this worktree's latest, else the latest any worktree captured (a worktree on a fix
+  branch never sweeps: its captures are probes). It is read from the worktree that captured it (found from
+  `<common dir>/worktrees/<name>/gitdir`, never by running anything): its scope and sample paths, its recordings
+  (this folder's when it has every person's) and its saved login (this folder's, else that folder's). Its base URL is
+  used only when this folder captured it; otherwise `--url` is required, with the design's copy: "Start the app from
+  this folder on a free port (e.g. `PORT=3001 npm run dev`), then start with `--url http://127.0.0.1:3001`." (`fix
+  --plan` says it too). A sweep whose folder is gone is said ("… capture again … on the branch you ship from").
+- `fix --verify` in a folder other than the one the attempt started in needs `--url` (or `--serve`): "…, then verify
+  with `--url http://127.0.0.1:3001`."; P0 is read from the folder it was captured in, and the fix's fold and P1
+  carry the stream of the folder that captured P1.
+- A `--url` another live claim uses is refused when the claim is taken (M3) and now also at `--verify` and on a
+  resumed `--start` ("Another fix (branch …) is checking the app at http://127.0.0.1:3002. Start the app from this
+  folder on a free port …"); a free one moves the claim (`moveClaimUrl`) and the record. Addresses are compared as
+  the app server they reach (`addressKey`): host and port, every name of this machine one host (localhost and
+  `*.localhost`, 127.0.0.0/8, `[::1]`, 0.0.0.0, `[::]`, IPv4-mapped loopback), whatever the scheme, so
+  `http://localhost:3001` is refused while `http://127.0.0.1:3001` is claimed (M6 review, tested).
+- An attempt open in another folder is that agent's: `fix --start` there gives the claim's refusal ("Codex is already
+  fixing this finding in another folder (branch …, N min). Wait for it, or decide something else in the board:
+  deciding and capturing still work here."), never "edit, then check"; and `fix --checks` runs on the attempt's branch
+  only ("This attempt is on branch …, and this folder is on main: run nunchi fix --checks <group> where … is checked
+  out.").
+- Worktree paths are compared as real paths (`realpathSync.native`), and on Windows whatever the slashes and the case.
+  The single-agent path's copy never mentions worktrees (tested).
+
+**Runs.** The tracked branch is any branch but nunchi's fix branches (`nunchi/fix…`): a capture on a fix branch is a fix
+probe (§6.2), and a probe's hunts, verdicts and re-checks never fold (`runIdentity`). `hunt --record` on a probe now
+says so instead of keeping quiet (its quiet flag is for `--out` folders). A worktree on another branch stays a stream
+of its own (§5.1 *Streams*), as a branch switch in one folder is a sweep.
+
+**Stress tests** (`test/multi-agent-stress.test.mjs`, the M6 "done when"). Two processes, each an agent in a worktree of
+its own (`test/fixtures/stress-child.mjs`), start together at a barrier on files, never at a time on the clock (each
+says it is there and waits for the other; one that fails says so and the other stops waiting); everything is counted,
+never timed.
+- *2 × 50 folds*: each process folds 50 hunts through the ledger's catch-up (`syncLedger`: a sweep's rule fold and its
+  AI fold, one commit each, as `hunt --record` folds). Checked: one commit per fold (rev and generation 100), each
+  fold under its own stream, the two processes' commits interleave, each of the ten shared defects one item with both
+  agents and both worktrees, no dormant contribution left, and the ledger byte for byte the one the same folds give
+  one after the other. Fairness, not speed: at most 5 tries per fold (4 while the other commits, then once under the
+  fair lock), and under the lock no one else commits (its commit follows the rev it read under the lock). Overtakes
+  (the other agent's commits between a fold's first read and its own commit) depend on the machine and are said, with
+  a bound only a fold starved for most of the other agent's run reaches (40 of 50: a 2-vCPU runner that puts one
+  process aside for a while sees many). Measured here (2026-10-15 KST, 4 cores; alone and with four copies at once):
+  overtakes at most 5–11, mean 0.9; 6–13 of 100 folds went under the lock.
+- *Claim conflicts*, 25 rounds each, both processes meeting at the barrier before every round (then each waits a
+  seeded 0–2 ms, so either may go first: the one that came last would otherwise always go first): the same group (one
+  wins, the other is told "group"), one file for two groups (one wins, the other "file", its own marker removed), an
+  expired claim taken over (one wins, the expired claim's markers gone), and a renewal racing a take-over at the moment
+  of expiry (exactly one of them wins, never both, never neither; the old holder's renewal after a take-over never
+  brings it back). Every claim on disk whole and live, every marker a live claim's. Each round's expired claim expires
+  at its round (last renewed at base + i·2 s, the round reading the clock 1 s after it expired): a take-over removes
+  every expired claim, so with one time for all, the first take-over removed the later rounds' claims before their
+  race (M6 review: the renewal then lost 24 or 25 rounds of 25 without racing, and the expired-claim rounds took over
+  no expired claim). Measured here: the renewal won 12–15 rounds of 25, the two attempts overlapping in time in 9–17.
+- *Measured (2026-10-15 20:04–20:31 KST, after the review of PR #34 and the merges of M5, M7, M4 and the follow-ups):*
+  `npm test` 790 tests, 789 pass and 1 skipped (Windows only), on Node 22.22.0 and on Node 24.21.0, Chromium required
+  (`NUNCHI_REQUIRE_BROWSER=1`), with bun on PATH and without. Pebble `node bench/run.mjs --twice` is unchanged: rule
+  recall 34/34, 0 false positives on 8 clean scenes, determinism identical (1,141 files), fingerprints 100% (52/52),
+  169 s per capture. One Node 22 run
+  (18:26 KST), while other sessions' suites held the machine at a load average of about 30 on 4 cores, saw the D5
+  fair-lock test overtaken 3, 5, 3, 3 times (limit 3), counted from asking as the test then did; the run again:
+  passed. The follow-ups (§5.1) count from the ticket since, which is what the lock orders.
+
+**Limits.** Agents hunting one run share its plan: a plan with other lenses waits for the running hunt. An AI fold
+keeps the cells its hunt saw (`seen`, about 30 characters a cell). The board's before and after of a fix verified in another folder is missing (its
+screenshots are in that folder's runs).
 
 ## 6. Fix loop (0.1-c)
 
@@ -1565,7 +1754,8 @@ key. A second `nunchi open` pings this project's records (a record whose board d
 a live board of the same mode; the check and the start run under a lock (`state/boards/launch.lock.d`, the state's
 lock, waited for without blocking), so two `nunchi open` at once start one board. A running board keeps its port: a
 `--port` that differs is ignored, and said ("--port N is ignored: the running board keeps port M"). The board stops after 2 hours without a request (the live stream and the polling
-fallback do not count), telling an open tab. The link is printed only when stdin and stdout are the person's
+fallback do not count; a request counts from when it arrives until it is answered, so a slow answer never stops it
+right after: CI Windows, 2026-10-15 KST), telling an open tab. The link is printed only when stdin and stdout are the person's
 terminal and no browser is opened (`--no-browser`); run by an agent, the output is `board open on 127.0.0.1:<port>`
 and nothing secret. The server never writes a link to its stdout (which carries `{"port"}` only): `nunchi open`
 hands it an extra pipe as fd 3 and asks for the link with `--link-to-parent`, and the link goes over that pipe (a
@@ -1632,7 +1822,8 @@ still has it.
   goes to the board or a blob of its own).
 
 **API (§3.3), all with the key.** `GET /api/summary` (summary.mjs `summary()`, the same function `findings --json`
-carries as `summary`; plus the latest run, the Now lines, confirmations, the check card, and whether the working
+carries as `summary`; plus the latest run, the Now lines (captures, live claims and, since M6, AI hunts in progress,
+§5.2), confirmations, the check card, and whether the working
 tree differs from the latest run's), `GET /api/groups?status=&lens=&q=&group=` (sections of group ids for the tab,
 lens and plain substring asked, by `kind` | `file` | `screen` | `lens`; AI groups not double-checked in their own
 sections; and every group of the ledger by id, so the page can update rows it shows whatever they match now),
@@ -1724,7 +1915,11 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   sends the ids of the decisions it made (`POST /api/undo {decisions}`); the server reopens exactly their targets (the
   fingerprints of a group decided on its fingerprints), only for decisions approved with channel `board`, and answers
   409 unless each target still shows that decision (decided again since, here, in the terminal or through git:
-  nothing is undone). Buttons carry the permanent sub-labels, except in a window 420 px high or less (below).
+  nothing is undone). Once the undo is answered the focus goes to the row (or the finding) it reopened, but only if
+  the person is still where they pressed Z: one who moved to another row meanwhile keeps it, so the next decision key
+  acts on the row they chose (2026-10-15 KST: on a slow macOS runner X dismissed the reopened row instead of asking
+  about the blocker the test had focused; `test/board-undo-race-e2e.test.mjs` holds the answer back to show it).
+  Buttons carry the permanent sub-labels, except in a window 420 px high or less (below).
 - *Frozen list:* while Findings or Detail is open, order and members stay; rows take new statuses in place; a banner
   says "Updated: 2 new, 1 fixed · Show (R)". Decisions target group ids.
 - *Batches:* group by kind (default), root-cause file (the grounded file of an AI item, else "No file known"),
