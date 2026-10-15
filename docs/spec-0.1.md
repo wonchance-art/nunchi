@@ -1173,7 +1173,9 @@ malicious one (design §1).
 **Hunt answers per agent** (`src/hunt-agents.mjs`, `src/agents.mjs`).
 - An answers file says who wrote it in its header: `{"plan", "agent", "vendor", "units"}` (a unit answer still refuses
   unknown keys, `agent` included). A declared name is one line of at most 40 characters without control characters
-  (C0, C1, bidi marks, line separators), its whitespace collapsed, compared without regard to case. A vendor without
+  (C0, C1, bidi marks, line separators), its whitespace collapsed, compared without regard to case: everywhere a
+  name is given (`hunt --agent/--vendor`, `fix --agent/--vendor`, `verify --vendor`: one that is no name is refused)
+  or compared (a claim's refusal takes "codex" and "Codex" for one agent, M6 review). A vendor without
   an agent names no one (two agents of one vendor would share one record, M6 review): a header with one is refused, as
   is `hunt --plan --vendor` without `--agent` ("… a vendor without an agent: name the agent too (--agent), so two
   agents of one vendor keep answers of their own"). A file whose header holds anything else is refused, said in

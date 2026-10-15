@@ -12,6 +12,7 @@ import { openSync, writeSync, fsyncSync, closeSync, readdirSync, rmSync, lstatSy
 import { createHash, randomBytes } from 'node:crypto';
 import { withLock, writeAtomic, privateDir, refuseLink, stableJson } from '../stable.mjs';
 import { bumpGeneration } from '../state.mjs';
+import { declaredName, sameName } from '../agents.mjs';
 
 export const CLAIM_TTL_MS = 30 * 60e3;
 export const RENEW_MS = 5 * 60e3;
@@ -118,7 +119,7 @@ export function acquireClaim(stateDir, { group, worktree, branch, url, files = [
     }
     const startedAt = own && own.claim.token === mine && own.claim.startedAt ? own.claim.startedAt : kst(now);
     const claim = { schema: 1, note: 'who is fixing this group (design §7): expiry is lastRenewal + 30 minutes, computed by the reader', token, worktree, branch, url: url ?? null, files: sorted,
-      declaredAgent: agent ? String(agent).slice(0, 40) : null, declaredVendor: vendor ? String(vendor).slice(0, 40) : null, startedAt, lastRenewal: kst(now) };
+      declaredAgent: declaredName(agent, 'agent').name ?? null, declaredVendor: declaredName(vendor, 'vendor').name ?? null, startedAt, lastRenewal: kst(now) };
     const file = claimFile(stateDir, group);
     if (own) rmSync(file, { force: true });
     createOnce(file, stableJson(claim));
@@ -181,18 +182,21 @@ export async function whileRenewing(stateDir, group, token, fn, { every = RENEW_
 // step it stopped at, or, when no open attempt owns the claim (a command was stopped), wait for it or release it.
 export function refusalText(r, { me = null, folder = 'myapp', worktree = null, now = Date.now(), hint = null } = {}) {
   const c = r.claim || {};
-  const who = c.declaredAgent || 'Your AI';
+  // a claim is a file anything can write: its agent is a declared name, or none
+  const theirs = declaredName(c.declaredAgent, 'agent').name ?? null, mine = declaredName(me, 'agent').name ?? null;
+  const who = theirs || 'Your AI';
   const min = claimMinutes(c, now);
   const branch = c.branch || 'its branch';
-  if (r.why === 'group' && worktree && c.worktree && c.worktree !== worktree) return `${who} is already fixing this finding in another folder (branch ${branch}${min !== null ? `, ${min} min` : ''}). Wait for it, or decide something else in the board: deciding and capturing still work here.`;
+  if (r.why === 'group' && worktree && c.worktree && !samePath(c.worktree, worktree)) return `${who} is already fixing this finding in another folder (branch ${branch}${min !== null ? `, ${min} min` : ''}). Wait for it, or decide something else in the board: deciding and capturing still work here.`;
   if (r.why === 'url') return `Another fix (branch ${branch}) is checking the app at ${originOf(c.url) || c.url}. Start the app from this folder on a free port (e.g. \`PORT=3001 npm run dev\`), then verify with \`--url http://127.0.0.1:3001\`.`;
   if (r.why === 'file') return `${who} is fixing another finding in ${r.file} right now (branch ${branch}${min !== null ? `, ${min} min` : ''}). Fix this one when that fix is done.`;
   // worktrees are advice for two different agents, and only when both said who they are: an agent that did not say
-  // (no --agent) is taken for the same one (the single-agent path never hears about worktrees)
-  const same = !me || !c.declaredAgent || me === c.declaredAgent;
+  // (no --agent) is taken for the same one (the single-agent path never hears about worktrees); names are compared
+  // as declared names are, case aside (M6 review: "codex" and "Codex" are one agent)
+  const same = !mine || !theirs || sameName(mine, theirs);
   const next = hint || `resume with \`nunchi fix --verify ${r.group}\`, or stop it with \`nunchi fix --abort ${r.group}\``;
   if (same) return r.why === 'folder'
     ? `A fix of another finding (group ${r.group}) is still open in this folder (branch ${branch}${min !== null ? `, ${min} min` : ''}): ${next}.`
     : `This finding is already being fixed (branch ${branch}${min !== null ? `, ${min} min` : ''}): ${next}.`;
-  return `${who} is already fixing in this folder (branch ${branch}${min !== null ? `, ${min} min` : ''}). To fix in parallel: \`git worktree add ../${folder}-2 -b nunchi/fixes-2\`, open that folder in ${me || 'your AI'}, start the app there on another port. Or wait: deciding and capturing still work here.`;
+  return `${who} is already fixing in this folder (branch ${branch}${min !== null ? `, ${min} min` : ''}). To fix in parallel: \`git worktree add ../${folder}-2 -b nunchi/fixes-2\`, open that folder in ${mine || 'your AI'}, start the app there on another port. Or wait: deciding and capturing still work here.`;
 }

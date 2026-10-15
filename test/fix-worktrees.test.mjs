@@ -120,6 +120,13 @@ test('the single-agent path never mentions worktrees: the same folder\'s second 
   const again = await F.startFix(ctxOf(p), p.group, { agent: 'Claude Code' });
   assert.doesNotMatch(again.lines.join('\n'), /worktree/);
   assert.doesNotMatch(C.refusalText({ why: 'url', group: 'aaaaaaaaaaaa', claim: { branch: 'b', url: 'http://127.0.0.1:3000', lastRenewal: new Date().toISOString() } }), /worktree/);
+  // one agent whatever the case it gives its name in (M6 review): no worktree advice for "codex" against "Codex"
+  const held = { why: 'group', group: 'aaaaaaaaaaaa', claim: { declaredAgent: 'Codex', branch: 'nunchi/fixes-1015', lastRenewal: new Date().toISOString() } };
+  assert.match(C.refusalText(held, { me: 'codex ' }), /^This finding is already being fixed \(branch nunchi\/fixes-1015/);
+  assert.match(C.refusalText(held, { me: 'Claude Code' }), /^Codex is already fixing in this folder .*worktree add/, 'another agent: the advice');
+  // fix --agent and --vendor are declared names: one that is no name is refused before anything happens
+  const bad = await F.startFix(ctxOf(p), p.group, { agent: 'Co\u202edex' });
+  assert.deepEqual([bad.code, bad.lines], [2, ['nunchi fix: --agent must not hold control characters']]);
 });
 
 test('a sweep whose folder cannot be found now is said, never read: fix --plan goes on, fix --start refuses', async () => {

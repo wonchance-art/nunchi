@@ -18,6 +18,7 @@ import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import * as P from '../project.mjs';
 import { titleOf, captureRuns, latestRunOf, foldKindOf, foldFix, unfoldFix, commitFix, byRun, looked, currentTargets, writtenAs, approvalKey, HUMAN_CHANNELS } from '../ledger.mjs';
 import { runsDirOf } from '../worktrees.mjs';
+import { declaredName } from '../agents.mjs';
 import { human } from '../board/shared.mjs';
 import { readConfig, workTree } from '../runs.mjs';
 import { baseUrlRefusal } from '../network.mjs';
@@ -360,6 +361,10 @@ function planBranch(ctx, group = null) {
 
 const RESUME_START = new Set(['starting', 'branching', 'claiming', 'snapshot', 'baseline', 'p0']);
 async function startFixInner(ctx, id, opts = {}) {
+  // who is fixing, as declared: names like any agent's (one line, no control characters, M6 review)
+  const me = declaredName(opts.agent, '--agent'), myVendor = declaredName(opts.vendor, '--vendor');
+  if (me.error || myVendor.error) return out(2, `nunchi fix: ${me.error || myVendor.error}`);
+  opts = { ...opts, agent: me.name ?? null, vendor: myVendor.name ?? null };
   if (!ctx.git) return refuse(`The fix loop needs git (${ctx.gitError?.message || 'no repository here'}): nunchi fixes on a branch it makes, and undoes a fix with git revert.`);
   const found = findGroup(ctx, id);
   if (found.error) return refuse(found.error);
