@@ -934,6 +934,7 @@ if (cmd === 'setup') {
   const usage = m => { console.error(`nunchi export: ${m}`); process.exit(1); };
   if ('html' in args) usage('use either --html <dir> (the review page) or --format md|json|sarif');
   if (!E.exportFormats.includes(args.format)) usage('--format takes md, json or sarif');
+  if ('run' in args || 'inline' in args) usage('--run and --inline are for --html; --format exports the ledger (every run it folded)');
   let statuses = E.DEFAULT_STATUSES;
   if (args.status !== undefined) {
     if (typeof args.status !== 'string') usage(`--status takes a list: ${E.STATUSES.join(',')} (or all)`);

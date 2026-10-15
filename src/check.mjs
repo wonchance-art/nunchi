@@ -89,7 +89,7 @@ export function runCheck({ project, root = project, failOn = null, base = null, 
 
   const failed = cmpd.fresh.length + weakened.length;
   const code = failed || standing.length ? 1 : 0;
-  lines.push(code ? `exit 1: ${[failed && plural(failed, 'guard hit'), standing.length && `${plural(standing.length, 'open finding group')} at or above ${failOn}`].filter(Boolean).join(', ')}` : 'exit 0: clean');
+  lines.push(code ? `exit 1: ${[cmpd.fresh.length && plural(cmpd.fresh.length, 'guard hit'), weakened.length && `${plural(weakened.length, 'guard change')} since ${base} that let${weakened.length === 1 ? 's' : ''} hits through`, standing.length && `${plural(standing.length, 'open finding group')} at or above ${failOn}`].filter(Boolean).join(', ')}` : 'exit 0: clean');
 
   let sarifOut = null;
   // paths in SARIF are the repository's: the project folder's place in it (no git: the project's own)
