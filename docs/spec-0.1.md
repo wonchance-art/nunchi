@@ -362,6 +362,24 @@ hour, and the board says "running" until then (as it did before for any partial 
 **Skill.** A first look, then the full check: `capture --quick`, `findings`, `open`, then `capture`; the chat reports
 only what those print (§1, design §6).
 
+*Measured (2026-10-15 13:29 KST, Pebble, this development container; **not the time gate of design §9.5**, which needs
+a reference and a lower-spec machine, a pre-chosen app with ≥ 25 routes, cold runs on each, setup and build reported
+apart).* Pebble has 13 routes (one dynamic, with a sample) and two persons. Three rounds,
+each in a fresh folder (no recording), the app built once and served by `next start`; wall time of the CLI command,
+invocation to exit (the run folded into the ledger, which is what the board shows). The container was shared with other
+sessions (load average 11–13 on 4 CPUs), so these are upper-side numbers.
+
+| | What | Median | Max |
+|---|---|---|---|
+| T1 | `capture --quick`: 8 key screens (`/`, `/pricing`, `/about`, `/help`, `/login`, `/app`, `/orphan-page`, `/reports`), 32 scenes, recorded | 46.6 s | 51.4 s |
+| T2 | the full check after it (`capture`, all states, no canaries): 100 scenes, `merge` for both persons, health ok, 0 replay misses, "Full check done: 23 new groups" | 174.6 s | 177.2 s |
+| — | for reference, the same full check without a first look (records everything) | 169.5 s | 179.5 s |
+
+The first look found 52 rule findings (16 high, 26 medium, 10 low) in every round. Merging costs nothing measurable
+against recording from scratch (within the noise of the shared machine). `node bench/run.mjs --twice` after M5:
+34/34 rule recall, 0 false positives on 8 clean scenes, determinism identical (1,141 files), fingerprints 100% (52/52),
+162 s per capture.
+
 ## 3. Lenses
 
 A lens is a data file (H8): id, definition of a defect, checklist items, good/bad examples, severity rubric,
