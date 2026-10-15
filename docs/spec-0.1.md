@@ -960,10 +960,14 @@ unreadable one by one). Built in `src/ledger.mjs`:
     pid alone, so a reused pid makes takers wait and end in LOCKED, never take a live lock); one on another
     machine, after 30 s without a touch. One taker at a time removes a
     stale lock, after checking again that it still holds the owner judged stale; a lock is never given back and is
-    released only by its owner. Waiting is fair (2026-10-15 KST): a waiter that has waited 20 ms makes a ticket of
-    its own (`<file>.lock.d.wait-<since>-<token>`, an empty file made once, never renamed or rewritten, its order in
-    its name), and while live tickets exist only the waiter with the lowest takes the lock, so a process that releases
-    and takes the lock again at once cannot starve the others. Fairness is measured as overtakes (how many
+    released only by its owner. Waiting is fair (2026-10-15 KST): a waiter that finds the lock taken makes a ticket
+    of its own at once (`<file>.lock.d.wait-<since>-<token>`, an empty file made once, never renamed or rewritten,
+    its order in its name), and while live tickets exist only the waiter with the lowest takes the lock, so a process
+    that releases and takes the lock again at once cannot starve the others. At once, not after a first wait of
+    20 ms as at first (M6 review, 2026-10-15 KST): a waiter a busy machine set aside right after it asked had no
+    place in line yet, so one that released and asked again after it went first (a macOS runner: a waiter overtaken
+    4 times by 3 others; reproduced here with waiters now and then woken 300 ms late, see
+    `test/lock-ticket.test.mjs`, which drives it step by step). A free lock is still taken without one. Fairness is measured as overtakes (how many
     acquisitions by others come between a request and its turn; at most N − 1 for N waiters, however fast the
     machine): 4 processes × 15 holds of 80 ms, at most 45 before, 3 after (2026-10-15 KST). A waiter renews its
     ticket's time while it waits; one not renewed for 1 s, or that cannot be read, does not count; a crash's ticket

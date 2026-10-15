@@ -150,13 +150,16 @@ export function sweepLeftovers(dir, { olderThanMs = 3600e3, now = Date.now() } =
 // - released only while it still holds our token.
 // - Windows refuses to rename the lock folder while another process reads owner.json in it: those renames, and
 //   the reads, are retried (retryBusy), so a release is never lost to a reader.
-// - fair: a waiter is not starved by processes that release and take the lock again at once. A waiter that has waited
-//   TICKET_AFTER_MS makes a ticket of its own, `<file>.lock.d.wait-<since>-<token>` (an empty file, made once and
+// - fair: a waiter is not starved by processes that release and take the lock again at once. A waiter that finds the
+//   lock taken makes a ticket of its own at once, `<file>.lock.d.wait-<since>-<token>` (an empty file, made once and
 //   never renamed or rewritten: Windows refuses to rename over, or at once delete, a file another process has open),
 //   and while live tickets exist only the waiter with the lowest (the longest waiting) takes the lock. A waiter renews
 //   its ticket's time while it waits; a ticket not renewed for TICKET_STALE_MS, or that cannot be read (deleted, still
 //   open elsewhere), does not count. A ticket goes when its waiter takes the lock or gives up; one a crash left is
-//   removed by the next ticket made after staleMs, or with the other leftovers after an hour.
+//   removed by the next ticket made after staleMs, or with the other leftovers after an hour. At once, not after a
+//   first wait: a waiter the machine sets aside right after it asked (a busy runner) would otherwise have no place in
+//   line yet, and a process that released and asked again after it could go first, again and again (seen on a macOS
+//   runner, 2026-10-15 KST: overtaken 4 times by 3 other waiters). A free lock is taken without one.
 // - a waiter judges the holder stale at most every STALE_CHECK_MS: on Windows every read of owner.json holds up the
 //   holder's release (a folder with an open file cannot be renamed).
 // Held only around read–change–write of a small file, and by `nunchi open` while it starts a board (withLockAsync,
@@ -243,7 +246,7 @@ function release(dir, token) {
 }
 
 // Tickets (fairness): `<file>.lock.d.wait-<since, 15 digits>-<token>`, so the order is in the names and no file is read.
-const TICKET_AFTER_MS = 20, TICKET_STALE_MS = 1000, TICKET_RENEW_MS = 200, STALE_CHECK_MS = 100;
+const TICKET_STALE_MS = 1000, TICKET_RENEW_MS = 200, STALE_CHECK_MS = 100;
 const TICKET = /^wait-(\d{15})-([0-9a-f]{16})$/;
 const ticketName = l => `${basename(l.dir)}.wait-${String(l.t0).padStart(15, '0')}-${l.token}`;
 // the lowest ticket that counts (ours always counts), or null
@@ -304,7 +307,7 @@ function tryLock(l, { timeoutMs, staleMs }) {
       if (stale && reap(l.dir, stale, staleMs)) continue;
     }
     if (l.ticket) renewTicket(l);
-    else if (Date.now() - l.t0 >= TICKET_AFTER_MS) makeTicket(l);
+    else makeTicket(l);
     if (Date.now() - l.t0 > timeoutMs) {
       const o = readOwner(l.dir);
       const who = o ? ` (pid ${o.pid} on ${o.host}${sameMachine(o) ? `, ${alive(o.pid) ? 'running' : 'exited'}` : ''})` : '';
@@ -341,4 +344,4 @@ export async function withLockAsync(path, fn, { timeoutMs = 5000, staleMs = 3000
 }
 
 // The parts of the lock a test needs to drive one race step by step.
-export const lockInternals = { staleOwner, reap, release, holdAliveWindows, probeAliveWindows };
+export const lockInternals = { staleOwner, reap, release, holdAliveWindows, probeAliveWindows, prepareLock, tryLock, heldLock, abandon };
