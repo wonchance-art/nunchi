@@ -230,6 +230,25 @@ test('export --html: a defect gone in this run shows as fixed; CLI writes the pa
   assert.throws(() => execFileSync('node', [CLI, 'export', '--html', '.nunchi/runs/x'], { cwd: p.root, stdio: 'pipe' }), /outside \.nunchi\/runs/);
 });
 
+test('export --html: owner-only files (0600) in folders it creates 0700; a flag it does not take is refused', () => {
+  const s = sample();
+  const p = project(s);
+  const out = join(p.root, 'share', 'review');
+  execFileSync('node', [CLI, 'export', '--html', 'share/review'], { cwd: p.root, stdio: 'pipe' });
+  if (process.platform !== 'win32') {
+    const mode = f => statSync(f).mode & 0o777;
+    assert.equal(mode(join(out, 'index.html')), 0o600);
+    assert.equal(mode(join(p.root, 'share')), 0o700);
+    assert.equal(mode(out), 0o700);
+    assert.equal(mode(join(out, 'img')), 0o700);
+    for (const f of readdirSync(join(out, 'img'))) assert.equal(mode(join(out, 'img', f)), 0o600, f);
+  }
+  for (const extra of [['--format-md'], ['--status', 'open'], ['--out', 'x.html'], ['--incline']]) {
+    assert.throws(() => execFileSync('node', [CLI, 'export', '--html', 'again', ...extra], { cwd: p.root, stdio: 'pipe' }), /not a flag of export --html/, extra.join(' '));
+  }
+  assert.ok(!existsSync(join(p.root, 'again')));
+});
+
 // ---- regressions from the adversarial review (2026-10-14 KST) ------------------------------------------
 
 const htmlOf = (p, opts = {}) => { const out = join(p.root, 'out'); exportHtml({ runDir: p.run, nunchiDir: p.nunchi, outDir: out, ...opts }); return readFileSync(join(out, 'index.html'), 'utf8'); };

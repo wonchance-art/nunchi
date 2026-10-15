@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { normalizeSelector, fingerprintOf, annotate, foldRun, view, groups, writeDecision, readDecisions, trust, approvalKey } from '../src/ledger.mjs';
+import { normalizeSelector, fingerprintOf, annotate, foldRun, view, groups, writeDecision, readDecisions, trust, approvalKey, buildDecision } from '../src/ledger.mjs';
 
 const f = (route, extra = {}) => ({ lens: 'L8', rule: 'target-size-min', severity: 'medium', scene: `${route.slice(1) || '~'}.guest.normal.m`, route, viewport: 'm', selector: 'main > ul > li:nth-of-type(3) > button', box: [0, 0, 18, 18], evidence: { width: 18, height: 18, minimum: 24, name: 'Done' }, ...extra });
 const empty = () => ({ schema: 1, runs: [], items: {} });
@@ -62,6 +62,21 @@ test('decisions: append-only files, latest wins, a group decision covers new scr
   assert.match(rows.find(r => r.fp === secret.fp).note, /needs approval/);
   assert.equal(view(st, readDecisions(dir), new Set([keep, fix, git].map(approvalKey))).find(r => r.fp === secret.fp).status, 'dismissed', 'approved on this machine: honoured');
   assert.deepEqual(groups(rows).map(g => [g.rule, g.routes.length]), [['secret-in-client-bundle', 0], ['target-size-min', 2]]);
+});
+
+test('a decision note is scrubbed before it is clipped to 500 characters: no half of a key is left for no scanner to know', () => {
+  const KEY = 'sk_' + 'live_' + 'FixtureOnly0000000000000003';
+  for (const at of [480, 488, 495]) {
+    const d = buildDecision({ target: { fp: 'aaaaaaaaaaaa' }, decision: 'fix', note: `${'x'.repeat(at)} ${KEY} and https://u:pw@x.invalid/?token=Hunter2Token`, by: 'me' });
+    assert.ok(!d.note.includes('sk_' + 'live_') && !d.note.includes('FixtureOnly'), `at ${at}`);
+    assert.ok([...d.note].length <= 500);
+  }
+  const d = buildDecision({ target: { fp: 'aaaaaaaaaaaa' }, decision: 'fix', note: `${KEY} https://u:pw@x.invalid/?token=Hunter2Token`, by: 'me' });
+  assert.equal(d.note, '[secret-shaped: stripe-live-secret-key] https://x.invalid/?token=REDACTED');
+  // clipped by code point: an emoji at the edge is kept whole or left out, never half
+  const e = buildDecision({ target: { fp: 'aaaaaaaaaaaa' }, decision: 'fix', note: `${'x'.repeat(499)}\u{1F33F}\u{1F33F}`, by: 'me' });
+  assert.equal(e.note, `${'x'.repeat(499)}\u{1F33F}`);
+  assert.equal(e.note.isWellFormed(), true);
 });
 
 test('trust: precision from fix and false-positive decisions; intended keeps do not count against the lens', () => {

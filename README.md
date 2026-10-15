@@ -69,9 +69,22 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
   nothing
 - **Runs** you can compare: each capture is its own folder with the commit and working-tree state it came from;
   a login that expired or an app that isn't running is reported once, not as a hundred findings
+- **Guards** that keep a fixed kind of defect from coming back: `window.confirm`/`alert`, `href="#"` and
+  `javascript:` links, `{error.message}` in JSX, `{{ }}` left in JSX text, and colour literals outside your measured
+  tokens. Read from your source (parsed, not grepped; tests, comments and `node_modules` never count). At the end of a
+  batch of fixes the board offers the first four, for the kinds it fixed, on one card ("Stop these coming back?"); the
+  colour guard you add with `nunchi guard --add colour-literal` in your own terminal. You add them, never your AI. They live in
+  `.nunchi/guards.json` with a baseline of what was already there, so only new hits fail. `nunchi guard --lint` prints
+  the same checks as an ESLint config object to paste (nunchi never writes your config)
+- **`nunchi check`** for CI: no browser, no network. The guards over your source (a new hit fails), `--base
+  origin/main` fails a pull request that removes or weakens a guard, `--sarif` writes a file for code scanning; on your
+  own machine `--fail-on high` also fails on open findings. Exit 0 clean, 1 a hit, 2 a usage or state error
+- **Exports**: `nunchi export --format md|json|sarif` — the findings to share or upload, secret-shaped strings
+  replaced by their kind, text from your screens left out unless `--include-page-text`, paths relative to your
+  repository and routes as templates
 
-Not yet (0.1): guards that keep a fixed kind of defect from coming back, and `nunchi check`. The
-AI lenses (copy, states, visual judgment) with a separate verifier, and the fix loop, are built and being measured.
+Being measured (0.1): the AI lenses (copy, states, visual judgment) with a separate verifier, the fix loop, the guards
+with `nunchi check`, and the first look are built; their gates are not measured yet.
 
 ## Benchmark
 
@@ -104,7 +117,11 @@ The checks were tuned on this app once; a second, held-out app is what the 0.1 g
 AI에게 할 한 문장까지 봅니다), 그리고 고치기(`nunchi fix`)까지 됩니다. AI가
 고친 것은 별도 브랜치에 결함 하나당 커밋 하나로 남고, 다시 찍어서 결함이 사라지고 다른 곳이 깨지지 않았을 때만 고쳐진 것으로
 칩니다(고치기 게이트는 아직 측정 전). 빠른 첫 보기(`nunchi capture --quick`)는 핵심 화면 최대 8개를 먼저 보여
-주고, 결론은 이어지는 전체 검사가 끝난 뒤에 냅니다(그 전까지 진행판은 「Too early to say」).
+주고, 결론은 이어지는 전체 검사가 끝난 뒤에 냅니다(그 전까지 진행판은 「Too early to say」). 고친 종류가 다시 생기지 않게
+막는 방지 규칙(`window.confirm`, `href="#"`, JSX의 `.message`, `{{ }}`, 토큰 밖 색)은 한 묶음의 고치기가 끝나면 진행판
+카드에서 사람이 추가하고(색 규칙은 `nunchi guard --add colour-literal`), CI에서는 `nunchi check`(브라우저 · 네트워크
+없이, `--base`로 방지 규칙을 약하게 한 PR도 잡음)로 돌립니다. `nunchi export --format md|json|sarif`로 결과를 내보낼 수
+있습니다(비밀값은 종류만, 화면 문구는 요청할 때만).
 Claude Code에서 `/plugin marketplace add wonchance-art/nunchi` → `/plugin install nunchi@nunchi` 후, 앱 폴더에서
 nunchi로 검사해 달라고 하면 됩니다. 처음 한 번 `nunchi setup`이 고정된 패키지 2개(설치 스크립트 없이)와 Chromium(약
 170MB)을 받습니다. 실제 앱에서 틀리게 잡는 것이 있으면 알려 주세요.

@@ -21,9 +21,9 @@ export const PARSER = `@babel/parser@${pkg.dependencies['@babel/parser']}`;
 
 const posix = p => p.split(sep).join('/');
 const CODE = /\.(m|c)?(t|j)sx?$/;
-const TEST_FILE = /(^|\/)(__tests__|__mocks__|__fixtures__|e2e|cypress)\/|\.(test|spec|stories|story|cy)\.[cm]?[jt]sx?$|\.d\.[cm]?ts$/;
-const CONFIG_FILE = /(^|\/)[^/]+\.config\.[cm]?[jt]s$/;
-const IGNORE_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', 'out', '.turbo', '.vercel', 'coverage', '.nunchi', 'public']);
+export const TEST_FILE = /(^|\/)(__tests__|__mocks__|__fixtures__|e2e|cypress)\/|\.(test|spec|stories|story|cy)\.[cm]?[jt]sx?$|\.d\.[cm]?ts$/;
+export const CONFIG_FILE = /(^|\/)[^/]+\.config\.[cm]?[jt]s$/;
+export const IGNORE_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', 'out', '.turbo', '.vercel', 'coverage', '.nunchi', 'public']);
 const MAX_BYTES = 512 * 1024;                     // larger files are generated data, not hand-written screens
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -45,7 +45,7 @@ export function parseSource(src, file) {
 }
 
 const SKIP_KEYS = new Set(['loc', 'start', 'end', 'extra', 'leadingComments', 'trailingComments', 'innerComments', 'range', 'comments', 'tokens', 'errors']);
-function traverse(node, enter, ancestors = []) {
+export function traverse(node, enter, ancestors = []) {
   enter(node, ancestors);
   ancestors.push(node);
   for (const key of Object.keys(node)) {
@@ -57,14 +57,14 @@ function traverse(node, enter, ancestors = []) {
   ancestors.pop();
 }
 
-const unwrap = n => {
+export const unwrap = n => {
   while (n && /^(TSAsExpression|TSSatisfiesExpression|TSNonNullExpression|TypeCastExpression|ParenthesizedExpression)$/.test(n.type)) n = n.expression;
   return n;
 };
 const isFunction = n => /Function|ArrowFunctionExpression|ObjectMethod|ClassMethod|ClassPrivateMethod/.test(n.type);
 const isJsx = n => n && (n.type === 'JSXElement' || n.type === 'JSXFragment');
 
-function calleeName(c) {
+export function calleeName(c) {
   c = unwrap(c);
   if (!c) return null;
   if (c.type === 'Identifier') return c.name;
@@ -78,7 +78,7 @@ function calleeName(c) {
   return null;
 }
 
-function tagOf(el) {
+export function tagOf(el) {
   if (el.type === 'JSXFragment') return '';
   const n = el.openingElement.name;
   if (n.type === 'JSXIdentifier') return n.name;
@@ -87,7 +87,7 @@ function tagOf(el) {
   return member(n);
 }
 const attrsOf = el => (el.type === 'JSXElement' ? el.openingElement.attributes.filter(a => a.type === 'JSXAttribute') : []);
-const attrName = a => (a.name.type === 'JSXNamespacedName' ? `${a.name.namespace.name}:${a.name.name.name}` : a.name.name);
+export const attrName = a => (a.name.type === 'JSXNamespacedName' ? `${a.name.namespace.name}:${a.name.name.name}` : a.name.name);
 const getAttr = (el, name) => attrsOf(el).find(a => attrName(a) === name) || null;
 
 // ---------------------------------------------------------------------------------------------- strings

@@ -1020,7 +1020,9 @@ unreadable one by one). Built in `src/ledger.mjs`:
   the board. A keep or false-positive no person made or confirmed shows as kept / dismissed but does not clear
   "Ready to ship" (summary.mjs).
 - **CLI:** `nunchi findings` (one row per kind; `--rule <rule>` lists its groups; `--status`, `--all`, `--json`),
-  `nunchi decide <id…> <decision> [--reason] [--note]`, `nunchi approve <id…>|--all`, `nunchi trust`.
+  `nunchi decide <id…> <decision> [--reason] [--note]`, `nunchi approve <id…>|--all`, `nunchi trust`. A note is
+  committed with its decision: secrets are scrubbed from it first (credential URL parts, `scrubSecrets`), then it is
+  clipped to 500 code points, so a clip never leaves half a key that no scanner would know (test).
   Since M1 `findings` lists double-checked AI kinds as `AI · <checklist item>` beside the rule kinds, collapses AI
   groups not double-checked (claimed only, or a verdict that was suspect, rejected or insufficient, or from a run with
   too few decoys to check the checker, §4) into one line
@@ -1212,7 +1214,7 @@ else is derived from those, the same whatever order the folds come in:
 5. The agent saying "fixed" changes nothing; only re-capture does.
 6. Guard: on a second occurrence of a kind, or ≥5 instances, propose a rule (e.g. no `*.message` in JSX or
    toast arguments, no `window.confirm`, no `href="#"`, `stylelint-declaration-strict-value` for tokens,
-   `toMatchAriaSnapshot` for structure). Added to the user's repo only with consent. (M4, not built.)
+   `toMatchAriaSnapshot` for structure). Added to the user's repo only with consent. (Built in M4, 2026-10-15 KST: offered after a verified fix, added by a person, §7.3.)
 
 Built in M3 (2026-10-15 KST, design 0.1-c §4 and §7 minimal) as `nunchi fix`, in `src/fix/`. The engine never edits
 code: the skill edits; the engine plans, checks preconditions, runs the checks, captures and judges. An outcome comes
@@ -1458,7 +1460,7 @@ the focus through a redraw.
   capture. `npm test` 545 of 546 (1 Windows-only test skipped) on Node 22.22.0 and on Node 24.21.0, Chromium included,
   with bun on PATH and without it (2026-10-15 08:08 KST).
 - Limits: the drift threshold (1%) is not calibrated yet (the gate does that); repositories with git filters are
-  refused, not handled; guards (principle 6) are M4.
+  refused, not handled; guards (principle 6) came with M4 (§7.3).
 
 ## 7. Progress board and exports (0.1-c)
 
@@ -1475,11 +1477,12 @@ Keyboard: J/K move, F fix, W keep, X false positive, S hold; batch decisions by 
 | coverage | seen cells ÷ all cells, not-seen by reason, stale cells | where are the blind spots |
 | design-system size | distinct colors / type sizes / radii / button shapes, first run → now | is it converging |
 | AI trust | lens precision, resolution rate, canary hit rate, decoy pass rate | how far to trust the AI |
-| guarded kinds | ledger | can this mistake come back |
+| guarded kinds | `.nunchi/guards.json` (the built-in kinds added and their baseline) and the fix loop's verified fixes | can this mistake come back |
 | what the AI is doing now | ledger `fixing` + re-capture queue | wait or look elsewhere |
 
-Exports: SARIF, Markdown, JSON. `nunchi check`: no capture; runs guard rules and ledger state for CI,
-exit code only. First run (H11): key routes × rule lenses within ~2 minutes; the deep sweep continues and
+Exports: SARIF, Markdown, JSON (§7.4, M4). `nunchi check` (§7.3, M4): no capture; runs the guards of `.nunchi/guards.json`
+over the source (and, on a machine with a ledger, `--fail-on`) for CI: an exit code, the lines that say why, and SARIF
+on request. First run (H11): key routes × rule lenses within ~2 minutes; the deep sweep continues and
 fills the board live.
 *Amended (2026-10-15 KST, design 0.1-c §6, M5): no live partial runs.* The first look (`capture --quick`, §2.6) is
 folded and shown as it lands; the full check after it is not shown screen by screen. The board says how far it is —
@@ -1498,7 +1501,9 @@ puts the images in `index.html` as data URIs instead (one file; pegroom: 8 MB ag
   and a symlinked `index.html` or `img/` are all refused before anything changes. `index.html` is written to a new
   file and renamed into place. A folder inside `.nunchi/runs` or inside the run is refused, checked on the real path
   of its nearest existing parent (so a symlink cannot get round it), case-insensitively on Windows and macOS.
-  A `--html` value starting with `--` is a missing value.
+  A `--html` value starting with `--` is a missing value, and a flag `--html` does not take is refused (exit 1). The
+  page holds screenshots of the app: its files are written owner-only (0600) and the folders it creates 0700 (POSIX;
+  a folder that is there already is left as it is).
 - *Views* (mock-up v3 layout, system fonts): **Progress** (verdict as in design §3.4 where it can be computed
   statically: blocker/high open → "Not yet · …", no AI review → "Probably · rules only", screens not seen → "Yes, for
   what was checked · …"; open groups by severity; new, fixed and came back since the parent run; screens checked; AI
@@ -1661,13 +1666,17 @@ and `GET /api/screens/:run/:scene`, §7.5),
 `POST /api/fix-accept {group, attempt}` (the fix loop's [Looks fine, mark fixed], §6.6), `POST /api/fix-undo {group,
 attempt}` (the fix loop's [Undo this fix], `fix --undo`'s safe revert; 409 with `stale`, or `refused` (not-head,
 wrong-branch, dirty, occupied, filtered) with `paths`, `branch` and `on`, §6.6), `GET /api/live`, and
-`GET /api/generation` (the polling fallback). Added to the design's table: `POST /api/session`, `/api/screens`,
-`/api/generation`, `/api/undo`, `/api/fix-accept`, `/api/fix-undo`. In label mode only `/api/label/pool`, `/api/label/item/:id`, `POST /api/label`, the evidence and
+`GET /api/generation` (the polling fallback), and `POST /api/guard {kind, add}` (the guard card's Add toggle, §7.3:
+→ `{ok, added, baselined}`, how many hits there now became the baseline of what it added; 409 with `stale` when the
+kind is no longer offered or guards.json cannot be read). Added to the design's table: `POST /api/session`,
+`/api/screens`, `/api/generation`, `/api/undo`, `/api/fix-accept`, `/api/fix-undo`, `/api/guard`. In label mode only `/api/label/pool`, `/api/label/item/:id`, `POST /api/label`, the evidence and
 the live endpoints answer (the others 404, so nothing unblinds).
 - *Live updates:* the server watches the state folder (not recursively, 200 ms debounce) and polls every 3 s; what it
   compares is the generation **plus a signature of `.nunchi/decisions`** (names and times of its folders), because a
   decision that arrives through git bumps no generation, **plus the live claims** (group and agent of each claim
-  not expired by the reader's clock), because a claim bumps none either and expires without a write; a cached model
+  not expired by the reader's clock), because a claim bumps none either and expires without a write, **plus the
+  mtime and size of `.nunchi/guards.json`**, which the person's terminal (`nunchi guard --add`) and git change without
+  a generation; a cached model
   takes the claims as they are on each request (their minutes too). A change sends `event: generation` with the new version on
   every open stream (a `fetch` stream read with `ReadableStream`, SSE framing, a ping every 15 s); the page then
   reloads the summary and, in place, the list and detail it shows. A stream that fails or ends falls back to polling
@@ -1785,7 +1794,9 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   of a 640 × 360 window, 32% with the toast (32% and 51% before); tested at 640 × 360 and 800 × 420, measured in
   one evaluation.
 - *Views:* only Progress, Findings (and Detail) and Screens, and since M7 Coverage and Screen detail (§7.5); "More views in
-  0.2" lists the commands that show the rest.
+  0.2" lists the commands that show the rest (Design system, States & messages, Copy groups, AI trust, and Guards:
+  `nunchi guard`, the guards, what each finds now and how many are new; the owner deferred a Guards view to 0.2 on
+  2026-10-15 KST).
   It and "Keys (?)" are at the foot of the sidebar, and in the header on a phone (≤ 760 px), 44 px each.
 - *Words:* one table (`shared.mjs`), English. Decision times show as relative or local; files keep KST. The main
   button's "Decide N" is the number the verdict says is to decide when it says one (blocker and high; they come first
@@ -1897,6 +1908,282 @@ beside it; 438 tests on Node 22.22.0 and on Node 24.21.0, Chromium included.
 **Not done in M2:** the fix loop's states and probe runs hidden from `runs` came with M3 (§6.6); Coverage and
 Screens beyond the wall came with M7 (§7.5); label pools from the gate harness (G); Korean words (the table is
 ready).
+
+### 7.3 Guards and `nunchi check` (built 2026-10-15 KST, design 0.1-c §5, M4)
+
+A guard keeps a kind of defect that was fixed from coming back. The guards are built in, run over the app's source
+in `nunchi check`, need no dependency of the user's and no network, and are deterministic (files walked in sorted
+order, every list sorted, no clock). The scanner is `src/guards.mjs`; the kinds, the file format and the baseline are
+`src/guard-kinds.mjs` (no parser, so the board and the fix loop load without it); the offer is `src/guard-offer.mjs`.
+
+**The built-in guards.** The source is parsed with the inventory's pinned parser (@babel/parser, §2.4) and a small
+CSS tokenizer, never grepped, so comments, strings in code that is not JSX, and anything else that is not the
+construct never count.
+
+| Kind | A hit is | Parameters (typed; nothing else is read) |
+|---|---|---|
+| `native-dialog` | a call of `window.confirm`, `alert` or `prompt`: `window.`/`globalThis.`/`self.`, `window['confirm']`, `?.()`, or the bare name unless the file declares its own (`import { confirm }`, a parameter, a function) | `calls`: some of `alert`, `confirm`, `prompt` |
+| `dead-href` | an `href` in JSX that is `#` or a `javascript:` URL (a string, `{'#'}`, a template with no expression, either branch of `?:`; tabs and line breaks inside the scheme dropped, as browsers do). `#top`, `` `#${id}` `` and `'#' + id` are not | `values`: some of `#`, `javascript:` |
+| `raw-message` | a JSX expression whose value can be `<x>.message`: `{e.message}`, `{err?.message}`, `{(e as Error).message}`, `{e['message']}`, `{a && e.message}`, `{e.message ?? '…'}`, either branch of `?:`; as a child (also in `<pre>`) or in an attribute that is text (not `className`, `class`, `style`, `key`, `ref`, `id`, `href`, `src`, `data-*`, `on*`, `aria-describedby` …) | none |
+| `mustache-text` | `{{` or `}}` in JSX text: the text itself (entities decoded, so `&#123;&#123;` counts), a string or template child, and text attributes (`alt`, `title`, `placeholder`, `label`, `aria-label` …). Not inside `<code>`, `<pre>`, `<kbd>`, `<samp>`, `<style>`, `<script>`; never an object child (`<Trans>{{ name }}</Trans>` is react-i18next's own syntax) or `style={{…}}` | none |
+| `colour-literal` | a colour literal outside the measured tokens: hex, `rgb()`/`hsl()`/`hwb()`/`lab()`/`lch()`/`oklab()`/`oklch()`/`color()` with literal arguments, a CSS named colour where a colour is expected (`color: tomato`, not `font-family: Tomato`); in JSX `style` objects, Tailwind arbitrary values in class names (`bg-[#…]`, inside `cn(…)` too), SVG colour attributes (`fill`, `stroke`, `stopColor` …) and `.css` declarations. Comments, strings, `url()`, `var()` (its fallback included) and custom-property definitions (`--brand: …`, a token's own definition) are left out. A literal within ΔE_OK `deltaE` and alpha ±0.1 of a token is that token | `colors`: the token values of the latest run's `tokens.json` (§3.2.1), copied in when the guard is added, so CI (which has no runs) checks the same set; `deltaE`: 0.03 (`tokens.mjs` MERGE_DE). Without `tokens.json` the guard is *unavailable* and says so (`nunchi guard`) |
+
+What is read: `.js .jsx .ts .tsx .mjs .cjs .mts .cts` (and `.css` for the colour guard) under `--root` (default the
+project folder, where `.nunchi` is), in sorted order. Never read: `node_modules`, `.git`, `.next`, `dist`, `build`,
+`out`, `.turbo`, `.vercel`, `coverage`, `.nunchi`, `public`, dot folders, symbolic links (never followed), tests and
+stories (`__tests__`, `__mocks__`, `__fixtures__`, `e2e`, `cypress`, `*.test.*`, `*.spec.*`, `*.stories.*`, `*.d.ts`),
+the project's own top-level `test/`, `tests/`, `fixtures/`, `stories/`, `playwright/` and `e2e/` folders (a route
+folder called `test` inside `app/` is a page and is read), and config files (`*.config.*`). Files over 1 MB are
+skipped and counted ("skipped: 1 file over 1 MB"); a file that does not parse is listed by file:line and not checked.
+A file whose name a baseline cannot keep (a backslash, which a POSIX name may hold, or a control or bidi character),
+and a file or folder nunchi cannot open by its name (a name that is not UTF-8, a folder that cannot be listed), is
+listed and counted ("not checked: 1 file whose name …", with control and format characters written `\u{202e}`) and
+never read; nothing is skipped uncounted, and nothing throws. Paths are kept with forward slashes on every platform
+(`projectPath`, checked on Linux through `path.win32`: `D:\` and `D:/` alike, another drive or `..` outside), and a
+CRLF checkout (Git for Windows' `core.autocrlf`) gives the same hits, lines, columns and anchors as LF (test).
+A hit is reported by file:line:column and kind, never with its source line, so a key in the source never reaches the
+output.
+
+*Limits, stated:* there is no data flow (`const m = e.message; <p>{m}</p>` is missed: a fixture pins it); a name is
+judged per file, not per scope (a parameter called `confirm` anywhere in the file makes every bare `confirm()` there
+local); a `toast(e.message)` is not JSX and not this guard; colours in CSS-in-JS templates, SCSS/Less, theme objects
+in code and `var()` fallbacks are not read; Vue, Svelte, Astro and MDX (`.mdx`: Markdown with JSX, a docs site's pages) files are not read, so a `{error.message}` or an `alert()` in an `.mdx` page is not seen.
+
+**`.nunchi/guards.json`** (committed, the person's) is `{schema: 1, guards: [{kind, params}], baseline: [{kind,
+file, anchor, count, what?}]}` and nothing else. Only the built-in kinds with the typed parameters above: a regex, a
+selector, an unknown kind or key, a list value outside its set, a colour that `parseColor` does not read or that holds
+anything but colour-syntax characters, a baseline path that is absolute, holds `..`, a backslash or a control
+character, an anchor that is not 16 hex, a count under 1, a baseline entry of a kind not among the guards, or a
+duplicate are each a state error naming the file (`nunchi check` exits 2), never a silent pass. It is written stable
+(sorted keys and lists) and atomically, never through a link, with its own file mode (it is committed, not private);
+the writes of the board and the CLI are serialised by a lock in the state folder (never a lock folder among the
+committed files).
+
+*The baseline* holds the hits that were there when a guard was added, so `check` fails only on new ones. Its key is
+the file (relative to the project folder) plus an anchor: sha256 of the kind and the hit's own source text with
+whitespace collapsed (for a colour, its declaration, the literal and its place in it), so lines added above a hit do
+not make it new, while the same call once more in the file is new (counts are compared per key: the first `count` hits
+in file order are the baselined ones), a changed call is new (and its old entry gone), and the same text in another
+file is that file's hit. Adding a guard baselines what is there; widening one (another call, another link kind)
+baselines only the hits of what it adds, so a hit the guard already catches is never baselined by an add. A file
+renamed makes its hits new (a stated limit).
+
+**`nunchi check [--fail-on blocker|high|medium|low] [--sarif <file>] [--base <ref>] [--root <dir>] [--json]`**
+(`src/check.mjs`): no capture, no browser, no network; nothing is written but the SARIF file asked for (a test checks
+the tree is the same after it, and that no `.nunchi` or state folder appears).
+- The guards of `.nunchi/guards.json` run over the source; a hit not in the baseline is a failure, printed as
+  `app/nav.tsx:3:9  ` + the kind's words. Baselined hits are counted, and entries with fewer hits than recorded are
+  said ("gone from the baseline: 1 (nunchi guard --baseline, in your own terminal, tightens it)").
+- `--base <ref>`: the guards file as it was at `<ref>`, read with the hardened git (§2.4: `rev-parse --verify
+  --end-of-options <ref>^{commit}`, then `cat-file blob <commit>:<prefix>.nunchi/guards.json`: no textconv, no
+  filters, no checkout). A guard removed since, a guard narrowed (a call or link kind dropped, a colour added to the
+  allowed set, a wider ΔE), and a baseline that grew for a guard both have each count as a hit (exit 1), so a guard
+  cannot be weakened in a pull request without CI saying so. A guard added since is new by nature (its baseline is not
+  growth). A ref that is not a commit here is exit 2 with the way out ("in CI, fetch it first: git fetch --depth=1
+  origin <ref>"); a base without the file compares nothing.
+- The ledger: when this machine has one (its file exists in the shared state or `.nunchi/state`; looked up without
+  creating anything), `--fail-on <severity>` fails on the groups at or above it that still stand in the way — the
+  verdict's own count (summary.mjs `standingOf`: open, came back, to fix, later, needs you, not double-checked, a
+  dismissal nobody confirmed), on the latest full check: with only a quick first look in the ledger (§6, design §6)
+  it is too early to say, so `--fail-on` is exit 2 ("judges a full check …"), and the ledger line names the latest
+  sweep, never a first look after it. In CI there is no ledger: `check` runs the guards only and says `ledger: absent (guards
+  only)`; `--fail-on` without a ledger is exit 2 ("needs nunchi's ledger, and there is none here (in CI there never
+  is)"), never 0. With a ledger and no `--fail-on` it says "ledger: present, not judged" and does not read it.
+- Exit codes: 0 clean; 1 a new guard hit, a weakened guard, or findings at or above `--fail-on`; 2 a usage or state
+  error (an unknown option value or argument, a malformed or linked guards file, an unknown ref, a ledger that cannot
+  be read, no git for `--base`).
+- `--sarif <file>`: §7.4's SARIF (`runs[0].automationDetails.id` `nunchi/check/`, the export's is `nunchi/export/`,
+  so code scanning keeps the two analyses apart) with one result per new hit (`nunchi.guard/<kind>`, level `error`, the file and
+  line:column; `partialFingerprints` `nunchi/guard/v1` (kind and anchor) and `nunchi/fp/v1` (kind, file, anchor and
+  occurrence)), one per weakening (at `.nunchi/guards.json` line 1, or the file whose baseline grew, line 1), and,
+  with a ledger and `--fail-on`, one per place of the groups that stand in the way. Paths are the repository's.
+
+**Offering guards** (design §5). Only at the end of a fix batch — every group of the last fix plan
+(`state/fix-plan.json`) has an attempt since the plan and none is still running (so not while the batch goes on, on
+the board or in `fix --summary`) — and only after a *verified* fix — the fix loop's latest attempt of a group of the
+batch is `fixed` (§6.5, the engine's probes) — of a kind that has a built-in guard: `native-dialog` (the rule `native-dialog`), `dead-href` (`dead-href`), `raw-message` (`raw-error-text` and the
+AI item `L6.raw-technical-text`), `mustache-text` (`missing-value` of kind `unreplaced {{…}}`). The colour guard has
+no finding kind yet (its "move to token" findings are T2, design §6a): it is added with `nunchi guard --add
+colour-literal`. A kind guards.json covers already is not offered. The offer takes what was fixed: a fixed `confirm`
+offers `window.confirm` (`calls: ["confirm"]`), a fixed `href="#"` offers `href="#"`.
+- *The card* (the board's Progress view, under the verdict): the design's words, "Stop these coming back?" as its
+  heading, then one row per kind — "`window.confirm` (fixed twice)", "`href="#"`" (code as code; "(fixed twice)" when
+  the fix loop has fixed two groups of the kind, "(fixed N times)" for more, nothing for one) — each with an **Add**
+  toggle (`aria-pressed`, 44 px; its name is "Add" and its row, `aria-labelledby`, pressed or not; pressed it shows
+  "✓ Added", and in forced colours it takes `Highlight`, so the state is seen without colour too). Pressing it adds the
+  guard (`POST /api/guard {kind, add}`, the board's key only; the hits there now become the baseline of what it adds);
+  pressing it again takes back exactly what this card added (`state/guard-card.json`), never a guard the person had
+  before. Under the row it toggled, the card then says what happened in the owner's words (approved 2026-10-15 KST;
+  `GUARD_WORDS` in `board/shared.mjs`, code as code), and the polite live region says the same text:
+  "Added · the 2 already in your code are its baseline; a new one fails `nunchi check`. Commit `.nunchi/guards.json`."
+  ("the 1 already in your code is its baseline" for one; `baselined` from `POST /api/guard`), "Added · none in your
+  code now.", or "Taken back · `window.confirm` isn't guarded." (the row's label); the focus stays on the toggle. The
+  card stays, rows pressed, until the next fix plan.
+- *A guards.json that cannot be read* (a merge conflict, a hand edit, a link): the card says, in the owner's words,
+  "Can't read `.nunchi/guards.json`: it is not valid JSON (…). Guards can't be added until it's fixed — `git checkout --
+  .nunchi/guards.json` restores the committed one." (the file as the repository names it, `web/.nunchi/guards.json` in a
+  monorepo; the reason never holds a path of this machine); the rows stay and show what was fixed, with no toggle; no
+  chip is shown (what the file covers is not known); a toggle that had the focus leaves it on the card's heading. The
+  summary carries the line as `guards.unreadable` (null otherwise), the board's warnings say it once, and the CLI
+  prints the same line: `fix --summary` (instead of the offer; `--json`: `guardsUnreadable`), `nunchi guard` (exit 2)
+  and `findings` (a warning).
+- *The chat:* `fix --summary` adds the same words as a second line, pointing at the board: "Stop these coming back?
+  `window.confirm` (fixed twice) · `href="#"` → the board (nunchi open)." (`--json`: `guards`). Rows already added are
+  not said.
+- *Who adds:* a person only — the card (channel `board`), or `nunchi guard --add <kind>`, `--remove <kind>` or
+  `--baseline` in their own terminal (stdin and stdout TTYs and a typed 4-character code, as `fix --approve-checks`;
+  otherwise "Your AI cannot", exit 1). Never `cli-agent`.
+- *"guard available"*: a kind with five or more open places (open, came back, to fix, later) that a guard would cover
+  and none does shows only a passive chip, in Findings grouped by kind, beside the kind's section title (`/api/groups`
+  `guard: "available"` on the `kind` sections only), and in `findings` (`guard: "guard available"`). Nothing to press.
+  With a guards.json that cannot be read, no chip.
+
+**`nunchi guard`** lists the five kinds, whether each is in guards.json, what each finds now and how many of those are
+new (colour: *unavailable* without `tokens.json`); the agent may run it and propose. **`nunchi guard --lint`** prints
+an ESLint flat-config object to paste into the user's `eslint.config.*` — nunchi never writes their config: core rules
+only (`no-alert`, which covers alert, confirm and prompt alike; `no-restricted-syntax` with esquery selectors for
+`href="#"` (a string, `{'#'}`, `` {`#`} ``, either branch of `?:`), `javascript:` links, an error's `.message` or
+`['message']` (the guard's names, never through `errors`, `formState` or `fieldState`; directly, on the rendered side
+of `&&`, `??`, `||` and `?:`, in a template, after `+` or in `String()`) in JSX outside the attributes that are not
+text, and `{{`/`}}` in JSX text, a string or a template child, outside `<code>`, `<pre>`, `<kbd>`, `<samp>`, `<style>`,
+`<script>`), as a separate object scoped to `files` whose `ignores` are what `check` leaves out (tests, stories,
+`*.cy.*`, `*.story.*`, `e2e/`, `cypress/`, the top-level test folders, config files, the skipped folders; a test turns
+the globs into patterns and checks them against `check`'s own list), with the warning that ESLint does not merge rule
+options: this object replaces any earlier `no-restricted-syntax` list for these files, a later object that sets it
+with options replaces this one, so merge them into one list. Verified with ESLint 9.39.1 on 2026-10-15 KST: the
+selectors flag every hit of a JSX copy of the fixtures (23: two `no-alert`, six links, eleven messages, four
+placeholders) and none of the near misses (`className={styles.message}`, `toast.message`, `errors.email?.message`,
+`{e.message && <b>…</b>}`, `#top`, `` `#${id}` ``, `<Trans>{{ name }}</Trans>`, `<code>{'{{name}}'}</code>`), files
+under `e2e/`, `cypress/` and `__tests__/` and `*.cy.*` and `*.story.*` files get none, and with a later object that sets
+`no-restricted-syntax` only `no-alert` was left. Proposed only when already installed (the app's package.json or
+`node_modules`): `jsx-a11y/anchor-is-valid` when `eslint-plugin-jsx-a11y` is (or `eslint-config-next`, which depends on
+it: eslint-config-next 16.4.1 turns on six jsx-a11y rules, `alt-text`, `aria-props`, `aria-proptypes`,
+`aria-unsupported-elements`, `role-has-required-aria-props`, `role-supports-aria-props`, and not `anchor-is-valid`,
+read from its published package on 2026-10-15 KST; design §13's open item), stylelint's
+`scale-unlimited/declaration-strict-value` when `stylelint` and `stylelint-declaration-strict-value` are, Playwright's
+`toMatchAriaSnapshot` when `@playwright/test` is.
+
+**The deny hook** (§7.2) protects guards.json: Write, Edit and writing Bash commands on `.nunchi/guards.json` are
+denied (reading is not: it is committed), in any letter case (a case-insensitive disk opens `.NUNCHI/Guards.json` as
+the same file; paths are resolved with `realpathSync.native`), and so is the `.nunchi` folder itself named by a command
+that writes or removes what it names (`rm -rf .nunchi`, `cp g.json .nunchi/`, `git checkout <ref> -- .nunchi`, `git
+restore --source <ref> .nunchi/`; rm, rmdir, cp, mv, ln, rsync, install, tar, unzip and git checkout, restore, rm, mv,
+clean, stash: `ls .nunchi` or `--ignore-pattern .nunchi` are not writes). `nunchi guard --add`, `--remove` and
+`--baseline` are denied in the words as the shell joins them too (`nunchi guard --ad""d`, `nunchi "guard" "--add"`),
+and nunchi under a pseudo-terminal, as before. A path built at run time (a variable, inline code that joins pieces, a
+patch applied, `git stash pop`) is not seen: the hook's stated limit. The agent may propose a guard (`nunchi guard`, `--lint`) but never write or weaken
+one; where the hook does not run (Codex), `check --base` in CI catches a weakening that reaches a pull request.
+
+### 7.4 `nunchi export --format md|json|sarif` (built 2026-10-15 KST, design 0.1-c §5, M4)
+
+`nunchi export --format md|json|sarif [--status open,to-fix,…|all] [--include-page-text] [--out <file>] [--root
+<dir>]` (`src/export-findings.mjs`; `--html`, §7.1, stays the review page). It reads the ledger as `findings` does
+(brought up to date first; the run it names is the latest full check, never a quick first look) and exports its
+places (rows) whose status is asked — by default open, came back, to fix
+and later (what still counts for shipping; `--status` takes the ledger's words and the board's `later`,
+`not-a-problem`, `came-back`, or `all`) — grouped as the ledger groups them. To stdout, or `--out <file>` (written
+atomically, never through a link, never inside `.nunchi/runs`, owner-only (0600), in folders made 0700 when nunchi
+creates them); what was left out is said on stderr.
+- *Redaction:* every string goes through the secret scanner at export time — credential URL parts and query values
+  (`SECRET_PARAM`: `token`, `*_token`, `token_hash`, `oobCode`, `code`, `apikey` …), then `scrubSecrets` (§7.1; a
+  random-looking path segment or query value of 24 characters or more is `url-path-token` / `url-query-token`): a hit
+  becomes `[secret-shaped: <kind>]`. Selectors go through `redactSelector` first,
+  URLs through `redactUrl`, object keys too, and the JSON export cleans every key and string of its model once more
+  (an evidence key, the app's `package.json` path in a folder named like a key), as the SARIF writer does every string
+  of the log, whoever built it. A secret finding gives its location and kind only. Tested with secrets in every field: selectors, a route
+  (`/reset/<key>` from `--routes`), an AI claim quote, evidence text, a decision note with URL userinfo, a bundle URL's
+  query, a file path.
+- *Page text* is left out unless `--include-page-text`: evidence text and AI claim quotes always; control names
+  (`name`, `label`, `placeholder`), URLs (`href`, `src`, `url`: a link to `/people/ana-fern/diary` says whose screen it
+  was; a secret finding's bundle URL is its location and stays), the quoted names in a selector
+  (`button:has-text("…")`) and an AI finding's `aria=` node (cut to its role, a masked name and its states:
+  `aria=group "Week 3": Ana dentist Tuesday` → `aria=group "…"`, `aria=text: Welcome back` → `aria=text`,
+  `aria=heading "Hello" [level=1]` → `aria=heading "…" [level=1]`) when the finding was seen on a signed-in screen.
+  Numbers and enums the engine measured are kept; an evidence field nunchi does not know is page text. How many fields
+  were left out is said (a selector with anything taken out of it counts as one). HAR, network bodies, `text.txt` and `aria.yml` are never read.
+- *Escaping:* Markdown gets no raw HTML and no structure from data: control and format characters (`\p{Cc}`,
+  `\p{Cf}`: line breaks, bidi marks and isolates, zero-width characters, the soft hyphen, the Arabic letter mark) and
+  the line and paragraph separators are flattened to a space, a lone surrogate becomes U+FFFD, and every character Markdown or GFM gives a meaning (`` \ ` * _ { } [ ] ( ) # + - . ! | < > ~ & : @ = $ % ^ " ' ``)
+  is backslash-escaped, so no data opens a link, an image, a heading, an entity, an autolink or HTML. SARIF uses
+  `message.text` only.
+- *Locations:* paths relative to the repository root (`git rev-parse --show-prefix` of the app's root; without git,
+  the project folder's, said in the export); route templates (`/posts/[id]`), never URLs, sample paths, origins or
+  screen ids. JSON and Markdown give each place its route, persons, viewports and states, element, location, the
+  evidence kept, and its decision (decision, reason, whether a person made or confirmed it, its channel and note; not
+  who).
+- *SARIF* (`src/sarif.mjs`): SARIF 2.1.0, one run, tool `nunchi` with its version, `columnKind: utf16CodeUnits`, no
+  time and no absolute path (`%SRCROOT%` is described, not resolved). One result per place: `ruleId` the rule,
+  `level` blocker and high → `error`, medium → `warning`, low → `note`; `message.text` "<title> on <route> (element
+  <selector>). <status> · rule|AI · group <id> · …" (the first sentence is what GitHub shows when space is short);
+  every result has a `physicalLocation` — the finding's own file:line (an AI finding's grounded `evidence.file`), else
+  the page file of its route with `startLine` 1 (discover's route → file), else the app's `package.json` line 1 (a
+  whole-app finding such as a secret in the bundle); a place with none of these is left out and counted. The route and
+  the element are also `logicalLocations` (`resource`, `element`); `partialFingerprints` are `nunchi/group/v1` (the
+  group) and `nunchi/fp/v1` (the fingerprint). Rules carry `shortDescription`, `defaultConfiguration.level` (the worst
+  of their results) and tags (lens, rule or ai, `security` for L9); `security-severity` only on L9 rules (blocker 9.5,
+  high 8.0, medium 5.5, low 2.0 by the worst result; GitHub reads over 9.0 as critical, 7.0–8.9 high, 4.0–6.9
+  medium, 0.1–3.9 low). URIs are percent-encoded outside RFC 3986's path characters (`app/posts/%5Bid%5D/page.tsx`), and `:` too, so
+  no first segment reads as a scheme; a finding's file that is not a plain relative path (a root, a drive, a scheme
+  such as `https:`, `..`) is not a location. SARIF text is clipped by code point (never half a surrogate pair).
+- *GitHub's limits* (docs.github.com/en/code-security/reference/code-scanning/sarif-files/sarif-support and its
+  limits table, `data/reusables/code-scanning/sarif-limits.md` in github/docs, read 2026-10-15 KST from the docs'
+  source, since docs.github.com is not reachable from this build machine): a gzip-compressed SARIF file of at most
+  10 MB, rejected above; per file at most 20 runs; per run at most 25,000 results (only the top 5,000, by severity,
+  are kept), 25,000 rules and 100 tool extensions; per result at most 1,000 locations (100 kept; only the first is
+  used) and 10,000 thread flow locations (1,000 kept); per rule at most 20 tags (10 kept); 1,000,000 alerts per
+  repository. A result needs a location to be shown; only `partialFingerprints.primaryLocationLineHash` is GitHub's
+  own (the upload action adds it), the rest are kept for tools. nunchi writes one run, one location per result and at
+  most 10 tags per rule, keeps the 5,000 results GitHub would keep — worst first, then by rule, path and line, the same
+  every time — and keeps the uncompressed file at or under 10 MB (the most results that fit, found by halving over the
+  sizes of the results and rules, worked out once each as the file writes them; the log is built once, and a test
+  checks the size worked out is the size written), so the compressed one is too. When it cuts, the run's
+  `properties.truncated` says `{kept, of, why, limits}`, `why` naming both reasons when both cut ("GitHub keeps 5,000
+  results per run; and the file would be over 10 MB"), and the command says "SARIF truncated: 5,000 of 6,120 results
+  kept, worst first (GitHub keeps 5,000 results per run; <docs URL>)".
+- *Suppressions:* a place that is fixed, or that a decision dismissed or kept (`--status fixed,not-a-problem,kept` or
+  `all`), carries `suppressions: [{kind: "external", status, justification}]` (the decision lives in nunchi's ledger,
+  not in the source), so code scanning shows it closed instead of opening an alert: `accepted`, or `underReview` for a
+  decision no person made or confirmed (it does not clear "Ready to ship" either). The log is built of pieces (the run
+  around the results and rules, each result, each rule), each scrubbed whole, keys included, so every key and string of
+  the log passes the scanner whoever built it (a tag, a fingerprint's name, the version).
+- *Checks:* the SARIF 2.1.0 schema is vendored as a test fixture (`test/fixtures/sarif/sarif-schema-2.1.0.json`, from
+  oasis-tcs/sarif-spec `sarif-2.1/schema/sarif-schema-2.1.0.json`, whose id is the OASIS errata01 schema; sha256
+  `c3b4bb2d6093897483348925aaa73af03b3e3f4bd4ca38cef26dcb4212a2682e`, pinned by a test) and checked without network by
+  a minimal validator written for the draft-04 keywords it uses (`test/fixtures/sarif/validate.mjs`: `$ref`, type,
+  enum, anyOf, oneOf, properties, required, additionalProperties, items, minItems, uniqueItems, minimum, maximum,
+  pattern, format: `uri` and `uri-reference` by RFC 3986's grammar; an unknown keyword fails the run), with tests that
+  it rejects broken logs, and by what GitHub needs beyond the schema (`githubProblems`: one run of at most 5,000
+  results, every `ruleId` among the rules, a non-empty relative `uri` under `%SRCROOT%`, at most 10 tags a rule) for
+  both `export --format sarif` and `check --sarif`. No dependency was added.
+  Markdown and JSON (and SARIF) exports are byte-identical across two runs (test).
+
+**Deviations from design §5, and why.**
+- `check --base` also fails on a narrowed guard and a grown baseline, not only a removed guard: each lets a hit
+  through as silently as a removal (the baseline being "the person's" is the design's own rule).
+- The colour guard copies its token set into guards.json when it is added (CI has no runs to read `tokens.json`
+  from), and is never on the card yet: no ledger finding is a colour literal until T2's "move to token" findings.
+- The chat line adds " → the board (nunchi open)." to the design's words, as the batch line does for *needs you*.
+- "(fixed N times)" for three or more: the design gives only "(fixed twice)".
+- The card's toggle takes back only what the card added: a toggle that removed a guard the person had before would be
+  a weakening the person did not ask for.
+- SARIF keeps 5,000 results (GitHub's display cap), not the 25,000 hard limit: GitHub would drop the rest anyway, and
+  this way the order is nunchi's and stated.
+
+**Measured (2026-10-15 18:02 KST, after the review fixes and the merges of M5 and M7).** Pebble `node bench/run.mjs --twice`
+is unchanged: rule recall 34/34, 0 false positives on 8 clean scenes, determinism identical (1,141 files), fingerprints
+100% (52/52), 178.9 s per capture (other suites ran on the machine meanwhile; 162 s at 13:09 KST).
+`nunchi guard` on Pebble's source finds 2 `native-dialog` and 2 `dead-href` hits (its seeded `confirm` and `href="#"`)
+and no `raw-message`: Pebble stores the message first (`setError(e.message)`, then `{error}`), the stated limit of a
+guard without data flow. Tests: a fixture that triggers each guard and one of near misses that does not
+(`test/fixtures/guards/`), guards.json validation, the baseline, `--base`, `check`'s exit codes, the SARIF schema and
+what GitHub needs beyond it, redaction in every field of every format, Markdown escaping, determinism, the card's API
+and its page in Chromium with axe (light 1280 px, dark 390 px, forced colours), the owner's words, the deny hook's
+rules. `npm test` (with M5's and M7's): 734 tests, 733 passing and 1 Windows-only skipped, on Node 22.22.0 and Node 24.21.0, Chromium
+included, with bun on PATH and without it.
+
+**Not done in M4:** a board view of the guards and their hits (deferred to 0.2 by the owner; "More views in 0.2"
+names `nunchi guard`); `--run` for md/json/sarif (they export the ledger, which is what CI and sharing need);
+re-baselining from the board; SARIF from `check` for the ledger without `--fail-on`.
 
 ### 7.5 Coverage and Screens (built 2026-10-15 KST, design 0.1-c §3, §12 M7)
 

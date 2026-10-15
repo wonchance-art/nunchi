@@ -219,7 +219,8 @@ const gitUnsafe = why => Object.assign(new Error(`git cannot be run safely here:
 // programs cannot be switched off.
 // A call may add `env` (only GIT_INDEX_FILE, a temporary index the fix loop hashes a working tree with) and its own
 // `timeout`.
-const CALL_ENV = new Set(['GIT_INDEX_FILE']);
+// variables one call may set: a temporary index; no lazy fetch from a partial clone's promisor remote (git 2.44+)
+const CALL_ENV = new Set(['GIT_INDEX_FILE', 'GIT_NO_LAZY_FETCH']);
 export function gitRunner(root, { timeout = 60_000 } = {}) {
   const opts = (env, t = timeout) => ({ env, timeout: t, maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
   const version = /(\d+)\.(\d+)/.exec(execFileSync('git', ['--version'], opts(gitEnv(process.env, []))).toString());

@@ -20,6 +20,8 @@ import { SEV, STATUS_LABEL, PERSONS, VPS, STATES, human, plural, drawable, scene
 import { claimLive, claimMinutes } from '../fix/claims.mjs';
 import { fixNeedsOf } from '../summary.mjs';
 import { latestRecords, allRecords, isOpen } from '../fix/records.mjs';
+import { readGuards, guardsPath, guardsName, unreadableLine } from '../guard-kinds.mjs';
+import { guardAvailable, guardOffer } from '../guard-offer.mjs';
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const rank = (list, v) => { const i = list.indexOf(v); return i < 0 ? list.length : i; };
@@ -242,7 +244,15 @@ export function buildBoardModel({ nunchiDir, projectDir, warn = () => {} }) {
     || b.screens - a.screens || b.routes - a.routes || Number(a.source === 'ai') - Number(b.source === 'ai') || cmp(a.id, b.id));
   out.forEach((g, i) => { g.order = i; });
   const byId = new Map(out.map(g => [g.id, g]));
-  return { generation, led, rows, groups: out, byId, summary: sum, latest, latestEv, evidenceOf, projectDir, nunchiDir, claims, stateDir: st.root.dir };
+  // guards (design §5): the card at the end of a fix batch, and the passive "guard available" chip on a kind with ≥ 5
+  // open places no guard covers. A guards file that cannot be read gets the owner's line (its repository path, why),
+  // said once among the warnings and on the card, which shows what was fixed without its toggles; no chip is shown
+  // (what the file covers is not known).
+  let guardsDoc = null, guardsUnreadable = null;
+  try { guardsDoc = readGuards(guardsPath(nunchiDir), guardsName(st.root.prefix)); } catch (e) { guardsUnreadable = unreadableLine(guardsName(st.root.prefix), e); warn(guardsUnreadable); }
+  const guardOfferNow = (() => { try { return guardOffer({ stateDir: st.root.dir, rows, doc: guardsDoc }); } catch { return null; } })();
+  const guardRules = guardsUnreadable ? new Set() : guardAvailable(rows, guardsDoc);
+  return { generation, led, rows, groups: out, byId, summary: sum, latest, latestEv, evidenceOf, projectDir, nunchiDir, claims, stateDir: st.root.dir, guardOffer: guardOfferNow, guardRules, guardsUnreadable };
 }
 
 // A fix record as the board shows it (design §3.4): which attempt, its phase, the *needs you* kind — (a) the fix also
@@ -357,6 +367,8 @@ export function groupList(model, { status = 'open', lens = null, q = null, group
   // updates the rows it shows in place, whatever filter they match now (design §3.4)
   const lensName = id => model.lenses?.[id]?.name ? `${id} · ${model.lenses[id].name}` : id;
   for (const s of [...sections.values(), ...unchecked.values()]) if (by === 'lens') s.title = safe(lensName(s.key), 160);
+  // a kind with ≥ 5 open places and a built-in guard nobody added: a passive chip, nothing to press (design §5)
+  if (by === 'kind') for (const s of sections.values()) if (model.guardRules?.has(s.key)) s.guard = 'available';
   return {
     generation: model.generation, status, lens, q: needle, groupBy: by, counts, total: shown.length,
     sections: order(sections), unchecked: order(unchecked), groups: Object.fromEntries(model.groups.map(g => [g.id, publicGroup(g)])),

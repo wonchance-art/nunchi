@@ -20,7 +20,7 @@ import { foldFinding } from './ai-fold.mjs';
 import { readManifest, jpegSize, sceneIndex, sceneDir } from './hunt.mjs';
 import { scrubSecrets } from './rules.mjs';
 import { redactUrl, redactText } from './network.mjs';
-import { sha } from './stable.mjs';
+import { sha, privateDir, setMode } from './stable.mjs';
 import { BASE_CSS } from './board/look.mjs';
 import { SEV, SEV_LABEL, STATUS_LABEL, FILTERS, WHO, WIDTH, STATES, STATE_LABEL, PERSONS, VPS, drawable as drawableOn, shotGeometry, pct, plural, human, sceneLabelText, WORDS } from './board/shared.mjs';
 
@@ -668,19 +668,21 @@ export function exportHtml({ runDir, nunchiDir, outDir, inline = false, ledger =
   const mine = new Set(ours);
   for (const key of keys) if (!mine.has(`${key}.jpg`) && lstatOr(join(img, `${key}.jpg`))) refuse(`${join(img, `${key}.jpg`)} exists and was not written by nunchi export`);
 
-  // then write: remove only what the last export listed (a link is removed as a link, never followed)
-  mkdirSync(outDir, { recursive: true });
+  // then write: remove only what the last export listed (a link is removed as a link, never followed). The page holds
+  // screenshots of the app: the folders it creates are 0700 and its files 0600 (POSIX), so only you can open them.
+  privateDir(outDir);
   for (const n of ours) { const f = join(img, n); const st = lstatOr(f); if (st && (st.isFile() || st.isSymbolicLink())) unlinkSync(f); }
   if (im && lstatOr(marker)) unlinkSync(marker);
   let bytes = Buffer.byteLength(html);
   if (keys.length || (!inline && m.images.size === 0)) {
-    if (!lstatOr(img)) mkdirSync(img);
-    for (const key of keys) { copyFileSync(m.images.get(key).file, join(img, `${key}.jpg`), FS.COPYFILE_EXCL); bytes += m.images.get(key).bytes; }
-    writeFileSync(marker, keys.map(k => `${k}.jpg\n`).join(''), { flag: 'wx' });
+    if (!lstatOr(img)) { mkdirSync(img, { mode: 0o700 }); setMode(img, 0o700); }
+    for (const key of keys) { const f = join(img, `${key}.jpg`); copyFileSync(m.images.get(key).file, f, FS.COPYFILE_EXCL); setMode(f, 0o600); bytes += m.images.get(key).bytes; }
+    writeFileSync(marker, keys.map(k => `${k}.jpg\n`).join(''), { flag: 'wx', mode: 0o600 });
   } else if (lstatOr(img) && !readdirSync(img).length) rmdirSync(img);
   // a new file renamed over index.html: a symlink put there in the meantime is replaced, never written through
   const tmp = join(outDir, `.index.html.${process.pid}.tmp`);
-  writeFileSync(tmp, html, { flag: 'wx' });
+  writeFileSync(tmp, html, { flag: 'wx', mode: 0o600 });
+  setMode(tmp, 0o600);
   renameSync(tmp, index);
   return {
     out: index, run: m.runId, inline, bytes, images: keys.length,
