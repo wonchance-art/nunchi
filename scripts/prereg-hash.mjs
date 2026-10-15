@@ -222,12 +222,13 @@ function main(argv) {
   }
   if (!doc) throw fail('usage: prereg-hash.mjs [--fill | --check] <docs/prereg-<gate>.md> [--key name=<path> …] [--again]');
   const text = readFileSync(resolve(doc), 'utf8');
-  const now = computeHashes({ repo, spec: parseSets(text), keys });
   const shownDoc = doc.replace(/\\/g, '/');
-  if (mode === 'print') return console.log(renderBlock(now, shownDoc));
+  const spec = parseSets(text);
   const registered = readRegistered(text);
+  if (mode === 'check' && !registered) throw fail(`${doc} is not registered yet (node scripts/prereg-hash.mjs --fill ${shownDoc})`, 2);
+  const now = computeHashes({ repo, spec, keys });
+  if (mode === 'print') return console.log(renderBlock(now, shownDoc));
   if (mode === 'check') {
-    if (!registered) throw fail(`${doc} is not registered yet (node scripts/prereg-hash.mjs --fill ${shownDoc})`, 2);
     const diffs = compare(registered, now);
     if (diffs.length) throw fail(`${doc}: the registration no longer holds:\n  ${diffs.join('\n  ')}`, 1);
     return console.log(`${doc}: every registered hash and seed holds (${now.rows.length} sets, ${now.keys.length} keys, ${now.seeds.length} seeds)`);
