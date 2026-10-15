@@ -120,14 +120,48 @@ function stringsUnder(node) {
   });
   return out;
 }
-// Where an expression's value is rendered as it is: `e.message`, `err?.message`, `a && e.message`, `e.message ?? 'x'`,
-// `ok ? 'x' : e.message`. Not a template, a concatenation or a call.
+// A member's property name (`a.b`, `a['b']`, `a?.b`), or null.
+const isMember = e => e?.type === 'MemberExpression' || e?.type === 'OptionalMemberExpression';
+const propName = m => (!m.computed && m.property.type === 'Identifier' ? m.property.name : m.computed && m.property.type === 'StringLiteral' ? m.property.value : null);
+// The names along a member chain, root first (`e.response?.data` → e, response, data); a call or `this` ends it.
+function chainNames(e) {
+  const out = [];
+  for (let x = unwrap(e); x;) {
+    if (x.type === 'Identifier') { out.unshift(x.name); break; }
+    if (!isMember(x)) break;
+    const p = propName(x);
+    if (p !== null) out.unshift(p);
+    x = unwrap(x.object);
+  }
+  return out;
+}
+// A raw message comes from an error: the chain names `e`, `err`, `error`, `ex`, `exception`, `cause` or a name ending
+// in Error (`loadError`). A chain through `errors`, `formState` or `fieldState` is a form library's validation message
+// (react-hook-form, Formik), written for people; `toast.message` or `m.message` is not an error's.
+const ERRORISH = n => /^(e|err|error|ex|exception|cause)$/i.test(n) || /Error$/.test(n);
+const FORM_CHAIN = new Set(['errors', 'formState', 'fieldState']);
+function errorMessage(m) {
+  if (!isMember(m) || propName(m) !== 'message') return false;
+  const names = chainNames(m.object);
+  return !names.some(n => FORM_CHAIN.has(n)) && names.some(ERRORISH);
+}
+// Where an error's message is rendered as it is: `e.message`, `err?.message`, `a && e.message`, `e.message ?? 'x'`,
+// `ok ? 'x' : e.message`, and through the plain wrappers that keep it whole: `String(e.message)`,
+// `e.message.toString()`, `` `Failed: ${e.message}` ``, `'Error: ' + e.message`. Not a call that makes something else
+// of it (`t(e.message)`, `e.message.length`).
 function messageEnds(e, out = []) {
   e = unwrap(e);
   if (!e) return out;
-  if ((e.type === 'MemberExpression' || e.type === 'OptionalMemberExpression') && ((!e.computed && e.property.type === 'Identifier' && e.property.name === 'message') || (e.computed && e.property.type === 'StringLiteral' && e.property.value === 'message'))) out.push(e);
+  if (errorMessage(e)) out.push(e);
   else if (e.type === 'LogicalExpression') { if (e.operator !== '&&') messageEnds(e.left, out); messageEnds(e.right, out); }
   else if (e.type === 'ConditionalExpression') { messageEnds(e.consequent, out); messageEnds(e.alternate, out); }
+  else if (e.type === 'TemplateLiteral') e.expressions.forEach(x => messageEnds(x, out));
+  else if (e.type === 'BinaryExpression' && e.operator === '+') { messageEnds(e.left, out); messageEnds(e.right, out); }
+  else if ((e.type === 'CallExpression' || e.type === 'OptionalCallExpression') && e.arguments.length <= 1) {
+    const c = unwrap(e.callee);
+    if (c?.type === 'Identifier' && c.name === 'String' && e.arguments.length === 1) messageEnds(e.arguments[0], out);
+    else if (isMember(c) && !e.arguments.length && ['toString', 'trim'].includes(propName(c)) && errorMessage(unwrap(c.object))) out.push(unwrap(c.object));
+  }
   return out;
 }
 
