@@ -3,9 +3,11 @@
 //
 // Up to QUICK_MAX routes, in this order:
 //   1. `/` (the home page), when the app has it;
-//   2. the routes the home page links to from its navigation landmarks (`<nav>` / role=navigation and `<header>` /
-//      role=banner; a footer is not navigation), in the order a visitor meets them: the screens of `/` guest before
-//      signed-in, desktop before phone, each one's links in document order; a route counts once, where it is met first.
+//   2. the routes the home page links to from its navigation (`<nav>` / role=navigation, or the page banner: a
+//      `<header>` not inside an article, aside, main, nav or section, or role=banner; never inside a footer or
+//      role=contentinfo; a link the screen does not show is skipped — links.json `navigation`, `visible`), in the
+//      order a visitor meets them: the screens of `/` guest before signed-in, desktop before phone, each one's links in
+//      document order; a route counts once, where it is met first.
 //      A screen of `/` that redirected within the app counts (its links are what `/` shows); one that was not captured
 //      (no DOM, left the app) gives none;
 //   3. one route per top-level segment no chosen route is in yet (`/app/...` is segment `app`), bigger segments first
@@ -15,7 +17,10 @@
 import { routeMatcher } from './flow.mjs';
 
 export const QUICK_MAX = 8;
+// links.json says whether a link is the site's navigation (`navigation`: in a nav or the page banner, never in a footer);
+// links captured before it existed fall back to the nearest landmark
 const NAVIGATION = new Set(['nav', 'header']);
+const isNavigation = l => (typeof l.navigation === 'boolean' ? l.navigation : NAVIGATION.has(l.landmark));
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const segmentOf = r => r.split('/').filter(Boolean)[0] ?? '';
 const depthOf = r => r.split('/').filter(Boolean).length;
@@ -37,7 +42,7 @@ export function rankQuick({ routes, known = routes, home = [], max = QUICK_MAX }
   const match = routeMatcher([...new Set([...known, ...candidates])].sort(cmp));
   const screens = home.filter(s => s && s.status === 'captured').sort((a, b) => visitorOrder(a) - visitorOrder(b) || cmp(String(a.id), String(b.id)));
   for (const s of screens) for (const l of Array.isArray(s.links) ? s.links : []) {
-    if (!l || !NAVIGATION.has(l.landmark)) continue;
+    if (!l || l.visible === false || !isNavigation(l)) continue;
     const to = match(l.path);
     if (to) take(to, 'navigation');
   }

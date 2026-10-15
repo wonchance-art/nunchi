@@ -65,6 +65,21 @@ test('quick scope tie-breaks: bigger sections first, then by name; a section\'s 
   assert.deepEqual(rankQuick({ routes, max: 2 }).routes, ['/shop/cart', '/c/[id]'], 'the cap counts every route');
 });
 
+test('quick scope: only the site\'s navigation counts — not a footer\'s nav, a card\'s header or a link the screen does not show (review of PR #33)', () => {
+  const routes = ['/', '/about', '/blog', '/legal', '/menu-only', '/pricing'];
+  const home = [homeScreen('guest', 'd', [
+    { path: '/legal', landmark: 'nav', navigation: false, visible: true },                // a nav inside the footer
+    { path: '/blog', landmark: 'header', navigation: false, visible: true },              // a card's header in main
+    { path: '/menu-only', landmark: 'nav', navigation: true, visible: false },            // a menu the screen does not show
+    { path: '/pricing', landmark: 'nav', navigation: true, visible: true },
+    { path: '/about', landmark: 'header', navigation: true, visible: true },              // the page banner
+  ])];
+  const r = rankQuick({ routes, home, max: 3 });
+  assert.deepEqual(r.routes, ['/', '/pricing', '/about']);
+  // links captured before `navigation` existed fall back to their nearest landmark
+  assert.deepEqual(rankQuick({ routes, home: [homeScreen('guest', 'd', [link('/legal'), link('/blog', 'footer')])], max: 2 }).routes, ['/', '/legal']);
+});
+
 test('quick scope: a home screen that was not captured gives no links, a redirected one does; a link to a route without a sample is skipped', () => {
   const routes = ['/', '/inbox', '/settings', '/zz'];
   const known = [...routes, '/posts/[id]'];
