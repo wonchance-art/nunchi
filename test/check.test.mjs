@@ -89,6 +89,23 @@ test('a malformed guards file, an unknown --base, bad usage: exit 2, never 0', (
   }
 });
 
+test('a --root that is missing, a file, or a folder with no source to read: exit 2, never a pass', () => {
+  const root = repo({ guards: [{ kind: 'native-dialog' }] });
+  mkdirSync(join(root, 'docs'));
+  put(root, 'docs/notes.md', '# notes\n');
+  put(root, 'tests/remove.test.tsx', "alert('x');\n");
+  for (const [arg, why] of [['no-such-folder', /does not exist/], ['package.json', /is not a folder/], ['docs', /no source file read under .*docs/], ['tests', /no source file read/]]) {
+    const r = check(root, '--root', arg);
+    assert.equal(r.status, 2, `${arg}: ${r.stdout}`);
+    assert.match(r.stderr, why);
+  }
+  assert.equal(check(root, '--root', 'app').status, 0);
+  // no guards: nothing is read, and that is said, not failed
+  const none = repo();
+  assert.equal(check(none, '--root', 'docs-missing').status, 2);
+  assert.equal(check(none).status, 0);
+});
+
 test('--fail-on without a ledger exits 2; with one, open findings at or above it fail', () => {
   const root = repo();
   const none = check(root, '--fail-on', 'high');

@@ -13,7 +13,7 @@
 //   a selector from the file — and a baseline of the hits that were there when a guard was added, keyed by file and a
 //   hash of the hit's own source (not its line), so `check` fails only on new hits. It is validated strictly: anything
 //   unexpected is a state error (exit 2), never a silent pass.
-import { readFileSync, readdirSync, lstatSync, realpathSync } from 'node:fs';
+import { readFileSync, readdirSync, lstatSync, statSync, realpathSync } from 'node:fs';
 import * as nodePath from 'node:path';
 import { join, relative, resolve, sep, isAbsolute, extname } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -461,6 +461,9 @@ export function scanGuards({ project, root = project, guards }) {
   const real = p => { try { return realpathSync.native(resolve(p)); } catch { return resolve(p); } };
   project = real(project); root = real(root);
   if (!insideProject(project, root)) throw fail('BAD_ARGS', `--root ${root} is outside the project folder ${project}`);
+  let st = null;
+  try { st = statSync(root); } catch {}
+  if (!st?.isDirectory()) throw fail('BAD_ARGS', `--root ${root} ${st ? 'is not a folder' : 'does not exist'}: point it at the app's folder`);
   const css = guards.some(g => g.kind === 'colour-literal');
   const { files, large, odd } = guards.length ? sourceFiles(project, root, { css }) : { files: [], large: [], odd: [] };
   const hits = [], unparsed = [];

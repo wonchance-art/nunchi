@@ -80,6 +80,8 @@ export function runCheck({ project, root = project, failOn = null, base = null, 
   const before = base ? guardsAt(project, base, { git }) : null;
   const guards = doc?.guards || [];
   const scan = scanGuards({ project, root, guards });
+  // guards that read nothing check nothing: never a pass (a monorepo's root, a folder of tests only)
+  if (guards.length && !scan.files) throw fail('NO_SOURCE', `no source file read under ${root} (${[scan.large.length && `${plural(scan.large.length, 'file')} over 1 MB`, scan.odd.length && `${plural(scan.odd.length, 'odd name')}`].filter(Boolean).join(', ') || 'none there that is not a test, a fixture, a config file or in a skipped folder'}): point --root at the app's folder`);
   const cmpd = compareBaseline(scan.hits, doc?.baseline || []);
   const weakened = base ? weakenedSince(before, doc, scan.hits) : [];
   const lines = [];

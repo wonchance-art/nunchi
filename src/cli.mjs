@@ -1007,7 +1007,7 @@ if (cmd === 'setup') {
   let r;
   try { r = runCheck({ project, root, failOn: args.failOn ?? null, base: args.base ?? null, sarif: !!args.sarif, version: pkg.version, ledger: loaded ? () => loaded : null }); }
   catch (e) {
-    if (['CORRUPT', 'UNSAFE_PATH', 'BAD_ARGS', 'BAD_STATE', 'NO_LEDGER', 'GIT_UNSAFE', ...LEDGER_ERRORS].includes(e.code)) usage(e.message);
+    if (['CORRUPT', 'UNSAFE_PATH', 'BAD_ARGS', 'BAD_STATE', 'NO_LEDGER', 'NO_SOURCE', 'GIT_UNSAFE', ...LEDGER_ERRORS].includes(e.code)) usage(e.message);
     throw e;
   }
   if (args.sarif) {
