@@ -191,6 +191,8 @@ test('nunchi guard: listing and --lint for anyone; --add, --remove and --baselin
   }
   assert.ok(!existsSync(join(p.nunchi, 'guards.json')));
   assert.equal(run('--add').status, 2);
+  assert.equal(run('--lnt').status, 2, 'a typo is refused, not ignored');
+  assert.equal(run('--strict').status, 2, 'another command\'s flag is refused');
 });
 
 test('deny hook: the agent cannot write guards.json or add, remove or re-baseline a guard; it may read and propose', () => {

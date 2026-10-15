@@ -92,7 +92,7 @@ test('a malformed guards file, an unknown --base, bad usage: exit 2, never 0', (
     assert.match(r.stderr, why);
   }
   gitIn(root, 'checkout', '--', '.nunchi/guards.json');
-  for (const args of [['--fail-on', 'critical'], ['--fail-on'], ['--sarif'], ['--base', 'no-such-ref'], ['--base', '--fail-on'], ['extra'], ['--base', '-x']]) {
+  for (const args of [['--fail-on', 'critical'], ['--fail-on'], ['--sarif'], ['--base', 'no-such-ref'], ['--base', '--fail-on'], ['extra'], ['--base', '-x'], ['--failon', 'high'], ['--strct'], ['--url', 'http://x.invalid'], ['--format', 'sarif']]) {
     const r = check(root, ...args);
     assert.equal(r.status, 2, args.join(' '));
   }

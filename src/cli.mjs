@@ -258,6 +258,10 @@ const ledgerGuard = fn => {
   catch (e) { if (!LEDGER_ERRORS.includes(e.code)) throw e; console.error('nunchi: ' + e.message); process.exit(2); }
 };
 const warn = m => console.error('nunchi: ' + m);
+// The flags given that a command does not take (another command's, or none at all), as typed: a command that
+// refuses them says so instead of ignoring a typo (`--fail-on` for `--failon`) or a flag meant for something else.
+const kebab = k => `--${k.replace(/[A-Z]/g, c => '-' + c.toLowerCase())}`;
+const flagsOutside = (a, allowed) => [...Object.keys(a).filter(k => k !== '_' && !allowed.includes(k)).map(kebab), ...a._.slice(1).filter(x => /^-/.test(x))];
 // The state store of this project, its folder made private, and the ledger, through the functions the board uses too
 // (project.mjs).
 const stateOf = nunchiDir => ledgerGuard(() => P.stateOf(nunchiDir, { warn }));
@@ -937,6 +941,8 @@ if (cmd === 'setup') {
   if ('html' in args) usage('use either --html <dir> (the review page) or --format md|json|sarif');
   if (!E.exportFormats.includes(args.format)) usage('--format takes md, json or sarif');
   if ('run' in args || 'inline' in args) usage('--run and --inline are for --html; --format exports the ledger (every run it folded)');
+  const outside = flagsOutside(args, ['format', 'status', 'includePageText', 'out', 'root']);
+  if (outside.length) usage(`${outside.join(', ')}: not a flag of export --format (nunchi export --format md|json|sarif [--status …] [--include-page-text] [--out <file>] [--root <dir>])`);
   let statuses = E.DEFAULT_STATUSES;
   if (args.status !== undefined) {
     if (typeof args.status !== 'string') usage(`--status takes a list: ${E.STATUSES.join(',')} (or all)`);
@@ -982,6 +988,8 @@ if (cmd === 'setup') {
   // one. Never a capture, a browser or the network. Exit 0 clean, 1 a hit or findings at or above --fail-on, 2 usage
   // or state.
   const usage = m => { console.error(`nunchi check: ${m}`); process.exit(2); };
+  const outside = flagsOutside(args, ['failOn', 'sarif', 'base', 'strict', 'root', 'json']);
+  if (outside.length) usage(`${outside.join(', ')}: not a flag of check (nunchi check [--fail-on <severity>] [--sarif <file>] [--base <ref>] [--strict] [--root <dir>] [--json])`);
   if (args._.length > 1) usage(`unexpected ${JSON.stringify(args._[1])} (nunchi check [--fail-on <severity>] [--sarif <file>] [--base <ref>] [--strict] [--root <dir>] [--json])`);
   for (const k of ['failOn', 'sarif', 'base', 'root']) if (k in args && (typeof args[k] !== 'string' || !args[k] || args[k].startsWith('--'))) usage(`--${k.replace(/[A-Z]/g, c => '-' + c.toLowerCase())} takes a value`);
   if (args.failOn && !['blocker', 'high', 'medium', 'low'].includes(args.failOn)) usage('--fail-on takes blocker, high, medium or low');
@@ -1028,6 +1036,8 @@ if (cmd === 'setup') {
   const G = await engine('./guards.mjs');
   const usage = m => { console.error(`nunchi guard: ${m}`); process.exit(2); };
   for (const k of ['add', 'remove', 'root']) if (k in args && (typeof args[k] !== 'string' || !args[k] || args[k].startsWith('--'))) usage(`--${k} takes a value`);
+  const outside = flagsOutside(args, ['add', 'remove', 'baseline', 'lint', 'root', 'json']);
+  if (outside.length) usage(`${outside.join(', ')}: not a flag of guard (nunchi guard [--json] | --lint | --add <kind> | --remove <kind> | --baseline   [--root <dir>])`);
   const project = process.cwd();
   const root = resolve(args.root || project);
   const nunchiDir = resolve('.nunchi');

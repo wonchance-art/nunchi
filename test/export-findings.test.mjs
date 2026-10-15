@@ -162,7 +162,7 @@ test('paths are the repository\'s: an app in a subfolder gets its prefix; status
   assert.deepEqual(fixedOnly.statuses, ['fixed']);
   const later = JSON.parse(run(p, 'export', '--format', 'json', '--status', 'later,open').stdout);
   assert.deepEqual(later.statuses, ['open', 'held']);
-  for (const args of [['--format', 'pdf'], ['--format', 'json', '--status', 'bogus'], ['--format', 'json', '--html', 'x'], ['--format', 'md', '--out'], ['--format', 'json', '--run', '0001']]) {
+  for (const args of [['--format', 'pdf'], ['--format', 'json', '--status', 'bogus'], ['--format', 'json', '--html', 'x'], ['--format', 'md', '--out'], ['--format', 'json', '--run', '0001'], ['--format', 'md', '--include-page-txt'], ['--format', 'md', '--url', 'http://x.invalid'], ['--format', 'json', '--fail-on', 'high']]) {
     const r = run(p, 'export', ...args);
     assert.equal(r.status, 1, args.join(' '));
   }
