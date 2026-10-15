@@ -6,11 +6,14 @@ import { fileURLToPath } from 'node:url';
 import {
   clopperPearson, minCountForLower, maxCountForUpper, poissonBounds, cohensKappa, normalQuantile, pairedDifference,
   mulberry32, seededShuffle, subSeed, stratifiedDraw, weightedProportion, quantile, bootstrapMean, worked,
+  latticeBootstrap, operatingCharacteristic, pabak, williamsSquare, heldoutOc,
 } from '../scripts/prereg-stats.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const near = (a, b, tol = 1e-9, what = '') => assert.ok(Math.abs(a - b) <= tol, `${what} ${a} is not within ${tol} of ${b}`);
 const one = { sides: 1 }, two = { sides: 2 };
+// a doc as checked out: LF, or CRLF in a Windows checkout without .gitattributes
+const readDoc = name => readFileSync(new URL(`../docs/${name}`, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('Clopper–Pearson: closed forms at 0/n and n/n, one- and two-sided', () => {
   for (const n of [1, 3, 20, 30, 56, 150]) {
@@ -123,6 +126,9 @@ test('stratified draw: input order does not matter, counts and "all", population
   assert.notDeepEqual(stratifiedDraw(pop, plan, 100).strata.confirmed.ids, a.strata.confirmed.ids);
   assert.throws(() => stratifiedDraw([{ id: 'x', stratum: 's' }, { id: 'x', stratum: 's' }], { s: 1 }, 1), RangeError);
   near(weightedProportion([{ population: 90, n: 10, k: 9 }, { population: 10, n: 10, k: 5 }]), 0.86, 1e-12);
+  // a stratum with members but nothing sampled has no estimate: an error, never a silent 0%
+  assert.throws(() => weightedProportion([{ population: 90, n: 10, k: 9 }, { population: 10, n: 0, k: 0 }]), /not sampled/);
+  near(weightedProportion([{ population: 90, n: 10, k: 9 }, { population: 0, n: 0, k: 0 }]), 0.9, 1e-12);
 });
 
 test('quantile and the seeded bootstrap: deterministic, bracketing the mean', () => {
@@ -137,8 +143,65 @@ test('quantile and the seeded bootstrap: deterministic, bracketing the mean', ()
   assert.throws(() => bootstrapMean(v, {}), RangeError);
 });
 
+test('the exact lattice bootstrap: binary values give the binomial quantile; it agrees with a long Monte Carlo run', () => {
+  // 0/1 values: the resampled total is Binomial(n, k/n), so the bound is that distribution's nearest-rank quantile
+  const n = 56, k = 48;
+  const v = [...Array(k).fill(1), ...Array(n - k).fill(0)];
+  const r = latticeBootstrap(v, { runs: 1, sides: 1 });
+  let c = 0, s = 0;
+  const p = k / n;
+  const pmf = i => { let lc = 0; for (let j = 1; j <= i; j++) lc += Math.log((n - i + j) / j); return Math.exp(lc + i * Math.log(p) + (n - i) * Math.log1p(-p)); };
+  for (; s <= n; s++) { c += pmf(s); if (c >= 0.05 - 1e-12) break; }
+  near(r.lower, s / n, 1e-12);
+  near(r.mean, k / n, 1e-15);
+  // thirds (found in 0–3 of 3 runs) and a paired difference from −1 to 1, against 200,000 seeded resamples
+  const thirds = [...Array(50).fill(1), ...Array(14).fill(2 / 3), ...Array(10).fill(1 / 3), ...Array(6).fill(0)];
+  const exact = latticeBootstrap(thirds, { runs: 3, sides: 2 }), mc = bootstrapMean(thirds, { seed: 3, resamples: 200000, sides: 2 });
+  near(exact.lower, mc.lower, 0.0126, 'thirds lower'); near(exact.upper, mc.upper, 0.0126, 'thirds upper');
+  const diffs = [...Array(60).fill(0), ...Array(4).fill(-1), ...Array(2).fill(1), ...Array(3).fill(-1 / 3), 2 / 3];
+  const de = latticeBootstrap(diffs, { runs: 3, sides: 1, level: 0.975 }), dm = bootstrapMean(diffs, { seed: 5, resamples: 200000, sides: 1, level: 0.975 });
+  near(de.lower, dm.lower, 0.0126, 'difference lower');
+  assert.deepEqual(latticeBootstrap(thirds, { runs: 3, sides: 2 }), exact);
+  assert.throws(() => latticeBootstrap([0.5], { runs: 3 }), /not a multiple of 1\/3/);
+});
+
+test('operating characteristic: majority of 3 passes far more often at a true 75% than one run or the registered rule', () => {
+  const ind = operatingCharacteristic({ n: 80, runs: 3, p: 0.75, model: 'independent', sims: 600 });
+  near(ind.majorityCp, 0.63, 0.01, 'majority of 3 at 75%');     // the review's H3 figure
+  near(ind.singleRunCp, 0.046, 0.01, 'one run at 75%');
+  assert.ok(ind.meanBootstrap < 0.15, `the registered rule passes rarely at the threshold (${ind.meanBootstrap})`);
+  const aon = operatingCharacteristic({ n: 80, runs: 3, p: 0.75, model: 'all-or-none' });
+  near(aon.majorityCp, aon.singleRunCp, 1e-15, 'all-or-none: every run agrees');
+  assert.equal(aon.exact, true);
+  let last = -1;
+  for (const p of [0.7, 0.75, 0.8, 0.85]) { const x = operatingCharacteristic({ n: 80, runs: 3, p, model: 'all-or-none' }).meanBootstrap; assert.ok(x >= last); last = x; }
+});
+
+test('PABAK and the Williams design', () => {
+  near(pabak([['a', 'a'], ['a', 'b'], ['b', 'b'], ['b', 'a'], ['a', 'a']], 2), 0.2, 1e-12);
+  near(pabak([...Array(7).fill(['c', 'c']), ...Array(3).fill(['c', 'w'])], 3), 0.55, 1e-12);
+  for (const t of [2, 3, 4, 5, 6]) {
+    const rows = williamsSquare(t);
+    assert.equal(rows.length, t % 2 ? 2 * t : t);
+    const pairs = new Map();
+    for (const r of rows) {
+      assert.deepEqual([...r].sort((x, y) => x - y), [...Array(t).keys()], 'each order holds every condition once');
+      for (let i = 1; i < t; i++) pairs.set(`${r[i - 1]}>${r[i]}`, (pairs.get(`${r[i - 1]}>${r[i]}`) || 0) + 1);
+    }
+    for (let c = 0; c < t; c++) for (const pos of [...Array(t).keys()]) assert.equal(rows.filter(r => r[pos] === c).length, t % 2 ? 2 : 1, 'each condition in each position equally often');
+    assert.equal(pairs.size, t * (t - 1), 'every ordered pair follows');
+    assert.ok([...pairs.values()].every(v => v === (t % 2 ? 2 : 1)), 'equally often');
+  }
+});
+
+test('the operating-characteristic table in docs/prereg-heldout.md is exactly what the helper prints', () => {
+  const m = /<!-- heldout-oc:begin -->\n([\s\S]*?)\n<!-- heldout-oc:end -->/.exec(readDoc('prereg-heldout.md'));
+  assert.ok(m, 'the held-out doc keeps the table between heldout-oc markers');
+  assert.equal(m[1], heldoutOc());
+});
+
 test('the worked-numbers table in docs/prereg-README.md is exactly what the helper prints', () => {
-  const doc = readFileSync(new URL('../docs/prereg-README.md', import.meta.url), 'utf8');
+  const doc = readDoc('prereg-README.md');
   const m = /<!-- worked-numbers:begin -->\n([\s\S]*?)\n<!-- worked-numbers:end -->/.exec(doc);
   assert.ok(m, 'the README keeps the table between worked-numbers markers');
   assert.equal(m[1], worked());

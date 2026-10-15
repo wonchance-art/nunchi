@@ -11,7 +11,9 @@
 //   node scripts/prereg-stats.mjs cp <k> <n> [--sides 1|2] [--level 0.95]
 //   node scripts/prereg-stats.mjs min <n> <p0> [--sides 1|2] [--level 0.95]   smallest k whose lower bound is ≥ p0
 //   node scripts/prereg-stats.mjs worked                                       the worked-numbers table (markdown)
+//   node scripts/prereg-stats.mjs oc                                           the held-out operating characteristic
 import { fileURLToPath } from 'node:url';
+import { realpathSync } from 'node:fs';
 
 const ITER = 200; // bisection steps: far past the precision of a double
 
@@ -183,7 +185,9 @@ export function stratifiedDraw(population, plan, seed) {
   return { seed: seed >>> 0, strata };
 }
 // Weighting a stratified sample back to its population: [{population, n, k}] → the population-weighted proportion.
+// A stratum with members but no sampled item has no estimate, so it is an error, never a silent 0%.
 export function weightedProportion(strata) {
+  for (const x of strata) if (x.population > 0 && !(x.n > 0)) throw new RangeError('a stratum with members was not sampled: no estimate can weight it back');
   const total = strata.reduce((s, x) => s + x.population, 0);
   if (!total) return null;
   return strata.reduce((s, x) => s + (x.n ? (x.population / total) * (x.k / x.n) : 0), 0);
@@ -195,8 +199,9 @@ export function quantile(sorted, q) {
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))];
 }
 
-// A percentile bootstrap of the mean over units (the unit is the seed, design §9.1): `resamples` draws of n units
-// with replacement from a seeded stream. One-sided → {lower} (or {upper} with tail 'upper'); two-sided → both.
+// A Monte Carlo percentile bootstrap of the mean over units: `resamples` draws of n units with replacement from a
+// seeded stream. → {mean, lower, upper}: with sides 1 both are one-sided bounds at `level`; with sides 2, the
+// equal-tailed interval. For values on a lattice (found in k of R runs) use `latticeBootstrap`, which is exact.
 export function bootstrapMean(values, { seed, resamples = 20000, level = 0.95, sides = 2 } = {}) {
   if (!Array.isArray(values) || !values.length || !values.every(Number.isFinite)) throw new RangeError('bootstrap needs a list of numbers');
   if (!Number.isInteger(seed)) throw new RangeError('bootstrap needs a whole-number seed');
@@ -212,6 +217,88 @@ export function bootstrapMean(values, { seed, resamples = 20000, level = 0.95, s
   means.sort();
   const mean = values.reduce((s, v) => s + v, 0) / n;
   return { n, mean, lower: quantile(means, a), upper: quantile(means, 1 - a), resamples, seed, level, sides };
+}
+
+// The exact percentile bootstrap of a mean whose values sit on a lattice: each unit's value is j / runs for a whole
+// j in [lo, hi] (a seed found in j of 3 runs; a paired difference from −3 to 3). Resampling n units with replacement
+// gives a total whose distribution is the n-fold convolution of the units' empirical distribution; it is computed
+// exactly, so the bound is the bootstrap's own limit (infinitely many resamples): no seed, no Monte Carlo error.
+// Bounds follow the nearest-rank rule of `quantile` (the smallest total whose cumulative probability reaches the tail).
+export function latticeBootstrap(values, { runs = 1, level = 0.95, sides = 2 } = {}) {
+  if (!Array.isArray(values) || !values.length) throw new RangeError('bootstrap needs a list of numbers');
+  if (!Number.isInteger(runs) || runs < 1) throw new RangeError('runs: a whole number ≥ 1');
+  const a = tailOf({ level, sides });
+  const js = values.map(v => {
+    const j = Math.round(v * runs);
+    if (!Number.isFinite(v) || Math.abs(v * runs - j) > 1e-9) throw new RangeError(`${v} is not a multiple of 1/${runs}`);
+    return j;
+  });
+  const lo = Math.min(...js), hi = Math.max(...js), n = js.length, w = hi - lo;
+  const q = new Float64Array(w + 1);
+  for (const j of js) q[j - lo] += 1 / n;
+  let dist = Float64Array.of(1);                    // distribution of the shifted total after 0 units
+  for (let u = 0; u < n; u++) {
+    const next = new Float64Array(dist.length + w);
+    for (let s = 0; s < dist.length; s++) { const d = dist[s]; if (d) for (let t = 0; t <= w; t++) if (q[t]) next[s + t] += d * q[t]; }
+    dist = next;
+  }
+  const at = p => { let c = 0; for (let s = 0; s < dist.length; s++) { c += dist[s]; if (c >= p - 1e-12) return (s + n * lo) / (n * runs); } return hi / runs; };
+  const mean = js.reduce((s, j) => s + j, 0) / (n * runs);
+  return { n, runs, mean, lower: at(a), upper: at(1 - a), level, sides };
+}
+
+// The pass probability of a recall rule "lower bound ≥ threshold" for n seeds, `runs` runs each and a true per-run
+// recall p, under two models that bracket reality: 'independent' (every run of every seed finds it with probability p
+// on its own) and 'all-or-none' (a seed is found in all runs with probability p, else in none).
+//   meanBootstrap: the exact bootstrap lower bound of mean-of-runs recall (the held-out primary);
+//   majorityCp:    Clopper–Pearson on the seeds found in a majority of runs;
+//   singleRunCp:   Clopper–Pearson on one run.
+// Exact where it can be (binomial sums); the independent model's bootstrap rule by a seeded simulation of `sims`
+// datasets (its Monte Carlo standard error is at most 0.5/√sims).
+export function operatingCharacteristic({ n, runs = 3, p, threshold = 0.75, level = 0.95, model = 'independent', sims = 4000, seed = 1 }) {
+  const one = { sides: 1, level };
+  const kMin = minCountForLower(n, threshold, one);
+  const lc = logChoose(n);
+  const atLeast = (k, q) => (k === null ? 0 : binomGE(k, n, q, lc));
+  const majority = r => { let s = 0; const lr = logChoose(r); for (let i = Math.floor(r / 2) + 1; i <= r; i++) s += binomGE(i, r, p, lr) - (i < r ? binomGE(i + 1, r, p, lr) : 0); return s; };
+  const passBoot = vals => latticeBootstrap(vals, { runs, sides: 1, level }).lower >= threshold;
+  if (model === 'all-or-none') {
+    // the dataset is k seeds always found and n − k never: the bootstrap rule depends on k alone
+    let boot = 0;
+    for (let k = 0; k <= n; k++) {
+      const pk = Math.exp(lc[k] + (k ? k * Math.log(p) : 0) + (n - k ? (n - k) * Math.log1p(-p) : 0));
+      if (pk > 1e-15 && passBoot([...Array(k).fill(1), ...Array(n - k).fill(0)])) boot += pk;
+    }
+    return { n, runs, p, model, meanBootstrap: boot, majorityCp: atLeast(kMin, p), singleRunCp: atLeast(kMin, p), exact: true };
+  }
+  if (model !== 'independent') throw new RangeError('model: independent or all-or-none');
+  const rnd = mulberry32(seed);
+  let pass = 0;
+  for (let s = 0; s < sims; s++) {
+    const vals = new Array(n);
+    for (let i = 0; i < n; i++) { let j = 0; for (let r = 0; r < runs; r++) if (rnd() < p) j++; vals[i] = j / runs; }
+    if (passBoot(vals)) pass++;
+  }
+  return { n, runs, p, model, meanBootstrap: pass / sims, majorityCp: atLeast(kMin, majority(runs)), singleRunCp: atLeast(kMin, p), exact: false, sims, seed };
+}
+
+// Prevalence- and bias-adjusted kappa for k categories: (k·po − 1) / (k − 1). Reported beside Cohen's kappa, which
+// collapses when almost every label is one category.
+export function pabak(pairs, categories = 3) {
+  if (!Array.isArray(pairs) || !pairs.length) throw new RangeError('PABAK needs at least one pair of labels');
+  if (!Number.isInteger(categories) || categories < 2) throw new RangeError('categories: a whole number ≥ 2');
+  const po = pairs.filter(([x, y]) => x === y).length / pairs.length;
+  return (categories * po - 1) / (categories - 1);
+}
+
+// A Williams design: orders of t conditions in which every condition takes every position once and follows every
+// other condition once (t even: t orders) or twice (t odd: 2t orders, each order and its reverse).
+export function williamsSquare(t) {
+  if (!Number.isInteger(t) || t < 2) throw new RangeError('t: a whole number ≥ 2');
+  const first = [0];
+  for (let j = 1; j < t; j++) first.push(j % 2 ? (j + 1) / 2 : t - j / 2);
+  const rows = Array.from({ length: t }, (_, i) => first.map(c => (c + i) % t));
+  return t % 2 ? [...rows, ...rows.map(r => [...r].reverse())] : rows;
 }
 
 // ---- the worked numbers of docs/prereg-README.md: every figure the design states, recomputed ----
@@ -240,6 +327,18 @@ export function worked() {
   return ['| What | Design says | Recomputed | Verdict |', '|---|---|---|---|', ...rows].join('\n');
 }
 
+// The held-out operating characteristic of docs/prereg-heldout.md: pass probabilities of the registered rule and
+// the two it replaced, at n = 80 seeds, 3 runs, threshold 75%.
+export function heldoutOc({ n = 80, ps = [0.7, 0.75, 0.8, 0.85] } = {}) {
+  const f = x => `${Math.round(x * 100)}%`;
+  const rows = ['| True per-run recall | Model | Mean of runs, bootstrap bound (registered) | Majority of 3, Clopper–Pearson (replaced) | One run, Clopper–Pearson |', '|---|---|---|---|---|'];
+  for (const model of ['independent', 'all-or-none']) for (const p of ps) {
+    const r = operatingCharacteristic({ n, runs: 3, p, model });
+    rows.push(`| ${f(p)} | ${model} | ${f(r.meanBootstrap)} | ${f(r.majorityCp)} | ${f(r.singleRunCp)} |`);
+  }
+  return rows.join('\n');
+}
+
 function cli(argv) {
   const opt = (name, fallback) => { const i = argv.indexOf(name); return i >= 0 ? Number(argv[i + 1]) : fallback; };
   const o = { sides: opt('--sides', 2), level: opt('--level', 0.95) };
@@ -253,9 +352,13 @@ function cli(argv) {
     return k === null ? `no count out of ${x} has a lower bound ≥ ${y}` : `${k}/${x} (lower bound ${pct(clopperPearson(k, Number(x), o).lower)}%)`;
   }
   if (cmd === 'worked') return worked();
-  throw new Error('usage: prereg-stats.mjs cp <k> <n> | min <n> <p0> [--sides 1|2] [--level 0.95] | worked');
+  if (cmd === 'oc') return heldoutOc();
+  throw new Error('usage: prereg-stats.mjs cp <k> <n> | min <n> <p0> [--sides 1|2] [--level 0.95] | worked | oc');
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+// Run as a command only when this file is the program, however it was reached (a link, a junction, a short or
+// differently cased Windows path).
+const realOrSelf = p => { try { return realpathSync.native(p); } catch { return p; } };
+if (process.argv[1] && realOrSelf(process.argv[1]) === realOrSelf(fileURLToPath(import.meta.url))) {
   try { console.log(cli(process.argv.slice(2))); } catch (e) { console.error(e.message); process.exit(2); }
 }
