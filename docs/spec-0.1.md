@@ -1341,10 +1341,11 @@ never timed.
   every expired claim, so with one time for all, the first take-over removed the later rounds' claims before their
   race (M6 review: the renewal then lost 24 or 25 rounds of 25 without racing, and the expired-claim rounds took over
   no expired claim). Measured here: the renewal won 12–15 rounds of 25, the two attempts overlapping in time in 9–17.
-- *Measured (2026-10-15 13:50–13:56 KST):* `npm test` 600 tests, 599 pass and 1 skipped (Windows only), on Node 22.22.0
-  and on Node 24.21.0, Chromium included, with bun on PATH and without. Pebble `node bench/run.mjs --twice` is
-  unchanged: rule recall 34/34, 0 false positives on 8 clean scenes, determinism identical (1,141 files), fingerprints
-  100% (52/52), 171 s per capture.
+- *Measured (2026-10-15 17:03–17:31 KST, after the review of PR #34 and the merge of M5):* `npm test` 668 tests, 667
+  pass and 1 skipped (Windows only), on Node 22.22.0 and on Node 24.21.0, Chromium included, with bun on PATH and
+  without. Pebble `node bench/run.mjs --twice` is unchanged: rule recall 34/34, 0 false positives on 8 clean scenes,
+  determinism identical (1,141 files), fingerprints 100% (52/52), 211 s per capture (other sessions were running
+  tests on the machine).
 
 **Limits.** Agents hunting one run share its plan: a plan with other lenses waits for the running hunt. An AI fold
 keeps the cells its hunt saw (`seen`, about 30 characters a cell). The board's before and after of a fix verified in another folder is missing (its
