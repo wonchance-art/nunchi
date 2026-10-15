@@ -29,6 +29,7 @@ import { buildBoardModel, groupList, groupDetail, safe, readClaims, RUN_ID } fro
 import { coverageView, aiOnChecked, runningRuns } from './coverage.mjs';
 import { wallOut, screenDetail } from './screens.mjs';
 import { BASE_CSS, BOARD_CSS } from './look.mjs';
+import { VIEWS_CSS } from './look-views.mjs';
 import { decidedText, CAP_MS, fixingMinutes } from './shared.mjs';
 import * as P from '../project.mjs';
 import { DECISIONS, protectOf, approvalKey, reasonProblem } from '../ledger.mjs';
@@ -72,7 +73,10 @@ function assets() {
     '/': { body: read('assets/index.html'), type: 'text/html; charset=utf-8' },
     '/assets/board.js': { body: read('assets/board.js'), type: 'text/javascript; charset=utf-8' },
     '/assets/shared.mjs': { body: read('shared.mjs'), type: 'text/javascript; charset=utf-8' },
-    '/assets/board.css': { body: Buffer.from(BASE_CSS + BOARD_CSS), type: 'text/css; charset=utf-8' },
+    // the Coverage and Screens views (M7), modules of the page's script
+    '/assets/coverage.js': { body: read('assets/coverage.js'), type: 'text/javascript; charset=utf-8' },
+    '/assets/screens.js': { body: read('assets/screens.js'), type: 'text/javascript; charset=utf-8' },
+    '/assets/board.css': { body: Buffer.from(BASE_CSS + BOARD_CSS + VIEWS_CSS), type: 'text/css; charset=utf-8' },
     // the browser asks for this on every move within the page; an empty answer, no data
     '/favicon.ico': { body: Buffer.alloc(0), type: 'image/x-icon', status: 204 },
   };
