@@ -36,11 +36,3 @@ export function agentList(list) {
   }
   return [...out.entries()].sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)).map(([, v]) => v);
 }
-
-// "Claude Code and Codex (declared)", for a line of text.
-export function agentsText(list, { empty = 'an agent that did not say who it is' } = {}) {
-  const names = agentList(list).map(x => (x.agent ? `${x.agent}${x.vendor ? ` (${x.vendor})` : ''}` : `an agent of ${x.vendor}`));
-  if (!names.length) return empty;
-  const joined = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
-  return `${joined}, as declared`;
-}

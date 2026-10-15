@@ -36,7 +36,6 @@ test('agents: declared names are data (40 characters, no control characters), co
   assert.match(A.declaredName('   ').error, /leave it out/);
   assert.equal(A.sameName('OpenAI', 'openai'), true);
   assert.deepEqual(A.agentList([CODEX, { agent: 'codex', vendor: 'openai' }, CLAUDE, { agent: null, vendor: null }, { agent: 'bad\u0007' }]), [CLAUDE, CODEX], 'each once, in one order; nothing undeclared or unreadable');
-  assert.equal(A.agentsText([CODEX, CLAUDE]), 'Claude Code (Anthropic) and Codex (OpenAI), as declared');
 });
 
 test('answers without a header record exactly as before M6: no hunt-agents.json, no agents', () => {

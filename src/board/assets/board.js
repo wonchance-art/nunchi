@@ -340,7 +340,7 @@ function renderProgress(focus = false) {
     h('div', { class: 'hero-top' }, h('div', null, h('p', { class: 'eyebrow' }, 'Ready to ship?'), h('h1', { id: 'h-progress' }, s.verdict.text)), decideBtn),
     handoff, s.treeChanged ? h('p', { class: 'banner banner-warn', role: 'note' }, W.WORDS['tree-differs']) : null, h('div', { class: 'tiles' }, tiles),
     h('p', { class: 'muted small' }, 'Open findings by severity: groups still open, to fix, or held for later. A group is one defect, however many screens show it.'),
-    s.now.length ? h('ul', { class: 'now', 'aria-label': 'Now' }, s.now.map(l => h('li', null, l))) : null);
+    s.now.length ? h('ul', { class: 'now', 'aria-label': 'Now' }, s.now.map((l, i) => h('li', { title: s.nowTitles?.[i] || null }, l))) : null);
   const confirm = s.confirm.length ? confirmPanel(s.confirm) : null;
   const checks = s.checks && s.checks.requested && !s.checks.approved ? checksPanel(s.checks) : null;
   const since = h('section', { class: 'panel-box', 'aria-labelledby': 'h-since' }, h('h2', { id: 'h-since' }, s.since.label),
@@ -779,7 +779,8 @@ function renderDetail(focus = false) {
     decision ? [h('dt', null, 'Decision'), h('dd', null, `${W.decidedText(decision.decision, decision.reason)} · ${decision.by || ''} · ${when(decision.at)}`, decision.channelText ? h('span', { class: decision.human ? 'muted' : 'warn' }, ` · ${decision.channelText}`) : null)] : null,
     g.notes.map(n => [h('dt', null, 'Note'), h('dd', { class: 'warn' }, n)]),
     g.notLookedAt ? [h('dt', null, 'Looked at'), h('dd', { class: 'warn' }, `Not looked at since run ${g.notLookedAt}: no run since has captured every screen it was on, so it cannot be marked fixed.`)] : null,
-    g.verification ? [h('dt', null, 'Reviewer'), h('dd', null, `${g.verification.status}${g.verification.by ? ` · ${g.verification.by}` : ''}${g.verification.suspect ? ' · suspect' : ''}${g.verification.tooFewDecoys ? ` · ${W.WORDS['too-few-decoys']}: not a double-check` : ''}`)] : null,
+    g.verification ? [h('dt', null, 'Reviewer'), h('dd', null, W.reviewerText(g.verification))] : null,
+    g.agents?.length ? [h('dt', null, 'Found by'), h('dd', null, W.foundByText(g.agents))] : null,
     // a fix that landed is undone by the AI (`fix --undo`): the sentence to say (design §3.4 "Undo and reopen")
     g.fix?.landed && !UNDO_ON_CARD.has(g.fix.needs) ? [h('dt', null, 'Fix'), h('dd', null, W.FIX_WORDS.landed(g.fix.commit), ' ', h('code', null, W.FIX_WORDS.undoSay(g.kindTitle, g.id)), ' ', copyButton(W.FIX_WORDS.undoSay(g.kindTitle, g.id)))] : null);
   const evidence = h('details', { class: 'evidence' }, h('summary', null, 'Evidence details'), h('dl', { class: 'facts-dl' },

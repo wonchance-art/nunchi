@@ -27,7 +27,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir, userInfo } from 'node:os';
 import { buildBoardModel, groupList, groupDetail, screenWall, safe, readClaims, RUN_ID } from './model.mjs';
 import { BASE_CSS, BOARD_CSS } from './look.mjs';
-import { decidedText, CAP_MS, fixingMinutes } from './shared.mjs';
+import { decidedText, CAP_MS, fixingMinutes, AGENT_WORDS } from './shared.mjs';
 import * as P from '../project.mjs';
 import { DECISIONS, protectOf, approvalKey, reasonProblem } from '../ledger.mjs';
 import { listRuns, workTree } from '../runs.mjs';
@@ -38,6 +38,7 @@ import { recordDecisionTime, metricsPath } from '../metrics.mjs';
 import { checkProfile, approvedProfiles, approveProfile, scriptsApprovedPath, checksRequestPath } from '../checks.mjs';
 import { labelPool, blindItem, lensTable, readLabels, writeLabel, LABELLER } from '../labels.mjs';
 import { listHunts, huntLine } from '../activity.mjs';
+import { declaredName } from '../agents.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
@@ -174,7 +175,10 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   const order = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
   const runningHunts = () => listHunts(stateDir, now()).filter(x => x.running).sort((a, b) => order(String(a.hunt.startedAt), String(b.hunt.startedAt)) || order(a.id, b.id));
   // "Codex · AI review L6 · 12/40 units · 3 min" (design §7); the declared name is data, cleaned and clipped
-  const huntLines = () => { const t = now(); return runningHunts().map(x => safe(huntLine({ ...x.hunt, declaredAgent: x.hunt.declaredAgent ? safe(x.hunt.declaredAgent, 40) : null }, t), 160)); };
+  // and its title: the name, "(as declared)" (M6 review: the line keeps the design's words, its title says whose word
+  // the name is); none for "Your AI"
+  const huntNow = () => { const t = now(); return runningHunts().map(x => { const n = declaredName(x.hunt.declaredAgent).name, name = n ? safe(n, 40) : null;
+    return { line: safe(huntLine({ ...x.hunt, declaredAgent: name }, t), 160), title: name ? `${name} ${AGENT_WORDS.asDeclared}` : null }; }); };
   const huntsSig = () => { const h = runningHunts(); return h.length ? sha(h.map(x => `${x.id}:${x.hunt.answered}:${x.hunt.complete}:${x.hunt.units}`).join('|'), 12) : '-'; };
   const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${huntsSig()}.${claimsSig()}`;
   // claims as they are now (their minutes too) on a cached model
@@ -423,6 +427,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     // the fast first run (design §6): the first look and the full check after it say how far they are, in the agreed
     // words, instead of "Capture running" for that full check (summary.mjs)
     const firstLookRun = s.firstLook?.full?.run ?? null;
+    const hunting = huntNow();
     const nowLines = [...(s.fullCheckDone ? [s.fullCheckDone.text] : []), ...(s.firstLook?.text ? [s.firstLook.text] : []),
       ...running.filter(r => r !== firstLookRun).map(r => `Capture running · run ${r}`), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)} · ${fixingMinutes(c.minutes)}`)];
     return {
@@ -436,7 +441,10 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
       health: { problems: s.health.problems.map(p => ({ status: safe(p.status, 40), scenes: p.scenes, of: p.of })), blind: s.health.blind ? safe(s.health.blind, 40) : null,
         scenes: { ...s.health.scenes, reasons: s.health.scenes.reasons.map(r => safe(r, 80)) } },
       // design §7: "Now" lists captures, claims and, after them, the running hunts with their progress
-      ai: { ...s.ai, coverage }, now: [...nowLines, ...huntLines()],
+      ai: { ...s.ai, coverage }, now: [...nowLines, ...hunting.map(x => x.line)],
+      // a title per line of "Now": the declared name, "(as declared)", on the claims' and the hunts' lines (M6 review;
+      // "Your AI" is no declared name)
+      nowTitles: [...Array(nowLines.length - m.claims.size).fill(null), ...[...m.claims.values()].map(c => (c.agent !== 'Your AI' ? `${c.agent} ${AGENT_WORDS.asDeclared}` : null)), ...hunting.map(x => x.title)],
       checks: profile ? { requested, approved, profile: { hash: profile.hash, scripts: Object.fromEntries(Object.entries(profile.scripts).map(([k, v]) => [safe(k, 40), safe(v, 400)])), serve: Object.fromEntries(Object.entries(profile.serve || {}).map(([k, v]) => [safe(k, 40), safe(v, 400)])), others: Object.keys(profile.others || {}).length, files: Object.fromEntries(Object.entries(profile.files).map(([k, v]) => [safe(k, 120), v ? safe(v, 64) : null])), packageManager: profile.packageManager ? safe(profile.packageManager, 80) : null } } : null,
       counts: { groups: m.groups.length, screens: m.latestEv?.scenes.length || 0 },
       treeChanged: !!(runTree && now && now !== runTree),

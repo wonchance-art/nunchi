@@ -1200,13 +1200,27 @@ malicious one (design §1).
   key's, §4), so another agent's answers are added to it, never written over it. A `hunt-agents.json` that cannot be
   read is an error (exit 2), never "no other agent".
 - Agents hunting one run share its plan (one `hunt-plan.json` per run). `hunt --plan` that would replace the plan
-  another agent is hunting right now is refused: "Codex is hunting this run right now (AI review L9 · 12/40 units ·
-  3 min) with the plan in hunt-plan.json (plan …). Answer that plan's units (agents hunting one run share its plan), or
-  wait until it is done: a new plan would leave its answers for an old one." The same plan, or the same agent, goes on.
+  another agent is hunting right now is refused: "Codex (as declared) is hunting this run right now (AI review L9 ·
+  12/40 units · 3 min) with the plan in hunt-plan.json (plan …). Answer that plan's units (agents hunting one run share
+  its plan), or wait until it is done: a new plan would leave its answers for an old one." The same plan, or the same
+  agent, goes on.
 
 **One item per fingerprint, whoever claimed it** (`src/ledger.mjs`).
 - The same fingerprint from two agents, in one run or in two worktrees, is one item with `agents` (every agent of a
-  claim that still stands, as declared); rows and groups carry them (`findings --json`). Nothing shows them yet.
+  claim that still stands, as declared); rows and groups carry them (`findings --json`).
+- *Shown* (the mock-up the owner approved 2026-10-15 KST; the words in the one strings table, `AGENT_WORDS`,
+  `reviewerText` and `foundByText` in `src/board/shared.mjs`):
+  - Detail of an AI group, two rows of its facts list: `Reviewer   confirmed · cross-vendor (OpenAI, as declared)`,
+    the verdict word (confirmed, rejected, insufficient, or not double-checked for a claim), then `cross-vendor
+    (<vendor>, as declared)` only when the ledger labels the verdict cross-vendor (below), else `same model`, then
+    suspect or too few decoys as before; and `Found by   Claude Code (Anthropic) and Codex (OpenAI), as declared`
+    (one agent: `Codex (OpenAI), as declared`; a vendor not known: the name only). Names are clipped to 40
+    characters and shown as text.
+  - `nunchi findings`, a kind's line: `AI · L9.destructive-without-confirm — 2 group(s) (found by 2 agents, as
+    declared) on 3 screen(s), 4 place(s)`, the parenthetical only when more than one declared agent found the kind's
+    groups (the line's own words, `group(s)` and the screens, are the ones it had).
+  - Tested with two agents, one agent, cross-vendor, same vendor and no vendor, the board in one `page.evaluate`
+    (`test/board-agents.test.mjs`).
 - *Folds commute.* With two agents folding at once, one run's fold can land before or after another's, and the
   ledger must not depend on it. It did: the `foldAi` before M6 gave three different ledgers for one set of folds folded in
   three orders (found while writing the stress test). Now:
@@ -1262,7 +1276,11 @@ the item stays open, to decide (0.1 never auto-approves).
   "+N"), "Your AI" for an agent that did not say (or whose recorded name is no name), "just started" under a minute. A
   hunt runs while some planned unit is unanswered by every agent and its last word is under 30 minutes old by the
   reader's clock; the running hunts are part of the board's version, as claims are, so one that goes quiet drops out
-  without a write. Announced through M2's Now line (every 10 s at most).
+  without a write. Announced through M2's Now line (every 10 s at most). The lines keep the design's words; a claim's
+  and a hunt's line has the declared name with "(as declared)" as its title (`nowTitles` beside `now` in
+  `/api/summary`: "Codex (as declared)"; none for "Your AI"). The CLI says it where it prints a name outside the
+  design's copy: "Codex (as declared) is hunting this run right now …", "by agent, as declared: …", "verified by
+  cross-vendor (OpenAI, as declared)".
 
 **Per-worktree URL rules** (`src/fix/loop.mjs`, `src/fix/claims.mjs`, `src/worktrees.mjs`). Each worktree runs its own
 app server.

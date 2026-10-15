@@ -18,6 +18,7 @@ import { scrubSecrets } from '../rules.mjs';
 import { redactText, redactUrl } from '../network.mjs';
 import { SEV, STATUS_LABEL, PERSONS, VPS, STATES, human, plural, drawable, sceneLabelText } from './shared.mjs';
 import { claimLive, claimMinutes } from '../fix/claims.mjs';
+import { agentList } from '../agents.mjs';
 import { fixNeedsOf } from '../summary.mjs';
 import { latestRecords, allRecords, isOpen } from '../fix/records.mjs';
 
@@ -419,6 +420,8 @@ export function groupDetail(model, id) {
     secret: g.rule === 'secret-in-client-bundle' ? { where: safe(redactUrl(String(first?.evidence?.url || '')), 300), kind: safe(first?.evidence?.kind || '', 80) } : null,
     code: codeOut(model.projectDir, code),
     verification: verification ? { status: safe(verification.status, 20), by: safeOrNull(verification.by, 80), vendor: safeOrNull(verification.vendor, 40), suspect: !!verification.suspect, tooFewDecoys: verification.tooFewDecoys === true, run: safeOrNull(verification.run, 12) } : null,
+    // who found it, as declared (M6): every agent of a claim that stands, in any of its fingerprints; names clipped
+    agents: agentList(g._rows.flatMap(r => r.agents || [])).map(a => ({ agent: safeOrNull(a.agent, 40), vendor: safeOrNull(a.vendor, 40) })),
   };
 }
 

@@ -106,13 +106,13 @@ test('cli: a second plan is refused while another agent hunts this run with the 
   const id = JSON.parse(first.stdout).id;
   const other = plan('--lens', 'L6', '--agent', 'Claude Code');
   assert.equal(other.status, 1);
-  assert.match(other.stderr, new RegExp(`^nunchi hunt: Codex is hunting this run right now \\(AI review L9 · 0/\\d+ units · just started\\) with the plan in hunt-plan\\.json \\(plan ${id}\\)\\. Answer that plan's units`));
+  assert.match(other.stderr, new RegExp(`^nunchi hunt: Codex \\(as declared\\) is hunting this run right now \\(AI review L9 · 0/\\d+ units · just started\\) with the plan in hunt-plan\\.json \\(plan ${id}\\)\\. Answer that plan's units`));
   assert.equal(JSON.parse(readFileSync(join(p.runDir, 'hunt-plan.json'), 'utf8')).id, id, 'the plan on disk is Codex\'s still');
   assert.equal(plan('--lens', 'L6', '--agent', 'codex').status, 0, 'Codex itself may plan again (case aside)');
   assert.equal(plan('--lens', 'L6', '--agent', 'Claude Code').status, 0, 'the same plan: Claude Code joins it');
   const again = plan('--lens', 'L9', '--agent', 'Codex');
   assert.equal(again.status, 1, 'now Claude Code hunts that plan: Codex is refused in turn');
-  assert.match(again.stderr, /^nunchi hunt: Claude Code is hunting this run right now/);
+  assert.match(again.stderr, /^nunchi hunt: Claude Code \(as declared\) is hunting this run right now/);
 });
 
 test('board: "Now" lists the running hunts with their progress after captures and claims; a hunt that goes quiet leaves it, and the version, by the reader\'s clock', async () => {

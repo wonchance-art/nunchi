@@ -14,6 +14,8 @@ import { runIdentity, routeHashes } from './ai-fold.mjs';
 import { withLock } from './stable.mjs';
 import * as P from './project.mjs';
 import { LEDGER_ERRORS } from './project.mjs';
+import { agentList } from './agents.mjs';
+import { AGENT_WORDS } from './board/shared.mjs';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
@@ -581,8 +583,9 @@ if (cmd === 'setup') {
     const kinds = [];
     for (const g of shown) {
       let k = kinds.find(x => x.rule === g.rule);
-      if (!k) kinds.push((k = { rule: g.rule, lens: g.lens, source: g.source, title: g.source === 'ai' ? `AI · ${g.rule}` : g.title, severity: g.severity, groups: 0, routes: new Set(), places: 0 }));
+      if (!k) kinds.push((k = { rule: g.rule, lens: g.lens, source: g.source, title: g.source === 'ai' ? `AI · ${g.rule}` : g.title, severity: g.severity, groups: 0, routes: new Set(), places: 0, ...(g.source === 'ai' ? { agents: [] } : {}) }));
       k.groups++; k.places += g.places; g.routes.forEach(r => k.routes.add(r));
+      if (k.agents) k.agents = agentList([...k.agents, ...(g.agents || [])]);
       if (SEV[g.severity] < SEV[k.severity]) k.severity = g.severity;
     }
     kinds.sort((a, b) => SEV[a.severity] - SEV[b.severity] || b.routes.size - a.routes.size || (a.rule < b.rule ? -1 : 1));
@@ -618,7 +621,8 @@ if (cmd === 'setup') {
       const stale = rows.filter(r => r.notLookedAt).length;
       if (stale) console.log(`${stale} open defect(s) not looked at again for ${NOT_LOOKED_RUNS}+ runs (their screens, states or viewports were not captured like for like): they cannot be marked fixed until a run covers them`);
       if (!args.rule) {
-        for (const k of kinds) console.log(`${k.severity.padEnd(7)} ${k.title} — ${k.groups} group(s) on ${k.routes.size || 'no'} screen(s), ${k.places} place(s)   nunchi findings --rule ${k.rule}`);
+        // several agents' groups say so (M6, the mock-up approved 2026-10-15 KST): "(found by 2 agents, as declared)"
+        for (const k of kinds) console.log(`${k.severity.padEnd(7)} ${k.title} — ${k.groups} group(s)${k.agents?.length > 1 ? ` (${AGENT_WORDS.agentsFound(k.agents.length)})` : ''} on ${k.routes.size || 'no'} screen(s), ${k.places} place(s)   nunchi findings --rule ${k.rule}`);
         if (collapsed.length) console.log(`AI, not double-checked: ${collapsed.length} group(s) (claimed only, or a verdict that was suspect, rejected or insufficient, or from a run with too few decoys to check the checker) — nunchi findings --all lists them`);
         const fewDecoys = new Set(rows.filter(r => r.source === 'ai' && !r.goneAt && r.verification?.tooFewDecoys === true).map(r => r.group)).size;
         if (fewDecoys) console.log(`${fewDecoys} AI group(s) verified in a run with too few decoys to check the checker: not suspect, and not double-checked either`);
@@ -778,7 +782,9 @@ if (cmd === 'setup') {
       let current = null;
       try { current = JSON.parse(readFileSync(planPath, 'utf8')).id ?? null; } catch {}
       const way = activity(st => huntInTheWay(st.root.dir, { stream: st.root.stream, run: runId, agent: me.name, plan: plan.id, current }));
-      if (way) fail(`${way.hunt.declaredAgent || 'Another AI'} is hunting this run right now (${huntLine(way.hunt).split(' · ').slice(1).join(' · ')}) with the plan in hunt-plan.json (plan ${current}). Answer that plan's units (agents hunting one run share its plan), or wait until it is done: a new plan would leave its answers for an old one.`);
+      // the name as declared (M6 review): said so
+      const theirs = declaredName(way?.hunt.declaredAgent).name;
+      if (way) fail(`${theirs ? `${theirs} (as declared)` : 'Another AI'} is hunting this run right now (${huntLine(way.hunt).split(' · ').slice(1).join(' · ')}) with the plan in hunt-plan.json (plan ${current}). Answer that plan's units (agents hunting one run share its plan), or wait until it is done: a new plan would leave its answers for an old one.`);
       runLock(runDir, () => {
         writeStable(planPath, plan);
         // a run with canaries: scene aliases, their answer key (kept outside the project, design §2.2) and the
