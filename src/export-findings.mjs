@@ -16,7 +16,7 @@
 // - Deterministic: no clock; groups, items and keys sorted; the same ledger gives the same bytes.
 import { join, relative, resolve, sep } from 'node:path';
 import { existsSync } from 'node:fs';
-import { titleOf, latestRunOf } from './ledger.mjs';
+import { titleOf, latestSweepOf } from './ledger.mjs';
 import { discover } from './discover.mjs';
 import { gitRunner } from './runs.mjs';
 import { scrubSecrets } from './rules.mjs';
@@ -111,7 +111,8 @@ export function findingsModel({ led, view, root, project, statuses = DEFAULT_STA
   const pageOf = new Map();
   try { for (const r of routes ?? discover(root).routes) if (!pageOf.has(r.path) && SAFE_FILE(r.file)) pageOf.set(r.path, `${prefix}${r.file}`); } catch {}
   const pkg = existsSync(join(root, 'package.json')) ? `${prefix}package.json` : null;
-  const latest = latestRunOf(led.state, led.st.root.stream);
+  // the run the export names is the latest full check: a quick first look is no result (design §6), as for the hunt
+  const latest = latestSweepOf(led.state, led.st.root.stream);
   const rows = view.rows.filter(r => want.has(r.status));
   const byGroup = new Map();
   let left = 0;

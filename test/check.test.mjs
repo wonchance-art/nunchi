@@ -297,3 +297,25 @@ test('check reads only: the project tree is the same after it', () => {
   assert.equal(gitIn(root, 'status', '--porcelain', '--ignored'), before);
   assert.deepEqual(readdirSync(join(root, '.nunchi')), ['guards.json']);
 });
+
+test('--fail-on judges the latest full check: a quick first look alone is exit 2, and after a sweep the ledger line names the sweep', () => {
+  const root = repo();
+  const sc = scene('/', 'guest', 'normal', 'd');
+  const high = { lens: 'L6', rule: 'raw-error-text', severity: 'high', scene: sc.id, route: '/', viewport: 'd', selector: 'main p', box: null, evidence: { text: 'TypeError: x' } };
+  const quick = id => { const f = join(root, '.nunchi', 'runs', id, 'run.json'); writeFileSync(f, JSON.stringify({ ...JSON.parse(readFileSync(f, 'utf8')), kind: 'quick', wholeApp: false })); };
+  writeRun(root, '0001', { scenes: [sc], findings: [high], wholeApp: false });
+  quick('0001');
+  assert.equal(spawnSync(process.execPath, [CLI, 'findings'], { cwd: root, encoding: 'utf8' }).status, 0);
+  const early = check(root, '--fail-on', 'high');
+  assert.equal(early.status, 2, early.stdout + early.stderr);
+  assert.match(early.stderr, /judges a full check, and the ledger holds only a quick first look so far/);
+  writeRun(root, '0002', { scenes: [sc], findings: [high] });
+  writeRun(root, '0003', { scenes: [sc], findings: [high], wholeApp: false });
+  quick('0003');
+  assert.equal(spawnSync(process.execPath, [CLI, 'findings'], { cwd: root, encoding: 'utf8' }).status, 0);
+  const r = check(root, '--fail-on', 'high');
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /^ledger: run 0002 · 1 group at or above high still stands in the way/m);
+  const j = JSON.parse(spawnSync(process.execPath, [CLI, 'export', '--format', 'json'], { cwd: root, encoding: 'utf8' }).stdout);
+  assert.equal(j.run, '0002', 'the export names the full check, not the first look after it');
+});

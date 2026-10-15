@@ -1937,7 +1937,9 @@ the tree is the same after it, and that no `.nunchi` or state folder appears).
 - The ledger: when this machine has one (its file exists in the shared state or `.nunchi/state`; looked up without
   creating anything), `--fail-on <severity>` fails on the groups at or above it that still stand in the way — the
   verdict's own count (summary.mjs `standingOf`: open, came back, to fix, later, needs you, not double-checked, a
-  dismissal nobody confirmed). In CI there is no ledger: `check` runs the guards only and says `ledger: absent (guards
+  dismissal nobody confirmed), on the latest full check: with only a quick first look in the ledger (§6, design §6)
+  it is too early to say, so `--fail-on` is exit 2 ("judges a full check …"), and the ledger line names the latest
+  sweep, never a first look after it. In CI there is no ledger: `check` runs the guards only and says `ledger: absent (guards
   only)`; `--fail-on` without a ledger is exit 2 ("needs nunchi's ledger, and there is none here (in CI there never
   is)"), never 0. With a ledger and no `--fail-on` it says "ledger: present, not judged" and does not read it.
 - Exit codes: 0 clean; 1 a new guard hit, a weakened guard, or findings at or above `--fail-on`; 2 a usage or state
@@ -2020,7 +2022,8 @@ one; where the hook does not run (Codex), `check --base` in CI catches a weakeni
 
 `nunchi export --format md|json|sarif [--status open,to-fix,…|all] [--include-page-text] [--out <file>] [--root
 <dir>]` (`src/export-findings.mjs`; `--html`, §7.1, stays the review page). It reads the ledger as `findings` does
-(brought up to date first) and exports its places (rows) whose status is asked — by default open, came back, to fix
+(brought up to date first; the run it names is the latest full check, never a quick first look) and exports its
+places (rows) whose status is asked — by default open, came back, to fix
 and later (what still counts for shipping; `--status` takes the ledger's words and the board's `later`,
 `not-a-problem`, `came-back`, or `all`) — grouped as the ledger groups them. To stdout, or `--out <file>` (written
 atomically, never through a link, never inside `.nunchi/runs`, owner-only (0600), in folders made 0700 when nunchi

@@ -8,7 +8,7 @@ import { buildSourceMap, affectedRoutes, sourceHashes } from './sourcemap.mjs';
 import { startRun, finishRun, gcRuns, latestRun, latestSweep, PROGRESS_FILE, workTree, ensureGitignore, ensurePrivate, readConfig, gitRunner, DIFF_SAFE } from './runs.mjs';
 import { baseUrlRefusal } from './network.mjs';
 import { codeNavigations } from './flow.mjs';
-import { readDecisions, approvalKey, buildDecision, view, DECISIONS, NOT_LOOKED_RUNS, STALE_HUNTS, latestRunOf } from './ledger.mjs';
+import { readDecisions, approvalKey, buildDecision, view, DECISIONS, NOT_LOOKED_RUNS, STALE_HUNTS, latestRunOf, latestSweepOf } from './ledger.mjs';
 import { ensureStateDir, writeKey, readKey, removeKey, removeKeys, keyPath } from './state.mjs';
 import { runIdentity, routeHashes } from './ai-fold.mjs';
 import { withLock } from './stable.mjs';
@@ -1099,8 +1099,12 @@ if (cmd === 'setup') {
     let fixNeeds = new Set();
     try { fixNeeds = fixNeedsOf(latestRecords(led.st.root.dir), rows); } catch {}
     const E = await import('./export-findings.mjs');
+    // judged on the latest full check, as the hunt and the fix loop are: a quick first look alone is too early to say
+    // (design §6), so --fail-on is a state error then, never a pass
+    const sweep = latestSweepOf(led.state, led.st.root.stream);
+    if (!sweep && latestRunOf(led.state, led.st.root.stream)) throw Object.assign(new Error(`--fail-on ${args.failOn} judges a full check, and the ledger holds only a quick first look so far (nunchi capture --url <your local server> runs the full check)`), { code: 'NO_LEDGER' });
     return {
-      run: latestRunOf(led.state, led.st.root.stream), groups, standing: g => standingOf(g, rows, fixNeeds) !== null,
+      run: sweep, groups, standing: g => standingOf(g, rows, fixNeeds) !== null,
       results: ids => E.findingResults(E.findingsModel({ led, view: { rows: rows.filter(r => ids.has(r.group) && !r.goneAt) }, root, project, statuses: E.STATUSES })),
     };
   };
