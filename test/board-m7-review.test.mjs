@@ -27,7 +27,13 @@ async function open(p, ctx = {}) {
   await page.waitForSelector('#h-progress');
   return { b, page, errors, close: async () => { await context.close(); await b.close(); } };
 }
-const go = async (page, hash, ready) => { await page.evaluate(h => { location.hash = h; }, hash); await page.waitForSelector(ready); };
+// To a view, and wait for that view's `ready` element: the view drawn for this address, never the one before it (from
+// one Screen detail to another, `#h-screen` is there all along: keys pressed before the new one is drawn would go to
+// the old one, as on a slow CI runner)
+const go = async (page, hash, ready) => {
+  const moved = await page.evaluate(h => { if (location.hash === h) return false; document.querySelector('main')?.firstElementChild?.setAttribute('data-was', '1'); location.hash = h; return true; }, hash);
+  await page.waitForFunction(([r, moved]) => { const el = document.querySelector(r); return !!el && (!moved || !el.closest('[data-was]')); }, [ready, moved]);
+};
 const focused = page => page.evaluate(() => { const a = document.activeElement; return !a || a === document.body ? 'body' : a.id || a.tagName; });
 // the wall's phone screens (buttons on a wide window, a select on a phone)
 const phoneCards = async page => { if (await page.$('#wall-vp-m')) await page.click('#wall-vp-m'); else await page.selectOption('#wall-vp', 'm'); };

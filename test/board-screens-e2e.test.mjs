@@ -44,7 +44,13 @@ async function axe(page) {
   return page.evaluate(async () => (await globalThis.axe.run(document, { resultTypes: ['violations'] })).violations.map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target.join(' ')).slice(0, 3) })));
 }
 const focused = page => page.evaluate(() => { const a = document.activeElement; return !a || a === document.body ? 'body' : a.id || a.tagName; });
-const go = async (page, hash, ready) => { await page.evaluate(h => { location.hash = h; }, hash); await page.waitForSelector(ready); };
+// To a view, and wait for that view's `ready` element: the view drawn for this address, never the one before it (from
+// one Screen detail to another, `#h-screen` is there all along: keys pressed before the new one is drawn would go to
+// the old one, as on a slow CI runner)
+const go = async (page, hash, ready) => {
+  const moved = await page.evaluate(h => { if (location.hash === h) return false; document.querySelector('main')?.firstElementChild?.setAttribute('data-was', '1'); location.hash = h; return true; }, hash);
+  await page.waitForFunction(([r, moved]) => { const el = document.querySelector(r); return !!el && (!moved || !el.closest('[data-was]')); }, [ready, moved]);
+};
 
 test('screens e2e: the wall — counts on its filters, "N shown of M", Show, search (/), page groups, one tab stop; Space looks, Enter opens, Esc comes back to the card', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
