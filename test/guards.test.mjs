@@ -408,6 +408,16 @@ test('a name that is not UTF-8, a bidi override or a folder that cannot be liste
   } finally { chmodSync(join(p, 'app', 'shut'), 0o755); }
 });
 
+test('a --root that does not exist under another spelling of the project (a link, Windows\' 8.3 names) does not exist; it is not outside', { skip: process.platform === 'win32' && 'a symbolic link needs a privilege on Windows (the 8.3 spelling is checked there by check.test)' }, () => {
+  const p = tmp();
+  put(p, 'real/app/a.tsx', "alert('x');\n");
+  symlinkSync(join(p, 'real'), join(p, 'alias'));
+  const project = join(p, 'alias');
+  assert.throws(() => G.scanGuards({ project, root: join(project, 'no-such-folder'), guards: guardsOf(['native-dialog']) }), /no-such-folder does not exist/);
+  assert.throws(() => G.scanGuards({ project, root: join(p, 'elsewhere'), guards: guardsOf(['native-dialog']) }), /is outside the project folder/);
+  assert.deepEqual(G.scanGuards({ project, root: join(project, 'app'), guards: guardsOf(['native-dialog']) }).hits.map(h => h.file), ['app/a.tsx']);
+});
+
 test('line endings: a CRLF checkout (Git for Windows\' core.autocrlf) gives the same hits, lines, columns and anchors as LF', () => {
   for (const [kind, f] of CASES.flatMap(([k, h, m]) => [[k, h], [k, m]])) {
     const lf = fixture(kind, f);

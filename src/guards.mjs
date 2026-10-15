@@ -15,7 +15,7 @@
 //   unexpected is a state error (exit 2), never a silent pass.
 import { readFileSync, readdirSync, lstatSync, statSync, realpathSync } from 'node:fs';
 import * as nodePath from 'node:path';
-import { join, relative, resolve, sep, isAbsolute, extname } from 'node:path';
+import { join, relative, resolve, sep, isAbsolute, extname, dirname, basename } from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseSource, traverse, unwrap, calleeName, tagOf, attrName, TEST_FILE, CONFIG_FILE, IGNORE_DIRS } from './inventory.mjs';
 import { parseColor, oklabOf, deltaE, MERGE_DE, ALPHA_TOLERANCE } from './tokens.mjs';
@@ -472,8 +472,17 @@ export function tokenColours(report) {
 // Every hit of the given guards under `root` (inside `project`), paths relative to `project`.
 // → { hits (sorted), files (scanned), large (skipped, over 1 MB), unparsed: [{ file, line, message }] }
 export function scanGuards({ project, root = project, guards }) {
-  // compared on their real paths (a symlinked temp folder such as macOS's /var → /private/var; Windows' D:/ and D:\)
-  const real = p => { try { return realpathSync.native(resolve(p)); } catch { return resolve(p); } };
+  // compared on their real paths (a symlinked temp folder such as macOS's /var → /private/var; Windows' D:/ and D:\, and
+  // its 8.3 names: C:\Users\RUNNER~1 is C:\Users\runneradmin). A path that does not exist takes the real path of the
+  // nearest folder that does, so a missing --root is "does not exist", never "outside the project".
+  const real = p => {
+    let cur = resolve(p);
+    const rest = [];
+    for (;;) {
+      try { return join(realpathSync.native(cur), ...rest); }
+      catch { const up = dirname(cur); if (up === cur) return resolve(p); rest.unshift(basename(cur)); cur = up; }
+    }
+  };
   project = real(project); root = real(root);
   if (!insideProject(project, root)) throw fail('BAD_ARGS', `--root ${root} is outside the project folder ${project}`);
   let st = null;
