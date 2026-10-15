@@ -37,6 +37,7 @@ import { writeStable, privateDir, sha } from '../stable.mjs';
 import { recordDecisionTime, metricsPath } from '../metrics.mjs';
 import { checkProfile, approvedProfiles, approveProfile, scriptsApprovedPath, checksRequestPath } from '../checks.mjs';
 import { labelPool, blindItem, lensTable, readLabels, writeLabel, LABELLER } from '../labels.mjs';
+import { listHunts, huntLine } from '../activity.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
@@ -168,7 +169,14 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   // clock: claims bump no generation) changes the version
   const claimsDir = join(stateDir, 'claims');
   const claimsSig = () => { const c = readClaims(claimsDir, now()); return c.size ? sha([...c].map(([g, x]) => `${g}:${x.agent}`).join('|'), 12) : '-'; };
-  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${claimsSig()}`;
+  // the AI hunts in progress (design §7, src/activity.mjs): one that goes quiet drops out by the reader's clock, without
+  // a write, so the running ones are part of the version too
+  const order = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  const runningHunts = () => listHunts(stateDir, now()).filter(x => x.running).sort((a, b) => order(String(a.hunt.startedAt), String(b.hunt.startedAt)) || order(a.id, b.id));
+  // "Codex · AI review L6 · 12/40 units · 3 min" (design §7); the declared name is data, cleaned and clipped
+  const huntLines = () => { const t = now(); return runningHunts().map(x => safe(huntLine({ ...x.hunt, declaredAgent: x.hunt.declaredAgent ? safe(x.hunt.declaredAgent, 40) : null }, t), 160)); };
+  const huntsSig = () => { const h = runningHunts(); return h.length ? sha(h.map(x => `${x.id}:${x.hunt.answered}:${x.hunt.complete}:${x.hunt.units}`).join('|'), 12) : '-'; };
+  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${huntsSig()}.${claimsSig()}`;
   // claims as they are now (their minutes too) on a cached model
   const freshClaims = m => { const c = readClaims(claimsDir, now()); m.claims = c; for (const g of m.groups) g.fixing = c.get(g.id) || null; return m; };
   let cache = null;
@@ -411,7 +419,9 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
         if (c && Number.isFinite(c.cells)) coverage = { cells: c.cells, seen: Number(c.seen) || 0, budget: Number(c.notSeen?.budget) || 0 };
       } catch {}
     }
-    const nowLines = [...running.map(r => `Capture running · run ${r}`), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)} · ${fixingMinutes(c.minutes)}`)];
+    // design §7: "Now" lists captures, claims and running hunts with their progress
+    const hunts = huntLines();
+    const nowLines = [...running.map(r => `Capture running · run ${r}`), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)} · ${fixingMinutes(c.minutes)}`), ...hunts];
     return {
       version: version(), mode, project: safe(basename(project), 80), run: s.run, kind: s.kind, commit: s.commit ? safe(String(s.commit).slice(0, 7), 7) : null, dirty: s.dirty,
       verdict: s.verdict, bySeverity: s.bySeverity, byStatus: s.byStatus, toDecide: s.toDecide, decideNow: s.decideNow, toFix: s.toFix, fixNeedsYou: s.fixNeedsYou || 0, handoff: s.handoff, since: s.since, running: s.running,

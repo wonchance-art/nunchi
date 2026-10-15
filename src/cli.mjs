@@ -123,16 +123,19 @@ Usage:
   nunchi login --url <base> [--path /login] [--out .nunchi/auth.json]
                                             open a browser window, sign in once with a test account,
                                             save the login for signed-in scenes
-  nunchi hunt --plan [--run <id>] [--lens L1,L6] [--budget <tokens>|all] [--json]
+  nunchi hunt --plan [--run <id>] [--lens L1,L6] [--budget <tokens>|all] [--agent <name>] [--vendor <name>] [--json]
                                             Cut a run into AI-lens work units (1–3 scenes × 1 lens + a reference
                                             scene), estimate tokens, write hunt-plan.json into the run.
                                             Units over the budget (default 400000 tokens, normal screens
-                                            first; all = no cap) are listed as not seen: budget
+                                            first; all = no cap) are listed as not seen: budget. The board shows
+                                            the hunt in progress under the agent and vendor declared
   nunchi hunt --record <answers.json|dir> [--run <id>] [--root <dir>] [--json]
                                             Check the hunter's answers (every item answered, every defect
                                             grounded in a selector of the scene or a file:line under --root),
                                             write ai-findings.json and coverage.json into the run, and fold the
-                                            hunt into the ledger (claims not double-checked yet; screens it saw)
+                                            hunt into the ledger (claims not double-checked yet; screens it saw).
+                                            Each answers file may say "agent" and "vendor": every agent's latest
+                                            answers stand side by side
   nunchi export --html <dir> [--run <id>] [--inline] [--json]
                                             A static review page of one run and the ledger: <dir>/index.html plus
                                             <dir>/img/ (screenshots, copied). --inline puts the images inside
@@ -643,6 +646,8 @@ if (cmd === 'setup') {
   const { loadLenses } = await import('./lenses.mjs');
   const { planHuntWithKey, writeHuntMirror, writeRecord, readAnswers, formatPlan, formatRecord } = await import('./hunt.mjs');
   const { recordHunts, readAgentRecords, writeAgentRecords, formatAgents } = await import('./hunt-agents.mjs');
+  const { noteHunt, huntProgress, huntInTheWay, huntLine } = await import('./activity.mjs');
+  const { declaredName } = await import('./agents.mjs');
   const { writeStable } = await import('./stable.mjs');
   const fail = (msg, code = 1) => { console.error(`nunchi hunt: ${msg}`); process.exit(code); };
   if (!!args.plan === !!args.record) fail('use either --plan or --record <answers.json>');
@@ -657,6 +662,14 @@ if (cmd === 'setup') {
   if (!existsSync(join(runDir, 'manifest.json'))) fail(`${runDir} is not a complete capture run (no manifest.json)`);
   if (!runId) { try { runId = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8')).id ?? null; } catch {} }
   const planPath = join(runDir, 'hunt-plan.json');
+  // the board's "Now" (design §7): a hunt in progress, per worktree, run and declared agent; only for a run of this
+  // project's runs folder. It never fails a hunt: a state that cannot be written is said and the hunt goes on.
+  const ownRun = !!runId && resolve(dirname(runDir)) === runsDir;
+  const activity = fn => {
+    if (!ownRun) return null;
+    try { return fn(P.openState(resolve('.nunchi'), { warn })); }
+    catch (e) { if (!LEDGER_ERRORS.includes(e.code) && e.code !== 'EACCES' && e.code !== 'EPERM') throw e; console.error(`nunchi: the board will not show this hunt in progress (${e.message})`); return null; }
+  };
   try {
     if (args.plan) {
       const { DEFAULT_BUDGET } = await import('./hunt.mjs');
@@ -666,6 +679,13 @@ if (cmd === 'setup') {
       const { lenses } = loadLenses({ root: process.cwd() });
       const lensIds = args.lens ? args.lens.split(',').map(x => x.trim().toUpperCase()).filter(Boolean) : null;
       const { plan, key } = planHuntWithKey({ runDir, lenses, lensIds, budget, budgetDefault, runId });
+      const me = declaredName(args.agent, '--agent'), myVendor = declaredName(args.vendor, '--vendor');
+      if (me.error || myVendor.error) fail(me.error || myVendor.error);
+      // another agent hunting this run with the plan on disk would be left answering an old one: one plan per run
+      let current = null;
+      try { current = JSON.parse(readFileSync(planPath, 'utf8')).id ?? null; } catch {}
+      const way = activity(st => huntInTheWay(st.root.dir, { stream: st.root.stream, run: runId, agent: me.name, plan: plan.id, current }));
+      if (way) fail(`${way.hunt.declaredAgent || 'Another AI'} is hunting this run right now (${huntLine(way.hunt).split(' · ').slice(1).join(' · ')}) with the plan in hunt-plan.json (plan ${current}). Answer that plan's units (agents hunting one run share its plan), or wait until it is done: a new plan would leave its answers for an old one.`);
       runLock(runDir, () => {
         writeStable(planPath, plan);
         // a run with canaries: scene aliases, their answer key (kept outside the project, design §2.2) and the
@@ -673,6 +693,7 @@ if (cmd === 'setup') {
         if (key) writeKey(runDir, 'hunt-key.json', key); else removeKey(runDir, 'hunt-key.json');
         writeHuntMirror(runDir, key);
       });
+      activity(st => { let records = []; try { records = readAgentRecords(runDir); } catch {} noteHunt(st.root.dir, { agent: me.name, vendor: myVendor.name, stream: st.root.stream, run: runId, plan: plan.id, ...huntProgress(plan, records, me.name), generation: st.files.generation }); });
       console.log(args.json ? JSON.stringify(plan, null, 2) : formatPlan(plan, planPath));
     } else {
       if (!existsSync(planPath)) fail(`no hunt-plan.json in ${runDir}: run hunt --plan first`);
@@ -693,6 +714,7 @@ if (cmd === 'setup') {
       // the hunt into the ledger as (run, "ai"): its claims (not double-checked yet) and the cells it saw, so a hunt
       // that claims nothing counts towards staleness too (design §2.2, §2.4)
       foldAfterRecord(runDir, 'the AI hunt', args.root || process.cwd(), { quiet: true });
+      activity(st => { for (const a of result.agents) noteHunt(st.root.dir, { agent: a.agent, vendor: a.vendor, stream: st.root.stream, run: runId, plan: plan.id, ...huntProgress(plan, result.records, a.agent), generation: st.files.generation }); });
       console.log(args.json ? JSON.stringify({ plan: plan.id, run: runId, summary: result.coverage.summary, findings: result.findings.length, rejected: result.rejected, agents: result.coverage.agents ?? null }, null, 2) : [formatRecord(result, runDir), formatAgents(result)].filter(Boolean).join('\n'));
     }
   } catch (e) {
