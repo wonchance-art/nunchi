@@ -467,7 +467,8 @@ opened (keys by `code`), forced colours, and a capture that stops reaching an op
 itself. `test/quick-cli.test.mjs` checks a real first look's `flow.json` and its line. For the review of PR #36: the
 machine identity, the progress file from `startRun` to `finishRun`, the announcer with a fake clock, one order of the
 Now lines, the version (how far, why) and Coverage's newest capture (`test/board-m5b.test.mjs`); a stop announced below
-"Full check done" and inside the 10 s, and the search kept through a live redraw (`test/board-m5b-e2e.test.mjs`); the
+"Full check done" and inside the 10 s, a hunt's progress (M6) announced below a capture's line, and the search kept
+through a live redraw (`test/board-m5b-e2e.test.mjs`); the
 CLI's progress file naming its machine (`test/quick-cli.test.mjs`). Each fails without its fix (checked by undoing it).
 
 *Measured (M5b, 2026-10-15 KST, this development container, shared with other sessions).* With the review of PR #36,
@@ -2023,7 +2024,7 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   a decision the focus moves to the next row and a polite live region says "Kept (intended). Next: Raw error text,
   high, 4 screens"; the Now lines are announced at most every 10 s: what changed since the last announcement, the first
 changed line first, and a change inside the 10 s once they have passed, never dropped (review of PR #36, `shared.mjs`
-`NowAnnouncer`); single-character shortcuts can be turned off in
+`NowAnnouncer`; the summary's lines, the claims and M6's hunts alike); single-character shortcuts can be turned off in
   the keys dialog (`?`), and keys are off in text fields (`/` searches; Esc goes back to the row); the focus never
   falls to the page: a redraw (a live update, an undo) puts it back on the same control, the row or the heading, Z in
   Detail goes back to the finding it reopened, and a tab that lost the board focuses and says its message; Shift+J and

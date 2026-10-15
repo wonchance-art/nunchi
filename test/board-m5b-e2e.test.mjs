@@ -14,6 +14,8 @@ import { startBoard } from '../src/board/server.mjs';
 import { leafy } from './fixtures/coverage-project.mjs';
 import { writeRun, scene, tmp } from './fixtures/board-project.mjs';
 import { stableJson, thisMachine } from '../src/stable.mjs';
+import { noteHunt } from '../src/activity.mjs';
+import { stateOf } from '../src/project.mjs';
 
 const require = createRequire(import.meta.url);
 const AXE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
@@ -177,6 +179,24 @@ test('m5b e2e (review): a live redraw while someone types in the wall\'s search 
     assert.equal(after, 4, 'the wall was redrawn while typing');
     await page.waitForTimeout(700);
     assert.deepEqual(await page.evaluate(() => [document.getElementById('screen-search').value, document.activeElement?.id]), [typed, 'screen-search']);
+    assert.deepEqual(s.errors, []);
+  } finally { await s.close(); }
+});
+
+test('m5b e2e (review): a hunt\'s progress line (M6) is announced too, though a capture\'s line comes first', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = leafy({ probes: false });
+  progress(join(p.nunchi, 'runs', '0005.partial'), 3);
+  const sd = stateOf(p.nunchi).root.dir;
+  const hunt = answered => noteHunt(sd, { agent: 'Codex', vendor: 'OpenAI', stream: 'main', run: '0004', plan: 'p1', lenses: ['L6'], units: 40, answered, complete: answered, now: Date.now() });
+  hunt(12);
+  const s = await open(p);
+  const { page } = s;
+  try {
+    await page.evaluate(() => { window.__said = []; new MutationObserver(() => { const x = document.getElementById('announce').textContent; if (x) window.__said.push(x); }).observe(document.getElementById('announce'), { childList: true, characterData: true, subtree: true }); });
+    assert.match(await page.evaluate(() => [...document.querySelectorAll('.now li')].map(l => l.textContent).join('\n')), /^Capture running · run 0005 .*\nCodex · AI review L6 · 12\/40 units · just started$/);
+    hunt(13);
+    await page.waitForFunction(() => window.__said.some(x => x.includes('Codex · AI review L6 · 13/40 units')), null, { timeout: 25000 });
     assert.deepEqual(s.errors, []);
   } finally { await s.close(); }
 });
