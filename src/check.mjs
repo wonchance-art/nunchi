@@ -57,7 +57,7 @@ export function runCheck({ project, root = project, failOn = null, base = null, 
   const guards = doc?.guards || [];
   const scan = scanGuards({ project, root, guards });
   const cmpd = compareBaseline(scan.hits, doc?.baseline || []);
-  const weakened = base ? weakenedSince(before, doc) : [];
+  const weakened = base ? weakenedSince(before, doc, scan.hits) : [];
   const lines = [];
   lines.push(`nunchi check · ${guards.length ? `guards: ${guards.map(g => labelOf(g.kind, g.params)).join(', ')} (${guards.length} of ${KINDS.length} built-in)` : 'guards: none (.nunchi/guards.json does not exist or lists none: nunchi guard shows the built-in ones)'} · ${plural(scan.files, 'file')} read`);
   if (cmpd.fresh.length) {
@@ -68,7 +68,7 @@ export function runCheck({ project, root = project, failOn = null, base = null, 
   if (cmpd.gone.length) lines.push(`gone from the baseline: ${cmpd.gone.reduce((n, e) => n + e.count - e.now, 0)} (nunchi guard --baseline, in your own terminal, tightens it)`);
   if (base) {
     if (!weakened.length) lines.push(`since ${base}: no guard removed or weakened`);
-    for (const w of weakened) lines.push(`  since ${base}: ${w.why === 'removed' ? `guard removed: ${w.label}` : w.why === 'narrowed' ? `guard weakened: ${w.label} (${w.detail})` : `baseline grew: ${w.file} (${w.what ? hitLabel({ kind: w.kind, what: w.what }) : w.label}, +${w.count})`}`);
+    for (const w of weakened) lines.push(`  since ${base}: ${w.why === 'removed' ? `guard removed: ${w.label}` : w.why === 'narrowed' ? `guard weakened: ${w.label} (${w.detail})` : `baseline grew: ${w.files.join(', ')} (${w.what ? hitLabel({ kind: w.kind, what: w.what }) : w.label}, +${w.count})`}`);
   }
   if (scan.large.length) lines.push(`skipped: ${plural(scan.large.length, 'file')} over 1 MB (${scan.large.slice(0, 3).join(', ')}${scan.large.length > 3 ? ', …' : ''})`);
   if (scan.unparsed.length) lines.push(`not checked: ${plural(scan.unparsed.length, 'file')} that do not parse (${scan.unparsed.slice(0, 3).map(u => `${u.file}${u.line ? `:${u.line}` : ''}`).join(', ')}${scan.unparsed.length > 3 ? ', …' : ''})`);

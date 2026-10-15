@@ -149,6 +149,36 @@ test('--base: a guard removed, narrowed or with a grown baseline since the ref f
   assert.equal(check(root, '--base', 'empty').status, 0);
 });
 
+test('--base passes the legitimate changes: a widening from the card, git mv then --baseline, a reformat then --baseline', () => {
+  const root = repo({ guards: [{ kind: 'native-dialog', params: { calls: ['confirm'] } }] });
+  put(root, 'app/later.tsx', "export const Later = () => { alert('Saved'); return null; };\n");
+  gitIn(root, 'add', '-A');
+  gitIn(root, 'commit', '-q', '-m', 'an alert');
+  const base = gitIn(root, 'rev-parse', 'HEAD').trim();
+  const path = join(root, '.nunchi', 'guards.json');
+  // the card's widening: alert taken on, the alert there now baselined with it
+  G.writeGuards(path, G.addGuard(G.readGuards(path), { project: root, kind: 'native-dialog', params: { calls: ['alert', 'confirm'] } }).doc);
+  let r = check(root, '--base', base);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /no guard removed or weakened/);
+  // a file moved, and the baseline set again
+  gitIn(root, 'mv', 'app/remove.tsx', 'app/fern-remove.tsx');
+  G.writeGuards(path, G.rebaseline(G.readGuards(path), { project: root }));
+  r = check(root, '--base', base);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  // reformatted (lines reflowed, quotes changed), and the baseline set again
+  put(root, 'app/fern-remove.tsx', 'export function Remove() {\n  return (\n    <button onClick={() => window.confirm("Remove this fern?")}>\n      Remove\n    </button>\n  );\n}\n');
+  G.writeGuards(path, G.rebaseline(G.readGuards(path), { project: root }));
+  r = check(root, '--base', base);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  // and a new confirm taken into the baseline still fails
+  put(root, 'app/again.tsx', "export const Again = () => { window.confirm('Again?'); return null; };\n");
+  G.writeGuards(path, G.rebaseline(G.readGuards(path), { project: root }));
+  r = check(root, '--base', base);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /^ {2}since [0-9a-f]+: baseline grew: app\/again\.tsx \(`window\.confirm`, \+1\)$/m);
+});
+
 test('--sarif: new hits and weakened guards as results, valid against the vendored schema, repo-relative paths', () => {
   const root = repo({ guards: [{ kind: 'native-dialog' }, { kind: 'dead-href' }] });
   const base = gitIn(root, 'rev-parse', 'HEAD').trim();

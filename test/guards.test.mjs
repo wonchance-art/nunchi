@@ -282,6 +282,26 @@ test('weakened since a ref: a removed guard, fewer calls, more allowed colours, 
   assert.deepEqual(w.filter(x => x.why === 'baseline').map(x => [x.file, x.count]), [['app/a.tsx', 1], ['app/b.tsx', 1]]);
 });
 
+test('weakened since a ref: a renamed file nets out; growth is excused only for hits of what a widening took on', () => {
+  const doc = (calls, baseline) => G.validateGuards({ schema: 1, guards: [{ kind: 'native-dialog', params: { calls } }], baseline });
+  const e = (file, anchor, count, what) => ({ kind: 'native-dialog', file, anchor, count, ...(what ? { what } : {}) });
+  // git mv app/a.tsx app/b.tsx, then the baseline set again: the same anchors, another file
+  assert.deepEqual(G.weakenedSince(doc(['confirm'], [e('app/a.tsx', 'aaaaaaaaaaaaaaaa', 2)]), doc(['confirm'], [e('app/b.tsx', 'aaaaaaaaaaaaaaaa', 1), e('app/c.tsx', 'aaaaaaaaaaaaaaaa', 1)])), []);
+  // widened to alert: the alert there now joined the baseline with it
+  const before = doc(['confirm'], [e('app/a.tsx', 'aaaaaaaaaaaaaaaa', 1)]);
+  const after = doc(['alert', 'confirm'], [e('app/a.tsx', 'aaaaaaaaaaaaaaaa', 1), e('app/a.tsx', 'bbbbbbbbbbbbbbbb', 1, 'alert')]);
+  const hit = (anchor, what) => ({ kind: 'native-dialog', file: 'app/a.tsx', anchor, what, line: 1, column: 1 });
+  assert.deepEqual(G.weakenedSince(before, after, [hit('aaaaaaaaaaaaaaaa', 'confirm'), hit('bbbbbbbbbbbbbbbb', 'alert')]), []);
+  // the file says alert, the source says confirm: what the scanner finds counts, so the growth is not excused
+  const w = G.weakenedSince(before, after, [hit('aaaaaaaaaaaaaaaa', 'confirm'), hit('bbbbbbbbbbbbbbbb', 'confirm')]);
+  assert.deepEqual(w.map(x => [x.why, x.files, x.count, x.what]), [['baseline', ['app/a.tsx'], 1, 'confirm']]);
+  // no hit there now: nothing shows what the entry is, so it is not excused either
+  assert.equal(G.weakenedSince(before, after, []).length, 1);
+  // two more alerts baselined than there are: the slack is a weakening
+  const more = doc(['alert', 'confirm'], [e('app/a.tsx', 'aaaaaaaaaaaaaaaa', 1), e('app/a.tsx', 'bbbbbbbbbbbbbbbb', 3, 'alert')]);
+  assert.deepEqual(G.weakenedSince(before, more, [hit('bbbbbbbbbbbbbbbb', 'alert')]).map(x => x.count), [2]);
+});
+
 test('the lint proposal: core rules only, one separate object scoped to files, the replace warning; plugins only when installed', () => {
   const doc = { guards: guardsOf(['native-dialog', 'dead-href', 'raw-message', 'mustache-text', 'colour-literal']) };
   const r = G.lintProposal({ guards: doc.guards, pkg: { devDependencies: { eslint: '9.0.0' } } });

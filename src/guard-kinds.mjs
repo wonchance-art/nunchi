@@ -193,7 +193,11 @@ export function compareBaseline(hits, baseline = []) {
 // What a guards file at an earlier commit had that this one has not (design §5: "a guard removed since <ref> counts
 // as a hit"); also a guard narrowed (fewer calls or link kinds, more allowed colours, a wider ΔE) and a baseline that
 // grew for a guard both have: each is a way to let a hit through without a new hit appearing.
-export function weakenedSince(before, after) {
+// The baseline is compared per kind and anchor over every file, so a file renamed or moved (`git mv`, then
+// `nunchi guard --baseline`) nets out. Growth is excused for the hits there now of what the guard took on since the
+// ref (a call or link kind added by a widening, which baselines what it adds): `hits` are the scanner's, so what a hit
+// is comes from the source, never from the file's own `what`.
+export function weakenedSince(before, after, hits = []) {
   const out = [];
   if (!before) return out;
   const now = new Map((after?.guards || []).map(g => [g.kind, g.params]));
@@ -207,12 +211,27 @@ export function weakenedSince(before, after) {
       if (more.length || p.deltaE > g.params.deltaE) out.push({ kind: g.kind, why: 'narrowed', detail: [more.length && `${more.length} more allowed colour${more.length === 1 ? '' : 's'}`, p.deltaE > g.params.deltaE && `ΔE ${g.params.deltaE} → ${p.deltaE}`].filter(Boolean).join(', '), label: labelOf(g.kind, g.params) });
     }
   }
-  const was = new Map(before.baseline.map(e => [keyOf(e), e.count]));
-  const kept = new Set(before.guards.map(g => g.kind));
-  for (const e of after?.baseline || []) {
-    if (!kept.has(e.kind)) continue;                               // a guard added since: its baseline is new by nature
-    const n = was.get(keyOf(e)) || 0;
-    if (e.count > n) out.push({ kind: e.kind, why: 'baseline', file: e.file, anchor: e.anchor, count: e.count - n, what: e.what ?? null, label: labelOf(e.kind, now.get(e.kind)) });
+  // a guard added since: its baseline is new by nature; one both have is compared
+  const kept = new Set(before.guards.filter(g => now.has(g.kind)).map(g => g.kind));
+  const totals = doc => {
+    const m = new Map();
+    for (const e of doc?.baseline || []) if (kept.has(e.kind)) { const k = `${e.kind}\0${e.anchor}`; m.set(k, (m.get(k) || 0) + e.count); }
+    return m;
+  };
+  const was = totals(before), is = totals(after);
+  const then = new Map(before.guards.map(g => [g.kind, g.params]));
+  const takenOn = kind => (kind === 'native-dialog' ? now.get(kind).calls.filter(c => !then.get(kind).calls.includes(c))
+    : kind === 'dead-href' ? now.get(kind).values.filter(v => !then.get(kind).values.includes(v)) : []);
+  for (const k of [...is.keys()].sort()) {
+    const grew = is.get(k) - (was.get(k) || 0);
+    if (grew <= 0) continue;
+    const [kind, anchor] = k.split('\0');
+    const mine = hits.filter(h => h.kind === kind && h.anchor === anchor);
+    const added = takenOn(kind);
+    const count = grew - Math.min(grew, mine.filter(h => added.includes(h.what)).length);
+    if (!count) continue;
+    const files = [...new Set(after.baseline.filter(e => e.kind === kind && e.anchor === anchor).map(e => e.file))].sort();
+    out.push({ kind, why: 'baseline', file: files[0], files, anchor, count, what: mine[0]?.what ?? null, label: labelOf(kind, now.get(kind)) });
   }
   return out;
 }
