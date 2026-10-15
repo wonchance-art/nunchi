@@ -100,8 +100,11 @@ test('board e2e: interrupted says the sentence (no buttons); revert says why and
   const s4 = await open(a);
   try {
     await s4.look(a.group, '.needs .actions');
+    // the undo's answer held back 1.5 s: the live update redraws first (as it did on Windows CI), and the focus must
+    // still land on the history row in the very redraw that removes the card
+    await s4.pg.route('**/api/fix-undo', async r => { const res = await r.fetch(); await new Promise(z => setTimeout(z, 1500)); await r.fulfill({ response: res }); });
     await s4.pg.click('#fix-undo');
-    await s4.pg.waitForFunction(() => !document.querySelector('.needs') && document.getElementById('attempt-1'));
+    await s4.pg.waitForFunction(() => !document.querySelector('.needs') && document.getElementById('attempt-1'), null, { polling: 'raf' });
     const m = await s4.pg.evaluate(() => ({ focus: document.activeElement?.id, row: document.getElementById('attempt-1').innerText.replace(/\s+/g, ' ').trim(), dialog: document.getElementById('dialog').open }));
     assert.equal(m.focus, 'attempt-1');
     assert.match(m.row, /^Attempt 1 · Undone at your request · [0-9a-f]{7} Copy → reverted in [0-9a-f]{7} Copy · just now$/);

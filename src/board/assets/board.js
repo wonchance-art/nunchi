@@ -802,6 +802,13 @@ function renderDetail(focus = false) {
       facts, evidence),
     history, h('div', { class: 'detail-box dock' }, decisionBar(() => targetsNow()))));
   if (focus) focusHeading();
+  // an undo under way: the first redraw without its card (the live update or the undo's own) puts the focus on the
+  // attempt's history row, in the same redraw, so the card never goes without the focus landing
+  if (D.focusAfter && !$('fix-undo')) {
+    const row = $(D.focusAfter);
+    D.focusAfter = null;
+    if (row) { row.setAttribute('tabindex', '-1'); row.focus({ preventScroll: true }); row.scrollIntoView({ block: 'nearest' }); }
+  }
 }
 
 // ---- the fix loop's states in Detail (design §3.4 "Fix states on the board") --------------------------------------------
@@ -862,27 +869,29 @@ function fixNeedsBox(g) {
     actions.length ? h('div', { class: 'actions' }, actions) : null, undoable ? msg : null);
 }
 // [Undo this fix]: the same safe revert as the AI's fix --undo. A refusal is said on the card, in the board's words.
+let undoing = false;
 async function undoFix(g) {
+  if (undoing) return;                       // one undo at a time (the button stays enabled: disabling it drops the focus)
   const F = W.FIX_WORDS, key = `${g.id}/${g.fix.record}`;
   const say = text => { if (S.detail) S.detail.undoSaid = { key, text }; const m = $('fix-undo-msg'); if (m) m.textContent = text; };
-  const b = $('fix-undo');
-  if (b) b.disabled = true;
+  undoing = true;
+  // where the focus goes once the card is gone: set before the request, as the live update may redraw first
+  if (S.detail) S.detail.focusAfter = `attempt-${g.fix.record}`;
   try { await api('/api/fix-undo', { method: 'POST', body: { group: g.id, attempt: g.fix.record } }); }
   catch (e) {
-    if (b) { b.disabled = false; b.focus(); }
+    if (S.detail) S.detail.focusAfter = null;
     if (e.status === 401) return;
     const d = e.data || {};
     if (d.stale) { announce('This fix changed while you looked: the page is up to date now'); await refreshDetail(); return; }
     const refusal = F.undoRefused[d.refused];
     say(refusal ? refusal(g.fix.commit || '', { paths: W.listText(d.paths || []), branch: d.branch || '', on: d.on || null }) : `Not undone: ${e.message}`);
+    $('fix-undo')?.focus();
     return;
   }
+  finally { undoing = false; }
   if (S.detail) S.detail.undoSaid = null;
   announce(F.undone);
   await refreshDetail();
-  // the card is gone (or another one says why the undo could not run): the focus goes to the attempt's history row
-  const row = $(`attempt-${g.fix.record}`) || $('fix-undo');
-  if (row) { row.setAttribute('tabindex', '-1'); row.focus(); }
 }
 // Detail history: the fix attempts, newest first (Attempt n · outcome · commit → reverted in commit · when).
 function fixRows(g) {

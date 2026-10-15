@@ -192,8 +192,11 @@ test('board e2e: the diff card at 390 px — five paths then "and 2 more", [Copy
     assert.deepEqual(await pg.evaluate(async () => (await globalThis.axe.run(document, { resultTypes: ['violations'] })).violations.map(x => x.id)), []);
     // clean: undone; the card goes, the focus lands on the attempt's history row, which says it
     rmSync(join(p.root, 'notes.md'));
+    // the undo's answer held back 1.5 s: the live update redraws first (as it did on Windows CI), and the focus must
+    // still land on the history row in the very redraw that removes the card
+    await pg.route('**/api/fix-undo', async r => { const res = await r.fetch(); await new Promise(z => setTimeout(z, 1500)); await r.fulfill({ response: res }); });
     await pg.click('#fix-undo');
-    await pg.waitForFunction(() => !document.querySelector('.needs') && document.getElementById('attempt-1'));
+    await pg.waitForFunction(() => !document.querySelector('.needs') && document.getElementById('attempt-1'), null, { polling: 'raf' });
     const done = await pg.evaluate(() => ({ focus: document.activeElement?.id, row: document.getElementById('attempt-1').innerText.replace(/\s+/g, ' '), h: document.getElementById('h-attempts')?.textContent,
       mono: getComputedStyle(document.querySelector('#attempt-1 .mono')).fontFamily, names: [...document.querySelectorAll('#attempt-1 button')].map(b => b.getAttribute('aria-label')), wide: document.documentElement.scrollWidth <= innerWidth }));
     assert.equal(done.focus, 'attempt-1');
