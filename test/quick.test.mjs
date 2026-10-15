@@ -206,6 +206,31 @@ test('a quick run is presence-only: it adds and brings back, never fixes, never 
 
 // ---- which run: hunt, verify, gc ------------------------------------------------------------------------------------
 
+test('quick runs and the ledger (review of PR #33): not counted as "not looked at", never take an item over from another worktree, never hold back an older sweep', () => {
+  const at = (id, kind, route, names, extra = {}) => ({ id, kind, scope: { routes: [route] }, wholeApp: false, scenes: [sc(route, 'guest.normal.m')], findings: L.annotate(names.map(n => fnd(route, 'guest.normal.m', n))), ...extra });
+  const row = (st, name) => L.view(st, [], new Set(), { now: 0 }).find(r => r.evidence.name === name);
+  // seen on /a by sweep 0001; then three first looks of /b only: never looked at again, but no sweep came after
+  let st = L.foldRun(L.emptyState(), at('0001', 'sweep', '/a', ['x']));
+  for (const id of ['0002', '0003', '0004']) st = L.foldRun(st, at(id, 'quick', '/b', []));
+  assert.equal(row(st, 'x').notLookedAt, null, 'first looks do not count');
+  for (const id of ['0005', '0006', '0007']) st = L.foldRun(st, at(id, 'sweep', '/b', []));
+  assert.equal(row(st, 'x').notLookedAt, '0001', 'three sweeps that did not look at it do');
+  // another worktree's first look sees an item of main's: it stays main's, so main's next sweep can fix it
+  let w = L.foldRun(L.emptyState(), at('0001', 'sweep', '/a', ['y']));
+  w = L.foldRun(w, { ...at('0002', 'quick', '/a', ['y']), stream: 'wt:other' });
+  const y = Object.values(w.items).find(i => i.evidence.name === 'y');
+  assert.deepEqual([y.stream ?? 'main', y.lastSeen], ['main', '0002']);
+  w = L.foldRun(w, at('0003', 'sweep', '/a', []));
+  assert.equal(Object.values(w.items).find(i => i.evidence.name === 'y').goneAt, '0003');
+  // a sweep started before a first look and folded after it still fixes what it looked at — but never what the later
+  // first look saw
+  let o = L.foldRun(L.emptyState(), at('0001', 'sweep', '/a', ['seen-later', 'gone']));
+  o = L.foldRun(o, at('0003', 'quick', '/a', ['seen-later']));
+  o = L.foldRun(o, at('0002', 'sweep', '/a', []));
+  const byName = n => Object.values(o.items).find(i => i.evidence.name === n);
+  assert.deepEqual([byName('gone').goneAt, byName('seen-later').goneAt], ['0002', null]);
+});
+
 function runsFolder(kinds) {
   const dir = join(tmp('nunchi-quick-runs-'), 'runs');
   kinds.forEach((kind, i) => {
