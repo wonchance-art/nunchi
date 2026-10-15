@@ -252,7 +252,8 @@ fixed: never say *fixed*, *undone* or *needs you* unless the engine printed it.
     (the plugin's hook refuses all of these): adding, removing and re-baselining are the user's. A "guard available"
     chip in the board or `findings` is passive: mention it only if the user asks about guards. You may run `guard`
     (what each guard finds now) and `guard --lint`, and show the ESLint config object it prints for the user to paste
-    into their own `eslint.config.*` with its warning (a later `no-restricted-syntax` replaces the earlier one);
+    into their own `eslint.config.*` with its warning (it replaces any earlier `no-restricted-syntax` list for those
+    files, and a later one with options replaces it: they merge them into one list);
     never edit their ESLint config yourself.
 19. **`check` in CI.** When the user wants CI to keep guards (or asks how), suggest a step that runs the bundled
     engine from their checkout, e.g. `node <path to nunchi>/src/cli.mjs setup --no-browser` (the engine's pinned parser;

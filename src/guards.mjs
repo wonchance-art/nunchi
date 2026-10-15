@@ -34,6 +34,16 @@ const CSS = /\.css$/i;
 // (a route folder called `test` inside app/ or pages/ is a page: only the project's own top-level test folders are left out)
 const NOT_APP = /^(tests?|fixtures?|stories|storybook-static|playwright|e2e)\/|(^|\/)__snapshots__\//;
 export const SKIPPED_DIRS = [...IGNORE_DIRS].sort();
+// A file (path relative to the project) a scan never reads: a test, a fixture, a story, a config file. The folders it
+// never enters are SKIPPED_DIRS and dot folders.
+export const notApp = rel => TEST_FILE.test(rel) || NOT_APP.test(rel) || CONFIG_FILE.test(rel) || /\.config\.[cm]?[jt]sx?$/.test(rel);
+// The same, as the `ignores` of the lint proposal's config object (globs of ESLint's flat config)
+export const LINT_IGNORES = [
+  '**/__tests__/**', '**/__mocks__/**', '**/__fixtures__/**', '**/__snapshots__/**', '**/e2e/**', '**/cypress/**',
+  '**/*.{test,spec,stories,story,cy}.*', '**/*.d.{ts,mts,cts}', '**/*.config.*',
+  '{test,tests,fixture,fixtures,stories,storybook-static,playwright}/**',
+  `**/{${SKIPPED_DIRS.filter(d => !d.startsWith('.')).join(',')}}/**`, '**/.*/**',
+];
 
 // A file's path as guards.json keeps it: relative to the project, with forward slashes on every platform, or null when
 // it lies outside the project (`..`, another drive) or its name holds what a baseline path may not (a backslash, which
@@ -66,7 +76,7 @@ export function sourceFiles(project, root, { css = false } = {}) {
       if (!(CODE.test(e.name) || (css && CSS.test(e.name)))) continue;
       const rel = projectPath(project, p);
       if (rel === null) { odd.push(JSON.stringify(posix(relative(project, p))).slice(1, -1).slice(0, 200)); continue; }
-      if (TEST_FILE.test(rel) || NOT_APP.test(rel) || CONFIG_FILE.test(rel) || /\.config\.[cm]?[jt]sx?$/.test(rel)) continue;
+      if (notApp(rel)) continue;
       let size = 0;
       try { size = lstatSync(p).size; } catch { continue; }
       if (size > MAX_SOURCE_BYTES) { large.push(rel); continue; }
@@ -163,12 +173,13 @@ function chainNames(e) {
 // A raw message comes from an error: the chain names `e`, `err`, `error`, `ex`, `exception`, `cause` or a name ending
 // in Error (`loadError`). A chain through `errors`, `formState` or `fieldState` is a form library's validation message
 // (react-hook-form, Formik), written for people; `toast.message` or `m.message` is not an error's.
-const ERRORISH = n => /^(e|err|error|ex|exception|cause)$/i.test(n) || /Error$/.test(n);
-const FORM_CHAIN = new Set(['errors', 'formState', 'fieldState']);
+// The lint proposal's selectors use the same two patterns.
+const ERROR_NAME = /^([eE]|[eE]rr|[eE]rror|[eE]x|[eE]xception|[cC]ause)$|Error$/;
+const FORM_NAME = /^(errors|formState|fieldState)$/;
 function errorMessage(m) {
   if (!isMember(m) || propName(m) !== 'message') return false;
   const names = chainNames(m.object);
-  return !names.some(n => FORM_CHAIN.has(n)) && names.some(ERRORISH);
+  return !names.some(n => FORM_NAME.test(n)) && names.some(n => ERROR_NAME.test(n));
 }
 // Where an error's message is rendered as it is: `e.message`, `err?.message`, `a && e.message`, `e.message ?? 'x'`,
 // `ok ? 'x' : e.message`, and through the plain wrappers that keep it whole: `String(e.message)`,
@@ -527,21 +538,53 @@ export function rebaseline(doc, { project, root = project }) {
 // ---- the lint proposal (design §5) --------------------------------------------------------------------------------------
 
 const has = (pkg, name) => !!(pkg && ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'].some(k => pkg[k] && typeof pkg[k] === 'object' && Object.hasOwn(pkg[k], name)));
-// ESLint selectors (esquery) for the guards ESLint's core rules can express; the colour guard has none.
+// ESLint selectors (esquery) for the guards ESLint's core rules can express; the colour guard has none. They say what
+// the guards say, as far as a selector can (no data flow, no names declared in the file).
+const HREF = "JSXAttribute[name.name='href']";
+// a JSX expression in a place that is text: a child, or an attribute that is not a class, a key, an id, a handler …
+const SHOWN = `JSXExpressionContainer:not(JSXAttribute[name.name=/${NOT_TEXT_ATTR.source}/] > *)`;
+// `<x>.message` or `<x>['message']` whose chain names an error and not a form library's state
+const MESSAGE = `MemberExpression:matches([property.name='message'], [property.value='message']):has(Identifier[name=/${ERROR_NAME.source}/]):not(:has(Identifier[name=/${FORM_NAME.source}/]))`;
+const ENDS = `:matches(${MESSAGE}, ChainExpression:has(> ${MESSAGE}))`;
+// a placeholder in text that is not a code sample, a stylesheet or a script
+const NOT_RAW = `:not(JSXElement[openingElement.name.name=/^(${[...RAW_TAGS].join('|')})$/] *)`;
+const MUSTACHE = '/\\{\\{|\\}\\}/';
 const SELECTORS = {
-  'dead-href': p => [
-    ...(p.values.includes('#') ? [{ selector: "JSXAttribute[name.name='href'][value.value='#']", message: 'A link to "#" goes nowhere: link to a real page, or use a <button>.' },
-      { selector: "JSXAttribute[name.name='href'] > JSXExpressionContainer > Literal[value='#']", message: 'A link to "#" goes nowhere: link to a real page, or use a <button>.' }] : []),
-    ...(p.values.includes('javascript:') ? [{ selector: "JSXAttribute[name.name='href'][value.value=/^\\s*javascript:/i]", message: 'A javascript: link: use a <button> with an onClick.' }] : []),
-  ],
-  'raw-message': () => [
-    { selector: "JSXExpressionContainer:not(JSXAttribute[name.name=/^(className|class|style|key|ref|id)$/] > *) > MemberExpression[property.name='message']", message: 'Raw error text on screen: say what happened and what to do instead of showing e.message.' },
-    { selector: "JSXExpressionContainer:not(JSXAttribute[name.name=/^(className|class|style|key|ref|id)$/] > *) > ChainExpression > MemberExpression[property.name='message']", message: 'Raw error text on screen: say what happened and what to do instead of showing e.message.' },
-  ],
-  'mustache-text': () => [
-    { selector: 'JSXText[value=/\\{\\{|\\}\\}/]', message: '{{ }} in JSX text is shown as it is: interpolate the value.' },
-    { selector: 'JSXElement > JSXExpressionContainer > Literal[value=/\\{\\{|\\}\\}/]', message: '{{ }} in JSX text is shown as it is: interpolate the value.' },
-  ],
+  'dead-href': p => {
+    const nowhere = 'A link to "#" goes nowhere: link to a real page, or use a <button>.', script = 'A javascript: link: use a <button> with an onClick.';
+    return [
+      ...(p.values.includes('#') ? [
+        { selector: `${HREF}[value.value='#']`, message: nowhere },
+        { selector: `${HREF} > JSXExpressionContainer > Literal[value='#']`, message: nowhere },
+        { selector: `${HREF} > JSXExpressionContainer > ConditionalExpression > Literal[value='#']`, message: nowhere },
+        { selector: `${HREF} > JSXExpressionContainer > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked='#']`, message: nowhere },
+      ] : []),
+      ...(p.values.includes('javascript:') ? [
+        { selector: `${HREF}[value.value=/^\\s*javascript:/i]`, message: script },
+        { selector: `${HREF} > JSXExpressionContainer > Literal[value=/^\\s*javascript:/i]`, message: script },
+        { selector: `${HREF} > JSXExpressionContainer > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/^\\s*javascript:/i]`, message: script },
+      ] : []),
+    ];
+  },
+  'raw-message': () => {
+    const message = 'Raw error text on screen: say what happened and what to do instead of showing e.message.';
+    return [
+      { selector: `${SHOWN} > ${ENDS}`, message },
+      // `a && e.message`, `e.message ?? '…'`, either branch of `?:`, `${e.message}`, `'Error: ' + e.message`, String(e.message)
+      { selector: `${SHOWN} > LogicalExpression > ${ENDS}.right`, message },
+      { selector: `${SHOWN} > LogicalExpression[operator!='&&'] > ${ENDS}.left`, message },
+      { selector: `${SHOWN} > ConditionalExpression > ${ENDS}:not(.test)`, message },
+      { selector: `${SHOWN} > :matches(TemplateLiteral, BinaryExpression[operator='+'], CallExpression[callee.name='String']) > ${ENDS}`, message },
+    ];
+  },
+  'mustache-text': () => {
+    const message = '{{ }} in JSX text is shown as it is: interpolate the value.';
+    return [
+      { selector: `JSXText[value=${MUSTACHE}]${NOT_RAW}`, message },
+      { selector: `:matches(JSXElement, JSXFragment) > JSXExpressionContainer > Literal[value=${MUSTACHE}]${NOT_RAW}`, message },
+      { selector: `:matches(JSXElement, JSXFragment) > JSXExpressionContainer > TemplateLiteral > TemplateElement[value.cooked=${MUSTACHE}]${NOT_RAW}`, message },
+    ];
+  },
 };
 // → { text, notes }: one flat-config object, core rules only, to paste into the array eslint.config.* exports. nunchi
 // never writes the user's config. `pkg`: the app's package.json (for what is installed already).
@@ -552,11 +595,14 @@ export function lintProposal({ guards, pkg = null, installed = () => false }) {
   const lines = [
     '// nunchi guards as ESLint core rules: a separate config object, scoped to your source files.',
     '// Paste it into the array your eslint.config.* exports (nunchi never writes your config).',
-    '// Warning: ESLint does not merge rule options. A later config object that sets no-restricted-syntax for the same',
-    '// files replaces this list instead of adding to it: keep every no-restricted-syntax selector in one object.',
+    '// Warning: ESLint does not merge rule options. This object replaces any earlier no-restricted-syntax list for these',
+    '// files; a later object that sets no-restricted-syntax with options replaces this one. Merge them into one list.',
+    '// The ignores are what nunchi check leaves out: tests, stories, fixtures, config files, build output.',
     '{',
     "  files: ['**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}'],",
-    "  ignores: ['**/*.{test,spec}.*', '**/__tests__/**', '**/*.stories.*'],",
+    '  ignores: [',
+    ...LINT_IGNORES.map(g => `    '${g}',`),
+    '  ],',
     '  rules: {',
     ...(dialog ? [`    'no-alert': 'error',${dialog.params.calls.length < CALLS.length ? ` // no-alert covers alert, confirm and prompt alike (your guard: ${dialog.params.calls.join(', ')})` : ''}`] : []),
     ...(selectors.length ? ["    'no-restricted-syntax': ['error',", ...selectors.map(s => `      { selector: ${JSON.stringify(s.selector)}, message: ${JSON.stringify(s.message)} },`), '    ],'] : []),

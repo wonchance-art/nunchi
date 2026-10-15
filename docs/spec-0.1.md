@@ -1796,11 +1796,19 @@ offers `window.confirm` (`calls: ["confirm"]`), a fixed `href="#"` offers `href=
 new (colour: *unavailable* without `tokens.json`); the agent may run it and propose. **`nunchi guard --lint`** prints
 an ESLint flat-config object to paste into the user's `eslint.config.*` — nunchi never writes their config: core rules
 only (`no-alert`, which covers alert, confirm and prompt alike; `no-restricted-syntax` with esquery selectors for
-`href="#"`, `javascript:` links, `.message` in JSX outside `className`/`class`/`style`/`key`/`ref`/`id`, and `{{`/`}}` in
-JSX text), as a separate object scoped to `files` (source files, tests and stories ignored), with the warning that a
-later object that sets `no-restricted-syntax` for the same files replaces the list instead of adding to it (ESLint does
-not merge rule options). Verified with ESLint 9.39.1 on 2026-10-15 KST: the selectors flag the fixture's hits and not
-`className={styles.message}`, `#top` or `<Trans>{{ name }}</Trans>`, and with a later object that sets
+`href="#"` (a string, `{'#'}`, `` {`#`} ``, either branch of `?:`), `javascript:` links, an error's `.message` or
+`['message']` (the guard's names, never through `errors`, `formState` or `fieldState`; directly, on the rendered side
+of `&&`, `??`, `||` and `?:`, in a template, after `+` or in `String()`) in JSX outside the attributes that are not
+text, and `{{`/`}}` in JSX text, a string or a template child, outside `<code>`, `<pre>`, `<kbd>`, `<samp>`, `<style>`,
+`<script>`), as a separate object scoped to `files` whose `ignores` are what `check` leaves out (tests, stories,
+`*.cy.*`, `*.story.*`, `e2e/`, `cypress/`, the top-level test folders, config files, the skipped folders; a test turns
+the globs into patterns and checks them against `check`'s own list), with the warning that ESLint does not merge rule
+options: this object replaces any earlier `no-restricted-syntax` list for these files, a later object that sets it
+with options replaces this one, so merge them into one list. Verified with ESLint 9.39.1 on 2026-10-15 KST: the
+selectors flag every hit of a JSX copy of the fixtures (23: two `no-alert`, six links, eleven messages, four
+placeholders) and none of the near misses (`className={styles.message}`, `toast.message`, `errors.email?.message`,
+`{e.message && <b>…</b>}`, `#top`, `` `#${id}` ``, `<Trans>{{ name }}</Trans>`, `<code>{'{{name}}'}</code>`), files
+under `e2e/`, `cypress/` and `__tests__/` and `*.cy.*` and `*.story.*` files get none, and with a later object that sets
 `no-restricted-syntax` only `no-alert` was left. Proposed only when already installed (the app's package.json or
 `node_modules`): `jsx-a11y/anchor-is-valid` when `eslint-plugin-jsx-a11y` is (or `eslint-config-next`, which depends on
 it: eslint-config-next 16.4.1 turns on six jsx-a11y rules, `alt-text`, `aria-props`, `aria-proptypes`,

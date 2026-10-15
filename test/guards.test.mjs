@@ -309,8 +309,16 @@ test('the lint proposal: core rules only, one separate object scoped to files, t
   assert.match(r.text, /files: \['\*\*\/\*\.\{js,jsx,mjs,cjs,ts,tsx,mts,cts\}'\]/);
   assert.match(r.text, /'no-alert': 'error'/);
   assert.match(r.text, /'no-restricted-syntax': \['error',/);
-  assert.match(r.text, /replaces this list instead of adding to it/);
+  // ESLint does not merge rule options: this object replaces an earlier list, a later one with options replaces it
+  assert.match(r.text, /This object replaces any earlier no-restricted-syntax list for these\n\/\/ files; a later object that sets no-restricted-syntax with options replaces this one\. Merge them into one list\./);
   assert.match(r.text, /never writes your config/);
+  // what the guards catch that a first selector missed: href={`#`}, e['message']; a code sample's {{ }} is left alone
+  assert.ok(r.text.includes("TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked='#']"));
+  assert.ok(r.text.includes("[property.value='message']"));
+  assert.ok(r.text.includes(':not(JSXElement[openingElement.name.name=/^(code|pre|kbd|samp|style|script|noscript)$/] *)'));
+  // only an error's message, never a form library's (the guard's own names)
+  assert.ok(r.text.includes('Identifier[name=/^([eE]|[eE]rr|[eE]rror|[eE]x|[eE]xception|[cC]ause)$|Error$/]'));
+  assert.ok(r.text.includes(':not(:has(Identifier[name=/^(errors|formState|fieldState)$/]))'));
   assert.ok(!/jsx-a11y|stylelint|toMatchAriaSnapshot/.test(r.text + r.notes.join('\n')), 'nothing proposed that is not installed');
   assert.ok(r.notes.some(n => /colour literals/.test(n)));
   const next = G.lintProposal({ guards: doc.guards, pkg: { dependencies: { 'eslint-config-next': '16.4.1', '@playwright/test': '1.0.0' }, devDependencies: { stylelint: '16', 'stylelint-declaration-strict-value': '1' } } });
@@ -319,6 +327,26 @@ test('the lint proposal: core rules only, one separate object scoped to files, t
   assert.ok(next.notes.some(n => /toMatchAriaSnapshot/.test(n)));
   // the snippet is a JavaScript object literal
   assert.doesNotThrow(() => new Function(`return (${r.text.split('\n').filter(l => !l.startsWith('//')).join('\n').replace(/,\s*$/, '')});`)());
+});
+
+test('the lint proposal ignores what nunchi check leaves out, and nothing it reads', () => {
+  // ESLint's flat-config globs (minimatch, dot files included): `**`, `*` and `{a,b}` are all the ignores use
+  const re = g => new RegExp(`^${g.replace(/[.+^$()|[\]\\]/g, '\\$&').replace(/\{([^}]*)\}/g, (_, a) => `(${a.split(',').join('|')})`)
+    .replace(/\*\*\//g, '\u0000').replace(/\/\*\*$/, '/\u0001').replace(/\*/g, '[^/]*').replace(/\u0000/g, '(.*/)?').replace(/\u0001/g, '.*')}$`);
+  const ignores = G.LINT_IGNORES.map(re);
+  const ignored = f => ignores.some(r => r.test(f));
+  const left = ['app/page.test.tsx', 'src/Nav.spec.ts', 'src/Nav.stories.tsx', 'src/Nav.story.tsx', 'src/nav.cy.ts', 'cypress/e2e/a.ts',
+    'e2e/login.ts', 'apps/web/e2e/login.ts', 'src/__tests__/a.tsx', 'src/__mocks__/a.ts', 'types/env.d.ts', 'next.config.mjs',
+    'tests/a.ts', 'test/a.tsx', 'fixtures/a.tsx', 'playwright/a.ts', 'stories/a.tsx', 'src/__snapshots__/a.tsx'];
+  for (const f of left) {
+    assert.ok(G.notApp(f), `check leaves out ${f}`);
+    assert.ok(ignored(f), `the lint proposal ignores ${f}`);
+  }
+  for (const d of G.SKIPPED_DIRS) assert.ok(ignored(`${d}/a.js`) && ignored(`apps/web/${d}/a.js`), `${d}/ is ignored`);
+  for (const f of ['app/page.tsx', 'app/test/page.tsx', 'src/components/Nav.tsx', 'pages/stories.tsx', 'src/testing.ts', 'app/e2e-guide/page.tsx']) {
+    assert.ok(!G.notApp(f), `check reads ${f}`);
+    assert.ok(!ignored(f), `the lint proposal reads ${f}`);
+  }
 });
 
 test('the offer of a fixed kind: what was fixed, in the design\'s words', () => {
