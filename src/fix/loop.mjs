@@ -213,20 +213,56 @@ const refusalFor = (ctx, rec, c) => refusalText(c, { me: rec.agent, folder: base
 
 const claimOk = (ctx, rec) => { const c = readClaim(ctx.stateDir, rec.group); return !!c && !!rec.claim?.token && c.token === rec.claim.token && claimLive(c, ctx.deps.now()); };
 const COMMITTED = new Set(['committed', 'verifying', 'p1', 'recheck', 'folding']);
-// HEAD is this attempt's fix commit: its trailers name the group and the attempt, its one parent is the base.
-function headIsFix(ctx, rec) {
-  const head = ctx.git?.head();
-  if (!head || head === rec.base) return null;
-  const t = ctx.git.trailers(head);
+// `rev` is this attempt's fix commit: its trailers name the group, the attempt and the decision. → rev or null.
+function isFixCommit(ctx, rec, rev) {
+  if (!rev || rev === rec.base) return null;
+  const t = ctx.git.trailers(rev);
   if (!(t[TRAILERS.fix] || []).includes(rec.group) || !(t[TRAILERS.attempt] || []).includes(String(rec.attempt))) return null;
   if (rec.decision?.id && !(t[TRAILERS.decision] || []).includes(rec.decision.id)) return null;
-  return head;
+  return rev;
+}
+const headIsFix = (ctx, rec) => (ctx.git ? isFixCommit(ctx, rec, ctx.git.head()) : null);
+// An attempt held in another folder (design §7: another agent's worktree): started there, and its branch not checked out
+// here. Its HEAD, index and reverts are that folder's, never this one's: from here only its branch is read (branch refs
+// are shared), and nothing of it is cancelled or undone. → that folder, or null. (An attempt whose branch was moved
+// into this folder is this folder's now.)
+const awayOf = (ctx, rec) => (rec?.worktree && ctx.git && !samePath(rec.worktree, ctx.git.toplevel()) && !(rec.branch && ctx.git.branch() === rec.branch) ? rec.worktree : null);
+// The fix commit of an attempt held in another folder: its branch's tip, when that is the attempt's commit.
+const branchFix = (ctx, rec) => (rec.branch ? isFixCommit(ctx, rec, ctx.git.tip(rec.branch)) : null);
+const fixCommitOf = (ctx, rec) => (awayOf(ctx, rec) ? branchFix(ctx, rec) : headIsFix(ctx, rec));
+const whereAway = (rec, away) => `another folder (${away}${rec.branch ? `, branch ${rec.branch}` : ''})`;
+const DECIDED_WORD = { keep: 'Keep', 'false-positive': 'Not a problem', hold: 'Later', reopen: 'to reopen it' };
+// reconcile for an attempt held in another folder: the ledger's part (a fold half done) is finished from anywhere, a
+// commit is read from its branch, and an expired claim closes it as needs you, naming the folder and the branch. A
+// decision that moved away from Fix, and a revert in flight, are that folder's to act on: said, never done from here.
+function reconcileAway(ctx, rec, away, { latestDecision }) {
+  const group = rec.group, where = whereAway(rec, away);
+  if (rec.phase === 'folding') { applyFold(ctx, rec); return { rec: latestRecord(ctx.stateDir, group), said: [] }; }
+  if (rec.phase === 'reverting' || rec.phase === 'undoing') return { rec, said: [`The fix of this finding is being undone in ${where}: the next nunchi fix command there finishes it.`] };
+  if (['started', 'checking', 'checked'].includes(rec.phase)) { const c = branchFix(ctx, rec); if (c) rec = setPhase(ctx.stateDir, rec, 'committed', { commit: c }, gen(ctx)); }
+  const committed = rec.commit || branchFix(ctx, rec);
+  if (latestDecision?.decision !== 'fix') {
+    const word = DECIDED_WORD[latestDecision?.decision || 'reopen'] || latestDecision?.decision;
+    return { rec, said: [`You decided ${word} on this finding while it is being fixed in ${where}: that attempt stops${committed ? ` (and its commit ${short(committed)} is undone)` : ''} when the next nunchi fix command runs in that folder. Nothing was changed from here.`] };
+  }
+  if (!['starting', 'claiming'].includes(rec.phase) && rec.claim?.token && !claimOk(ctx, rec)) {
+    const line = committed
+      ? `The fix of this finding in ${where} (commit ${short(committed)}) was not re-checked before its claim expired. It needs you: in that folder, tell your AI “retry” to re-check it, or “undo it”.`
+      : `The fix of this finding in ${where} stopped before its claim expired, with no fix commit on its branch. It needs you: look at that folder's changes; the finding can be fixed again.`;
+    closeWith(ctx, rec, 'needs-you', { kind: 'needs-you', needsYou: 'interrupted', commit: committed || null, branch: rec.branch || null, folder: away, line });
+    return { rec: latestRecord(ctx.stateDir, group), said: [line] };
+  }
+  return { rec, said: [] };
 }
 export function reconcile(ctx, group) {
   let rec = latestRecord(ctx.stateDir, group);
   if (!rec || !isOpen(rec) || !ctx.git) return { rec, said: [] };
   const said = [];
   const close = (phase, fields) => { rec = setPhase(ctx.stateDir, rec, phase, fields, gen(ctx)); if (rec.claim?.token) releaseClaim(ctx.stateDir, group, rec.claim.token, { generation: ctx.generation }); };
+  const decisionNow = () => ctx.rows.filter(r => r.group === group).map(r => r.decision).filter(Boolean).sort((a, b) => cmp(a.at || '', b.at || '') || cmp(a.id, b.id)).pop() || null;
+  // an attempt held in another folder: never judged with this folder's HEAD (M6 review)
+  const away = awayOf(ctx, rec);
+  if (away) return reconcileAway(ctx, rec, away, { latestDecision: decisionNow() });
   // a revert or an undo that a command started and did not see through
   if (rec.phase === 'reverting' || rec.phase === 'undoing') {
     const t = ctx.git.trailers(ctx.git.head() || 'HEAD');
@@ -246,11 +282,10 @@ export function reconcile(ctx, group) {
   const committed = rec.commit || headIsFix(ctx, rec);
   // a decision changed during the claim (design U8): cancelled, the commit undone when it is still HEAD. Only a
   // decision that moved away from Fix cancels: rows a sweep folded as gone (a capture on the fix branch) do not
-  const mine = ctx.rows.filter(r => r.group === group);
-  const latestDecision = mine.map(r => r.decision).filter(Boolean).sort((a, b) => cmp(a.at || '', b.at || '') || cmp(a.id, b.id)).pop() || null;
+  const latestDecision = decisionNow();
   if (latestDecision?.decision !== 'fix') {
     const now = latestDecision?.decision || 'reopen';
-    const word = { keep: 'Keep', 'false-positive': 'Not a problem', hold: 'Later', reopen: 'to reopen it' }[now] || now;
+    const word = DECIDED_WORD[now] || now;
     if (committed && ctx.git.head() === committed) {
       rec = setPhase(ctx.stateDir, rec, 'reverting', { cancel: { decision: now }, commit: committed, revertWhy: `the person decided ${now} while it was being fixed` }, gen(ctx));
       const r = doRevert(ctx, rec, rec.revertWhy, { cancelWord: word });
@@ -335,10 +370,17 @@ async function startFixInner(ctx, id, opts = {}) {
   const said = [...r0.said];
   const rows = ctx.rows.filter(r => r.group === g.group);
   const tf = toFix(rows);
-  // an attempt open in another folder is another agent's fix (design §7): the claim's refusal, never "edit, then check"
-  if (rec && isOpen(rec) && rec.worktree && !samePath(rec.worktree, ctx.git.toplevel())) {
+  // an attempt open in another folder is another agent's fix (design §7): the claim's refusal, never "edit, then check";
+  // one whose folder is gone can only be stopped (fix --abort), never waited for
+  const away = rec && isOpen(rec) ? awayOf(ctx, rec) : null;
+  if (away) {
     const c = readClaim(ctx.stateDir, g.group);
-    const claim = c && c.token === rec.claim?.token ? c : { declaredAgent: rec.agent, branch: rec.branch, worktree: rec.worktree };
+    const live = !!c && c.token === rec.claim?.token && claimLive(c, ctx.deps.now());
+    if (!existsSync(away)) {
+      const left = live ? Math.max(1, Math.ceil((Date.parse(c.lastRenewal) + CLAIM_TTL_MS - ctx.deps.now()) / 60e3)) : null;
+      return refuse([...said, `The fix of '${title}' was started in a folder that is no longer there (${away}${rec.branch ? `, branch ${rec.branch}` : ''}): stop it with \`nunchi fix --abort ${g.group}\`${left ? `, or wait ${left} min for its claim to expire` : ''}.`], { claim: 'gone' });
+    }
+    const claim = c && c.token === rec.claim?.token ? c : { declaredAgent: rec.agent, branch: rec.branch, worktree: rec.worktree, startedAt: null };
     return refuse([...said, refusalText({ why: 'group', group: g.group, claim }, { me: opts.agent || null, worktree: ctx.git.toplevel(), now: ctx.deps.now() })], { claim: 'group' });
   }
   // an attempt that is open: resume a start that stopped half way; anything later says where to go on
@@ -368,6 +410,11 @@ async function startFixInner(ctx, id, opts = {}) {
         if (k === 'a') return refuse([...said, `The last fix of '${title}' waits for you in the board: it also changed other parts of the screen. Look there ("Looks fine", "Undo this fix" or "Try again with a note…").`]);
         if (k === 'b') return refuse([...said, `The AI couldn't fix '${title}' in ${MAX_ATTEMPTS} tries: it waits for you in the board ("Try again with a note…", Keep or Later).`]);
         if (last.commit && head === last.commit) return refuse([...said, `The last fix of '${title}' (commit ${short(last.commit)}) was not re-checked: start your app, then resume with nunchi fix --verify ${g.group} (retry), or undo it with nunchi fix --undo ${g.group}.`]);
+        // …or on its branch in another folder: a second attempt here would fix it twice
+        const away = awayOf(ctx, last);
+        if (last.commit && away && last.branch && ctx.git.tip(last.branch) === last.commit) return refuse([...said, existsSync(away)
+          ? `The last fix of '${title}' (commit ${short(last.commit)}) waits on branch ${last.branch} in another folder (${away}), not re-checked: re-check it there (nunchi fix --verify ${g.group}), or undo it there (nunchi fix --undo ${g.group}).`
+          : `The last fix of '${title}' (commit ${short(last.commit)}) waits on branch ${last.branch}, not re-checked, and its folder (${away}) is gone: switch to that branch here (git switch ${last.branch}), then nunchi fix --verify ${g.group}, or nunchi fix --undo ${g.group}.`]);
       } else if (last.commit && head === last.commit && (k === 'a' || k === 'c' || k === 'diff' || k === 'unbaselined' || k === 'interrupted' || k === 'dirty')) {
         const dirty = ctx.git.uncommitted();
         if (dirty.length) return refuse([...said, dirtyLine(title, last.commit, dirty, { refusal: true })], { dirty });
@@ -609,6 +656,9 @@ export async function verifyFix(ctx, id, opts = {}) {
     if (!c.ok) return refuse(refusalFor(ctx, rec, c));
     rec = setPhase(ctx.stateDir, rec, 'committed', { claim: { token: c.token }, outcome: null, retried: (rec.retried || 0) + 1 }, gen(ctx));
   }
+  // an attempt held in another folder (its branch is there) is verified there
+  const held = awayOf(ctx, rec);
+  if (held) return refuse([...said, `This fix is held in ${whereAway(rec, held)}: run nunchi fix --verify ${g.group} there.`]);
   // design §7: a worktree other than the one the attempt started in runs its own app server, and a URL another live
   // claim uses is refused
   if (!opts.url && !opts.serve && !rec.serve && rec.worktree && !samePath(rec.worktree, ctx.git.toplevel())) return refuse([...said, OWN_SERVER('verify')]);
@@ -929,9 +979,10 @@ function abortFixInner(ctx, id) {
     return releaseClaim(ctx.stateDir, found.g.group, c.token, { generation: ctx.generation }) ? `Released the claim on '${found.title}' that a stopped command left behind.` : null;
   };
   if (!rec || !isOpen(rec)) { const freed = orphan(); return freed ? out(0, [...said, freed], { outcome: 'released' }) : refuse([...said, `No attempt of '${found.title}' is open.`]); }
-  const committed = rec.commit || (ctx.git ? headIsFix(ctx, rec) : null);
+  const away = awayOf(ctx, rec);
+  const committed = rec.commit || (ctx.git ? fixCommitOf(ctx, rec) : null);
   if (committed) {
-    const line = `Stopped fixing '${found.title}' after its commit (${short(committed)}), before nunchi re-checked it. It needs you: tell your AI “retry” to re-check it, or “undo it”.`;
+    const line = `Stopped fixing '${found.title}' after its commit (${short(committed)}${away && rec.branch ? ` on branch ${rec.branch}` : ''}), before nunchi re-checked it. It needs you: tell your AI “retry” to re-check it, or “undo it”${away ? `, where that branch is checked out` : ''}.`;
     closeWith(ctx, rec, 'needs-you', { kind: 'needs-you', needsYou: 'interrupted', commit: committed, line });
     return out(0, [...said, line], { outcome: 'needs-you', needsYou: 'interrupted' });
   }
