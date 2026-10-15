@@ -137,6 +137,13 @@ test('quantile and the seeded bootstrap: deterministic, bracketing the mean', ()
   assert.throws(() => bootstrapMean(v, {}), RangeError);
 });
 
+test('the worked-numbers table in docs/prereg-README.md is exactly what the helper prints', () => {
+  const doc = readFileSync(new URL('../docs/prereg-README.md', import.meta.url), 'utf8');
+  const m = /<!-- worked-numbers:begin -->\n([\s\S]*?)\n<!-- worked-numbers:end -->/.exec(doc);
+  assert.ok(m, 'the README keeps the table between worked-numbers markers');
+  assert.equal(m[1], worked());
+});
+
 test('the command line prints a pass rule as a count', () => {
   const out = execFileSync(process.execPath, ['scripts/prereg-stats.mjs', 'min', '56', '0.75', '--sides', '1'], { cwd: ROOT, encoding: 'utf8' });
   assert.match(out, /^48\/56 \(lower bound 75\.7%\)/);

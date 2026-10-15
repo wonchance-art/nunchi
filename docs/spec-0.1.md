@@ -1705,6 +1705,10 @@ ready).
 The benchmark app is synthetic (a small to-do/notes app, Next.js + fake auth). Answer keys are stored where the
 hunting model cannot read them.
 
+*Pre-registrations (drafts, 2026-10-15 KST):* each remaining gate is measured only under its registered
+`docs/prereg-<gate>.md` (design 0.1-c §9); the list, the owner decisions they wait for and the recomputed bounds are in
+[prereg-README.md](prereg-README.md).
+
 ## 9. Build order
 
 | Step | Contents | Done when |

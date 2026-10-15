@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -128,6 +128,23 @@ test('fill, read back, check: the block round-trips; a changed engine file is a 
   assert.ok(diffs.some(d => d.startsWith('seed order: registered')));           // the seeds move with the hashes
   assert.ok(!diffs.some(d => d.startsWith('set scorer')));
   assert.throws(() => fillDoc('no markers', 'x'), /exactly one/);
+});
+
+test('every pre-registration in docs/ parses, names its own gate, shares one engine set and has one hash block', () => {
+  const docs = new URL('../docs/', import.meta.url);
+  const files = readdirSync(docs).filter(n => /^prereg-.+\.md$/.test(n) && n !== 'prereg-README.md' && n !== 'prereg-time.md').sort();
+  for (const n of ['prereg-codex.md', 'prereg-decision-time.md', 'prereg-field.md', 'prereg-fix.md', 'prereg-heldout.md', 'prereg-precision.md']) assert.ok(files.includes(n), `${n} is there`);
+  const engines = new Set();
+  for (const n of files) {
+    const text = readFileSync(new URL(n, docs), 'utf8');
+    const spec = parseSets(text);
+    assert.equal(`prereg-${spec.gate}.md`, n);
+    engines.add(spec.sets.find(s => s.name === 'engine').entries.join(' '));
+    assert.ok(spec.sets.find(s => s.name === 'scorer').entries.includes('scripts/prereg-stats.mjs'), `${n}: the scorer set holds the stats helper`);
+    assert.equal(text.split(BEGIN).length, 2, `${n}: one hash block`);
+    assert.equal(text.split(END).length, 2, `${n}: one hash block`);
+  }
+  assert.equal(engines.size, 1, 'every gate hashes the same engine');
 });
 
 test('the command line: --check exits 2 unregistered, 0 after --fill, 1 after a change; --fill refuses to re-register', t => {
