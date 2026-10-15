@@ -28,6 +28,73 @@ export const WORDS = {
   // a verification whose run had fewer decoys than its claims called for: not suspect, and no double-check (verify.mjs)
   'too-few-decoys': 'too few decoys to check the checker',
 };
+// The fix loop on the board (design §3.4 "Fix states on the board"): the three *needs you* kinds with their actions,
+// before/after, and the sentence that undoes a fix that landed (the AI's `fix --undo`).
+export const FIX_WORDS = {
+  a: share => `The fix also changed other parts of this screen (${share}). Is that OK?`,
+  b: 'The AI couldn’t fix this in 2 tries.',
+  c: 'Couldn’t re-check: the screen didn’t load.',
+  cThen: 'Start your app, then tell your AI “retry”.',
+  looksFine: 'Looks fine, mark fixed', undo: 'Undo this fix', tryAgain: 'Try again with a note…', keep: 'Keep', later: 'Later',
+  note: 'A note for your AI (what to do differently)', send: 'Try again',
+  before: 'Before', after: 'After', slider: 'Before and after', width: 'Before/after width', needs: 'Needs you',
+  undoSay: (title, id) => `undo the fix of “${title}” (nunchi fix --undo ${id})`,
+  landed: commit => `Fixed by your AI in commit ${commit}. To undo it, tell your AI:`,
+  // the other kinds (owner-approved mock-ups): paths, routes and commits come from the record, as data
+  diff: 'The fix changed files only you can approve:',
+  copyPath: 'Copy path',
+  unbaselined: (routes, n) => `The fix also reaches ${routes}, which had no screenshot${n === 1 ? '' : 's'} before.`,
+  nowShows: titles => `It now shows ${titles}.`,
+  interrupted: commit => `This fix (commit ${commit}) wasn’t re-checked.`,
+  interruptedThen: 'Tell your AI “retry” to check it, or “undo it”.',
+  revert: (commit, reason) => `nunchi couldn’t undo this fix (commit ${commit}): ${reason}.`,
+  revertThen: 'Undo it yourself:',
+  revertSay: commit => `git revert ${commit}`,
+  other: 'nunchi couldn’t finish this fix on its own.',
+  // why a revert could not run (the record's `reason`, a key)
+  revertWhy: {
+    signing: () => 'your repository requires signed commits, and signing failed',
+    'not-head': () => 'it is no longer the last commit',
+    'in-progress': () => 'another git operation (a merge, rebase or revert) was in progress',
+    'half-done': () => 'it was no longer the last commit, or an undo was left half done',
+    dirty: paths => `you had changes that were not committed${paths ? ` (${paths})` : ''}`,
+    occupied: paths => `undoing it would overwrite files git does not show as changed${paths ? ` (${paths})` : ''}`,
+    'wrong-branch': (paths, branch) => `you were not on its branch${branch ? `, ${branch}` : ''}`,
+    failed: () => 'git could not apply the undo',
+  },
+  // [Undo this fix] refused (the same safe revert as the AI's fix --undo): said on the card
+  undoRefused: {
+    'not-head': commit => `Not undone: this fix (commit ${commit}) is no longer the last commit, and nunchi undoes only its own last commit. Undo it yourself with git revert ${commit}.`,
+    'wrong-branch': (commit, { branch, on }) => `Not undone: you are ${on ? `on ${on}` : 'on a detached HEAD'}, not on the fix branch ${branch}. Switch back to it, then press Undo this fix again.`,
+    dirty: (commit, { paths }) => `Not undone: you have changes that are not committed (${paths}). Commit or stash them, then press Undo this fix again.`,
+    occupied: (commit, { paths }) => `Not undone: undoing it would overwrite or remove files git does not show as changed (${paths}). Move them somewhere safe, then press Undo this fix again.`,
+    filtered: commit => `Not undone: this repository runs files through git filters (Git LFS or similar), so nunchi does not undo here. Undo it yourself with git revert ${commit}.`,
+  },
+  undone: 'Undone: it is to fix again',
+  // the short label of each kind (the history rows)
+  short: {
+    a: 'the fix also changed other parts of the screen', b: 'the AI couldn’t fix this in 2 tries', c: 'couldn’t re-check',
+    diff: 'changed files only you can approve', unbaselined: 'reaches a screen with no screenshot before', interrupted: 'wasn’t re-checked',
+    revert: 'nunchi couldn’t undo it', other: 'nunchi couldn’t finish it',
+  },
+  // Detail history: one row per attempt, newest first
+  attemptsH: 'Fix attempts',
+  attempt: n => `Attempt ${n}`,
+  outcome: {
+    fixed: 'Fixed', undone: 'Undone at your request', 'caused-regression': 'Broke something else — undone', 'not-fixed': 'Didn’t remove it — undone',
+    'try-again': 'Undone to try again with your note', cancelled: 'Stopped: you decided otherwise', aborted: 'Stopped before a commit',
+  },
+  needsRow: kind => `Needs you — ${FIX_SHORT[kind] || FIX_SHORT.other}`,
+  revertedIn: 'reverted in',
+  copyCommit: commit => `Copy commit ${commit}`,
+};
+const FIX_SHORT = FIX_WORDS.short;
+// Up to five, then "and N more" (paths and routes on a card).
+export const listText = (items, max = 5) => `${items.slice(0, max).join(', ')}${items.length > max ? ` and ${items.length - max} more` : ''}`;
+// "Claude Code is fixing · 4 min" (design §3.4), "just started" under a minute.
+export const fixingMinutes = minutes => (minutes === null || minutes === undefined ? 'just started' : minutes < 1 ? 'just started' : `${minutes} min`);
+export const fixingText = c => `${c.agent} is fixing · ${fixingMinutes(c.minutes)}`;
+export const pctText = share => `${Math.max(1, Math.round((Number(share) || 0) * 100))}%`;
 export const REASON_LABEL = { intended: 'intended', 'out-of-scope': 'out of scope', 'not-a-problem': 'nothing wrong here', 'wrong-place': 'right issue, wrong spot' };
 // The decision bar's buttons: label and permanent sub-label (design §3.4).
 export const DECISION_BUTTONS = [

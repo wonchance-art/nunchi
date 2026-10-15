@@ -70,10 +70,13 @@ export function kindApplies(kind, entry, lenses) {
 // there. `tryScene(entry, kinds, canaryId)` captures a copy of the scene with the
 // mutator and resolves to `{ entry, canary }`, or null when no kind fits that page (the copy is then
 // discarded and the next candidate is tried, at most 3 × count copies).
-export async function plantCanaries({ entries, count, seed, tryScene, lenses = null }) {
+// `again` (fix probes only, design §4.4): when the candidates run out before `count`, they are tried once more, so a
+// probe of one route still plants the re-check's minimum of controls; a sweep never does.
+export async function plantCanaries({ entries, count, seed, tryScene, lenses = null, again = false }) {
   const planted = []; const used = new Set();
   let tries = 0;
-  for (const base of canaryCandidates(entries, seed)) {
+  const candidates = canaryCandidates(entries, seed);
+  for (const base of again ? [...candidates, ...candidates] : candidates) {
     if (planted.length >= count || tries >= count * 3) break;
     const kinds = kindOrder(seed, base.id, used).filter(kind => kindApplies(kind, base, lenses));
     if (!kinds.length) continue;                                        // no lens would look for one here

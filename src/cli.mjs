@@ -66,8 +66,31 @@ Usage:
   nunchi approve <decision id…> | --all     Accept decisions that came through git (made on another machine)
   nunchi trust [--json]                     Per-lens precision from your decisions (fix ÷ (fix + false positive)),
                                             and how long decisions in the board took (singles and batches apart)
-  nunchi runs [--json]                      List captured runs (newest last) and which is latest
-  nunchi gc [--keep 5]                      Delete old runs, keep the newest N and the latest
+  nunchi runs [--all] [--json]              List captured runs (newest last) and which is latest; --all also lists
+                                            the fix loop's probe runs (hidden otherwise)
+  nunchi gc [--keep 5]                      Delete old runs, keep the newest N and the latest (fix probes go first;
+                                            an open fix attempt's probes stay)
+  nunchi fix --plan [--url <base>] [--json] The fix plan: groups decided Fix, their root-cause files, the branch, the
+                                            checks nunchi will run and whether you approved them
+  nunchi fix --start <group> [--url <base>] [--serve dev|start] [--agent <name>] [--vendor <name>] [--json]
+                                            Start fixing one group: a fix branch, a claim, a recording snapshot, your
+                                            checks once (baseline) and the screens before the fix (probe P0); prints
+                                            the fix brief. Refuses a dirty tree. --serve starts the app from this
+                                            folder with your approved script; else the app at --url is asked to serve
+                                            a probe file from public/ to show it runs this folder's code
+  nunchi fix --brief <group>                The fix brief of the open attempt again
+  nunchi fix --checks <group> [--json]      Run your approved checks on the working tree (pre/post lines off, an
+                                            allow-listed environment, 10 minutes each); prints the commit trailers
+  nunchi fix --verify <group> [--url <base>] [--serve dev|start] [--record <verdicts.json>] [--json]
+                                            Check the commit, the diff policy, capture the screens after the fix (P1)
+                                            and judge it: fixed, undone (broke something / still there), or needs you.
+                                            AI findings need a re-check from a fresh context: --record its verdicts
+  nunchi fix --undo <group>                 Undo a fix that landed (only while it is the last commit)
+  nunchi fix --abort <group>                Stop fixing a group
+  nunchi fix --status [<group>] [--json]    The fix attempts and their phases
+  nunchi fix --summary [--json]             One line for the batch the last fix plan named
+  nunchi fix --approve-checks               In your own terminal: approve the check scripts the fix loop runs (your
+                                            AI cannot: the board's card or this, with a code you type)
   nunchi map [--root <dir>] [--json]        Which source files each route renders (source ↔ scene map)
   nunchi canaries --score [--run <id>] [--json]
                                             Score the AI hunt (ai-findings.json) against the run's canaries:
@@ -122,7 +145,7 @@ Usage:
   nunchi --version
   nunchi --help
 
-Status: 0.1-c in progress. The fix loop comes later.`;
+Status: 0.1-c in progress (preview).`;
 
 function parse(argv) {
   const args = { _: [] };
@@ -141,7 +164,12 @@ function parse(argv) {
     else if (a === '--from-chat') args.fromChat = true;
     else if (a === '--stop') args.stop = true;
     else if (a === '--label') args.label = true;
-    else if (['--reason', '--note', '--run', '--status', '--rule', '--labeller'].includes(a)) args[a.slice(2)] = argv[++i];
+    else if (['--start', '--brief', '--verify', '--undo', '--abort', '--serve', '--agent'].includes(a)) args[a.slice(2)] = argv[++i];
+    else if (a === '--checks') args.checks = argv[++i];
+    else if (a === '--status') args.status = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : true;
+    else if (a === '--summary') args.summary = true;
+    else if (a === '--approve-checks') args.approveChecks = true;
+    else if (['--reason', '--note', '--run', '--rule', '--labeller'].includes(a)) args[a.slice(2)] = argv[++i];
     else if (a === '--port') args.port = Number(argv[++i]);
     else if (['--url', '--routes', '--samples', '--out', '--viewports', '--browser-path', '--auth', '--network', '--states', '--allow-host', '--path', '--changed-since', '--lens', '--budget', '--record', '--vendor', '--canaries', '--html'].includes(a)) args[a.slice(2).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = argv[++i];
     else if (a === '--help' || a === '-h') args.help = true;
@@ -348,10 +376,14 @@ if (cmd === 'setup') {
     catch (e) { console.error(`nunchi capture: lens packs not loaded (${String(e.message).split('\n')[0]}); canaries follow the built-in packs`); }
   }
   const states = (args.states || 'normal,empty,error,slow,offline').split(',').map(x => x.trim());
+  // design §7: only runs on the tracked branch fold as sweeps; a capture on a nunchi/fix… branch is a fix probe
+  // (kept apart, folded by nobody), so a fix not yet judged never reads as fixed, and never cancels its own attempt
+  let fixBranch = null;
+  try { const b = gitRunner(root)(['symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8' }).trim(); if (/^nunchi\/fix/.test(b)) fixBranch = b; } catch {}
   const runMeta = {
     // kind (design §2.1): a full capture is a sweep; only a sweep folds as one. worktree: whose runs these are
     // (runs stay per worktree, the ledger is shared, §7).
-    schema: 1, id: run?.id ?? null, parent: run?.parent ?? null, kind: 'sweep', worktree: st.root.stream, ...workTree(root),
+    schema: 1, id: run?.id ?? null, parent: run?.parent ?? null, kind: fixBranch ? 'fix-probe' : 'sweep', ...(fixBranch ? { fixBranch } : {}), worktree: st.root.stream, ...workTree(root),
     scope: { routes: [...new Set(all.map(s => s.route))].sort(), persons, viewports, states, changedSince: args.changedSince || null },
     // every route the source has, none skipped for this run only (a dynamic route without a sample), so
     // whole-app detectors (secrets, the link graph, one-offs) judged the whole app. Paths discover cannot
@@ -397,7 +429,7 @@ if (cmd === 'setup') {
         console.error(`warning: no inventory.json in this run (${String(e?.message ?? e).split('\n')[0]}); the AI hunt gets no source slices`);
       }
     }
-    const final = run ? finishRun(runsDir, run.id) : out;
+    const final = run ? finishRun(runsDir, run.id, { latest: !fixBranch }) : out;
     // fold the run into the local ledger state (what is open, fixed, back again), with any complete run a
     // crash left unfolded; if this fails, the next ledger command folds it
     if (run) {
@@ -410,6 +442,7 @@ if (cmd === 'setup') {
     if (args.json) console.log(JSON.stringify(summary, null, 2));
     else {
       console.log(`captured ${summary.scenes} scenes${canaryCount ? ` (+ ${canaryCount} canary copies)` : ''} in ${summary.seconds}s → ${final}${run ? ` (run ${run.id})` : ''}`);
+      if (fixBranch) console.log(`This ran on the fix branch ${fixBranch}: it is kept apart as a fix probe (nunchi runs --all lists it) and does not change the findings. nunchi fix --verify judges a fix; capture on your main branch for a sweep.`);
       const why = { 'login-expired': 'the saved login no longer works: signed-in screens showed the sign-in page and were not judged. Run `nunchi login` again.', 'app-unreachable': 'most screens did not load at all. Is the app running at --url?', 'recording-stale': 'most screens asked for data the recording does not have. Re-record with --network record.' };
       for (const p of r.manifest.health.problems) console.log(`RUN PROBLEM ${p.status} (${p.scenes}/${p.of} screens): ${why[p.status]}`);
       console.log(`rule findings: blocker ${by.blocker} · high ${by.high} · medium ${by.medium} · low ${by.low}`);
@@ -452,12 +485,12 @@ if (cmd === 'setup') {
     return 'cli-tty';
   };
   if (cmd === 'findings') {
-    const want = args.status ? new Set(args.status.split(',')) : args.all ? null : new Set(['open', 'regressed', 'to-fix', 'mixed']);
+    const want = typeof args.status === 'string' ? new Set(args.status.split(',')) : args.all ? null : new Set(['open', 'regressed', 'to-fix', 'mixed']);
     // AI groups not double-checked (claimed, or a verdict that was suspect, rejected or insufficient, or from a run with
     // too few decoys to check the checker) are kept apart,
     // collapsed into one line (design §2.2, §3.4); --all, --status and --rule list them
     const unchecked = g => g.source === 'ai' && !g.checked;
-    const collapsed = !args.all && !args.status && !args.rule ? gs.filter(g => unchecked(g) && want.has(g.status)) : [];
+    const collapsed = !args.all && typeof args.status !== 'string' && !args.rule ? gs.filter(g => unchecked(g) && want.has(g.status)) : [];
     const shown = gs.filter(g => (!want || want.has(g.status)) && (!args.rule || g.rule === args.rule) && !collapsed.includes(g));
     const SEV = { blocker: 0, high: 1, medium: 2, low: 3 };
     const kinds = [];
@@ -477,9 +510,13 @@ if (cmd === 'setup') {
     const staleAi = gs.filter(g => g.status === 'stale').length;
     const needsYou = rows.filter(r => r.needsYou && !r.goneAt).length;
     // the board's Progress summary (one function for both, design §3.3)
-    const { summary } = await import('./summary.mjs');
+    const { summary, fixNeedsOf } = await import('./summary.mjs');
     let runner = null; try { runner = gitRunner(process.cwd()); } catch {}
-    const sum = summary({ state, rows, groups: gs, stream: st.root.stream, runsDir: st.runsDir, git: runner });
+    // the fix loop's attempts that wait for the person count as "needs you", as the board counts them
+    const { latestRecords } = await import('./fix/records.mjs');
+    let fixNeeds = new Set();
+    try { fixNeeds = fixNeedsOf(latestRecords(st.root.dir), rows); } catch {}
+    const sum = summary({ state, rows, groups: gs, stream: st.root.stream, runsDir: st.runsDir, git: runner, fixNeeds });
     if (args.json) console.log(JSON.stringify({ run: latest, blind, kinds: kinds.map(k => ({ ...k, routes: [...k.routes].sort() })), groups: shown, ...(collapsed.length ? { notDoubleChecked: collapsed.map(g => g.group) } : {}), summary: sum }, null, 2));
     else {
       // groups by status, as the board's Decisions panel counts them (summary.byStatus: a group with rows in two
@@ -499,6 +536,7 @@ if (cmd === 'setup') {
         if (!kinds.length && !collapsed.length) console.log(want ? 'nothing open — `nunchi findings --all` lists everything' : 'no findings');
         if (staleAi && want) console.log(`${staleAi} AI group(s) stale: ${STALE_HUNTS} later hunts saw their screens and did not claim them — nunchi findings --status stale`);
         if (needsYou) console.log(`${needsYou} AI finding(s) need you: the re-check could not tell whether they are gone`);
+        if (sum.fixNeedsYou) console.log(`${sum.fixNeedsYou} group(s) to fix need you: their fix waits for you in the board (nunchi open), not for your AI`);
         if (sum.confirm.length) console.log(`${sum.confirm.length} decision(s) recorded by the AI or from git wait for you to confirm them in the board (nunchi open); until then they do not count for "ready to ship"`);
       }
       for (const g of args.rule ? shown : []) {
@@ -582,16 +620,20 @@ if (cmd === 'setup') {
   else if (args.noBrowser) console.log('no browser was opened; to open it, run nunchi open in your own terminal');
   else console.log(r.reused ? 'a fresh one-time link was opened in the browser' : 'the browser shows it; it stops after 2 hours idle (nunchi open --stop stops it now)');
 } else if (cmd === 'runs') {
-  const { listRuns } = await import('./runs.mjs');
+  const { listRuns, runKind } = await import('./runs.mjs');
   const dir = resolve('.nunchi/runs');
-  const r = { ...listRuns(dir), latest: latestRun(dir) };
+  const all = listRuns(dir);
+  // the fix loop's probe runs are hidden unless asked for (design §3.4)
+  const probes = all.complete.filter(id => runKind(dir, id) === 'fix-probe');
+  const r = { complete: args.all ? all.complete : all.complete.filter(id => !probes.includes(id)), partial: all.partial, latest: latestRun(dir), ...(probes.length ? { probes: probes.length } : {}) };
   if (args.json) console.log(JSON.stringify(r, null, 2));
   else {
+    if (probes.length && !args.all) console.log(`(${probes.length} fix probe run${probes.length === 1 ? '' : 's'} hidden: nunchi runs --all lists them)`);
     for (const id of r.complete) {
       let m = null;
       try { m = JSON.parse(readFileSync(join(dir, id, 'run.json'), 'utf8')); } catch {}
       if (!m) { console.log(`${id}${id === r.latest ? ' (latest)' : ''}  run.json cannot be read (torn or removed): fix or remove this run`); continue; }
-      console.log(`${id}${id === r.latest ? ' (latest)' : ''}  ${m.commit ? m.commit.slice(0, 7) : 'no git'}${m.dirty ? ' + edits' : ''}  health ${m.health?.status ?? '?'}  ${m.scope?.routes?.length ?? '?'} routes`);
+      console.log(`${id}${id === r.latest ? ' (latest)' : ''}  ${m.commit ? m.commit.slice(0, 7) : 'no git'}${m.dirty ? ' + edits' : ''}  health ${m.health?.status ?? '?'}  ${m.scope?.routes?.length ?? '?'} routes${m.kind === 'fix-probe' ? `  fix probe ${m.fix?.probe ?? ''} of group ${m.fix?.group ?? '?'}` : ''}`);
     }
     for (const p of r.partial) console.log(`${p}  (incomplete: still running, or interrupted; removed by nunchi gc after an hour)`);
     if (!r.complete.length && !r.partial.length) console.log('no runs yet: nunchi capture --url <your local server>');
@@ -900,10 +942,66 @@ if (cmd === 'setup') {
     if (i.lastSeen) pinned.add(i.lastSeen);
     for (const s of Object.values(i.seen || {})) if (s?.run) pinned.add(s.run);
   }
+  // fix probes stay while their attempt is open, or while it waits for the person (its before/after is on the board)
+  const { latestRecords, isOpen } = await import('./fix/records.mjs');
+  for (const rec of latestRecords(st.root.dir).values()) if (isOpen(rec) || rec.phase === 'needs-you') for (const p of [rec.p0?.run, rec.p1?.run]) if (p) pinned.add(p);
   const r = gcRuns(resolve('.nunchi/runs'), { keep: Number.isInteger(args.keep) && args.keep > 0 ? args.keep : 5, folded, pinned });
   // a removed run's answer keys go with it
   for (const id of r.removed) if (/^\d{4,}$/.test(id)) removeKeys(resolve('.nunchi/runs', id));
   console.log(args.json ? JSON.stringify(r, null, 2) : `kept ${r.kept.join(', ') || 'nothing'} · removed ${r.removed.join(', ') || 'nothing'}`);
+} else if (cmd === 'fix') {
+  // The fix loop (design §4): the engine never edits code; it plans, checks, captures the probes and judges.
+  const F = await import('./fix/loop.mjs');
+  const nunchiDir = resolve('.nunchi');
+  if (!existsSync(nunchiDir)) { console.error('nunchi fix: nothing captured yet (nunchi capture --url <your local server>)'); process.exit(1); }
+  const root = resolve(args.root || process.cwd());
+  const say = r => {
+    if (args.json) console.log(JSON.stringify({ code: r.code, lines: r.lines, ...r.json }, null, 2));
+    else for (const l of r.lines) (r.code ? console.error : console.log)(l);
+    process.exit(r.code);
+  };
+  if (args.approveChecks) {
+    // a person's channel only (design §4.3): the board's card, or this in their own terminal with a typed code
+    const { checkProfile, approveProfile, approvedProfiles, scriptsApprovedPath } = await import('./checks.mjs');
+    const st = openState(nunchiDir);
+    const profile = checkProfile(root);
+    if (!profile) { console.error('nunchi fix: this project has no package.json: there are no check scripts to approve'); process.exit(1); }
+    if (!process.stdin.isTTY || !process.stdout.isTTY) { console.error('nunchi fix: check scripts are approved by a person: in the board (nunchi open shows a card), or by running nunchi fix --approve-checks in your own terminal. Your AI cannot approve them.'); process.exit(1); }
+    if (approvedProfiles(scriptsApprovedPath(st.root.dir)).has(profile.hash)) { console.log('these check scripts are approved already'); process.exit(0); }
+    console.log('nunchi will run these exact lines of package.json while it fixes (pre/post lines off, an allow-listed environment):');
+    for (const [k, v] of [...Object.entries(profile.scripts), ...Object.entries(profile.serve)]) console.log(`  ${k}: ${v}`);
+    if (profile.packageManager) console.log(`  package manager: ${profile.packageManager}`);
+    const { randomInt } = await import('node:crypto');
+    const { createInterface } = await import('node:readline');
+    const ABC = 'ACDEFHJKMNPRTUVWXY34679';
+    const code = Array.from({ length: 4 }, () => ABC[randomInt(ABC.length)]).join('');
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await new Promise(res => { rl.on('close', () => res(null)); rl.question(`Type ${code} to approve them (anything else cancels): `, a => { res(a); rl.close(); }); });
+    if (String(answer ?? '').trim().toUpperCase() !== code) { console.error('nunchi: not approved (the confirmation code was not typed)'); process.exit(1); }
+    ledgerGuard(() => approveProfile(scriptsApprovedPath(st.root.dir), root, { seen: profile.hash, channel: 'cli-tty', by: P.whoAmI(), generation: st.files.generation }));
+    console.log('approved: nunchi runs these check scripts while it fixes; any change asks again');
+    process.exit(0);
+  }
+  const deps = { browserPath: args.browserPath || null };
+  if (args.start || args.verify) deps.capture = (await engine('./capture.mjs')).capture;
+  const ctx = ledgerGuard(() => F.openFix({ cwd: process.cwd(), root, warn, deps }));
+  const allowHosts = (args.allowHost || '').split(',').map(x => x.trim()).filter(Boolean);
+  try {
+    if (args.plan) say(F.planFixes(ctx, { url: args.url || null }));
+    else if (args.start) say(await F.startFix(ctx, args.start, { url: args.url || null, serve: args.serve || null, agent: args.agent || null, vendor: args.vendor || null, allowHosts }));
+    else if (args.brief) say(F.briefFix(ctx, args.brief));
+    else if (args.checks) say(await F.checkFix(ctx, args.checks));
+    else if (args.verify && args.record) say(await F.recordFix(ctx, args.verify, JSON.parse(readFileSync(resolve(args.record), 'utf8'))));
+    else if (args.verify) say(await F.verifyFix(ctx, args.verify, { url: args.url || null, serve: args.serve || null }));
+    else if (args.undo) say(F.undoFix(ctx, args.undo));
+    else if (args.abort) say(F.abortFix(ctx, args.abort));
+    else if (args.status) say(F.statusFix(ctx, typeof args.status === 'string' ? args.status : null));
+    else if (args.summary) say(F.summaryFix(ctx));
+    else { console.error('nunchi fix: use --plan, --start <group>, --checks <group>, --verify <group>, --undo <group>, --abort <group>, --status or --summary (nunchi --help)'); process.exit(1); }
+  } catch (e) {
+    if (LEDGER_ERRORS.includes(e.code) || e.code === 'GIT_UNSAFE') { console.error('nunchi: ' + e.message); process.exit(2); }
+    throw e;
+  }
 } else {
   console.error(`nunchi: unknown command "${cmd}"\n\n${HELP}`);
   process.exit(1);

@@ -27,10 +27,25 @@ const STANDING_WORDS = { 'needs-you': n => `${n} need${n === 1 ? 's' : ''} you`,
 // A decision that keeps a finding or calls it not a problem, that no person made or confirmed (design §1).
 export const unconfirmed = d => !!d && DISMISS.has(d.decision) && d.human === false;
 
-// One group's reason to stand in the way (any severity), or null.
-export function standingOf(g, rows) {
+// The groups whose latest fix attempt waits for the person: needs you, and still the very Fix decision that attempt
+// was made for (a newer Fix — "Try again with a note…" — or another decision has answered it). `records`: group →
+// latest record (fix/records.mjs latestRecords).
+export function fixNeedsOf(records, rows) {
+  const out = new Set();
+  for (const [g, rec] of records) {
+    if (rec?.phase !== 'needs-you') continue;
+    const d = rows.filter(r => r.group === g).map(r => r.decision).filter(Boolean).sort((a, b) => (a.at || '') < (b.at || '') ? -1 : (a.at || '') > (b.at || '') ? 1 : a.id < b.id ? -1 : 1).pop();
+    if (d?.decision === 'fix' && (!rec.decision?.id || d.id === rec.decision.id)) out.add(g);
+  }
+  return out;
+}
+
+// One group's reason to stand in the way (any severity), or null. `fixNeeds`: groups whose latest fix attempt waits for
+// the person (the fix loop's records, design §4.9).
+export function standingOf(g, rows, fixNeeds = new Set()) {
   const mine = rows.filter(r => r.group === g.group);
   const reasons = new Set();
+  if (fixNeeds.has(g.group) && mine.some(r => !r.goneAt && r.status === 'to-fix')) reasons.add('needs-you');
   for (const r of mine) {
     if (r.goneAt) continue;
     if (r.needsYou) reasons.add('needs-you');
@@ -54,7 +69,7 @@ function fullChecks(state, stream, runsDir) {
 
 // `git`: the hardened git runner of the project (runs.mjs gitRunner), to count commits with a `Nunchi-Fix:` trailer
 // after the last full check's commit; null when there is no git. `running`: a capture folder still being written.
-export function summary({ state, rows, groups, stream = 'main', runsDir, git = null }) {
+export function summary({ state, rows, groups, stream = 'main', runsDir, git = null, fixNeeds = new Set() }) {
   const latest = latestRunOf(state, stream);
   const meta = latest ? readJsonOr(join(runsDir, latest, 'run.json'), {}) : {};
   const manifest = latest ? readJsonOr(join(runsDir, latest, 'manifest.json'), {}) : {};
@@ -80,7 +95,7 @@ export function summary({ state, rows, groups, stream = 'main', runsDir, git = n
     if (keys.has('stale')) keys.add('open');
     for (const k of keys) if (Object.hasOwn(byStatus, k)) byStatus[k]++;
     if ([...keys].some(k => ACTIVE.has(k))) bySeverity[g.severity] = (bySeverity[g.severity] || 0) + 1;
-    const why = standingOf(g, rows);
+    const why = standingOf(g, rows, fixNeeds);
     if (why) standing[why][g.severity]++;
   }
   const serious = Object.fromEntries(STANDING.map(x => [x, standing[x].blocker + standing[x].high]));
@@ -131,14 +146,17 @@ export function summary({ state, rows, groups, stream = 'main', runsDir, git = n
   // (AI findings not double-checked wait for the AI's double-check first, so they do not hold the handoff back)
   const open = r => !r.goneAt && (r.status === 'open' || r.status === 'regressed' || r.status === 'stale' || !!r.needsYou) && !(r.source === 'ai' && !r.checked);
   const toDecide = groups.filter(g => rows.some(r => r.group === g.group && open(r))).length;
-  const toFix = groups.filter(g => g.statuses['to-fix']).length;
+  // to fix by the AI: a group whose fix waits for the person is not, so "All decided. N to fix…" never hands the AI a
+  // fix it cannot take on (design §3.4); those are counted apart
+  const fixNeedsYou = groups.filter(g => g.statuses['to-fix'] && fixNeeds.has(g.group)).length;
+  const toFix = groups.filter(g => g.statuses['to-fix'] && !fixNeeds.has(g.group)).length;
   // the main button's "Decide N": the number the verdict says is to decide (blocker and high, worst first in the list)
   // when it says one, so the two never disagree; otherwise every group to decide
   const decideNow = seriousTotal && serious.decide ? serious.decide : toDecide;
   const handoff = !toDecide && toFix ? { toFix, text: `All decided. ${toFix} to fix. Go back to your AI chat and say “fix them”.`, say: 'fix them' } : null;
   return {
     run: latest, kind: meta.kind ?? 'sweep', fullCheck: full, previousFullCheck: previous, running,
-    verdict, bySeverity, byStatus, standing, toDecide, decideNow, toFix, handoff, since, confirm,
+    verdict, bySeverity, byStatus, standing, toDecide, decideNow, toFix, fixNeedsYou, handoff, since, confirm,
     health: { problems, blind: (latest && state.blind?.[latest]) || null, scenes: { total: scenes.length, checked: scenes.length - notSeen.length, notSeen: notSeen.length, reasons: [...new Set(notSeen.map(s => String(s.reason || s.status)))].sort() } },
     ai: { ran: aiRan, groups: new Set(ai.map(r => r.group)).size, doubleChecked: new Set(ai.filter(r => r.checked).map(r => r.group)).size,
       notDoubleChecked: new Set(ai.filter(r => !r.checked).map(r => r.group)).size, stale: groups.filter(g => g.status === 'stale').length,

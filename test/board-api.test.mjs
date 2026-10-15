@@ -405,11 +405,13 @@ test('api: /api/confirm confirms the dismissals the agent recorded, in one batch
 
 test('api: /api/approve-checks approves the check profile shown, once, as the person; a changed profile asks again', async () => {
   const p = smallProject();
-  writeFileSync(join(p.root, 'package.json'), JSON.stringify({ name: 'x', scripts: { build: 'next build', prebuild: 'node gen.js', test: 'vitest run', dev: 'next dev' }, packageManager: 'pnpm@9.0.0' }));
+  writeFileSync(join(p.root, 'package.json'), JSON.stringify({ name: 'x', scripts: { build: 'next build', prebuild: 'node gen.js', test: 'vitest run', dev: 'next dev', helper: 'node helper.js' }, packageManager: 'pnpm@9.0.0' }));
   const { b, call } = await board(p);
   try {
     let s = (await call('/api/summary')).json;
     assert.deepEqual(Object.keys(s.checks.profile.scripts).sort(), ['build', 'prebuild', 'test'], 'the check scripts and their pre/post lines, nothing else');
+    assert.deepEqual(s.checks.profile.serve, { dev: 'next dev' }, 'and the line `fix --serve dev` may start the app with (M3), shown on the card too');
+    assert.equal(s.checks.profile.others, 1, 'and how many other scripts the approval covers (a check may call them)');
     assert.deepEqual([s.checks.requested, s.checks.approved], [false, false], 'shown only when the fix loop asks (M3)');
     mkdirSync(join(p.nunchi, 'state'), { recursive: true });
     writeFileSync(join(p.nunchi, 'state', 'checks-request.json'), '{"schema":1}');

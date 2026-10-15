@@ -68,7 +68,7 @@ const answerAll = (unit, answer, over = {}) => ({ unit: unit.id, items: Object.f
 // hunt (L9) and verify a run through the CLI, as the skill does
 async function huntAndVerify(cwd, id, { cells = ['m', 'd'], verdict = 'confirmed', severity = 'high', claimed = 'high', decoys = 'rejected', source = true, claim = 'Delete all clears the store at once.' } = {}) {
   const plan = await json(cwd, 'hunt', '--plan', '--run', id, '--lens', 'L9');
-  const units = plan.units.map(u => (u.scenes[0].route !== '/tasks' ? answerAll(u, 'none') : answerAll(u, 'none', cells.length ? { 'L9.destructive-without-confirm': { answer: 'defect', defects: cells.map(vp => ({ scene: `tasks.guest.normal.${vp}`, selector: 'button#delete-all', ...(source ? { source: 'app/tasks.tsx:2' } : {}), claim, severity: claimed })) } } : {})));
+  const units = plan.units.map(u => (u.scenes[0].route !== '/tasks' ? answerAll(u, 'none') : answerAll(u, 'none', cells.length ? { 'L9.destructive-without-confirm': { answer: 'defect', defects: cells.map(vp => ({ scene: `tasks.guest.normal.${vp}`, selector: 'button#delete-all', ...(source ? { evidence: { file: 'app/tasks.tsx', line: 2 } } : {}), claim, severity: claimed })) } } : {})));
   writeFileSync(join(cwd, `answers-${id}.json`), JSON.stringify({ plan: plan.id, units }));
   assert.equal((await cli(cwd, 'hunt', '--record', `answers-${id}.json`, '--run', id)).code, 0);
   if (!cells.length) return null;
@@ -432,7 +432,7 @@ test('AI fold: the grounding check is hunt --record\'s — a scene not in the ru
   const lenses = loadLenses({ root: cwd }).lenses;
   const plan = planHunt({ runDir: dir, lenses, lensIds: ['L9'], runId: '0001' });
   const unit = plan.units.find(u => u.scenes[0].route === '/tasks');
-  const r = recordHunt({ runDir: dir, plan, root: cwd, answers: { units: [answerAll(unit, 'none', { 'L9.destructive-without-confirm': { answer: 'defect', defects: [{ scene: 'tasks.guest.normal.m', source: 'app/blank.tsx:2', claim: 'c', severity: 'high' }] } })] } });
+  const r = recordHunt({ runDir: dir, plan, root: cwd, answers: { units: [answerAll(unit, 'none', { 'L9.destructive-without-confirm': { answer: 'defect', defects: [{ scene: 'tasks.guest.normal.m', evidence: { file: 'app/blank.tsx', line: 2 }, claim: 'c', severity: 'high' }] } })] } });
   assert.deepEqual(r.rejected.map(x => [x.reason, /blank line/.test(x.detail)]), [['source-not-found', true]]);
 });
 
@@ -544,6 +544,29 @@ test('group decisions on AI items: only when double-checked or decided after its
   assert.equal(row.status, 'open');
   assert.match(row.note, /before this AI finding was first seen/);
   assert.equal(L.view(s9, [after], new Set([L.approvalKey(after)]), NOW)[0].status, 'kept');
+});
+
+test('group decisions on AI items: one made after a verification with too few decoys does not cover the item (no double-check, like a bare claim)', () => {
+  const T = s => Date.parse(`2026-10-14T${s}:00.000+09:00`);
+  const NOW = { now: T('23:00') };
+  const identity = { element: 'p.err', file: 'app/err.tsx', anchor: null, component: { file: 'app/err.tsx', name: null } };
+  const fp = L.fingerprintOf({ source: 'ai', lens: 'L6', rule: 'L6.vague-error', route: '/tasks', selector: 'p.err', identity, evidence: {} });
+  const L6 = (over = {}) => AIF({ lens: 'L6', rule: 'L6.vague-error', selector: 'p.err', identity, claimedSeverity: 'medium', fp: fp.fp, group: fp.group, inputs: fp.inputs, ...over });
+  const keep = (target, at) => ({ schema: 1, id: `dk-${at.replace(/\D/g, '')}`, target, decision: 'keep', reason: 'intended', by: 'me', at: `2026-10-14T${at}:00.000+09:00`, fingerprintVersion: 2 });
+  // verified at 11:00 in a run with too few decoys: confirmed, not suspect, not double-checked
+  const st = L.foldAi(L.emptyState(), { run: '0001', key: 'k1', findings: [L6({ status: 'confirmed', tooFewDecoys: true, by: 'same-model check' })], now: T('11:00') });
+  const item = only(st);
+  assert.deepEqual([item.verification.status, item.verification.tooFewDecoys, item.verification.at, L.checkedAi(item)], ['confirmed', true, T('11:00'), false]);
+  const after = keep({ group: item.group }, '12:00');
+  const row = L.view(st, [after], new Set([L.approvalKey(after)]), NOW)[0];
+  assert.equal(row.status, 'open', 'a group decision after a too-few-decoys verification does not cover it');
+  assert.match(row.note, /too few decoys to check the checker/);
+  // the same timing after a suspect verification still covers it (design §2.2: decided after its latest verification)
+  const sus = L.foldAi(L.emptyState(), { run: '0001', key: 'k1', findings: [L6({ status: 'confirmed', suspect: true, by: 'same-model check' })], now: T('11:00') });
+  assert.equal(L.view(sus, [after], new Set([L.approvalKey(after)]), NOW)[0].status, 'kept');
+  // a decision on the fingerprint itself still applies, as for any AI item
+  const onFp = keep({ fp: item.fp }, '12:30');
+  assert.equal(L.view(st, [onFp], new Set([L.approvalKey(onFp)]), NOW)[0].status, 'kept');
 });
 
 test('trust is kept per lens and source: the rule lens and the AI lens of the same name never share a record', () => {

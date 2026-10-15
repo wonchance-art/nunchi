@@ -148,6 +148,13 @@ function reactRouterStarts(root, route, cfg) {
   return out;
 }
 
+// The files that frame a route without being its own page (layouts, templates, loading/error/not-found, middleware,
+// `_app`/`_document`, TanStack root and parent routes), relative to the root: never a fix's root cause (design §4.6).
+export function frameFilesOf(root, route, routes) {
+  root = resolve(root);
+  try { return [...new Set(frameFiles(root, route, routes).map(f => posix(relative(root, f))))].sort(); } catch { return []; }
+}
+
 export function buildSourceMap(root, routes) {
   root = resolve(root);
   const cfg = loadAliases(root);

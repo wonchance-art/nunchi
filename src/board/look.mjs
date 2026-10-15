@@ -214,6 +214,15 @@ dialog h2{font-size:17px;margin:0 0 10px}.dialog-actions{display:flex;flex-wrap:
 .history li{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
 .needs{padding:14px 16px;border-radius:10px;background:var(--high-soft);color:var(--high-ink);display:flex;flex-direction:column;gap:8px}
 .needs .actions{display:flex;flex-wrap:wrap;gap:8px}
+.needs .needs-h{font-size:1rem;margin:0}
+.needs .needs-msg{margin:0;font-weight:600}.needs .copyline code{color:var(--ink)}
+.h-attempts{font-size:14px;margin:14px 0 6px}.attempts .mono{overflow-wrap:anywhere}
+.cmp-route{margin:0}
+.cmp{position:relative}
+.cmp .cmp-after{position:absolute;inset:0;margin:0 auto}
+.cmp-labels{display:flex;justify-content:space-between;font-size:14px}
+.cmp-slider{display:block;width:100%;min-height:44px;margin:0;accent-color:var(--accent)}
+.note-field{display:block;width:100%;min-height:88px;padding:8px 10px;border:1px solid var(--control);border-radius:8px;background:var(--panel);color:var(--ink);font:inherit}
 .lost{max-width:640px;margin:10vh auto;padding:28px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
 .label-banner{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;padding:12px 18px;border-radius:12px;background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
 .label-keys{display:flex;flex-wrap:wrap;gap:8px}

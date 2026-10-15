@@ -163,7 +163,30 @@ test('D9: through nunchi\'s git, the repository\'s fsmonitor, hooks, external di
   for (const [k, v] of [['core.fsmonitor', 'mark fsmonitor'], ['core.hooksPath', 'my-hooks'], ['diff.external', 'mark ext'], ['core.pager', 'mark pager']]) git('config', k, v);
   const run = runs.gitRunner(root);
   const get = k => run(['config', '--get', k], { encoding: 'utf8' }).trim();
-  assert.deepEqual(['core.fsmonitor', 'core.hooksPath', 'diff.external', 'core.pager'].map(get), ['false', '/dev/null', '', 'cat']);
+  assert.deepEqual(['core.fsmonitor', 'core.hooksPath', 'diff.external', 'core.pager'].map(get), ['false', runs.noHooksPath(), '', 'cat']);
+  assert.equal(runs.noHooksPath('linux'), '/dev/null');
+  // the Windows value, checked on any machine: an empty folder of nunchi's own, written with forward slashes
+  const win = runs.noHooksPath('win32');
+  assert.notEqual(win, '/dev/null');
+  assert.ok(!win.includes('\\'), win);
+  assert.deepEqual(readdirSync(win), []);
+  assert.equal(runs.noHooksPath('win32'), win, 'one folder per process');
+});
+
+test('D9: the system config is read (signing, line endings are the person\'s), and cannot switch the programs back on', () => {
+  const root = tmp('git-system');
+  const git = (...a) => execFileSync('git', ['-C', root, ...a], { stdio: 'ignore' });
+  git('init', '-q');
+  const sys = join(tmp('git-system-file'), 'gitconfig');
+  writeFileSync(sys, '[commit]\n\tgpgsign = true\n[core]\n\tautocrlf = input\n\thooksPath = evil-hooks\n\tfsmonitor = evil\n[filter "sys"]\n\tclean = evil\n');
+  const saved = process.env.GIT_CONFIG_SYSTEM;
+  try {
+    process.env.GIT_CONFIG_SYSTEM = sys;
+    const run = runs.gitRunner(root);
+    const get = k => run(['config', '--get', k], { encoding: 'utf8' }).trim();
+    assert.deepEqual([get('commit.gpgsign'), get('core.autocrlf')], ['true', 'input'], 'the system file\'s settings stand');
+    assert.deepEqual([get('core.hooksPath'), get('core.fsmonitor'), get('filter.sys.clean')], [runs.noHooksPath(), 'false', ''], 'the overrides outrank it');
+  } finally { if (saved === undefined) delete process.env.GIT_CONFIG_SYSTEM; else process.env.GIT_CONFIG_SYSTEM = saved; }
 });
 
 test('D9: the caller\'s GIT_* variables do not steer nunchi\'s git (GIT_DIR, GIT_CONFIG_PARAMETERS)', () => {

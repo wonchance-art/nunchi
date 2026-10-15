@@ -27,7 +27,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir, userInfo } from 'node:os';
 import { buildBoardModel, groupList, groupDetail, screenWall, safe, readClaims, RUN_ID } from './model.mjs';
 import { BASE_CSS, BOARD_CSS } from './look.mjs';
-import { decidedText, CAP_MS } from './shared.mjs';
+import { decidedText, CAP_MS, fixingMinutes } from './shared.mjs';
 import * as P from '../project.mjs';
 import { DECISIONS, protectOf, approvalKey, reasonProblem } from '../ledger.mjs';
 import { listRuns, workTree } from '../runs.mjs';
@@ -140,6 +140,9 @@ class HttpError extends Error { constructor(status, message, extra = {}) { super
 export async function startBoard({ projectDir, mode = 'board', port = 0, labeller = null, idleMs = IDLE_MS, onExit = null, now = () => Date.now(), testHooks = {} } = {}) {
   const project = resolve(projectDir);
   const nunchiDir = join(project, '.nunchi');
+  // the app's source the fix loop checks (`--root`, written into its request); this folder when it names none. The
+  // board shows and approves the profile of that same folder, so the hash it approves is the one the loop asks for.
+  const profileRoot = () => { try { const r = JSON.parse(readFileSync(checksRequestPath(stateDir), 'utf8'))?.root; if (typeof r === 'string' && isAbsolute(r) && existsSync(join(r, 'package.json'))) return r; } catch {} return project; };
   const warnings = new Set();
   const st = P.stateOf(nunchiDir, { warn: w => warnings.add(w) });
   const stateDir = st.root.dir;
@@ -332,6 +335,8 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     if (post && path === '/api/undo') return undoDecisions(res, await readJsonBody(req));
     if (post && path === '/api/confirm') return confirm(res, await readJsonBody(req));
     if (post && path === '/api/approve-checks') return approveChecks(res, await readJsonBody(req));
+    if (post && path === '/api/fix-accept') return fixAccept(res, await readJsonBody(req));
+    if (post && path === '/api/fix-undo') return fixUndo(res, await readJsonBody(req));
     return fail(res, 404, 'not found');
   };
 
@@ -393,7 +398,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     const s = m.summary;
     const runTree = m.latestEv?.meta?.tree ?? null;
     const now = runTree ? treeNow() : null;
-    const profile = checkProfile(project);
+    const profile = checkProfile(profileRoot());
     let approved = false;
     try { approved = !!profile && approvedProfiles(scriptsApprovedPath(stateDir)).has(profile.hash); } catch {}
     const requested = existsSync(checksRequestPath(stateDir));
@@ -406,17 +411,17 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
         if (c && Number.isFinite(c.cells)) coverage = { cells: c.cells, seen: Number(c.seen) || 0, budget: Number(c.notSeen?.budget) || 0 };
       } catch {}
     }
-    const nowLines = [...running.map(r => `Capture running · run ${r}`), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)}${c.minutes !== null ? ` · ${c.minutes} min` : ''}`)];
+    const nowLines = [...running.map(r => `Capture running · run ${r}`), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)} · ${fixingMinutes(c.minutes)}`)];
     return {
       version: version(), mode, project: safe(basename(project), 80), run: s.run, kind: s.kind, commit: s.commit ? safe(String(s.commit).slice(0, 7), 7) : null, dirty: s.dirty,
-      verdict: s.verdict, bySeverity: s.bySeverity, byStatus: s.byStatus, toDecide: s.toDecide, decideNow: s.decideNow, toFix: s.toFix, handoff: s.handoff, since: s.since, running: s.running,
+      verdict: s.verdict, bySeverity: s.bySeverity, byStatus: s.byStatus, toDecide: s.toDecide, decideNow: s.decideNow, toFix: s.toFix, fixNeedsYou: s.fixNeedsYou || 0, handoff: s.handoff, since: s.since, running: s.running,
       fullCheck: s.fullCheck, previousFullCheck: s.previousFullCheck,
       confirm: s.confirm.map(c => ({ key: c.key, id: safe(c.id, 60), decision: c.decision, reason: c.reason, channel: c.channel, by: c.by ? safe(c.by, 80) : null, at: c.at ? safe(c.at, 40) : null,
         note: c.note ? safe(c.note, 500) : null, group: c.group, title: safe(c.title, 160), severity: c.severity })),
       health: { problems: s.health.problems.map(p => ({ status: safe(p.status, 40), scenes: p.scenes, of: p.of })), blind: s.health.blind ? safe(s.health.blind, 40) : null,
         scenes: { ...s.health.scenes, reasons: s.health.scenes.reasons.map(r => safe(r, 80)) } },
       ai: { ...s.ai, coverage }, now: nowLines,
-      checks: profile ? { requested, approved, profile: { hash: profile.hash, scripts: Object.fromEntries(Object.entries(profile.scripts).map(([k, v]) => [safe(k, 40), safe(v, 400)])), files: Object.fromEntries(Object.entries(profile.files).map(([k, v]) => [safe(k, 120), v ? safe(v, 64) : null])), packageManager: profile.packageManager ? safe(profile.packageManager, 80) : null } } : null,
+      checks: profile ? { requested, approved, profile: { hash: profile.hash, scripts: Object.fromEntries(Object.entries(profile.scripts).map(([k, v]) => [safe(k, 40), safe(v, 400)])), serve: Object.fromEntries(Object.entries(profile.serve || {}).map(([k, v]) => [safe(k, 40), safe(v, 400)])), others: Object.keys(profile.others || {}).length, files: Object.fromEntries(Object.entries(profile.files).map(([k, v]) => [safe(k, 120), v ? safe(v, 64) : null])), packageManager: profile.packageManager ? safe(profile.packageManager, 80) : null } } : null,
       counts: { groups: m.groups.length, screens: m.latestEv?.scenes.length || 0 },
       treeChanged: !!(runTree && now && now !== runTree),
       warnings: [...warnings].map(w => safe(w, 400)),
@@ -442,20 +447,20 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     const mine = ids.map(id => rows.filter(r => r.group === id || r.fp === id));
     if (confirmed !== true) {                                   // only a real true skips the questions
       const flat = mine.flat().filter(r => !r.goneAt);
+      // a live claim on one of them: asked once, in the same question as a dismissal's (never skipped by it)
+      const claims = decision !== 'fix' && decision !== 'reopen' ? readClaims(claimsDir, now()) : new Map();
+      const fixing = mine.map(rs => claims.get(rs[0]?.group)).find(Boolean);
       if (DISMISS[decision]) {
         const blocker = mine.filter(rs => rs.some(r => protectOf(r) === 'blocker')).length, l9 = mine.filter(rs => rs.some(r => r.lens === 'L9')).length;
         const high = mine.filter(rs => rs.some(r => r.severity === 'high')).length;
         if (blocker || l9 || mine.length > 10) {
           const parts = [blocker && `${blocker} ${blocker === 1 ? 'is a blocker' : 'are blockers'}`, high && `${high} ${high === 1 ? 'is' : 'are'} high`, l9 && `${l9} ${l9 === 1 ? 'is a safety or secret finding' : 'are safety or secret findings'}`].filter(Boolean);
-          return fail(res, 409, 'confirm', { confirm: { text: `Mark ${mine.length === 1 ? '1 group' : `${mine.length} groups`} ${DISMISS[decision]}?${parts.length ? ` ${parts.join(', ')}.` : ''}`, ok: `Mark ${DISMISS[decision]}` } });
+          const claimPart = fixing ? ` ${fixing.agent} is fixing ${mine.length === 1 ? 'it' : 'one of them'} right now: this stops that.` : '';
+          return fail(res, 409, 'confirm', { confirm: { text: `Mark ${mine.length === 1 ? '1 group' : `${mine.length} groups`} ${DISMISS[decision]}?${parts.length ? ` ${parts.join(', ')}.` : ''}${claimPart}`, ok: fixing ? 'Stop and mark' : `Mark ${DISMISS[decision]}` } });
         }
       }
       if (decision === 'fix' && flat.some(r => r.source === 'ai' && !r.checked)) return fail(res, 409, 'confirm', { confirm: { text: 'This hasn’t been double-checked. Fix anyway?', ok: 'Fix anyway' } });
-      if (decision !== 'fix' && decision !== 'reopen') {
-        const claims = model().claims;
-        const fixing = mine.map(rs => claims.get(rs[0]?.group)).find(Boolean);
-        if (fixing) return fail(res, 409, 'confirm', { confirm: { text: `${fixing.agent} is fixing this right now. Stop and mark ${decidedText(decision, null)}?`, ok: 'Stop and mark' } });
-      }
+      if (fixing) return fail(res, 409, 'confirm', { confirm: { text: `${fixing.agent} is fixing this right now. Stop and mark ${decidedText(decision, null)}?`, ok: 'Stop and mark' } });
     }
     const batch = P.batchFor(targets);
     const made = P.recordDecisions(led, { targets, decision, reason, note, by, channel: 'board', batch });
@@ -500,9 +505,41 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     return send(res, 200, { ok: true, confirmed: keys.length });
   }
 
+  // [Looks fine, mark fixed] on *needs you (a)* (design §3.4): a person's, through the board's key; the engine marks it
+  // fixed only when the defect itself is gone (fix/loop.mjs acceptDrift).
+  async function fixAccept(res, body) {
+    if (typeof body.group !== 'string' || !HEX12.test(body.group) || !Number.isInteger(body.attempt) || body.attempt < 1) return fail(res, 400, 'group and attempt of the fix');
+    const { openFix, acceptDrift } = await import('../fix/loop.mjs');
+    const r = acceptDrift(openFix({ cwd: project, root: project, warn: w => warnings.add(w) }), body.group, { attempt: body.attempt, by });
+    cache = null;
+    return r.ok ? send(res, 200, { ok: true, decided: 'Fixed' }) : fail(res, r.status || 409, r.error, { stale: true });
+  }
+
+  // [Undo this fix] on a *needs you* card: the same safe revert as the AI's `fix --undo` (only the fix's own last commit,
+  // on its branch, a clean tree, no file git does not show overwritten). A refusal is handed back as a key with its
+  // paths or branch, for the card to say in the board's words; a revert that could not run leaves the attempt *needs
+  // you* with its own card.
+  async function fixUndo(res, body) {
+    if (typeof body.group !== 'string' || !HEX12.test(body.group) || !Number.isInteger(body.attempt) || body.attempt < 1) return fail(res, 400, 'group and attempt of the fix');
+    const [{ openFix, undoFix }, { latestRecord }] = await Promise.all([import('../fix/loop.mjs'), import('../fix/records.mjs')]);
+    const ctx = openFix({ cwd: project, root: project, warn: w => warnings.add(w) });
+    const cur = latestRecord(ctx.stateDir, body.group);
+    if (!cur || cur.attempt !== body.attempt) return fail(res, 409, 'this fix changed while you looked', { stale: true });
+    const r = undoFix(ctx, body.group);
+    cache = null;
+    const why = r.json?.why;
+    if (r.json?.changed || why === 'none') return fail(res, 409, 'this fix changed while you looked', { stale: true });
+    if (r.code !== 0) {
+      const paths = [...new Set([].concat(r.json?.dirty || [], r.json?.occupied || []).filter(x => typeof x === 'string'))].sort().slice(0, 200).map(x => safe(x, 300));
+      return fail(res, 409, 'not undone', { refused: ['not-head', 'wrong-branch', 'dirty', 'occupied', 'filtered'].includes(why) ? why : 'failed', paths,
+        branch: typeof r.json?.branch === 'string' ? safe(r.json.branch, 200) : null, on: typeof r.json?.on === 'string' ? safe(r.json.on, 200) : null });
+    }
+    return send(res, 200, { ok: true, outcome: r.json?.outcome === 'undone' ? 'undone' : 'needs-you' });
+  }
+
   function approveChecks(res, body) {
     if (typeof body.profile !== 'string' || !/^[0-9a-f]{32}$/.test(body.profile)) return fail(res, 400, 'profile: the hash shown');
-    try { approveProfile(scriptsApprovedPath(stateDir), project, { seen: body.profile, channel: 'board', by, generation: genFile }); }
+    try { approveProfile(scriptsApprovedPath(stateDir), profileRoot(), { seen: body.profile, channel: 'board', by, generation: genFile }); }
     catch (e) { if (e.code === 'STALE' || e.code === 'NO_PROFILE') return fail(res, 409, e.message, { stale: true }); throw e; }
     cache = null;
     return send(res, 200, { ok: true });

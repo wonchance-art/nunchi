@@ -9,8 +9,9 @@ each finding tied to evidence: the element, its box on the screenshot, the measu
 Built for people who make web apps with AI coding tools (Claude Code, Cursor, Codex, Lovable, Bolt, v0)
 and don't write tests.
 
-> **Preview (0.0.2).** nunchi finds defects and shows them on a live local board where you decide; it does not
-> fix them yet. That is 0.1. Tested on Linux, macOS and Windows in CI, on Node 20, 22 and 24,
+> **Preview (0.0.2).** nunchi finds defects and shows them on a live local board where you decide; your AI then
+> fixes what you decided *Fix*, and nunchi keeps a fix only when capturing again shows the defect gone and nothing
+> else broken. The fix loop is new and not yet measured on its gate. Tested on Linux, macOS and Windows in CI, on Node 20, 22 and 24,
 > but so far only against a synthetic benchmark app and small fixtures — tell us what it gets wrong on
 > your app.
 
@@ -52,11 +53,19 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
   nor the board is a security boundary against code running as your user: they attest who decided, against honest
   mistakes and naive prompt injections. For a repository you don't trust, run the agent in a container or as
   another user
+- **A fix loop** (`nunchi fix`): your AI edits, nunchi does the rest. Fixes go on a branch of their own
+  (`nunchi/fixes-MMDD`, the day's date), one commit per finding, after your own build, typecheck, lint and tests run
+  (scripts you approve once in the board, run without install or pre/post scripts; a check blocks only when it newly
+  fails, or fails worse than before the fix). nunchi captures the affected screens before and after from the same
+  recorded data, and judges: *fixed*, *undone* (it broke something or did not remove the defect; two tries, then it is
+  yours), or *needs you* (it also changed other parts of the screen: the board shows before and after, with a slider).
+  It never pushes, resets or forces, never mixes your uncommitted work into an undo, and an AI saying "fixed" changes
+  nothing
 - **Runs** you can compare: each capture is its own folder with the commit and working-tree state it came from;
   a login that expired or an app that isn't running is reported once, not as a hundred findings
 
-Not yet (0.1): the fix-and-re-capture loop. The AI lenses (copy, states, visual judgment) with a separate verifier
-are built and being measured.
+Not yet (0.1): guards that keep a fixed kind of defect from coming back, `nunchi check`, and a fast first run. The
+AI lenses (copy, states, visual judgment) with a separate verifier, and the fix loop, are built and being measured.
 
 ## Benchmark
 
@@ -85,7 +94,9 @@ The checks were tuned on this app once; a second, held-out app is what the 0.1 g
 빈 데이터 · 오류 · 느림 · 끊김 상태까지 찍어서 깨지거나 어긋난 곳을 찾고, 결함마다 증거(요소 · 화면 위 위치 · 측정값 ·
 파일:줄)를 붙입니다. AI 코딩 도구로 웹앱을 만들고 테스트는 쓰지 않는 사람을 위해 만듭니다.
 
-**미리보기(0.0.2).** 지금은 *찾기*와 진행판(`nunchi open`, 내 브라우저에서 결정)까지입니다. 고치고 다시 찍기는 0.1에서 나옵니다.
+**미리보기(0.0.2).** *찾기*, 진행판(`nunchi open`, 내 브라우저에서 결정), 그리고 고치기(`nunchi fix`)까지 됩니다. AI가
+고친 것은 별도 브랜치에 결함 하나당 커밋 하나로 남고, 다시 찍어서 결함이 사라지고 다른 곳이 깨지지 않았을 때만 고쳐진 것으로
+칩니다(고치기 게이트는 아직 측정 전).
 Claude Code에서 `/plugin marketplace add wonchance-art/nunchi` → `/plugin install nunchi@nunchi` 후, 앱 폴더에서
 nunchi로 검사해 달라고 하면 됩니다. 처음 한 번 `nunchi setup`이 고정된 패키지 2개(설치 스크립트 없이)와 Chromium(약
 170MB)을 받습니다. 실제 앱에서 틀리게 잡는 것이 있으면 알려 주세요.

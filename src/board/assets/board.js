@@ -98,7 +98,7 @@ async function copy(text, btn) {
   try { await navigator.clipboard.writeText(text); if (btn) { const was = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = was; }, 1500); } announce('Copied'); }
   catch { announce('Copy failed: select the text and copy it yourself'); }
 }
-const copyButton = (text, label = 'Copy') => { const b = h('button', { type: 'button', class: 'b' }, label); b.addEventListener('click', () => copy(text, b)); return b; };
+const copyButton = (text, label = 'Copy', { id = null, name = null } = {}) => { const b = h('button', { type: 'button', class: 'b', ...(id ? { id } : {}), ...(name ? { 'aria-label': name } : {}) }, label); b.addEventListener('click', () => copy(text, b)); return b; };
 
 // ---- the server ------------------------------------------------------------------------------------------------------
 
@@ -361,6 +361,7 @@ function renderProgress(focus = false) {
       s.health.problems.map(p => h('li', { class: 'warn' }, `Run problem: ${p.status} (${p.scenes}/${p.of} screens) — ${WHY[p.status] || ''}`))));
   const counts = h('section', { class: 'panel-box', 'aria-labelledby': 'h-status' }, h('h2', { id: 'h-status' }, 'Decisions'),
     h('ul', { class: 'statuses' }, W.FILTERS.filter(([k]) => k !== 'all').map(([k, label]) => h('li', null, h('span', { class: `st st-${k}` }, label), ' ', h('b', null, String(s.byStatus[k] || 0))))),
+    s.fixNeedsYou ? h('p', { class: 'warn small' }, `${s.fixNeedsYou} to fix ${s.fixNeedsYou === 1 ? 'needs' : 'need'} you: ${s.fixNeedsYou === 1 ? 'its fix waits' : 'their fixes wait'} for you here, not for your AI.`) : null,
     s.warnings.length ? h('ul', { class: 'facts muted small' }, s.warnings.map(w => h('li', null, w))) : null);
   show(h('div', { id: 'progress', class: 'view' },
     h('div', { class: 'stack' }, hero, confirm, checks, h('div', { class: 'two' }, since, health), counts)));
@@ -392,9 +393,11 @@ function checksPanel(c) {
     try { await api('/api/approve-checks', { method: 'POST', body: { profile: c.profile.hash } }); announce('Check scripts approved'); await refreshSummary(); renderProgress(); }
     catch (e) { btn.disabled = false; announce(`Not approved: ${e.message}`); }
   });
-  const scripts = Object.entries(c.profile.scripts);
+  // the check lines, then the lines `fix --serve` may start the app with: every line the approval covers is shown
+  const scripts = [...Object.entries(c.profile.scripts), ...Object.entries(c.profile.serve || {})];
   return h('section', { class: 'panel-box', 'aria-labelledby': 'h-checks' }, h('h2', { id: 'h-checks' }, 'Your AI asks to run your checks while it fixes'),
     h('p', { class: 'small' }, 'nunchi runs these exact lines of package.json (and nothing else of it) to see that a fix breaks nothing. Approve them once; any change asks again.'),
+    c.profile.others ? h('p', { class: 'small' }, `The approval also covers the other ${c.profile.others} script${c.profile.others === 1 ? '' : 's'} of package.json, since a check may call ${c.profile.others === 1 ? 'it' : 'them'}: changing any script asks again.`) : null,
     scripts.length ? h('dl', { class: 'facts-dl' }, scripts.map(([k, v]) => [h('dt', null, k), h('dd', { class: 'mono' }, v)])) : h('p', { class: 'muted' }, 'No build, typecheck, lint or test script.'),
     c.profile.packageManager ? h('p', { class: 'small muted' }, `Package manager: ${c.profile.packageManager}`) : null, h('div', null, btn));
 }
@@ -438,14 +441,14 @@ function rowEl(g) {
 }
 function fillRow(row, g) {
   const tags = [g.notLookedAt ? h('span', { class: 'tag tag-warn' }, `Not looked at since run ${g.notLookedAt}`) : null,
-    g.fixing ? h('span', { class: 'tag tag-ai' }, `${g.fixing.agent} is fixing${g.fixing.minutes !== null ? ` · ${g.fixing.minutes} min` : ''}`) : null,
+    g.fixing ? h('span', { class: 'tag tag-ai' }, W.fixingText(g.fixing)) : null,
     g.needsYou ? h('span', { class: 'tag tag-warn' }, 'Needs you') : null, decisionTag(g), sourceTag(g), ...statusChips(g)];
   row.replaceChildren(h('span', { class: 'tick', 'aria-hidden': 'true' }, '✓'),
     h('span', { class: 'row-main' }, h('span', { class: 'row-what' }, g.source === 'ai' ? g.headline : whereText(g)),
       h('span', { class: 'row-where' }, g.source === 'ai' ? whereText(g) : g.gist)),
     // grouped by kind, the section names the severity; grouped otherwise, each row does
     h('span', { class: 'row-tags' }, S.params.group !== 'kind' ? sevChip(g.severity) : null, tags));
-  row.setAttribute('aria-label', `${g.source === 'ai' ? g.headline : `${g.kindTitle}: ${whereText(g)}`}, ${W.SEV_LABEL[sevOf(g.severity)]}, ${statusText(g.status)}`);
+  row.setAttribute('aria-label', `${g.source === 'ai' ? g.headline : `${g.kindTitle}: ${whereText(g)}`}, ${W.SEV_LABEL[sevOf(g.severity)]}, ${statusText(g.status)}${g.needsYou ? ', Needs you' : ''}${g.fixing ? `, ${g.fixing.agent} is fixing` : ''}`);
 }
 function updateRowsInPlace() {
   for (const row of main().querySelectorAll('.row[data-id]')) { const g = S.list.groups[row.getAttribute('data-id')]; if (g) fillRow(row, g); }
@@ -764,9 +767,11 @@ function renderDetail(focus = false) {
   const decision = g.decision;
   const latest = g.history.find(x => x.decision !== 'reopen');
   const reopen = g.status !== 'open' && g.status !== 'regressed' && g.status !== 'fixed' && latest ? (() => { const b = h('button', { type: 'button', class: 'b' }, 'Reopen'); b.addEventListener('click', () => decide([g.id], 'reopen', null, { confirmed: true, ms: null })); return b; })() : null;
-  const needs = g.needsYou ? h('div', { class: 'needs', role: 'note' }, h('b', null, 'Needs you'),
-    g.needsYou.reason === 'recheck-insufficient' ? h('span', null, 'The re-check could not tell whether this is gone. Look at the screen, then decide; or tell your AI “re-check it”.') : h('span', null, 'nunchi could not finish this one on its own.')) : null;
-  const fixing = g.fixing ? h('p', { class: 'banner' }, `${g.fixing.agent} is fixing this${g.fixing.minutes !== null ? ` · ${g.fixing.minutes} min` : ''}`) : null;
+  const fixNeeds = fixNeedsBox(g);
+  const needs = fixNeeds || (g.needsYou ? h('div', { class: 'needs', role: 'note' }, h('b', null, 'Needs you'),
+    g.needsYou.reason === 'recheck-insufficient' ? h('span', null, 'The re-check could not tell whether this is gone. Look at the screen, then decide; or tell your AI “re-check it”.') : h('span', null, 'nunchi could not finish this one on its own.')) : null);
+  const compare = compareBox(g);
+  const fixing = g.fixing ? h('p', { class: 'banner' }, W.fixingText(g.fixing)) : null;
   const facts = h('dl', { class: 'facts-dl' },
     codeLine ? [h('dt', null, 'Code'), h('dd', null, h('span', { class: 'mono' }, codeLine), ' ', codeCopy ? copyButton(codeCopy, 'Copy path') : null, ' ', g.code.link ? h('a', { class: 'b b-quiet', href: g.code.link }, 'Open in VS Code') : null)] : null,
     g.secret ? [h('dt', null, 'Where'), h('dd', { class: 'mono' }, g.secret.where), h('dt', null, 'Kind'), h('dd', null, g.secret.kind)] : null,
@@ -774,26 +779,183 @@ function renderDetail(focus = false) {
     decision ? [h('dt', null, 'Decision'), h('dd', null, `${W.decidedText(decision.decision, decision.reason)} · ${decision.by || ''} · ${when(decision.at)}`, decision.channelText ? h('span', { class: decision.human ? 'muted' : 'warn' }, ` · ${decision.channelText}`) : null)] : null,
     g.notes.map(n => [h('dt', null, 'Note'), h('dd', { class: 'warn' }, n)]),
     g.notLookedAt ? [h('dt', null, 'Looked at'), h('dd', { class: 'warn' }, `Not looked at since run ${g.notLookedAt}: no run since has captured every screen it was on, so it cannot be marked fixed.`)] : null,
-    g.verification ? [h('dt', null, 'Reviewer'), h('dd', null, `${g.verification.status}${g.verification.by ? ` · ${g.verification.by}` : ''}${g.verification.suspect ? ' · suspect' : ''}${g.verification.tooFewDecoys ? ` · ${W.WORDS['too-few-decoys']}: not a double-check` : ''}`)] : null);
+    g.verification ? [h('dt', null, 'Reviewer'), h('dd', null, `${g.verification.status}${g.verification.by ? ` · ${g.verification.by}` : ''}${g.verification.suspect ? ' · suspect' : ''}${g.verification.tooFewDecoys ? ` · ${W.WORDS['too-few-decoys']}: not a double-check` : ''}`)] : null,
+    // a fix that landed is undone by the AI (`fix --undo`): the sentence to say (design §3.4 "Undo and reopen")
+    g.fix?.landed && !UNDO_ON_CARD.has(g.fix.needs) ? [h('dt', null, 'Fix'), h('dd', null, W.FIX_WORDS.landed(g.fix.commit), ' ', h('code', null, W.FIX_WORDS.undoSay(g.kindTitle, g.id)), ' ', copyButton(W.FIX_WORDS.undoSay(g.kindTitle, g.id)))] : null);
   const evidence = h('details', { class: 'evidence' }, h('summary', null, 'Evidence details'), h('dl', { class: 'facts-dl' },
     h('dt', null, 'Rule'), h('dd', { class: 'mono' }, `${g.lens} · ${g.rule}`), h('dt', null, 'Group'), h('dd', { class: 'mono' }, g.id),
     h('dt', null, 'Fingerprints'), h('dd', { class: 'mono' }, g.fps.join(' ')),
     g.selector ? [h('dt', null, 'Element'), h('dd', { class: 'mono' }, g.selector)] : null,
     g.evidence.map(e => [h('dt', null, e.k), h('dd', { class: e.mono ? 'mono' : '' }, e.v)]),
     h('dt', null, 'History'), h('dd', null, `first seen in run ${g.firstSeen || '—'} · last seen in run ${g.lastSeen || '—'}`)));
-  const history = g.history.length ? h('section', { class: 'decide', 'aria-labelledby': 'h-history' }, h('h2', { id: 'h-history' }, 'Decisions'),
-    h('ul', { class: 'history' }, g.history.map(x => h('li', null, h('b', null, W.decidedText(x.decision, x.reason)), h('span', { class: 'muted small' }, `${x.by || ''} · ${when(x.at)}${x.channelText ? ` · ${x.channelText}` : ''}`), x.note ? h('span', { class: 'small' }, `“${x.note}”`) : null))),
-    reopen ? h('p', null, reopen) : null) : null;
+  const attempts = fixRows(g);
+  const history = g.history.length || attempts ? h('section', { class: 'decide', 'aria-labelledby': 'h-history' }, h('h2', { id: 'h-history' }, 'Decisions'),
+    g.history.length ? h('ul', { class: 'history' }, g.history.map(x => h('li', null, h('b', null, W.decidedText(x.decision, x.reason)), h('span', { class: 'muted small' }, `${x.by || ''} · ${when(x.at)}${x.channelText ? ` · ${x.channelText}` : ''}`), x.note ? h('span', { class: 'small' }, `“${x.note}”`) : null))) : null,
+    attempts, reopen ? h('p', null, reopen) : null) : null;
   show(h('article', { class: 'view detail', 'aria-labelledby': 'h-detail' },
     h('nav', { class: 'detail-nav', 'aria-label': 'Finding navigation' }, h('a', { href: '#/findings' }, '← All findings'),
       h('span', { class: 'pn' }, prev ? h('a', { href: `#/finding/${prev}`, rel: 'prev' }, 'Previous (K)') : null, next ? h('a', { href: `#/finding/${next}`, rel: 'next' }, 'Next (J)') : null)),
     h('div', { class: 'panel-box detail-box' },
       h('header', { class: 'detail-head' }, h('p', { class: 'chips' }, sevChip(g.severity), h('span', { class: 'muted' }, g.kindTitle), sourceTag(g), decisionTag(g), ...statusChips(g)),
         h('h1', { id: 'h-detail' }, g.headline)),
-      fixing, needs, figure || (g.secret || !g.instances.length ? h('p', { class: 'muted' }, 'No screenshot: this finding belongs to the whole app, not one screen.') : h('p', { class: 'muted' }, 'No screenshot of this finding is left (its run was removed).')),
+      fixing, needs, compare, figure || (g.secret || !g.instances.length ? h('p', { class: 'muted' }, 'No screenshot: this finding belongs to the whole app, not one screen.') : h('p', { class: 'muted' }, 'No screenshot of this finding is left (its run was removed).')),
       facts, evidence),
     history, h('div', { class: 'detail-box dock' }, decisionBar(() => targetsNow()))));
   if (focus) focusHeading();
+  // an undo under way: the first redraw without its card (the live update or the undo's own) puts the focus on the
+  // attempt's history row, in the same redraw, so the card never goes without the focus landing
+  if (D.focusAfter && !$('fix-undo')) {
+    const row = $(D.focusAfter);
+    D.focusAfter = null;
+    if (row) { row.setAttribute('tabindex', '-1'); row.focus({ preventScroll: true }); row.scrollIntoView({ block: 'nearest' }); }
+  }
+}
+
+// ---- the fix loop's states in Detail (design §3.4 "Fix states on the board") --------------------------------------------
+
+// *Needs you* from the fix loop, with exactly the actions the design and the owner-approved mock-ups list: (a) the fix
+// also changed other parts of the screen → [Looks fine, mark fixed] [Undo this fix] [Try again with a note…]; (b) the
+// AI couldn't fix it in 2 tries → [Try again with a note…] [Keep] [Later]; (c) it could not be re-checked → the
+// sentence to say; diff (files only the person can approve) → the paths, [Copy path] [Undo this fix] [Try again with a
+// note…]; unbaselined (a screen with nothing to compare against) → [Undo this fix] [Try again with a note…];
+// interrupted → the sentence to say; revert (an undo that could not run) → the git command to run, [Copy]. The words
+// are the board's (FIX_WORDS); paths, routes and commits are the record's, as data.
+const UNDO_ON_CARD = new Set(['a', 'diff', 'unbaselined', 'interrupted', 'revert']);
+function fixNeedsBox(g) {
+  const k = g.fix?.needs;
+  if (!k) return null;
+  const F = W.FIX_WORDS;
+  // ids: a live redraw gives the focus back to the same control (show())
+  const btn = (id, label, fn) => { const b = h('button', { type: 'button', class: 'b', id }, label); b.addEventListener('click', fn); return b; };
+  const head = h('h2', { class: 'needs-h' }, F.needs);
+  const c = g.fix.commit || '';
+  // what the last [Undo this fix] said, kept across redraws of this attempt
+  const said = S.detail?.undoSaid?.key === `${g.id}/${g.fix.record}` ? S.detail.undoSaid.text : null;
+  const msg = h('p', { class: 'needs-msg', id: 'fix-undo-msg', role: 'status' }, said || '');
+  const undo = () => btn('fix-undo', F.undo, () => undoFix(g));
+  const again = () => btn('fix-try', F.tryAgain, () => tryAgain(g));
+  let body = [], actions = [];
+  if (k === 'a') {
+    // pixels over the threshold say their share; geometry alone says what moved
+    body = [h('span', null, F.a(!g.fix.pixels && g.fix.moved ? `${g.fix.moved} other control${g.fix.moved === 1 ? '' : 's'} moved` : W.pctText(g.fix.share)))];
+    actions = [btn('fix-fine', F.looksFine, () => looksFine(g)), undo(), again()];
+  } else if (k === 'b') {
+    body = [h('span', null, F.b)];
+    actions = [again(), btn('fix-keep', F.keep, () => decide([g.id], 'keep', 'intended')), btn('fix-later', F.later, () => decide([g.id], 'hold', null))];
+  } else if (k === 'c') {
+    body = [h('span', null, F.c), h('span', null, F.cThen)];
+  } else if (k === 'diff') {
+    const paths = g.fix.paths || [];
+    body = [h('span', null, `${F.diff} `, h('span', { class: 'mono' }, W.listText(paths)))];
+    actions = [paths.length ? copyButton(paths.join('\n'), F.copyPath, { id: 'fix-copy-paths' }) : null, undo(), again()].filter(Boolean);
+  } else if (k === 'unbaselined') {
+    const routes = g.fix.routes || [], shows = (g.fix.shows || []).map(t => `‘${t}’`);
+    body = [h('span', null, F.unbaselined(W.listText(routes), routes.length)), shows.length ? h('span', null, F.nowShows(W.listText(shows, 3))) : null];
+    actions = [undo(), again()];
+  } else if (k === 'interrupted') {
+    body = [h('span', null, F.interrupted(c)), h('span', null, F.interruptedThen)];
+  } else if (k === 'revert') {
+    const why = F.revertWhy[g.fix.reason] || F.revertWhy.failed;
+    const cmd = F.revertSay(c);
+    body = [h('span', null, F.revert(c, why(W.listText(g.fix.paths || []), g.fix.branch))),
+      h('span', { class: 'copyline' }, F.revertThen, ' ', h('code', null, cmd), copyButton(cmd, 'Copy', { id: 'fix-copy-revert', name: `Copy ${cmd}` }))];
+  } else {
+    // a kind this board does not know yet: never a dead end
+    const say = g.fix.landed ? F.undoSay(g.kindTitle, g.id) : null;
+    body = [h('span', null, F.other), say ? h('span', null, 'To undo it, tell your AI: ', h('code', null, say), ' ', copyButton(say)) : null];
+  }
+  const undoable = actions.some(b => b.id === 'fix-undo');
+  return h('div', { class: 'needs', role: 'note', 'aria-labelledby': 'fix-needs-h' }, Object.assign(head, { id: 'fix-needs-h' }), ...body.filter(Boolean),
+    actions.length ? h('div', { class: 'actions' }, actions) : null, undoable ? msg : null);
+}
+// [Undo this fix]: the same safe revert as the AI's fix --undo. A refusal is said on the card, in the board's words.
+let undoing = false;
+async function undoFix(g) {
+  if (undoing) return;                       // one undo at a time (the button stays enabled: disabling it drops the focus)
+  const F = W.FIX_WORDS, key = `${g.id}/${g.fix.record}`;
+  const say = text => { if (S.detail) S.detail.undoSaid = { key, text }; const m = $('fix-undo-msg'); if (m) m.textContent = text; };
+  undoing = true;
+  // where the focus goes once the card is gone: set before the request, as the live update may redraw first
+  if (S.detail) S.detail.focusAfter = `attempt-${g.fix.record}`;
+  try { await api('/api/fix-undo', { method: 'POST', body: { group: g.id, attempt: g.fix.record } }); }
+  catch (e) {
+    if (S.detail) S.detail.focusAfter = null;
+    if (e.status === 401) return;
+    const d = e.data || {};
+    if (d.stale) { announce('This fix changed while you looked: the page is up to date now'); await refreshDetail(); return; }
+    const refusal = F.undoRefused[d.refused];
+    say(refusal ? refusal(g.fix.commit || '', { paths: W.listText(d.paths || []), branch: d.branch || '', on: d.on || null }) : `Not undone: ${e.message}`);
+    $('fix-undo')?.focus();
+    return;
+  }
+  finally { undoing = false; }
+  if (S.detail) S.detail.undoSaid = null;
+  announce(F.undone);
+  await refreshDetail();
+}
+// Detail history: the fix attempts, newest first (Attempt n · outcome · commit → reverted in commit · when).
+function fixRows(g) {
+  const rows = Array.isArray(g.fixes) ? g.fixes : [];
+  if (!rows.length) return null;
+  const F = W.FIX_WORDS;
+  const commit = (c, id) => [h('span', { class: 'mono' }, c), copyButton(c, 'Copy', { id, name: F.copyCommit(c) })];
+  return [h('h3', { class: 'h-attempts', id: 'h-attempts' }, F.attemptsH), h('ul', { class: 'history attempts', 'aria-labelledby': 'h-attempts' }, rows.map(r => {
+    const what = r.outcome === 'needs' ? F.needsRow(r.needs) : F.outcome[r.outcome] || r.outcome;
+    const parts = [h('b', null, F.attempt(r.attempt ?? '?')), h('span', null, `· ${what}`)];
+    if (r.commit) parts.push(h('span', { class: 'sep' }, '·'), ...commit(r.commit, `copy-c-${r.record}`));
+    if (r.revert) parts.push(h('span', null, `→ ${F.revertedIn}`), ...commit(r.revert, `copy-r-${r.record}`));
+    if (r.at) parts.push(h('span', { class: 'muted small' }, `· ${when(r.at)}`));
+    return h('li', { id: `attempt-${r.record}` }, parts);
+  }))];
+}
+async function looksFine(g) {
+  try { await api('/api/fix-accept', { method: 'POST', body: { group: g.id, attempt: g.fix.record } }); }
+  catch (e) { if (e.status !== 401) announce(`Not recorded: ${e.message}`); return; }
+  if (S.list?.groups[g.id]) S.list.groups[g.id] = { ...S.list.groups[g.id], status: 'fixed', statuses: { fixed: 1 } };
+  announce('Marked fixed');
+  await refreshDetail();
+}
+// [Try again with a note…]: a new Fix decision carrying the note (the fix loop counts attempts per decision)
+function tryAgain(g) {
+  const dlg = $('dialog');
+  const field = h('textarea', { id: 'fix-note', class: 'note-field', maxlength: '500', rows: '3' });
+  const no = h('button', { type: 'button', class: 'b' }, 'Cancel'), yes = h('button', { type: 'button', class: 'b b-primary' }, W.FIX_WORDS.send);
+  dlg.replaceChildren(h('h2', { id: 'dialog-title' }, W.FIX_WORDS.tryAgain), h('label', { for: 'fix-note', class: 'small' }, W.FIX_WORDS.note), field, h('div', { class: 'dialog-actions' }, no, yes));
+  no.addEventListener('click', () => dlg.close());
+  yes.addEventListener('click', async () => {
+    const note = field.value.trim();
+    dlg.close();
+    try { await api('/api/decide', { method: 'POST', body: { targets: [g.id], decision: 'fix', reason: null, note: note || null, ms: null, confirmed: true } }); }
+    catch (e) { if (e.status !== 401) announce(`Not recorded: ${e.message}`); return; }
+    announce(`${W.decidedText('fix', null)}${note ? ' (with your note)' : ''}`);
+    await refreshDetail();
+  });
+  dlg.showModal(); field.focus();
+}
+// Before and after, side by side on one frame with a slider (←/→ move it; a range input), for both viewports.
+function compareBox(g) {
+  if (!Array.isArray(g.compare) || !g.compare.length) return null;
+  const D = S.detail;
+  const vps = g.compare.map(c => c.viewport);
+  const vp = D.cmpVp && vps.includes(D.cmpVp) ? D.cmpVp : vps[0];
+  const c = g.compare.find(x => x.viewport === vp);
+  const first = sc => ({ ...sc, img: { ...sc.img, url: sc.img.thumb, h: sc.img.vh } });       // the first view (top.jpg)
+  const cls = vp === 'm' ? 'shot-m' : '';
+  const afterWord = g.fix?.afterLabel || W.FIX_WORDS.after;
+  const before = shot(first(c.before), [], { label: `${W.FIX_WORDS.before}: ${c.before.route}, ${c.before.label}`, cls });
+  const after = shot(first(c.after), [], { label: `${afterWord}: ${c.after.route}, ${c.after.label}`, cls: `${cls} cmp-after`.trim() });
+  const at = Number.isFinite(D.cmpAt) ? D.cmpAt : 50;
+  // ids: a live redraw or the width toggle gives the focus back to the same control (show())
+  const slider = h('input', { type: 'range', id: 'cmp-slider', class: 'cmp-slider', min: '0', max: '100', step: '5', value: String(at), 'aria-label': W.FIX_WORDS.slider });
+  const set = v => { after.style.clipPath = `inset(0 0 0 ${v}%)`; D.cmpAt = v; slider.setAttribute('aria-valuetext', `${W.FIX_WORDS.before} ${v}%, ${afterWord} ${100 - v}%`); };
+  slider.addEventListener('input', () => set(Number(slider.value)));
+  set(at);
+  const toggle = vps.length > 1 ? h('div', { class: 'seg-b', role: 'group', 'aria-label': W.FIX_WORDS.width }, vps.map(v => { const b = h('button', { type: 'button', id: `cmp-vp-${v}`, 'aria-pressed': v === vp ? 'true' : 'false' }, W.WIDTH[v] || v); b.addEventListener('click', () => { D.cmpVp = v; renderDetail(); }); return b; })) : null;
+  return h('div', { class: 'fig fix-compare', role: 'group', 'aria-label': `${W.FIX_WORDS.slider}, ${c.route || c.after.route}, ${W.WIDTH[vp] || vp}` },
+    toggle ? h('div', { class: 'fig-tools' }, toggle) : null,
+    h('p', { class: 'small cmp-route' }, `${W.FIX_WORDS.slider} on ${c.route || c.after.route}`),
+    h('div', { class: 'cmp-labels', 'aria-hidden': 'true' }, h('span', null, W.FIX_WORDS.before), h('span', null, afterWord)),
+    h('div', { class: 'cmp' }, before, after), slider);
 }
 
 // ---- Screens ----------------------------------------------------------------------------------------------------------

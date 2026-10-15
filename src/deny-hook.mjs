@@ -4,7 +4,8 @@
 // stdin, looks at the paths and words in it, and answers; no network, no state written.
 //
 // Denied, to every tool (Read, Grep, Glob, Write, Edit, MultiEdit, NotebookEdit, Bash, WebFetch):
-// - the shared state: `<git-common-dir>/nunchi/**` (ledger, approvals with their channels, the run-id counter, the
+// - the shared state: `<git-common-dir>/nunchi/**` (ledger, approvals with their channels, the run-id counter, the fix
+//   loop's records, recording snapshots, claims and the approved check scripts (M3), the
 //   generation, metrics, board records) and `.nunchi/state/**` (the per-folder fallback);
 // - the answer keys outside the project (`$XDG_STATE_HOME/nunchi/**`, `%LOCALAPPDATA%\nunchi\**`,
 //   `~/.local/state/nunchi/**`), whose path the CLI prints; and inside a run, `canaries.json` and older keys;
@@ -282,7 +283,10 @@ export function expandGlob(word, cwd, { max = 4000 } = {}) {
 }
 
 // ---- reads that walk folders -------------------------------------------------------------------------------------------
-const STATE_FILES = ['ledger.json', 'approved.json', 'generation', 'metrics.json', 'run-id', '4242.json', '4242.sock', 'scripts-approved.json', 'labels-approved.json'];
+// sample names of what the state holds (a filter that leaves the state out has to rule each of them out), the fix loop's
+// records, recording snapshots, claims and file markers included (M3)
+const STATE_FILES = ['ledger.json', 'approved.json', 'generation', 'metrics.json', 'run-id', '4242.json', '4242.sock', 'scripts-approved.json', 'labels-approved.json',
+  'checks-request.json', 'fix-plan.json', 'fixes/abcabcabcabc/1.json', 'fixes/abcabcabcabc/1-har/guest.json', 'claims/abcabcabcabc.json', 'claims/files/0f0f0f0f'];
 const KEY_FILES = ['hunt-key.json', 'verify-key.json', 'recheck-key.json'];
 const RUN_FILES = ['canaries.json', ...KEY_FILES];
 // What the AI must not read, as places (a folder, or a file) with sample names of the files a folder holds.
