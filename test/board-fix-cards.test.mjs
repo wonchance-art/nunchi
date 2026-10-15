@@ -16,6 +16,7 @@ import * as R from '../src/fix/records.mjs';
 import * as P from '../src/project.mjs';
 import { FIX_WORDS, listText } from '../src/board/shared.mjs';
 import { fixProject, edit, commitWith, git, tmp } from './fixtures/fix-project.mjs';
+import { boardRequest } from './fixtures/board-call.mjs';
 
 process.env.XDG_STATE_HOME = tmp('nunchi-board-cards-xdg-');
 const require = createRequire(import.meta.url);
@@ -34,11 +35,8 @@ async function board(p) {
   const b = await startBoard({ projectDir: p.root });
   const origin = b.origin;
   const s = await (await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) })).json();
-  const call = async (path, body) => {
-    const res = await fetch(origin + path, body === undefined ? { headers: { 'x-nunchi-token': s.token } } : { method: 'POST', headers: { 'x-nunchi-token': s.token, 'content-type': 'application/json', origin }, body: JSON.stringify(body) });
-    let json = null; try { json = await res.json(); } catch {}
-    return { status: res.status, json };
-  };
+  // a fresh connection per request: the fix loop and git run between calls (fixtures/board-call.mjs)
+  const call = (path, body) => boardRequest(origin, path, { token: s.token, body });
   return { b, call };
 }
 // the diff kind with seven paths outside the finding's files

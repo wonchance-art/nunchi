@@ -15,6 +15,7 @@ import * as C from '../src/fix/claims.mjs';
 import * as P from '../src/project.mjs';
 import { FIX_WORDS } from '../src/board/shared.mjs';
 import { fixProject, edit, commitWith, git, tmp } from './fixtures/fix-project.mjs';
+import { boardRequest } from './fixtures/board-call.mjs';
 
 process.env.XDG_STATE_HOME = tmp('nunchi-board-fix-xdg-');
 const require = createRequire(import.meta.url);
@@ -31,11 +32,8 @@ async function board(p) {
   const b = await startBoard({ projectDir: p.root });
   const origin = b.origin;
   const s = await (await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) })).json();
-  const call = async (path, body, { token = s.token } = {}) => {
-    const res = await fetch(origin + path, body === undefined ? { headers: { 'x-nunchi-token': token } } : { method: 'POST', headers: { 'x-nunchi-token': token, 'content-type': 'application/json', origin }, body: JSON.stringify(body) });
-    let json = null; try { json = await res.json(); } catch {}
-    return { status: res.status, json, type: res.headers.get('content-type') };
-  };
+  // a fresh connection per request: the fix loop runs between calls (fixtures/board-call.mjs)
+  const call = (path, body, { token = s.token } = {}) => boardRequest(origin, path, { token, body });
   return { b, call };
 }
 const decisionsOf = nunchi => readdirSync(join(nunchi, 'decisions'), { recursive: true }).map(String).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(nunchi, 'decisions', f), 'utf8')));
