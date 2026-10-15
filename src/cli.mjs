@@ -38,7 +38,8 @@ Usage:
                           (up to 8), normal state, rule lenses only; marks nothing fixed. The full check follows
     --network <mode>      auto | record | replay | live                default: auto
                           auto replays .nunchi/har/<person>.json when it exists, otherwise records it; screens
-                          the recording lacks are recorded and merged into it (shown as "merge")
+                          the recording lacks are recorded and merged into it (shown as "merge"). record
+                          records again: what it records replaces the recording's answers
     --states <list>       normal,empty,error,slow,offline              default: all five
                           forced states run only on screens that load data
     --allow-host <list>   extra backend hosts the app calls from the browser (Supabase, Firebase,

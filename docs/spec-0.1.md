@@ -266,11 +266,13 @@ check (an ordinary `capture`), which the first look never stands in for.
 **Which screens** (`src/quick.mjs`, `rankQuick`; from the source's route list and the evidence of `/` only, so the
 same app gives the same choice). Up to 8 routes, in this order:
 1. `/`, when the app has it. It is captured first (normal state, every person and viewport);
-2. the routes the screens of `/` link to from their navigation landmarks — `<nav>`/role=navigation and
-   `<header>`/role=banner (`links.json` `landmark`; a footer is not navigation) — in the order a visitor meets them:
-   guest before signed-in, desktop before phone (the L3 walk's order), each screen's links in document order; a route
-   counts once, where it is met first. A screen of `/` that redirected inside the app counts (its links are what `/`
-   shows); one that was not captured gives none;
+2. the routes the screens of `/` link to from their navigation — in a `<nav>`/role=navigation, or in the page banner (a
+   `<header>` that is not inside an article, aside, main, nav or section, or role=banner), and never inside a
+   `<footer>`/role=contentinfo (`links.json` `navigation`, since the review of PR #33, 2026-10-15 KST: before it a
+   footer's nav, a card's header and a menu the screen does not show filled the picks); a link the screen does not
+   show (`visible: false`) is skipped — in the order a visitor meets them: guest before signed-in, desktop before phone
+   (the L3 walk's order), each screen's links in document order; a route counts once, where it is met first. A screen
+   of `/` that redirected inside the app counts (its links are what `/` shows); one that was not captured gives none;
 3. one route per top-level segment that no chosen route is in yet (`/app/tasks` is segment `app`): bigger segments
    (more routes) first, then by name; the segment's route is the shallowest, a static one before a dynamic one, then
    by name.
@@ -294,8 +296,12 @@ A test pins every tie-break, and that shuffled input gives the same choice.
   re-check, which never run on a quick run.
 - *The fold* (§5.1 *Kinds*, already in the ledger since M1): presence-only. It adds what it saw and brings back an item
   that was fixed (`regressedAt`); it never sets `goneAt`, never moves `lookedAt` for what it did not see, and never
-  marks a run blind. The sweep after it fixes like for like as always; a sweep with an older id than a quick run (one
-  started before it) folds presence-only, as any older run does — the skill runs the two one after the other.
+  marks a run blind. Since the review of PR #33 (2026-10-15 KST):
+  - it is no watermark: a sweep with an older id than a quick run (started before it, folded after it) still says what
+    is gone, except an item a later run saw (`lastSeen` newer than the sweep);
+  - a sighting by a quick run of another worktree never takes the item over (`stream` stays the worktree that swept
+    it, which alone can fix it);
+  - "not looked at for 3 runs" counts the sweeps of the item's worktree after it was last looked at, not quick runs.
 
 **Which run each command builds on.**
 - `hunt`, `verify`, `recheck`, `canaries --score`, `export --html` and `tokens` default to the latest run that is not
@@ -303,7 +309,9 @@ A test pins every tie-break, and that shuffled input gives the same choice.
   runs they say "no full check yet: run 0001 is a quick first look … nunchi capture --url … runs the full check".
   `hunt --plan --run <a quick run>` is refused; `recheck` refuses one as before (only a sweep folds AI findings), and
   its controls compare with the run before that is not quick. `export --html --run <a quick run>` still exports it
-  (the export's verdict does not know quick runs: M4 owns the export).
+  (the export's verdict does not know quick runs). The page of a sweep after a first look counts "since" from the
+  sweep before the first look ("First run" when there is none), and what the first look found as this check's new or
+  back (review of PR #33: it said "Since run <the quick run>").
 - The fix loop copies the last sweep (`ledger.mjs` `latestSweepOf`: base URL, persons, states, samples), never a
   quick run; with only a first look, `fix --start` says "Only a quick first look so far: the fix loop re-checks against
   a full check".
@@ -320,17 +328,34 @@ screen it does not hold:
 - a screen it lacks is captured with **merge**: a request the recording holds is answered from it, as replay answers
   it (so this screen sees now what every later replay of it will see); one it lacks goes live once, and its responses
   are added in the order the page load asked for them, as recording adds them (tokens redacted the same way). Its
-  forced states replay what was added. Only a normal screen that was captured is marked held: one that did not load,
-  or showed the sign-in page because the login expired, is recorded again next time;
-- `run.json` `network` says `merge` for a person when a screen of theirs was merged (else `replay`), and the CLI says
-  what that means. A recording written before M5 (no `routes`) holds every route and is replayed as before.
+  forced states replay what was added;
+- *a screen that failed* (not captured: no page, a browser error page, it left the app; a server error page, HTTP
+  5xx; or a sign-in page because the login expired) is not marked held, and what it added to the recording is taken
+  back before the save, unless a screen that worked was answered from it (whose next replay needs it). So a screen that
+  failed once is recorded again by the next run, from the app, never replayed from the bad answer (review of PR #33,
+  2026-10-15 KST: a 503 page's `{fail: true}`, or 401s of a login that expired mid-merge, stayed in the recording until
+  it was deleted). This holds when recording too;
+- `--network record` starts from an empty recording, and what it records **replaces** the file's answers for those
+  requests when it is saved (the file used to win, so recording again could not refresh an answer); requests it did not
+  ask keep theirs, and the screens held are both;
+- `run.json` `network` says `merge` for a person when a screen of theirs was merged (else `replay`); `merged` lists the
+  routes per person (`{recorded, failed}`), and the CLI says them: "merge (guest): recorded /about, /help (the recording
+  lacked them: their data requests went to the app once and were added); the screens it held replayed their data from
+  it", and "merge (guest): not recorded /flaky (the screen failed …)". (It said "nothing they asked for was sent", which
+  was wrong: pages, scripts and styles load from the app in every mode; only data requests are replayed.) A recording
+  written before M5 (no `routes`) holds every route and is replayed as before.
+- *Redaction* (record and merge alike, review of PR #33): string values under `token`, `jwt`, `authorization`,
+  `session` and any `*_token` key are written `[redacted]`, besides `api_key`, `apikey`, `secret`, `client_secret` and
+  `password`.
 - *Saving* is merged and atomic: under the person's lock (`<person>.json.lock.d`, the state store's lock: the
   per-person lock §5.1 lists as not done yet), the file is read again, merged and written by temp file and rename. A
   request the file holds keeps its responses — what a screen already recorded was answered stays what it is
   answered, so strict replay holds for it — unless the new list starts with the same responses and has more (a
   recording run that saw more of one page load); a request only the new one holds is added; screens held are the
   union. Keys are written sorted, so the same two recordings give the same bytes; two captures saving at once lose
-  nothing. A file that no longer parses is replaced, as before.
+  nothing. A file that no longer parses is replaced, as before. A lock that stays busy (5 s, then 20 s) never loses the
+  run: what it recorded is written beside the file, `<person>.json.unsaved-<pid>`, `run.json` names it
+  (`recordingUnsaved`) and the CLI warns that the next capture records those screens again.
 - So a quick run (which records its screens) followed by the full check no longer makes it `recording-stale`: test
   `quick-merge.test.mjs` replays such a recording (stale: the new screens miss) as the control, then merges (no
   misses; the screens already recorded ask the server nothing), then replays again (nothing asked; evidence
@@ -338,26 +363,44 @@ screen it does not hold:
 
 **The board and `findings`: no live partial runs** (`summary.mjs`; the design's words are the agreed mock-up). While
 the latest capture of this worktree is a quick run:
-- the verdict is "Too early to say · full check running" while a full check (a sweep of the whole app, `wholeApp`, the
-  same "full check" as "Since last full check") is being captured after it, and "Too early to say" otherwise;
+- the verdict is "Too early to say · full check running" while a sweep is being captured after it, and "Too early to
+  say" otherwise. *Wording:* the owner's text is "Too early to say" until the full check lands; the board adds
+  "· full check running" (design §3.4's own words for this case) because it says what the person is waiting for. Kept
+  after the review of PR #33, to be confirmed with the owner;
 - the Now line is "First look: 8 key screens · full check running, 12 of 25 screens (about 6 min left)", in place of
   "Capture running · run N" for that capture. Screens here are routes, as in the design (8 key screens of a 25-route
   app). `findings` prints the same line under the verdict (or, with nothing running, that the run is a quick first look
   and no full check is running);
-- once the full check lands, until the next capture does: "Full check done: 16 new groups" (groups whose first
-  sighting is the full check: the first look did not show them), and the verdict is the §7.2 formula again.
+- once that sweep lands, until the next capture does: "Full check done: 16 new groups" (groups whose first sighting is
+  the sweep: the first look did not show them), and the verdict is the §7.2 formula again.
+
+Any sweep after the first look counts (review of PR #33: only a whole-app one did, so a check that skipped a dynamic
+route without a sample got none of these lines). One that is not of the whole app says why, in the words `capture`
+prints for it: "… (about 6 min left) · skipped /posts/[id] (needs-sample)" and "Full check done: 16 new groups ·
+skipped /posts/[id] (needs-sample)" (also `(unchanged)` for `--changed-since`, up to 3 then "and N more"), or "· only
+the routes given (--routes)". `run.json` and `progress.json` carry `skipped` (`{route, reason}`, the reasons that make a
+sweep partial) and `routesGiven`.
 
 *How far, and the time left.* While a capture is written, the CLI keeps `progress.json` in its `<id>.partial` folder
-(`{kind, wholeApp, routes, done, routeMs}`: routes in the run, routes done — every person, viewport and forced state of
-each — and each done route's measured time), and removes it before the run is renamed complete, so no measured time
-reaches the evidence (it is in `timing.json` as before). The board reads it as data (a link, a folder or a file over
-64 KB is not read; every field checked). **Time left** = the mean measured time of the routes done × the routes left,
-rounded up to whole minutes, at least 1: only this run's own times, so the same file gives the same words; none before
-the first route is done or once none is left (what remains then is the canaries and the fold).
+(`{kind, wholeApp, skipped, routesGiven, routes, done, routeMs, pid, host}`: routes in the run, routes done — every
+person, viewport and forced state of each — each done route's measured time, and its writer), and removes it before the
+run is renamed complete, so no measured time reaches the evidence (it is in `timing.json` as before). The board reads
+it as data (a link, a folder or a file over 64 KB is not read; every field checked). **Time left** = the mean measured
+time of the routes done × the routes left, rounded up to whole minutes, at least 1: only this run's own times, so the
+same file gives the same words; none before the first route is done or once none is left (what remains then is the
+canaries and the fold).
 
-*Known limits.* A capture that crashed leaves its `.partial` folder and `progress.json` until `gc` removes it after an
-hour, and the board says "running" until then (as it did before for any partial run). The first look counts towards
-"not looked at for 3 runs" like any capture. The time left does not count the canaries, the inventory or the fold.
+*A capture that stops* (review of PR #33, 2026-10-15 KST; before it, a failed or interrupted capture left its folder,
+and the board said "full check running" until `nunchi gc` removed it, an hour later at the earliest): a capture that
+fails, or is stopped by Ctrl-C, SIGTERM or SIGHUP, removes its unfinished `.partial` folder (its `progress.json` with
+it) as it exits, and says so; the runs before it are untouched. A kill that runs no handler leaves the folder, and the
+board no longer calls it running (`runs.mjs` `runningCaptures`, the one place `summary()` reads the clock and the
+process table) once its writer is gone — the pid in `progress.json` no longer runs on this host — or nothing was
+written for 10 minutes (`STALE_MS`); a folder without a progress file (a fix probe, an older nunchi) counts by its own
+time. `gc` still removes such a folder after an hour. The verdict, the Now line and "Capture running · run N" all go by
+this.
+
+*Known limits.* The time left does not count the canaries, the inventory or the fold.
 
 **Skill.** A first look, then the full check: `capture --quick`, `findings`, `open`, then `capture`; the chat reports
 only what those print (§1, design §6).
