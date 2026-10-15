@@ -36,6 +36,10 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
   once with a test account), deterministically: two runs of the same build give byte-identical evidence
 - **Forced states** on screens that load data: **empty, error, slow, offline**, from a recording of your app's own
   responses (replayed, so screens stay comparable between runs)
+- **A first look** (`nunchi capture --quick`): `/` and the key screens its navigation links to, then one per section
+  (up to 8), with the checks that need no AI, on the board in a minute or two. It marks nothing fixed; the board says
+  "Too early to say" and how far the full check that follows has come, then what the full check added. Screens the
+  first look recorded are replayed by the full check, the rest are recorded and merged in
 - **Checks that need no AI** — layout overflow, clipped text, broken images, page errors and failed requests,
   raw error text shown to users, errors that look like empty lists, missing offline notices, leftover placeholder
   text, `NaN`/`undefined` on screen, accessibility (axe-core, target sizes, placeholder-only labels), native
@@ -64,7 +68,7 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
 - **Runs** you can compare: each capture is its own folder with the commit and working-tree state it came from;
   a login that expired or an app that isn't running is reported once, not as a hundred findings
 
-Not yet (0.1): guards that keep a fixed kind of defect from coming back, `nunchi check`, and a fast first run. The
+Not yet (0.1): guards that keep a fixed kind of defect from coming back, and `nunchi check`. The
 AI lenses (copy, states, visual judgment) with a separate verifier, and the fix loop, are built and being measured.
 
 ## Benchmark
@@ -96,7 +100,8 @@ The checks were tuned on this app once; a second, held-out app is what the 0.1 g
 
 **미리보기(0.0.2).** *찾기*, 진행판(`nunchi open`, 내 브라우저에서 결정), 그리고 고치기(`nunchi fix`)까지 됩니다. AI가
 고친 것은 별도 브랜치에 결함 하나당 커밋 하나로 남고, 다시 찍어서 결함이 사라지고 다른 곳이 깨지지 않았을 때만 고쳐진 것으로
-칩니다(고치기 게이트는 아직 측정 전).
+칩니다(고치기 게이트는 아직 측정 전). 빠른 첫 보기(`nunchi capture --quick`)는 핵심 화면 최대 8개를 먼저 보여
+주고, 결론은 이어지는 전체 검사가 끝난 뒤에 냅니다(그 전까지 진행판은 「Too early to say」).
 Claude Code에서 `/plugin marketplace add wonchance-art/nunchi` → `/plugin install nunchi@nunchi` 후, 앱 폴더에서
 nunchi로 검사해 달라고 하면 됩니다. 처음 한 번 `nunchi setup`이 고정된 패키지 2개(설치 스크립트 없이)와 Chromium(약
 170MB)을 받습니다. 실제 앱에서 틀리게 잡는 것이 있으면 알려 주세요.

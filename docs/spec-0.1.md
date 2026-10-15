@@ -258,6 +258,110 @@ production build and are left for a later version. Used to (a) mark coverage
 cells *stale* when files they depend on change, (b) pick scenes to re-capture incrementally, (c) pick
 neighbour scenes for regression checks after a fix. The board header shows *evidence tree ≠ working tree* (§2.4 `run.json`).
 
+### 2.6 Fast first run: `capture --quick`, then the full check (built 2026-10-15 KST, design 0.1-c §6, M5)
+
+A first look at the key screens, so the board has something to show within a minute or two, followed by the full
+check (an ordinary `capture`), which the first look never stands in for.
+
+**Which screens** (`src/quick.mjs`, `rankQuick`; from the source's route list and the evidence of `/` only, so the
+same app gives the same choice). Up to 8 routes, in this order:
+1. `/`, when the app has it. It is captured first (normal state, every person and viewport);
+2. the routes the screens of `/` link to from their navigation landmarks — `<nav>`/role=navigation and
+   `<header>`/role=banner (`links.json` `landmark`; a footer is not navigation) — in the order a visitor meets them:
+   guest before signed-in, desktop before phone (the L3 walk's order), each screen's links in document order; a route
+   counts once, where it is met first. A screen of `/` that redirected inside the app counts (its links are what `/`
+   shows); one that was not captured gives none;
+3. one route per top-level segment that no chosen route is in yet (`/app/tasks` is segment `app`): bigger segments
+   (more routes) first, then by name; the segment's route is the shallowest, a static one before a dynamic one, then
+   by name.
+
+Only routes the capture can open count (static, or dynamic with a sample); a link is matched against every route of
+the app, so a link to a route without a sample is skipped, never mistaken for another. On Pebble: `/` · `/pricing`,
+`/about`, `/help`, `/login` (the header) · `/app`, `/orphan-page`, `/reports` (one per section). `capture --quick
+--plan` prints the rule and the choice without navigation (`withoutNavigation`); the real choice needs `/` captured.
+A test pins every tie-break, and that shuffled input gives the same choice.
+
+**What a quick run is.**
+- Normal state, both viewports (or `--viewports`), every person; rule and computed lenses only; no canaries. It
+  refuses `--routes`, `--changed-since`, `--states` and `--canaries` (it chooses those itself), and refuses to run on
+  a `nunchi/fix…` branch (a capture there is a fix probe).
+- `run.json`: `kind: "quick"`, `wholeApp: false`, `scope.routes` the routes captured, `quick: {routes, why}` (each
+  route's reason: `home`, `navigation`, `section`). The CLI prints the choice ("first look: 8 key screens, normal
+  state, rule lenses only: / (home) · … (home page navigation) · … (one per section)") and says it marks nothing
+  fixed and that the full check is next.
+- Whole-app detectors are off (the link graph's findings, design-system one-offs, the secret scan of the bundles), as
+  in a fix probe. No `source-map.json`, `source-hashes.json` or `inventory.json`: they serve the AI hunt and the
+  re-check, which never run on a quick run.
+- *The fold* (§5.1 *Kinds*, already in the ledger since M1): presence-only. It adds what it saw and brings back an item
+  that was fixed (`regressedAt`); it never sets `goneAt`, never moves `lookedAt` for what it did not see, and never
+  marks a run blind. The sweep after it fixes like for like as always; a sweep with an older id than a quick run (one
+  started before it) folds presence-only, as any older run does — the skill runs the two one after the other.
+
+**Which run each command builds on.**
+- `hunt`, `verify`, `recheck`, `canaries --score`, `export --html` and `tokens` default to the latest run that is not
+  quick (`runs.mjs` `latestSweep`: `latest` when it names a sweep, else the newest complete sweep). With only quick
+  runs they say "no full check yet: run 0001 is a quick first look … nunchi capture --url … runs the full check".
+  `hunt --plan --run <a quick run>` is refused; `recheck` refuses one as before (only a sweep folds AI findings), and
+  its controls compare with the run before that is not quick. `export --html --run <a quick run>` still exports it
+  (the export's verdict does not know quick runs: M4 owns the export).
+- The fix loop copies the last sweep (`ledger.mjs` `latestSweepOf`: base URL, persons, states, samples), never a
+  quick run; with only a first look, `fix --start` says "Only a quick first look so far: the fix loop re-checks against
+  a full check".
+- `gc`: a quick run that a sweep came after goes first, with fix probes, and does not count towards `--keep`, unless
+  an open item still names it (pinned) or the ledger has not folded it; a quick run with no sweep after it counts like
+  any run. `nunchi runs` marks it "quick (a first look)". `latest` names a quick run like any capture (the board and
+  `findings` show the first look).
+
+**Recordings: record with merge** (`network.mjs` `Recording`, `capture.mjs`). This amends §2.2's "later runs replay
+them": a recording now says which screens it holds — `routes` in the file, route → the viewports whose normal screen
+was captured while recording (`{"/pricing": ["d", "m"]}`) — and `--network auto` with a recording no longer replays a
+screen it does not hold:
+- a screen the recording holds replays strictly, as before (§2.2 *Strict replay*: a miss is aborted, never live);
+- a screen it lacks is captured with **merge**: a request the recording holds is answered from it, as replay answers
+  it (so this screen sees now what every later replay of it will see); one it lacks goes live once, and its responses
+  are added in the order the page load asked for them, as recording adds them (tokens redacted the same way). Its
+  forced states replay what was added. Only a normal screen that was captured is marked held: one that did not load,
+  or showed the sign-in page because the login expired, is recorded again next time;
+- `run.json` `network` says `merge` for a person when a screen of theirs was merged (else `replay`), and the CLI says
+  what that means. A recording written before M5 (no `routes`) holds every route and is replayed as before.
+- *Saving* is merged and atomic: under the person's lock (`<person>.json.lock.d`, the state store's lock: the
+  per-person lock §5.1 lists as not done yet), the file is read again, merged and written by temp file and rename. A
+  request the file holds keeps its responses — what a screen already recorded was answered stays what it is
+  answered, so strict replay holds for it — unless the new list starts with the same responses and has more (a
+  recording run that saw more of one page load); a request only the new one holds is added; screens held are the
+  union. Keys are written sorted, so the same two recordings give the same bytes; two captures saving at once lose
+  nothing. A file that no longer parses is replaced, as before.
+- So a quick run (which records its screens) followed by the full check no longer makes it `recording-stale`: test
+  `quick-merge.test.mjs` replays such a recording (stale: the new screens miss) as the control, then merges (no
+  misses; the screens already recorded ask the server nothing), then replays again (nothing asked; evidence
+  byte-identical to the merge run).
+
+**The board and `findings`: no live partial runs** (`summary.mjs`; the design's words are the agreed mock-up). While
+the latest capture of this worktree is a quick run:
+- the verdict is "Too early to say · full check running" while a full check (a sweep of the whole app, `wholeApp`, the
+  same "full check" as "Since last full check") is being captured after it, and "Too early to say" otherwise;
+- the Now line is "First look: 8 key screens · full check running, 12 of 25 screens (about 6 min left)", in place of
+  "Capture running · run N" for that capture. Screens here are routes, as in the design (8 key screens of a 25-route
+  app). `findings` prints the same line under the verdict (or, with nothing running, that the run is a quick first look
+  and no full check is running);
+- once the full check lands, until the next capture does: "Full check done: 16 new groups" (groups whose first
+  sighting is the full check: the first look did not show them), and the verdict is the §7.2 formula again.
+
+*How far, and the time left.* While a capture is written, the CLI keeps `progress.json` in its `<id>.partial` folder
+(`{kind, wholeApp, routes, done, routeMs}`: routes in the run, routes done — every person, viewport and forced state of
+each — and each done route's measured time), and removes it before the run is renamed complete, so no measured time
+reaches the evidence (it is in `timing.json` as before). The board reads it as data (a link, a folder or a file over
+64 KB is not read; every field checked). **Time left** = the mean measured time of the routes done × the routes left,
+rounded up to whole minutes, at least 1: only this run's own times, so the same file gives the same words; none before
+the first route is done or once none is left (what remains then is the canaries and the fold).
+
+*Known limits.* A capture that crashed leaves its `.partial` folder and `progress.json` until `gc` removes it after an
+hour, and the board says "running" until then (as it did before for any partial run). The first look counts towards
+"not looked at for 3 runs" like any capture. The time left does not count the canaries, the inventory or the fold.
+
+**Skill.** A first look, then the full check: `capture --quick`, `findings`, `open`, then `capture`; the chat reports
+only what those print (§1, design §6).
+
 ## 3. Lenses
 
 A lens is a data file (H8): id, definition of a defect, checklist items, good/bad examples, severity rubric,
@@ -1274,6 +1378,10 @@ Keyboard: J/K move, F fix, W keep, X false positive, S hold; batch decisions by 
 Exports: SARIF, Markdown, JSON. `nunchi check`: no capture; runs guard rules and ledger state for CI,
 exit code only. First run (H11): key routes × rule lenses within ~2 minutes; the deep sweep continues and
 fills the board live.
+*Amended (2026-10-15 KST, design 0.1-c §6, M5): no live partial runs.* The first look (`capture --quick`, §2.6) is
+folded and shown as it lands; the full check after it is not shown screen by screen. The board says how far it is —
+"First look: 8 key screens · full check running, 12 of 25 screens (about 6 min left)" — and the verdict is "Too early
+to say" until the full check lands, then "Full check done: 16 new groups" (§2.6 *The board and `findings`*).
 
 ### 7.1 `nunchi export --html` (built 2026-10-14 KST)
 
