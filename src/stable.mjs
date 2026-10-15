@@ -31,8 +31,13 @@ export const sha = (data, n = 16) => createHash('sha256').update(data).digest('h
 const POSIX = process.platform !== 'win32';
 const sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 // The syncs (what makes a write survive a power loss) and renames go through here, and so does which platform's rules apply to a refused rename: no output
-// shows them, so a test can watch the syncs and make renames refuse as Windows does.
-export const io = { fsync: fd => fsyncSync(fd), rename: (from, to) => renameSync(from, to), posix: POSIX };
+// shows them, so a test can watch the syncs and make renames refuse as Windows does. The lock's reads, stats,
+// deletes and touches of its small files go through here too, so a test can give them Windows' rules on Linux (a
+// file another process has open cannot be renamed over or deleted at once; a folder with an open file in it cannot
+// be renamed).
+export const io = { fsync: fd => fsyncSync(fd), rename: (from, to) => renameSync(from, to), posix: POSIX,
+  readFile: path => readFileSync(path, 'utf8'), stat: path => statSync(path), unlink: path => unlinkSync(path),
+  touch: (path, t = new Date()) => utimesSync(path, t, t), writeFile: (path, data) => writeFileSync(path, data) };
 
 // Nothing is written, nor its mode changed, through a symbolic link: a link planted among nunchi's paths would
 // send the write (or the chmod) outside the repository (D12).
@@ -108,7 +113,7 @@ const renameRetry = (from, to) => retryBusy(() => { try { return io.rename(from,
 
 // What a crash in the middle of a write leaves: temp files of writeAtomic (and of older versions) and lock
 // folders being made or removed. Removed from `dir` once they are an hour old (design §8.1).
-const LEFTOVER = /^\..+\.tmp-\d+-[0-9a-f]{8}$|^.+\.\d+\.tmp$|\.lock\.d\.(tmp|gone|alive)-[0-9a-f]+$/;
+const LEFTOVER = /^\..+\.tmp-\d+-[0-9a-f]{8}$|^.+\.\d+\.tmp$|\.lock\.d\.(tmp|gone|alive)-[0-9a-f]+$|\.lock\.d\.wait-\d{15}-[0-9a-f]{16}$/;
 export function sweepLeftovers(dir, { olderThanMs = 3600e3, now = Date.now() } = {}) {
   let names;
   try { names = readdirSync(dir); } catch { return []; }
@@ -146,10 +151,14 @@ export function sweepLeftovers(dir, { olderThanMs = 3600e3, now = Date.now() } =
 // - Windows refuses to rename the lock folder while another process reads owner.json in it: those renames, and
 //   the reads, are retried (retryBusy), so a release is never lost to a reader.
 // - fair: a waiter is not starved by processes that release and take the lock again at once. A waiter that has waited
-//   NEXT_AFTER_MS names itself next (`<file>.lock.d.next`, written whole and renamed into place; a waiter that has
-//   waited longer takes the place over), and while a live next is named only it may take the lock. It renews its
-//   place while it waits; a place not renewed for NEXT_STALE_MS, or whose process has ended on this machine, is free.
-//   The place goes when its waiter takes the lock or gives up.
+//   TICKET_AFTER_MS makes a ticket of its own, `<file>.lock.d.wait-<since>-<token>` (an empty file, made once and
+//   never renamed or rewritten: Windows refuses to rename over, or at once delete, a file another process has open),
+//   and while live tickets exist only the waiter with the lowest (the longest waiting) takes the lock. A waiter renews
+//   its ticket's time while it waits; a ticket not renewed for TICKET_STALE_MS, or that cannot be read (deleted, still
+//   open elsewhere), does not count. A ticket goes when its waiter takes the lock or gives up; one a crash left is
+//   removed by the next ticket made after staleMs, or with the other leftovers after an hour.
+// - a waiter judges the holder stale at most every STALE_CHECK_MS: on Windows every read of owner.json holds up the
+//   holder's release (a folder with an open file cannot be renamed).
 // Held only around read–change–write of a small file, and by `nunchi open` while it starts a board (withLockAsync,
 // which waits without blocking), never across capture or network I/O. Acquisition backs
 // off for `timeoutMs`, then fails with code LOCKED, also when a stale lock cannot be removed.
@@ -162,7 +171,7 @@ const alive = pid => { try { process.kill(pid, 0); return true; } catch (e) { re
 // null when there is no lock, or no readable owner in it
 function readOwner(dir) {
   let text;
-  try { text = retryBusy(() => readFileSync(join(dir, 'owner.json'), 'utf8'), 1000); } catch { return null; }
+  try { text = retryBusy(() => io.readFile(join(dir, 'owner.json')), 1000); } catch { return null; }
   try { return JSON.parse(text); } catch { return null; }
 }
 const RM = { recursive: true, force: true, maxRetries: 10, retryDelay: 20 };
@@ -191,7 +200,7 @@ io.probeAlive = file => (POSIX ? null : probeAliveWindows(file));
 function staleOwner(dir, staleMs) {
   const owner = readOwner(dir);
   let touched;
-  try { touched = statSync(owner ? join(dir, 'owner.json') : dir).mtimeMs; } catch { return null; }   // just released: try again
+  try { touched = io.stat(owner ? join(dir, 'owner.json') : dir).mtimeMs; } catch { return null; }   // just released: try again
   if (sameMachine(owner)) {
     const running = owner.alive ? io.probeAlive(join(dirname(dir), owner.alive)) : null;
     if (running !== null) return running ? null : { owner };
@@ -233,31 +242,37 @@ function release(dir, token) {
   rmSync(gone, RM);
 }
 
-// The waiter that takes the lock next (fairness): `<file>.lock.d.next` holds {token, since, pid, host, boot, ns}.
-const NEXT_AFTER_MS = 20, NEXT_STALE_MS = 1000, NEXT_RENEW_MS = 200;
-const nextPath = dir => `${dir}.next`;
-function readNext(dir) {
-  const p = nextPath(dir);
-  let text, renewed;
-  try { text = readFileSync(p, 'utf8'); renewed = statSync(p).mtimeMs; } catch { return null; }
-  let o; try { o = JSON.parse(text); } catch { return null; }
-  return o && typeof o.token === 'string' && Number.isFinite(o.since) ? { ...o, renewed } : null;
+// Tickets (fairness): `<file>.lock.d.wait-<since, 15 digits>-<token>`, so the order is in the names and no file is read.
+const TICKET_AFTER_MS = 20, TICKET_STALE_MS = 1000, TICKET_RENEW_MS = 200, STALE_CHECK_MS = 100;
+const TICKET = /^wait-(\d{15})-([0-9a-f]{16})$/;
+const ticketName = l => `${basename(l.dir)}.wait-${String(l.t0).padStart(15, '0')}-${l.token}`;
+// the lowest ticket that counts (ours always counts), or null
+function firstTicket(l, staleMs) {
+  const base = `${basename(l.dir)}.`;
+  let names;
+  try { names = readdirSync(dirname(l.dir)).filter(n => n.startsWith(base) && TICKET.test(n.slice(base.length))).sort(); } catch { return null; }
+  const now = Date.now();
+  for (const n of names) {
+    if (n === l.ticket) return n;
+    let age;
+    try { age = now - io.stat(join(dirname(l.dir), n)).mtimeMs; } catch { continue; }      // gone, or being deleted
+    if (age <= TICKET_STALE_MS) return n;
+    if (age > staleMs) try { io.unlink(join(dirname(l.dir), n)); } catch {}                // a crash left it
+  }
+  return null;
 }
-const nextStale = nx => Date.now() - nx.renewed > NEXT_STALE_MS || (sameMachine(nx) && !alive(nx.pid));
-// removed only while it still names `token` (a waiter that waited longer may have taken the place since)
-function dropNext(dir, token) { if (readNext(dir)?.token !== token) return; try { unlinkSync(nextPath(dir)); } catch {} }
-function claimNext(l) {
-  const tmp = `${nextPath(l.dir)}-${l.token}`;
-  try {
-    writeFileSync(tmp, JSON.stringify({ token: l.token, since: l.t0, pid: process.pid, host: hostname(), boot: bootId(), ns: pidNs() }));
-    io.rename(tmp, nextPath(l.dir));
-    l.renewed = Date.now();
-  } catch { try { unlinkSync(tmp); } catch {} }
+function makeTicket(l) {
+  const name = ticketName(l);
+  try { io.writeFile(join(dirname(l.dir), name), ''); l.ticket = name; l.renewed = Date.now(); } catch {}
 }
-function renewNext(l) {
-  if (Date.now() - (l.renewed || 0) < NEXT_RENEW_MS) return;
-  const t = new Date();
-  try { utimesSync(nextPath(l.dir), t, t); l.renewed = Date.now(); } catch {}
+function renewTicket(l) {
+  if (Date.now() - l.renewed < TICKET_RENEW_MS) return;
+  try { io.touch(join(dirname(l.dir), l.ticket)); l.renewed = Date.now(); } catch {}
+}
+function dropTicket(l) {
+  if (!l.ticket) return;
+  try { io.unlink(join(dirname(l.dir), l.ticket)); } catch {}
+  l.ticket = null;
 }
 
 // The steps of taking a lock, shared by the blocking and the awaiting way to wait for it.
@@ -273,22 +288,23 @@ function prepareLock(path) {
   writeFileSync(join(ready, 'owner.json'), JSON.stringify({ token, pid: process.pid, host: hostname(), boot: bootId(), ns: pidNs(), start: procStart(process.pid), alive: held ? basename(aliveFile) : null, at: Date.now() }));
   return { path, dir, token, ready, held, t0: Date.now() };
 }
-// One try: → true when the lock is ours; false to wait and try again; throws LOCKED after `timeoutMs`. `l.next`: this
-// waiter is the one named next (it then tries again soon).
+// One try: → true when the lock is ours; false to wait and try again; throws LOCKED after `timeoutMs`. `l.first`: this
+// waiter holds the lowest ticket (it then tries again soon).
 function tryLock(l, { timeoutMs, staleMs }) {
   for (;;) {
-    let nx = readNext(l.dir);
-    if (nx && nx.token !== l.token && nextStale(nx)) { dropNext(l.dir, nx.token); nx = null; }
-    l.next = nx?.token === l.token;
-    // while another live waiter is named next, only it takes the lock
-    if (!nx || l.next) {
-      try { io.rename(l.ready, l.dir); if (l.next) dropNext(l.dir, l.token); l.next = false; return true; } catch (e) { if (!taken(e)) throw e; }
+    const first = firstTicket(l, staleMs);
+    l.first = !!l.ticket && first === l.ticket;
+    // while live tickets exist, only the lowest one's waiter takes the lock
+    if (!first || l.first) {
+      try { io.rename(l.ready, l.dir); dropTicket(l); l.first = false; return true; } catch (e) { if (!taken(e)) throw e; }
     }
-    const stale = staleOwner(l.dir, staleMs);
-    if (stale && reap(l.dir, stale, staleMs)) continue;
-    if (l.next) renewNext(l);
-    // the longest waiter is next: one that has waited longer than the named one takes its place
-    else if (Date.now() - l.t0 >= NEXT_AFTER_MS && (!nx || l.t0 < nx.since || (l.t0 === nx.since && l.token < nx.token))) claimNext(l);
+    if (Date.now() - (l.checked || 0) >= STALE_CHECK_MS) {
+      l.checked = Date.now();
+      const stale = staleOwner(l.dir, staleMs);
+      if (stale && reap(l.dir, stale, staleMs)) continue;
+    }
+    if (l.ticket) renewTicket(l);
+    else if (Date.now() - l.t0 >= TICKET_AFTER_MS) makeTicket(l);
     if (Date.now() - l.t0 > timeoutMs) {
       const o = readOwner(l.dir);
       const who = o ? ` (pid ${o.pid} on ${o.host}${sameMachine(o) ? `, ${alive(o.pid) ? 'running' : 'exited'}` : ''})` : '';
@@ -297,14 +313,13 @@ function tryLock(l, { timeoutMs, staleMs }) {
     return false;
   }
 }
-const abandon = l => { dropNext(l.dir, l.token); rmSync(l.ready, RM); l.held?.release(); };
-// the next wait: soon for the waiter named next; else backing off to 25 ms (a waiter must see the lock free between
-// two holders often enough to name itself next)
-const nextWait = (l, wait) => (l.next ? 2 : Math.min(wait * 2, 25));
+const abandon = l => { dropTicket(l); rmSync(l.ready, RM); l.held?.release(); };
+// the next wait: soon for the waiter with the lowest ticket; else backing off to 25 ms
+const nextWait = (l, wait) => (l.first ? 2 : Math.min(wait * 2, 25));
 // a long holder touches the lock between steps, so a holder on another machine does not judge it stale
 function heldLock(l) {
   return {
-    touch: () => { if (readOwner(l.dir)?.token === l.token) { const t = new Date(); try { utimesSync(join(l.dir, 'owner.json'), t, t); } catch {} } },
+    touch: () => { if (readOwner(l.dir)?.token === l.token) { try { io.touch(join(l.dir, 'owner.json')); } catch {} } },
     release: () => { try { release(l.dir, l.token); } finally { l.held?.release(); } },   // the proof of life after the lock, never before
   };
 }
