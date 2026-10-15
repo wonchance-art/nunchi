@@ -14,8 +14,10 @@
 // - A repository path (a file, or a folder: every file git tracks under it) is read as git stores it at HEAD, and only
 //   while the working tree holds exactly that (nothing modified, staged or untracked under it). Line endings and a
 //   checkout's filters cannot change a hash.
-// - `@name` is a file outside the repository (an answer key the hunting session must not read), given on the command
-//   line as `--key name=<path>` and hashed as its bytes.
+// - `@name` is kept outside the repository until the measurement ends (an answer key the hunting session must not
+//   read, or a held-out app no other session may open), given on the command line as `--key name=<path>`: a file is
+//   hashed as its bytes; a folder must be the top of its own git repository and is hashed like a repository set
+//   (every tracked file at its HEAD, clean tree), its paths listed as `@name/<path>`.
 // - A set's hash is the sha256 of its sha256sum-style listing, `<sha256 of the file>  <path or @name>\n` per file,
 //   sorted by path bytes. For repository paths on a clean checkout, `git ls-files -z -- <paths> | xargs -0 sha256sum |
 //   sha256sum` prints the same hash.
@@ -29,7 +31,7 @@
 //                                                                      1 when one differs, 2 when the doc is not registered
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, statSync, realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -78,17 +80,20 @@ function git(repo, args, input) {
     { cwd: repo, env, input, maxBuffer: 512 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] });
 }
 
+// entries: repository paths, or null for every tracked file
 function repoFiles(repo, entries) {
-  if (!entries.length) return [];
-  const dirty = git(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...entries]).toString('utf8').split('\0').filter(Boolean);
-  if (dirty.length) throw fail(`the working tree differs from HEAD under the hashed paths (commit or remove first): ${dirty.slice(0, 5).map(d => d.slice(3)).join(', ')}${dirty.length > 5 ? ` and ${dirty.length - 5} more` : ''}`);
-  const rows = git(repo, ['ls-tree', '-r', '-z', 'HEAD', '--', ...entries]).toString('utf8').split('\0').filter(Boolean).map(r => {
+  if (entries && !entries.length) return [];
+  const spec = entries ? ['--', ...entries] : [];
+  const dirty = git(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all', ...spec]).toString('utf8').split('\0').filter(Boolean);
+  if (dirty.length) throw fail(`the working tree of ${repo} differs from HEAD under the hashed paths (commit or remove first): ${dirty.slice(0, 5).map(d => d.slice(3)).join(', ')}${dirty.length > 5 ? ` and ${dirty.length - 5} more` : ''}`);
+  const rows = git(repo, ['ls-tree', '-r', '-z', 'HEAD', ...spec]).toString('utf8').split('\0').filter(Boolean).map(r => {
     const tab = r.indexOf('\t');
     const [mode, type, oid] = r.slice(0, tab).split(' ');
     return { mode, type, oid, path: r.slice(tab + 1) };
   });
   for (const r of rows) if (r.type !== 'blob') throw fail(`${r.path} is a ${r.type} (a submodule?), not a file`);
-  for (const e of entries) if (!rows.some(r => r.path === e || r.path.startsWith(`${e}/`))) throw fail(`${e} is not in the repository at HEAD`);
+  for (const e of entries || []) if (!rows.some(r => r.path === e || r.path.startsWith(`${e}/`))) throw fail(`${e} is not in the repository at HEAD`);
+  if (!rows.length) throw fail(`${repo} has no tracked file at HEAD`);
   // one `cat-file --batch` for every blob: "<oid> blob <size>\n<bytes>\n" each
   const out = git(repo, ['cat-file', '--batch'], rows.map(r => r.oid).join('\n') + '\n');
   let at = 0;
@@ -109,23 +114,30 @@ export function headCommit(repo) { return git(repo, ['rev-parse', 'HEAD']).toStr
 
 export const listing = files => [...files].sort((a, b) => byBytes(a.path, b.path)).map(f => `${f.sha}  ${f.path}\n`).join('');
 
-// → {gate, rows: [{set, files, hash}], keys: [{name, hash}], seeds: [{name, value}], commit}
+// → {gate, rows: [{set, files, hash}], keys: [{name, files, hash}], seeds: [{name, value}], commit}
 export function computeHashes({ repo, spec, keys = {} }) {
   const named = new Set(spec.sets.flatMap(s => s.entries.filter(e => e.startsWith('@')).map(e => e.slice(1))));
   const missing = [...named].filter(n => !(n in keys)).sort(byBytes);
   if (missing.length) throw fail(`give the file of each key: ${missing.map(n => `--key ${n}=<path>`).join(' ')}`);
   const extra = Object.keys(keys).filter(n => !named.has(n)).sort(byBytes);
   if (extra.length) throw fail(`the doc names no key ${extra.map(n => `@${n}`).join(', ')}`);
+  const keyFiles = {};
   const keyRows = [...named].sort(byBytes).map(name => {
     let st;
     try { st = statSync(keys[name]); } catch { throw fail(`key @${name}: cannot read ${keys[name]}`); }
-    if (!st.isFile()) throw fail(`key @${name}: ${keys[name]} is not a file`);
-    return { name, hash: sha256(readFileSync(keys[name])) };
+    if (st.isFile()) keyFiles[name] = [{ path: `@${name}`, sha: sha256(readFileSync(keys[name])) }];
+    else if (st.isDirectory()) {
+      let top = null;
+      try { top = realpathSync(git(keys[name], ['rev-parse', '--show-toplevel']).toString('utf8').trim()); } catch {}
+      if (top !== realpathSync(keys[name])) throw fail(`key @${name}: ${keys[name]} is a folder but not the top of a git repository`);
+      keyFiles[name] = repoFiles(keys[name], null).map(f => ({ path: `@${name}/${f.path}`, sha: f.sha }));
+    } else throw fail(`key @${name}: ${keys[name]} is not a file or a folder`);
+    const list = keyFiles[name];
+    return { name, files: list.length, hash: list.length === 1 && list[0].path === `@${name}` ? list[0].sha : sha256(listing(list)) };
   });
-  const keyHash = Object.fromEntries(keyRows.map(k => [k.name, k.hash]));
   const rows = spec.sets.map(s => {
     const files = repoFiles(repo, s.entries.filter(e => !e.startsWith('@')));
-    for (const e of s.entries.filter(x => x.startsWith('@'))) files.push({ path: e, sha: keyHash[e.slice(1)] });
+    for (const e of s.entries.filter(x => x.startsWith('@'))) files.push(...keyFiles[e.slice(1)]);
     const paths = new Set();
     for (const f of files) { if (paths.has(f.path)) throw fail(`set "${s.name}" names ${f.path} twice`); paths.add(f.path); }
     return { set: s.name, files: files.length, hash: sha256(listing(files)) };
@@ -143,7 +155,7 @@ export function renderBlock(r, docPath = 'docs/prereg-<gate>.md') {
     '| Set | Files | sha256 |',
     '|---|---:|---|',
     ...r.rows.map(x => `| ${x.set} | ${x.files} | \`${x.hash}\` |`),
-    ...r.keys.map(k => `| key @${k.name} | 1 | \`${k.hash}\` |`),
+    ...r.keys.map(k => `| key @${k.name} | ${k.files} | \`${k.hash}\` |`),
     '',
     ...(r.seeds.length ? ['| Seed | Value |', '|---|---:|', ...r.seeds.map(s => `| ${s.name} | ${s.value} |`), ''] : []),
     `Hashed from commit \`${r.commit}\` (tracked files as git stores them; keys as their bytes). Seeds are derived from the`,
@@ -161,8 +173,8 @@ export function readRegistered(text) {
   const { body } = blockAt(text);
   const rows = [], keys = [], seeds = [];
   for (const line of body.split('\n')) {
-    let m = /^\| key @([a-z][a-z0-9-]*) \| 1 \| `([0-9a-f]{64})` \|$/.exec(line);
-    if (m) { keys.push({ name: m[1], hash: m[2] }); continue; }
+    let m = /^\| key @([a-z][a-z0-9-]*) \| (\d+) \| `([0-9a-f]{64})` \|$/.exec(line);
+    if (m) { keys.push({ name: m[1], files: Number(m[2]), hash: m[3] }); continue; }
     m = /^\| ([a-z][a-z0-9-]*) \| (\d+) \| `([0-9a-f]{64})` \|$/.exec(line);
     if (m) { rows.push({ set: m[1], files: Number(m[2]), hash: m[3] }); continue; }
     m = /^\| ([a-z][a-z0-9-]*) \| (\d+) \|$/.exec(line);

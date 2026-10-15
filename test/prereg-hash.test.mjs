@@ -73,6 +73,26 @@ test('a set hash is the sha256 of its sha256sum listing, read from git; keys are
   assert.deepEqual(computeHashes({ repo: dir, spec: parseSets(DOC), keys: { k1: keyFile } }).seeds, r.seeds);
 });
 
+test('a folder key is its own git repository, hashed like a set with its paths under @name/', t => {
+  const dir = repo(t);
+  const app = mkdtempSync(join(tmpdir(), 'nunchi-prereg-app-'));
+  t.after(() => rmSync(app, { recursive: true, force: true }));
+  mkdirSync(join(app, 'src'));
+  writeFileSync(join(app, 'src', 'page.jsx'), 'export default () => null;\n');
+  writeFileSync(join(app, 'bench.json'), '{}\n');
+  const spec = parseSets(DOC);
+  assert.throws(() => computeHashes({ repo: dir, spec, keys: { k1: app } }), /not the top of a git repository/);
+  git(app, 'init', '-q', '-b', 'main'); git(app, 'add', '-A'); git(app, 'commit', '-q', '-m', 'app');
+  const r = computeHashes({ repo: dir, spec, keys: { k1: app } });
+  const list = `${sha('{}\n')}  @k1/bench.json\n${sha('export default () => null;\n')}  @k1/src/page.jsx\n`;
+  assert.deepEqual(r.keys, [{ name: 'k1', files: 2, hash: sha(list) }]);
+  assert.equal(r.rows.find(x => x.set === 'key').hash, sha(list));
+  assert.equal(readRegistered(fillDoc(DOC, renderBlock(r))).keys[0].files, 2);
+  writeFileSync(join(app, 'src', 'page.jsx'), 'changed\n');
+  assert.throws(() => computeHashes({ repo: dir, spec, keys: { k1: app } }), /differs from HEAD/);
+  assert.throws(() => computeHashes({ repo: dir, spec, keys: { k1: join(dir, 'eng') } }), /not the top of a git repository/);
+});
+
 test('refuses a dirty or untracked file under a hashed path, a missing path, and missing or unknown keys', t => {
   const dir = repo(t);
   const spec = parseSets(DOC.replace('key     @k1\n', ''));
@@ -87,7 +107,7 @@ test('refuses a dirty or untracked file under a hashed path, a missing path, and
   assert.throws(() => computeHashes({ repo: dir, spec: parseSets(DOC.replace('score.mjs', 'bench/precision-gate.mjs').replace('key     @k1\n', '')) }), /bench\/precision-gate\.mjs is not in the repository/);
   assert.throws(() => computeHashes({ repo: dir, spec: parseSets(DOC) }), /--key k1=<path>/);
   assert.throws(() => computeHashes({ repo: dir, spec, keys: { other: join(dir, 'score.mjs') } }), /names no key @other/);
-  assert.throws(() => computeHashes({ repo: dir, spec: parseSets(DOC), keys: { k1: join(dir, 'eng') } }), /not a file/);
+  assert.throws(() => computeHashes({ repo: dir, spec: parseSets(DOC), keys: { k1: join(dir, 'nothing-here.json') } }), /cannot read/);
 });
 
 test('fill, read back, check: the block round-trips; a changed engine file is a mismatch', t => {
