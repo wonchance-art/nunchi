@@ -25,8 +25,9 @@ export const ORDER = PAGES.map(p => p.route);
 // the AI lenses of the built-in packs and the states each looks at (lenses/*.json `scenes`)
 export const AI_LENSES = { L1: ['normal'], L2: ['empty', 'error', 'slow', 'offline'], L4: ['normal'], L5: ['normal', 'empty', 'error'], L6: STATES5, L7: ['normal'], L9: ['normal'], L10: ['normal'] };
 
-// The scenes of one run. `offlineFails`: /checkout · Signed in · Offline did not load (runs after the first).
-export function leafyScenes({ offlineFails = true, changed = [] } = {}) {
+// The scenes of one run. `offlineFails`: /checkout · Signed in · Offline did not load (runs after the first); `nested`:
+// on the home page's phone screen the small link sits inside the "more" link, 1 px from its corner (two numbers there).
+export function leafyScenes({ offlineFails = true, changed = [], nested = false } = {}) {
   const out = [];
   for (const pg of PAGES) for (const person of ['guest', 'signed-in']) for (const vp of ['d', 'm']) {
     const to = person === 'guest' ? pg.guestTo : pg.signedTo;
@@ -35,7 +36,7 @@ export function leafyScenes({ offlineFails = true, changed = [] } = {}) {
       const extra = { h1: pg.h1, dataRequests: pg.data && !to ? 2 : 0 };
       if (to) Object.assign(extra, { reason: `redirected to ${to}`, redirected: true, finalPath: to });
       if (offlineFails && pg.route === '/checkout' && person === 'signed-in' && state === 'offline') Object.assign(extra, { status: 'capture-failed', reason: 'no-dom', finalPath: null, h1: null });
-      if (pg.route === '/' && person === 'guest' && state === 'normal') extra.controls = vp === 'd' ? [{ selector: 'main > a.more', box: [40, 900, 120, 32] }] : [{ selector: 'main > a.more', box: [16, 700, 100, 32] }, { selector: 'nav a', box: [10, 10, 12, 12] }];
+      if (pg.route === '/' && person === 'guest' && state === 'normal') extra.controls = vp === 'd' ? [{ selector: 'main > a.more', box: [40, 900, 120, 32] }] : [{ selector: 'main > a.more', box: [16, 700, 100, 32] }, { selector: 'nav a', box: nested ? [17, 701, 8, 8] : [10, 10, 12, 12] }];
       if (pg.route === '/cart' && person === 'signed-in' && state === 'error') extra.controls = [{ selector: 'main p.err', box: vp === 'd' ? [40, 300, 400, 24] : [16, 300, 350, 24] }];
       if (pg.route === '/cart' && person === 'signed-in' && state === 'normal') extra.controls = [{ selector: 'img.hero', box: vp === 'd' ? [40, 200, 600, 300] : [16, 200, 350, 200] }];
       const s = scene(pg.route, person, state, vp, extra);
@@ -96,8 +97,9 @@ export const QUICK = ['/', '/garden', '/cart'];
 // The project. `ai`: 'latest' (the hunt recorded on the last full check), 'older' (on run 0003 only), 'none';
 // `probes`: a fix attempt of the raw error with its probe runs (and a second whose probes were removed); `quick`: a
 // quick first look after the full checks, the latest capture (M5; not with `probes`, which take the same run ids).
-export function leafy({ ai = 'latest', runs = 4, probes = true, quick = false, prefix = 'nunchi-m7-' } = {}) {
+export function leafy({ ai = 'latest', runs = 4, probes = true, quick = false, nested = false, prefix = 'nunchi-m7-' } = {}) {
   if (quick && probes) throw new Error('leafy: a quick run and the fix probes would take the same run ids');
+  if (!runs && ai !== 'none') throw new Error('leafy: an AI hunt needs a full check to hunt (runs ≥ 1)');
   const root = tmp(prefix);
   const nunchi = join(root, '.nunchi');
   const runIds = Array.from({ length: runs }, (_, i) => String(i + 1).padStart(4, '0'));
@@ -105,7 +107,7 @@ export function leafy({ ai = 'latest', runs = 4, probes = true, quick = false, p
   let latest = null;
   for (const [i, id] of runIds.entries()) {
     const n = i + 1;
-    const scenes = leafyScenes({ offlineFails: n > 1, changed: n === runs ? ['cart.signed-in.error.d', 'cart.signed-in.error.m', '~.guest.normal.d'] : [] });
+    const scenes = leafyScenes({ offlineFails: n > 1, nested, changed: n === runs ? ['cart.signed-in.error.d', 'cart.signed-in.error.m', '~.guest.normal.d'] : [] });
     const { run } = writeRun(root, id, { scenes, findings: findingsOf(scenes, n, runs), parent: i ? runIds[i - 1] : null });
     write(join(run, 'run.json'), { schema: 1, id, parent: i ? runIds[i - 1] : null, kind: 'sweep', commit: null, dirty: null, wholeApp: true, health: { status: 'ok', problems: [] },
       scope: { routes: [...ORDER].sort(), persons: ['guest', 'signed-in'], viewports: ['d', 'm'], states: STATES5, changedSince: null }, unresolved: ['profile/edit'] });
@@ -117,11 +119,12 @@ export function leafy({ ai = 'latest', runs = 4, probes = true, quick = false, p
   }
   // a quick first look after them (M5, design §6): the normal screens of three key pages, rule lenses only, folded
   // as `quick`; its flow names every route, captured or not, as capture writes it
+  let quickId = null;
   if (quick) {
-    const id = String(runs + 1).padStart(4, '0');
+    const id = quickId = String(runs + 1).padStart(4, '0');
     const scenes = leafyScenes().filter(s => QUICK.includes(s.route) && s.state === 'normal');
-    const { run } = writeRun(root, id, { scenes, findings: findingsOf(leafyScenes(), runs, runs).filter(x => scenes.some(s => s.id === x.scene)), parent: runIds[runs - 1], wholeApp: false });
-    write(join(run, 'run.json'), { schema: 1, id, parent: runIds[runs - 1], kind: 'quick', commit: null, dirty: null, wholeApp: false, health: { status: 'ok', problems: [] },
+    const { run } = writeRun(root, id, { scenes, findings: findingsOf(leafyScenes(), runs, runs).filter(x => scenes.some(s => s.id === x.scene)), parent: runIds[runs - 1] ?? null, wholeApp: false });
+    write(join(run, 'run.json'), { schema: 1, id, parent: runIds[runs - 1] ?? null, kind: 'quick', commit: null, dirty: null, wholeApp: false, health: { status: 'ok', problems: [] },
       scope: { routes: [...QUICK].sort(), persons: ['guest', 'signed-in'], viewports: ['d', 'm'], states: ['normal'], changedSince: null }, skipped: [], unresolved: ['profile/edit'] });
     write(join(run, 'flow.json'), { schema: 1, complete: true, wholeApp: false, entry: '/', order: QUICK, groups: [{ id: '/', routes: ['/', '/cart'] }, { id: '/garden', routes: ['/garden'] }],
       nodes: [...ORDER].sort().map(r => ({ route: r, captured: QUICK.includes(r), reachedBy: r === '/' ? 'entry' : 'link' })), edges: [] });
@@ -163,7 +166,7 @@ export function leafy({ ai = 'latest', runs = 4, probes = true, quick = false, p
     write(join(dir, '1.json'), { schema: 1, group: rawGroup, attempt: 1, try: 1, phase: 'reverted', rev: 3, p0: { run: p0 }, p1: { run: p1 }, outcome: { revert: 'abcdef1234567', verdict: { outcome: 'not-fixed' } } });
     write(join(dir, '2.json'), { schema: 1, group: rawGroup, attempt: 2, try: 2, phase: 'reverted', rev: 3, p0: { run: '0099' }, p1: { run: '0100' }, outcome: { verdict: { outcome: 'not-fixed' } } });
   }
-  return { root, nunchi, runs: runIds, latest: latest.id, huntOn: ai === 'none' ? null : huntOn };
+  return { root, nunchi, runs: runIds, latest: quickId ?? latest.id, huntOn: ai === 'none' ? null : huntOn };
 }
 // A JSON file, read (fixtures only).
 function require_(p) { return JSON.parse(readFileSync(p, 'utf8')); }

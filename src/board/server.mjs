@@ -33,7 +33,7 @@ import { VIEWS_CSS } from './look-views.mjs';
 import { decidedText, CAP_MS, fixingMinutes } from './shared.mjs';
 import * as P from '../project.mjs';
 import { DECISIONS, protectOf, approvalKey, reasonProblem } from '../ledger.mjs';
-import { listRuns, workTree, latestRun } from '../runs.mjs';
+import { listRuns, workTree } from '../runs.mjs';
 import { readGeneration } from '../state.mjs';
 import { readManifest, sceneDir } from '../hunt.mjs';
 import { writeStable, privateDir, sha } from '../stable.mjs';
@@ -174,9 +174,15 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   // clock: claims bump no generation) changes the version
   const claimsDir = join(stateDir, 'claims');
   const claimsSig = () => { const c = readClaims(claimsDir, now()); return c.size ? sha([...c].map(([g, x]) => `${g}:${x.agent}`).join('|'), 12) : '-'; };
-  // the AI hunt's record of the latest run: `canaries --score` rewrites coverage.json without a ledger write (it bumps
-  // no generation), and Coverage must still show the cells it voided (M7)
-  const coverageSig = () => { const id = latestRun(runsDir); if (!id) return '-'; try { return String(statSync(join(runsDir, id, 'coverage.json')).mtimeMs); } catch { return '-'; } };
+  // the AI hunt's records: `canaries --score` rewrites a run's coverage.json without a ledger write (it bumps no
+  // generation), and Coverage must still show the cells it voided (M7). Every run's (Coverage shows the last full
+  // check, which the latest capture need not be), by size and time (a coarse file-system clock can leave the time as
+  // it was: review of PR #35).
+  const coverageSig = () => {
+    const parts = [];
+    for (const id of listRuns(runsDir).complete) { try { const st = statSync(join(runsDir, id, 'coverage.json')); parts.push(`${id}:${st.size}:${st.mtimeMs}`); } catch {} }
+    return parts.length ? sha(parts.join('|'), 12) : '-';
+  };
   const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${claimsSig()}.${coverageSig()}`;
   // claims as they are now (their minutes too) on a cached model
   const freshClaims = m => { const c = readClaims(claimsDir, now()); m.claims = c; for (const g of m.groups) g.fixing = c.get(g.id) || null; return m; };

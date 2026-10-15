@@ -22,7 +22,7 @@ test('words: the mock-up §5 strings, in the table', () => {
   assert.equal(C.budgetMore(['L4'], W.thousands(70000)), 'The budget goes to the worst defects first; L4 comes last. The rest needs about 70,000 more tokens.');
   assert.equal(C.budgetMore(['L5', 'L4'], '1,000'), 'The budget goes to the worst defects first; L5 and L4 come last. The rest needs about 1,000 more tokens.');
   assert.equal(C.notLooked(1, '0007'), '1 open finding can’t be marked fixed: not looked at since run 0007');
-  assert.equal(C.tell(C.say.hunt('L6', '/cart')), 'Tell your AI “hunt L6 on /cart again”');
+  assert.equal(C.tell(C.say.hunt('L6', '/cart')), 'Tell your AI “hunt L6 on `/cart` again”');
   assert.equal(C.startThen, 'Start your app, then tell your AI “capture again”');
   assert.equal(C.loginThen, 'Run nunchi login in your own terminal, then tell your AI “capture again”');
   assert.equal(C.copy('capture again'), 'Copy “capture again”', 'Copy is named by its sentence');
@@ -75,4 +75,14 @@ test('markers: boxes that overlap by IoU 0.5 or more are one stacked marker ("1 
   assert.equal(W.shotGeometry(img, [], { first: true }).ch, 800);
   assert.equal(W.shotGeometry(img, [{ box: [40, 900, 120, 32] }], { first: true }).ch, 900 + 32 + W.CONTEXT_PX);
   assert.equal(W.shotGeometry(img, [{ box: [40, 1900, 120, 32] }], { first: true }).ch, 2000);
+});
+
+test('markers (review of PR #35): a small element inside another, 1 px from its corner, stacks once the numbers would touch on screen; far apart, never', () => {
+  const img = { w: 390 * 2, h: 2000 * 2, dpr: 2, vh: 844 * 2 };
+  const g = W.shotGeometry(img, [{ box: [16, 700, 100, 32], n: 1 }, { box: [17, 701, 8, 8], n: 3 }, { box: [200, 1500, 50, 20], n: 4 }], { first: true });
+  assert.deepEqual(W.stackMarks(g.marks).map(m => m.label), ['1', '3', '4'], 'IoU alone: the 8×8 box is not half of the link');
+  // shown 300 px wide: a marker is about 8% of the width
+  const near = { x: W.MARKER_PX / 300, y: W.MARKER_PX / (300 * g.ch / img.w) };
+  assert.deepEqual(W.stackMarks(g.marks, { near }).map(m => [m.label, m.ns]), [['1 3', [1, 3]], [null, [1, 3]], ['4', [4]]]);
+  assert.equal(W.COVERAGE.gap.incomplete(2), '2 AI cells not checked: the AI’s answer was incomplete');
 });

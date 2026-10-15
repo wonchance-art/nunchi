@@ -183,6 +183,10 @@ export const MARKS = {
 };
 export const MARK_ORDER = ['full', 'partly', 'rules', 'not', 'none', 'ok'];
 const NOT_CHECKED = 'Not checked: ';
+// A route inside a sentence to copy is the app's data: control characters and quotes are dropped (they could end the
+// quoted sentence or start another line) and it is put in backticks, so it reads as an address, never as words to obey.
+export const routeInSay = route => `\`${String(route ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').replace(/["'`\u2018\u2019\u201c\u201d]/g, '').replace(/\s+/g, ' ').trim()}\``;
+const routesInSay = routes => listText((Array.isArray(routes) ? routes : [routes]).map(routeInSay), 5);
 export const COVERAGE = {
   nav: 'Coverage', title: 'Coverage',
   sub: (run, full) => `What nunchi looked at in run ${run}${full ? ' (full check)' : ''}, and what it didn’t`,
@@ -202,6 +206,8 @@ export const COVERAGE = {
   reason: {
     budget: WORDS['not-seen-budget'], 'not-answered': 'Not checked: the AI didn’t answer', incomplete: 'Not checked: the AI’s answer was incomplete',
     'canary-missed': 'Doesn’t count: the AI missed a test defect nunchi planted',
+    // a loaded AI lens that applies to the screen but was not in the hunt (`hunt --lens`): the "— not in this hunt" words
+    'not-hunted': 'Not checked: not in this hunt',
     redirected: path => `${NOT_CHECKED}sent to ${path}`, 'redirected-off-origin': origin => `${NOT_CHECKED}left the app (${origin})`,
     'no-dom': 'Not checked: the screen didn’t load', 'browser-error-page': 'Not checked: the browser showed an error page',
     'redirect-loop': 'Not checked: redirect loop', 'login-expired': 'Not checked: the saved login no longer worked',
@@ -224,9 +230,9 @@ export const COVERAGE = {
   startThen: 'Start your app, then tell your AI “capture again”',
   loginThen: 'Run nunchi login in your own terminal, then tell your AI “capture again”',
   say: {
-    again: 'capture again', hunt: (lens, route) => `hunt ${lens} on ${route} again`, budget: 'review what the AI budget skipped', finish: 'finish the AI review',
-    run: 'run the AI review', every: 'run the AI review with every lens', sample: route => `find a sample address for ${route}, then capture again`,
-    routeToo: route => `capture ${route} too`, states: 'capture again with every state', record: 'record the app’s data again',
+    again: 'capture again', hunt: (lens, route) => `hunt ${lens} on ${routeInSay(route)} again`, budget: 'review what the AI budget skipped', finish: 'finish the AI review',
+    run: 'run the AI review', every: 'run the AI review with every lens', sample: routes => `find a sample address for ${routesInSay(routes)}, then capture again`,
+    routeToo: routes => `capture ${routesInSay(routes)} too`, states: 'capture again with every state', record: 'record the app’s data again',
   },
   copy: say => `Copy “${say}”`, showOnMap: 'Show on map', showShort: 'Show', openScreen: 'Open this screen', openFinding: 'Open finding', clear: 'Clear filters',
   byLens: 'By lens', ruleChecks: 'Rule checks', aiCol: 'AI review (cells on checked screens)', rulesOnly: '— rules only', aiOnly: '— AI only', whole: 'Whole app',
@@ -238,7 +244,7 @@ export const COVERAGE = {
     canary: n => `${plural(n, 'AI cell')} ${n === 1 ? 'doesn’t' : 'don’t'} count: the AI missed a test defect nunchi planted`,
     budget: n => `${plural(n, 'AI cell')} not checked: AI budget ran out`,
     notAnswered: n => `${plural(n, 'AI cell')} not answered`,
-    incomplete: n => `${plural(n, 'AI cell')}: the AI’s answer was incomplete`,
+    incomplete: n => `${plural(n, 'AI cell')} not checked: the AI’s answer was incomplete`,
     pages: (n, routes, why) => `${plural(n, 'page')} not opened: ${routes} — ${why}`,
     needsSampleWhy: 'needs a sample address. Until it has one, no run is a full check.',
     unresolvedWhy: 'nunchi couldn’t work out its address from the code',
@@ -266,7 +272,7 @@ export function notCheckedText(s) {
   if (s.reason === 'redirected-off-origin') return R['redirected-off-origin'](s.finalOrigin || 'another site');
   if (s.status === 'captured' && s.redirected) return R.redirected(s.finalPath || '?');
   const k = String(s.reason || s.status || '');
-  return typeof R[k] === 'string' && !['budget', 'not-answered', 'incomplete', 'canary-missed'].includes(k) ? R[k] : R.other(k || 'unknown');
+  return typeof R[k] === 'string' && !['budget', 'not-answered', 'incomplete', 'canary-missed', 'not-hunted'].includes(k) ? R[k] : R.other(k || 'unknown');
 }
 // An AI cell's reason in the board's words.
 export const aiReasonText = reason => (typeof COVERAGE.reason[reason] === 'string' ? COVERAGE.reason[reason] : COVERAGE.reason.other(reason || 'unknown'));
@@ -376,13 +382,19 @@ export const iou = (a, b) => {
   const i = x * y, u = a.width * a.height + b.width * b.height - i;
   return u > 0 ? i / u : 0;
 };
-export function stackMarks(marks) {
+// A marker's size on screen (CSS px): its 20 px disc and its 2 px ring.
+export const MARKER_PX = 24;
+// `near` ({ x, y }: a marker's size as fractions of the region's width and height on screen): markers whose anchors (the
+// boxes' top-left corners, where the numbers sit) are closer than that on both axes are stacked too, so a link and the
+// small icon inside it never put one number on top of another (review of PR #35).
+export function stackMarks(marks, { near = null } = {}) {
   const out = marks.map(m => ({ ...m, ns: m.n ? [m.n] : [], label: null }));
   const lead = out.map((_, i) => i);
+  const close = (a, b) => iou(a, b) >= 0.5 || (!!near && Math.abs(a.left - b.left) < near.x && Math.abs(a.top - b.top) < near.y);
   for (let i = 0; i < out.length; i++) {
     if (lead[i] !== i || !out[i].n) continue;
     for (let j = i + 1; j < out.length; j++) {
-      if (lead[j] !== j || !out[j].n || iou(out[i], out[j]) < 0.5) continue;
+      if (lead[j] !== j || !out[j].n || !close(out[i], out[j])) continue;
       lead[j] = i;
       if (!out[i].ns.includes(out[j].n)) out[i].ns.push(out[j].n);
     }

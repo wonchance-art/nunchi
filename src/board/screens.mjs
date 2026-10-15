@@ -40,6 +40,26 @@ function groupsOf(model) {
   return of;
 }
 
+// The findings of a page (route, person, state) of the latest run, numbered by group: the same defect has the same
+// number on both widths, in the wall's quick look and in Screen detail (one numbering: review of PR #35).
+function pageItems(model, s) {
+  const ev = model.latestEv;
+  model._pages ||= new Map();
+  const k = `${s.route}\0${s.person}\0${s.state}`;
+  if (model._pages.has(k)) return model._pages.get(k);
+  const page = ev.scenes.filter(x => x.route === s.route && x.person === s.person && x.state === s.state);
+  const pageIds = new Set(page.map(x => x.id));
+  const items = [];
+  for (const g of model.groups) {
+    const here = g._inst.filter(f => f.run === ev.runId && f.scene && pageIds.has(f.scene));
+    if (here.length) items.push({ g, here });
+  }
+  items.sort((a, b) => SEV[a.g.severity] - SEV[b.g.severity] || cmp(a.g.headline, b.g.headline) || cmp(a.g.id, b.g.id));
+  const out = { page, pageIds, items, n: new Map(items.map((x, i) => [x.g.id, i + 1])) };
+  model._pages.set(k, out);
+  return out;
+}
+
 // /api/screens: the wall (model.mjs screenWall) with, per screen, `changed` (pixels or text differ from the same screen
 // in the last full check; null when there is none to compare), `ai` (its AI cells: seen of applicable), `group` and
 // `open` (open findings), and the page groups in the wall's order.
@@ -57,7 +77,11 @@ export function wallOut(model) {
     const a = now.get(e.id), b = then?.get(e.id);
     const changed = !then || !b || !cell.checked || !checkedScene(b) ? null : !sameShot(a, b);
     const ai = cell.ai ? { seen: cell.ai.seen, of: cell.ai.of, budget: cell.ai.of > 0 && cell.ai.seen === 0 && cell.ai.lenses.every(l => l.reason === 'budget') } : null;
-    return { ...s, checked: cell.checked, changed, ai, group: safe(groupOf.get(e.route) || '/', 200), open: Object.values(cell.open).reduce((x, y) => x + y, 0) };
+    // the quick look numbers a finding as Screen detail does (by group, across the page's widths); `why` stays the
+    // reason a box is not drawn
+    const num = pageItems(model, e).n;
+    const findings = s.findings.map(f => ({ ...f, n: num.get(f.group) ?? null })).sort((a, b) => (a.n ?? 1e9) - (b.n ?? 1e9));
+    return { ...s, findings, checked: cell.checked, changed, ai, group: safe(groupOf.get(e.route) || '/', 200), open: Object.values(cell.open).reduce((x, y) => x + y, 0) };
   });
   const groups = [];
   for (const [i, s] of scenes.entries()) {
@@ -83,21 +107,17 @@ export function screenDetail(model, run, sceneId) {
   if (!s) return null;
   const wall = wallOut(model);
   const card = wall.scenes.find(x => x.key === s.key) || null;
-  const page = ev.scenes.filter(x => x.route === s.route && x.person === s.person && x.state === s.state);
-  const pageIds = new Set(page.map(x => x.id));
+  const { page, pageIds, items: pageList } = pageItems(model, s);
   const widths = Object.fromEntries(VPS.map(v => [v, (() => { const x = page.find(p => p.viewport === v); return x ? wall.scenes.find(c => c.key === x.key) || sceneOut(x) : null; })()]));
 
-  // the findings on this page, numbered by group: the same defect has the same number on both widths
-  const items = [];
-  for (const g of model.groups) {
-    const here = g._inst.filter(f => f.run === ev.runId && f.scene && pageIds.has(f.scene));
-    if (!here.length) continue;
+  // the findings on this page, numbered by group: the same defect has the same number on both widths (and in the
+  // wall's quick look)
+  const items = pageList.map(({ g, here }) => {
     const at = {};
     for (const f of here) { const sc = ev.sceneById.get(f.scene); if (sc && !at[sc.viewport]) at[sc.viewport] = { box: f.box, ...drawable(f, sc.img) }; }
     const others = new Set(g._inst.filter(f => f.scene && !(f.run === ev.runId && pageIds.has(f.scene))).map(f => `${f.run}/${f.scene}`)).size;
-    items.push({ g, at, others });
-  }
-  items.sort((a, b) => SEV[a.g.severity] - SEV[b.g.severity] || cmp(a.g.headline, b.g.headline) || cmp(a.g.id, b.g.id));
+    return { g, at, others };
+  });
   const findings = items.map(({ g, at, others }, i) => ({
     group: g.id, n: i + 1, severity: g.severity, source: g.source, lens: g.lens, status: g.status, statusText: statusText(g.status), headline: g.headline, active: g.active,
     checked: g.source === 'ai' ? g.checked : true, viewports: VPS.filter(v => at[v]), others,
