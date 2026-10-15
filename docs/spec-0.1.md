@@ -1017,7 +1017,9 @@ malicious one (design §1).
   - *a cell is seen when any agent answered its unit completely*; otherwise its reason is the most telling one
     (incomplete, canary missed, not answered, then the plan's own);
   - *the same defect* (rule, scene, element, file:line) claimed by several agents is one finding with
-    `agents: [{agent, vendor}]`, so the verifier gets one packet for it; the most severe claim speaks for it;
+    `agents: [{agent, vendor}]`, so the verifier gets one packet for it; the claim the verify key holds a verdict on
+    speaks for it (its wording, severity and status kept in `ai-findings.json`), else the first agent's, and a more
+    severe claim of another agent only raises what protects it (`protect`, never what is shown);
   - rejected answers say their agent; `coverage.json` lists each agent's part (`agents`: units of the plan it saw,
     the plan it answered), and `hunt --record` says it in one line: "by agent, as declared: Claude Code (Anthropic)
     20/40 units seen · Codex (OpenAI) 12/40 units seen (recorded now)".
@@ -1042,9 +1044,12 @@ malicious one (design §1).
     keeps the silent hunts it gave;
   - a verdict folded before any claim of its fingerprint (rejected or insufficient only) waits *dormant* (`dormant` in
     the ledger, never shown) and joins the item when a claim comes, as it would have the other way round; an item a
-    re-hunt no longer claims goes dormant too (keeping when it was first claimed), and a fingerprint never claimed
-    with nothing left is dropped;
-  - `addedAt` is the earliest time a fold claimed the fingerprint.
+    re-hunt no longer claims goes dormant too, and a fingerprint with nothing left is dropped;
+  - `addedAt` (first seen, what group decisions are dated against, §5.1) is the earliest time a claim that stands now
+    was first claimed (`claimedAt` on its hunt: kept through a re-verify of that run, new once it stands again after a
+    rejection), so a claim rejected or withdrawn since never dates the item; a verdict older than the newest claim that
+    stands is not the item's verdict. A rejected L9 claim waiting dormant thus never lets a group dismissal made
+    before a new claim of it cover that claim (as before M6; tested).
 
   A test folds two agents' hunts in six orders (one after the other either way, interleaved, reversed, shuffled) and
   gets one ledger, byte for byte.

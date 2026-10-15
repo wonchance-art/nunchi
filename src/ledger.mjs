@@ -548,7 +548,9 @@ const AI_VERDICTS = new Set(['confirmed', 'rejected', 'insufficient']);
 // One AI item from its contributions; null when no hunt claims it as a defect any more (rejected and insufficient
 // claims never make an item, design §2.2).
 export function deriveAi(item) {
-  const hunts = (item.hunts || []).slice().sort(byEvent);
+  // a claim folded before claims kept the time they were first claimed (an older ledger): stamped once, from the
+  // item's own first sighting, so it is never read again
+  const hunts = (item.hunts || []).map(h => (h.claimed && CREATES(h.status) && !Number.isFinite(h.claimedAt) && Number.isFinite(h.at) ? { ...h, claimedAt: Math.min(h.at, Number.isFinite(item.addedAt) ? item.addedAt : h.at) } : h)).sort(byEvent);
   const rechecks = (item.rechecks || []).slice().sort(byEvent);
   const claims = hunts.filter(h => h.claimed);
   if (!claims.some(h => CREATES(h.status))) return null;
@@ -587,8 +589,13 @@ export function deriveAi(item) {
   const lastHunted = hunts.reduce((m, h) => maxRun(m, h.run), null);
   const silent = new Set(hunts.filter(h => h.silent && lastSeen && byRun(h.run, lastSeen) > 0).map(h => `${h.run}|${h.stream ?? 'main'}`));
   // the verdict: the latest one a verifier gave that was checked and not suspect, else the latest other one, else claimed
-  const judged = claims.filter(h => AI_VERDICTS.has(h.status));
+  // a rejection older than the newest claim that stands says nothing about that claim (M6 review: one folded before it,
+  // kept dormant, would otherwise date the item's verification before the claim it is about)
+  const newest = present.reduce((m, h) => maxRun(m, String(h.run)), null);
+  const judged = claims.filter(h => AI_VERDICTS.has(h.status) && (PRESENT(h) || !newest || byRun(String(h.run), newest) >= 0));
   const chosen = judged.filter(h => !weak(h)).pop() || judged.pop() || latest;
+  // first seen: the earliest time a claim that stands now was first claimed (never one rejected since, or gone)
+  const firsts = present.filter(h => CREATES(h.status) && Number.isFinite(h.claimedAt)).map(h => h.claimedAt);
   const verification = {
     status: chosen.status, by: chosen.by ?? null, ...(chosen.vendor ? { vendor: chosen.vendor } : {}), suspect: !!chosen.suspect,
     ...(chosen.tooFewDecoys && !chosen.suspect ? { tooFewDecoys: true } : {}), run: chosen.run,
@@ -608,7 +615,7 @@ export function deriveAi(item) {
   // who claimed it, as declared (M6): every agent of a claim that still stands
   const agents = agentList(present.flatMap(h => h.agents || []));
   const out = {
-    fp: item.fp, group: latest.group || item.group, source: 'ai', stream: lastStream || streamOf(latest), lens: item.lens, rule: item.rule, route: item.route ?? null, inputs: item.inputs, addedAt: item.addedAt ?? null,
+    fp: item.fp, group: latest.group || item.group, source: 'ai', stream: lastStream || streamOf(latest), lens: item.lens, rule: item.rule, route: item.route ?? null, inputs: item.inputs, addedAt: firsts.length ? Math.min(...firsts) : item.addedAt ?? null,
     // displayed: the severity a verifier that confirmed it gave; rejected and insufficient keep the claimed one
     severity: (chosen.status === 'confirmed' ? chosen.verdictSeverity : null) || latest.claimedSeverity,
     claimedSeverity: latest.claimedSeverity, protect: worst(present.flatMap(h => [h.claimedSeverity, h.verdictSeverity, h.protectSeverity])) || latest.claimedSeverity,
@@ -653,10 +660,10 @@ const silentOf = hunts => JSON.stringify(hunts.filter(h => h.silent).map(refOf))
 // What an AI fingerprint keeps while no hunt claims it as a defect (only rejected or insufficient claims, or a claim a
 // re-hunt replaced): its contributions, so a later claim, folded in whatever order, finds them (M6). Never shown.
 const dormantOf = it => ({ fp: it.fp, group: it.group, source: 'ai', lens: it.lens, rule: it.rule, route: it.route ?? null, inputs: it.inputs,
-  ...(Number.isFinite(it.addedAt) ? { addedAt: it.addedAt } : {}), hunts: it.hunts || [], rechecks: it.rechecks || [] });
+  hunts: it.hunts || [], rechecks: it.rechecks || [] });
 // A dormant fingerprint with nothing left (no contribution, never claimed) is no fingerprint at all: gone, so a state is
-// one and the same however it came about. One that was claimed once keeps when (`addedAt`).
-const keepDormant = (dormant, fp) => { const d = dormant[fp]; if (d && !d.hunts?.length && !d.rechecks?.length && !Number.isFinite(d.addedAt)) delete dormant[fp]; };
+// one and the same however it came about.
+const keepDormant = (dormant, fp) => { const d = dormant[fp]; if (d && !d.hunts?.length && !d.rechecks?.length) delete dormant[fp]; };
 // Derive the touched AI items (one no hunt claims any more goes dormant), then every AI item's silence from what the
 // folds saw. Changes `items` and `dormant` in place (both the caller's copies).
 function settleAi(items, dormant, touched, folds) {
@@ -692,9 +699,11 @@ export function foldAi(state, { run, stream = 'main', key = null, findings = [],
   const items = { ...st.items }, dormant = { ...(st.dormant || {}) };
   const touched = new Set();
   const mine = h => h.run === run && (h.stream ?? 'main') === stream;
+  // this run's earlier contribution (a re-hunt, a re-verify): replaced, each entry's first claim time kept
+  const before = new Map();
   if (prior) {
-    for (const [fp, it] of Object.entries(items)) if (isAi(it) && (it.hunts || []).some(mine)) { items[fp] = { ...it, hunts: it.hunts.filter(h => !mine(h)) }; touched.add(fp); }
-    for (const [fp, d] of Object.entries(dormant)) if ((d.hunts || []).some(mine)) { dormant[fp] = { ...d, hunts: d.hunts.filter(h => !mine(h)) }; keepDormant(dormant, fp); }
+    for (const [fp, it] of Object.entries(items)) if (isAi(it) && (it.hunts || []).some(mine)) { before.set(fp, { h: it.hunts.find(mine), addedAt: it.addedAt }); items[fp] = { ...it, hunts: it.hunts.filter(h => !mine(h)) }; touched.add(fp); }
+    for (const [fp, d] of Object.entries(dormant)) if ((d.hunts || []).some(mine)) { before.set(fp, { h: d.hunts.find(mine) }); dormant[fp] = { ...d, hunts: d.hunts.filter(h => !mine(h)) }; keepDormant(dormant, fp); }
   }
   const byFp = new Map();
   for (const f of findings) { if (!byFp.has(f.fp)) byFp.set(f.fp, []); byFp.get(f.fp).push(f); }
@@ -706,15 +715,17 @@ export function foldAi(state, { run, stream = 'main', key = null, findings = [],
       const f = list[0];
       it = { fp, group: f.group, source: 'ai', lens: f.lens, rule: f.rule, route: f.route ?? null, inputs: f.inputs, hunts: [], rechecks: [] };
     }
-    // first claimed: the earliest fold that claimed it as a defect, whatever order the folds came in
-    if (list.some(f => CREATES(f.status))) it = { ...it, addedAt: Number.isFinite(it.addedAt) ? Math.min(it.addedAt, now) : now };
     const best = list.slice().sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status])[0];
     const scenes = {};
     for (const f of list) if (f.cell && f.sceneHash) scenes[f.cell] = { scene: f.scene, ...f.sceneHash, selector: f.selector ?? null, box: f.box ?? null };
     const agents = agentList(list.flatMap(f => f.agents || []));
     const protectSeverity = worst(list.map(f => f.protectSeverity));
+    // when this run's hunt first claimed it as a defect: kept while its claim stands (a re-verify keeps it), and a new
+    // time once it stood again after a rejection; the item's first sighting is the earliest of these (deriveAi)
+    const was = before.get(fp)?.h, wasAdded = before.get(fp)?.addedAt;
+    const claimedAt = CREATES(best.status) ? (was && CREATES(was.status) ? (Number.isFinite(was.claimedAt) ? was.claimedAt : Number.isFinite(wasAdded) ? Math.min(was.at, wasAdded) : was.at) : now) : null;
     const entry = {
-      run, stream, at: now, claimed: true, status: best.status, suspect: list.some(f => !!f.suspect), ...(list.some(f => !!f.tooFewDecoys) ? { tooFewDecoys: true } : {}),
+      run, stream, at: now, ...(claimedAt !== null ? { claimedAt } : {}), claimed: true, status: best.status, suspect: list.some(f => !!f.suspect), ...(list.some(f => !!f.tooFewDecoys) ? { tooFewDecoys: true } : {}),
       by: best.by ?? null, ...(best.vendor ? { vendor: best.vendor } : {}),
       claimedSeverity: worst(list.map(f => f.claimedSeverity)), verdictSeverity: worst(list.filter(f => AI_VERDICTS.has(f.status)).map(f => f.verdictSeverity)),
       cells: [...new Set(list.map(f => f.cell).filter(Boolean))].sort(), scenes, group: best.group,

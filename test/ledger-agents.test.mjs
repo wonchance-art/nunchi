@@ -1,6 +1,6 @@
 // AI items from several agents (design 0.1-c §7, M6): the same fingerprint from two agents is one item with
 // `agents`, and the ledger is the same whatever order the agents' folds come in (silence derived from what each hunt
-// saw, a verdict folded before its claim waiting dormant, `addedAt` the earliest claim). The CLI path: two agents'
+// saw, a verdict folded before its claim waiting dormant, `addedAt` the earliest claim that stands). The CLI path: two agents'
 // answers in one run, folded through hunt --record.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -96,7 +96,7 @@ test('cli: two agents\' answers in one run fold into one item with both agents (
   assert.deepEqual([groups[0].fps.length, groups[0].agents], [1, [A, B]]);
 });
 
-test('dormant: a fingerprint with nothing left is gone; one claimed once keeps when it was first claimed, whatever the order', () => {
+test('dormant: a fingerprint with nothing left is gone; a claim withdrawn since never dates the item, whatever the order', () => {
   const [, , , , , five] = agentFolds('b', 6);
   const rej = { ...five, findings: five.findings.filter(f => f.status === 'rejected') };   // Codex's rejection only
   assert.ok(L.foldAi(L.emptyState(), rej).dormant);
@@ -106,6 +106,29 @@ test('dormant: a fingerprint with nothing left is gone; one claimed once keeps w
   const b = { ...agentFolds('b', 1)[0], now: a.now + 3600e3 };
   const one = foldAll(L.emptyState(), [a, withdrawn, b]), two = foldAll(L.emptyState(), [b, a, withdrawn]);
   assert.equal(stableJson(one), stableJson(two));
-  assert.equal(byRoute(one, '/shared/0').addedAt, a.now, 'first claimed at T0, by the claim since withdrawn');
+  assert.equal(byRoute(one, '/shared/0').addedAt, b.now, 'first seen when the claim that stands was made (M6 review: never by one withdrawn since)');
   assert.deepEqual(byRoute(one, '/shared/0').agents, [B]);
+});
+
+test('a rejected L9 claim waiting dormant never lets an older group dismissal cover a new claim of it (as before M6)', () => {
+  const T = hm => Date.parse(`2026-10-14T${hm}:00.000+09:00`);
+  const l9 = { lens: 'L9', rule: 'L9.destructive-without-confirm', route: '/tasks', selector: 'button#delete-all', severity: 'high', evidence: { claim: 'Deletes at once.' } };
+  const id = L.fingerprintOf({ source: 'ai', ...l9, scene: 'tasks.guest.normal.m' });
+  const f = (status, who) => ({ ...id, lens: l9.lens, rule: l9.rule, route: l9.route, scene: 'tasks.guest.normal.m', cell: 'guest.normal.m', selector: l9.selector, box: null, evidence: l9.evidence, identity: null, status,
+    claimedSeverity: 'high', verdictSeverity: status === 'claimed' ? null : 'high', by: status === 'claimed' ? null : 'same-model check', vendor: null, suspect: false, sceneHash: { top: 't', full: 'f', textHash: 'x' }, agents: [who] });
+  // Claude Code claims it (09:00); its verifier rejects it (10:00): no item, the rejection waits
+  let st = L.foldAi(L.emptyState(), { run: '0001', key: 'a1', findings: [f('claimed', A)], now: T('09:00') });
+  st = L.foldAi(st, { run: '0001', key: 'a2', findings: [f('rejected', A)], now: T('10:00') });
+  assert.equal(ai(st).length, 0);
+  // a person dismisses the group (11:00); Codex claims it again (12:00)
+  const dismiss = { schema: 1, id: 'dk-1100', target: { group: id.group }, decision: 'false-positive', reason: 'not-a-problem', by: 'me', at: '2026-10-14T11:00:00.000+09:00', fingerprintVersion: 2 };
+  st = L.foldAi(st, { run: '0002', key: 'b1', stream: 'wt:two', findings: [f('claimed', B)], now: T('12:00') });
+  const item = ai(st)[0];
+  assert.deepEqual([item.addedAt, item.verification.status], [T('12:00'), 'claimed'], 'first seen at 12:00; the older rejection is not its verdict');
+  const row = L.view(st, [dismiss], new Set([L.approvalKey(dismiss)]), { now: T('13:00') })[0];
+  assert.equal(row.status, 'open');
+  assert.match(row.note, /made before this AI finding was first seen does not cover it/);
+  // a re-verify keeps when a claim was first made: verified (confirmed) at 14:00, still first seen at 12:00
+  st = L.foldAi(st, { run: '0002', key: 'b2', stream: 'wt:two', findings: [f('confirmed', B)], now: T('14:00') });
+  assert.equal(ai(st)[0].addedAt, T('12:00'));
 });
