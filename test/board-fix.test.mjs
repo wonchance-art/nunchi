@@ -146,7 +146,7 @@ test('board: Keep after needs you (a) still shows how to undo the commit left on
   } finally { await b2.close(); }
 });
 
-test('board: the other needs-you kinds show the engine\'s own line and the sentence that undoes the fix (never a dead end)', async () => {
+test('board: a fix that touched files only the person can approve is its own kind (diff), with the paths from the record and never the engine\'s line', async () => {
   const p = await fixProject();
   assert.equal((await F.startFix(ctxOf(p), p.group)).code, 0);
   edit(p.root, 'app/settings/page.jsx', 'TINY', 'ROOMY');
@@ -156,8 +156,9 @@ test('board: the other needs-you kinds show the engine\'s own line and the sente
   const { b, call } = await board(p);
   try {
     const g = (await call(`/api/groups/${p.group}`)).json;
-    assert.deepEqual([g.fix.needs, g.fix.kind, g.fix.landed], ['other', 'diff', true]);
-    assert.match(g.fix.line, /^The fix of 'Tap target smaller than 24px' \(commit [0-9a-f]{7}\) touched what only you can approve:/);
+    assert.deepEqual([g.fix.needs, g.fix.kind, g.fix.landed, g.fix.paths], ['diff', 'diff', true, ['app/page.jsx']]);
+    assert.equal(g.fix.line, undefined, 'the board says it in its own words');
+    assert.match(g.fix.commit, /^[0-9a-f]{7}$/);
   } finally { await b.close(); }
 });
 
@@ -236,7 +237,7 @@ async function page(p, viewport = { width: 1280, height: 900 }) {
   return { b, pg, errors, close: async () => { await context.close(); await b.close(); } };
 }
 
-test('board e2e: needs you (a) in Detail — the text and exactly its three actions, before/after with a slider (←/→) for both viewports, the undo sentence, Looks fine', { timeout: 120000 }, async t => {
+test('board e2e: needs you (a) in Detail — the text and exactly its three actions, before/after with a slider (←/→) for both viewports, Looks fine', { timeout: 120000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = await fixProject();
   await attempt(p, ['TINY', 'ROOMY SHIFT']);
@@ -282,11 +283,6 @@ test('board e2e: needs you (a) in Detail — the text and exactly its three acti
     assert.match(aria, /, Needs you$/);
     await pg.evaluate(id => { location.hash = `#/finding/${id}`; }, p.group);
     await pg.waitForSelector('.needs button');
-    // [Undo this fix] shows the sentence to say
-    await pg.click('.needs button:nth-child(2)');
-    const say = await pg.evaluate(() => document.querySelector('#dialog code').textContent);
-    assert.equal(say, `undo the fix of “Tap target smaller than 24px” (nunchi fix --undo ${p.group})`);
-    await pg.keyboard.press('Escape');
     // axe on Detail with the needs-you box and the comparison
     await pg.evaluate(AXE);
     const v = await pg.evaluate(async () => (await globalThis.axe.run(document, { resultTypes: ['violations'] })).violations.map(x => x.id));

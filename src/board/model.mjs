@@ -11,7 +11,7 @@ import { readFileSync, openSync, readSync, closeSync, lstatSync, readdirSync } f
 import { loadLedger, ledgerView } from '../project.mjs';
 import { summary } from '../summary.mjs';
 import { readManifest, jpegSize, sceneIndex, sceneDir } from '../hunt.mjs';
-import { annotate, latestRunOf, byRun, currentTargets, writtenAs, approvalKey, HUMAN_CHANNELS } from '../ledger.mjs';
+import { annotate, latestRunOf, byRun, currentTargets, writtenAs, approvalKey, HUMAN_CHANNELS, titleOf } from '../ledger.mjs';
 import { listRuns, gitRunner } from '../runs.mjs';
 import { readGeneration } from '../state.mjs';
 import { scrubSecrets } from '../rules.mjs';
@@ -19,7 +19,7 @@ import { redactText, redactUrl } from '../network.mjs';
 import { SEV, STATUS_LABEL, PERSONS, VPS, STATES, human, plural, drawable, sceneLabelText } from './shared.mjs';
 import { claimLive, claimMinutes } from '../fix/claims.mjs';
 import { fixNeedsOf } from '../summary.mjs';
-import { latestRecords } from '../fix/records.mjs';
+import { latestRecords, allRecords, isOpen } from '../fix/records.mjs';
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const rank = (list, v) => { const i = list.indexOf(v); return i < 0 ? list.length : i; };
@@ -212,7 +212,8 @@ export function buildBoardModel({ nunchiDir, projectDir, warn = () => {} }) {
     const rec = records.get(g.group);
     // still on the branch: a kept or landed fix whose commit HEAD still has (a Keep or Later after (a) leaves it there)
     let reachable = false;
-    if (rec?.commit && git && /^[0-9a-f]{40,64}$/.test(String(rec.commit))) { try { git(['merge-base', '--is-ancestor', String(rec.commit), 'HEAD']); reachable = true; } catch {} }
+    const recCommit = rec?.commit || rec?.outcome?.commit;
+    if (recCommit && git && /^[0-9a-f]{40,64}$/.test(String(recCommit))) { try { git(['merge-base', '--is-ancestor', String(recCommit), 'HEAD']); reachable = true; } catch {} }
     const fix = fixOut(rec, { waiting: fixNeeds.has(g.group) && mine.some(r => r.status === 'to-fix' && !r.goneAt), reachable });
     const needsYou = fix?.needs ? { reason: `fix-${fix.needs}`, run: fix.after } : mine.find(r => r.needsYou && !r.goneAt)?.needsYou || null;
     const claim = claims.get(g.group) || null;
@@ -241,34 +242,72 @@ export function buildBoardModel({ nunchiDir, projectDir, warn = () => {} }) {
     || b.screens - a.screens || b.routes - a.routes || Number(a.source === 'ai') - Number(b.source === 'ai') || cmp(a.id, b.id));
   out.forEach((g, i) => { g.order = i; });
   const byId = new Map(out.map(g => [g.id, g]));
-  return { generation, led, rows, groups: out, byId, summary: sum, latest, latestEv, evidenceOf, projectDir, nunchiDir, claims };
+  return { generation, led, rows, groups: out, byId, summary: sum, latest, latestEv, evidenceOf, projectDir, nunchiDir, claims, stateDir: st.root.dir };
 }
 
 // A fix record as the board shows it (design §3.4): which attempt, its phase, the *needs you* kind — (a) the fix also
-// changed other parts of the screen, (b) the AI couldn't fix it in 2 tries, (c) it could not be re-checked; any other
-// kind shows the general "needs you" with the engine's own line — and the probes before and after. Only words the
-// engine wrote, and run ids and a commit checked for their shape.
-const NEEDS = new Set(['a', 'b', 'c']);
+// changed other parts of the screen, (b) the AI couldn't fix it in 2 tries, (c) it could not be re-checked, and the
+// other kinds with their own cards: `diff` (files only the person can approve), `unbaselined` (a screen the fix reaches
+// with nothing to compare against), `interrupted` (a commit nobody re-checked), `revert` (an undo that could not run:
+// signing, uncommitted changes, another branch, git) — and the probes before and after. The board says each in its own
+// words (shared.mjs FIX_WORDS), never the engine's chat line; only paths, routes, rule titles, a branch and commits
+// come from the record, as data, checked for their shape.
+const NEEDS = new Set(['a', 'b', 'c', 'diff', 'unbaselined', 'interrupted']);
+const REVERT_KINDS = new Set(['revert-failed', 'signing', 'dirty', 'wrong-branch']);
+const REVERT_REASONS = new Set(['signing', 'not-head', 'in-progress', 'half-done', 'dirty', 'occupied', 'wrong-branch', 'failed']);
+export const needsKind = k => (NEEDS.has(k) ? k : REVERT_KINDS.has(k) ? 'revert' : 'other');
+const short7 = v => (/^[0-9a-f]{7,64}$/.test(String(v || '')) ? String(v).slice(0, 7) : null);
+const pathList = v => (Array.isArray(v) ? [...new Set(v.filter(x => typeof x === 'string' && x))].sort().slice(0, 200).map(x => safe(x, 300)) : []);
 function fixOut(rec, { waiting = true, reachable = false } = {}) {
   if (!rec || typeof rec !== 'object') return null;
   // needs you only while the group is still to fix with the Fix decision the attempt was made for (a Keep, a Later,
   // or a new "Try again with a note…" answers it)
   const k = rec.phase === 'needs-you' && waiting ? String(rec.outcome?.needsYou || '') : null;
+  const kind = k === null ? null : needsKind(k);
   const run = v => (RUN_ID.test(String(v ?? '')) ? String(v) : null);
-  const commit = /^[0-9a-f]{7,64}$/.test(String(rec.commit || '')) ? String(rec.commit).slice(0, 7) : null;
+  const commit = short7(rec.commit || rec.outcome?.commit);
   const drift = Array.isArray(rec.verdict?.drift?.scenes) ? rec.verdict.drift.scenes.filter(x => x && typeof x.scene === 'string').sort((a, b) => (Number(b.share) || 0) - (Number(a.share) || 0) || (Number(b.moved) || 0) - (Number(a.moved) || 0)).map(x => x.scene) : [];
   const attempt = Number.isInteger(rec.try) ? rec.try : Number.isInteger(rec.attempt) ? rec.attempt : null;
+  const o = rec.outcome || {};
+  // the data each card needs
+  const paths = kind === 'diff' ? pathList((Array.isArray(o.flagged) ? o.flagged : []).map(f => f?.file)) : kind === 'revert' ? pathList(o.files) : [];
+  const unb = kind === 'unbaselined' && Array.isArray(rec.verdict?.unbaselined) ? rec.verdict.unbaselined.filter(x => x && typeof x === 'object') : [];
+  const reason = kind !== 'revert' ? null : REVERT_REASONS.has(o.reason) ? o.reason : { signing: 'signing', dirty: 'dirty', 'wrong-branch': 'wrong-branch', 'revert-failed': 'half-done' }[k] || 'failed';
   return {
     attempt, record: Number.isInteger(rec.attempt) ? rec.attempt : null,
-    phase: safe(rec.phase, 20), needs: k === null ? null : NEEDS.has(k) ? k : 'other', kind: k ? safe(k, 20) : null, line: k && !NEEDS.has(k) && rec.outcome?.line ? safe(rec.outcome.line, 600) : null,
-    share: Number.isFinite(rec.outcome?.share) ? rec.outcome.share : null, moved: Number.isInteger(rec.outcome?.moved) ? rec.outcome.moved : null, pixels: rec.outcome?.pixels !== false,
-    defectGone: rec.outcome?.defectGone === true, commit, before: run(rec.p0?.run), after: run(rec.p1?.run), drift: drift.slice(0, 20),
+    phase: safe(rec.phase, 20), needs: kind, kind: k ? safe(k, 20) : null,
+    share: Number.isFinite(o.share) ? o.share : null, moved: Number.isInteger(o.moved) ? o.moved : null, pixels: o.pixels !== false,
+    defectGone: o.defectGone === true, commit, before: run(rec.p0?.run), after: run(rec.p1?.run), drift: drift.slice(0, 20),
+    paths, reason, branch: reason === 'wrong-branch' && typeof (o.branch || rec.branch) === 'string' ? safe(o.branch || rec.branch, 200) : null,
+    routes: [...new Set(unb.map(x => x.route).filter(x => typeof x === 'string'))].sort().slice(0, 50).map(x => safe(x, 200)),
+    shows: [...new Set(unb.map(x => x.rule).filter(x => typeof x === 'string'))].sort().slice(0, 20).map(x => safe(titleOf(x), 120)),
     // the after of an attempt that was undone (b): its screens are that attempt's, not the code now
-    afterLabel: rec.outcome?.revert || rec.revert ? `Attempt ${attempt ?? '?'} (undone)` : null,
+    afterLabel: o.revert || rec.revert ? `Attempt ${attempt ?? '?'} (undone)` : null,
     // a fix whose commit is still on the branch, not undone (fixed, or kept for the person, whatever was decided since):
     // undone by the AI's `fix --undo` (design §3.4)
-    landed: !!commit && reachable && !rec.outcome?.revert && !rec.revert && (rec.phase === 'fixed' || rec.phase === 'needs-you'),
+    landed: !!commit && reachable && !o.revert && !rec.revert && (rec.phase === 'fixed' || rec.phase === 'needs-you'),
   };
+}
+
+// The group's fix attempts for Detail history, newest first (closed ones: an open one is the "is fixing" banner): which
+// attempt (per Fix decision), the outcome as a key the board words, the commit and its revert (7 characters), and when
+// it closed.
+export function fixHistory(model, group) {
+  let recs = [];
+  try { recs = allRecords(model.stateDir, group); } catch { return []; }
+  return recs.filter(r => r && !isOpen(r)).sort((a, b) => (b.attempt || 0) - (a.attempt || 0)).map(r => {
+    const o = r.outcome || {};
+    const why = r.revertWhy || o.verdict?.outcome || r.verdict?.outcome;
+    const outcome = r.phase === 'fixed' ? 'fixed' : r.phase === 'undone' ? 'undone' : r.phase === 'cancelled' ? 'cancelled' : r.phase === 'aborted' ? 'aborted'
+      : r.phase === 'needs-you' ? 'needs'
+      : r.phase === 'reverted' ? (o.tryAgain || r.tryAgain ? 'try-again' : why === 'caused-regression' || why === 'regression' ? 'caused-regression' : 'not-fixed') : 'other';
+    const at = Array.isArray(r.phases) && r.phases.length ? r.phases[r.phases.length - 1].at : null;
+    return {
+      attempt: Number.isInteger(r.try) ? r.try : Number.isInteger(r.attempt) ? r.attempt : null, record: Number.isInteger(r.attempt) ? r.attempt : null,
+      outcome, needs: outcome === 'needs' ? needsKind(String(o.needsYou || '')) : null,
+      commit: short7(r.commit || o.commit), revert: short7(o.revert || r.revert), at: typeof at === 'string' && !Number.isNaN(Date.parse(at)) ? at : null,
+    };
+  }).filter(x => x.outcome !== 'other');
 }
 
 // Live claims (design §7, written by the fix loop, src/fix/claims.mjs): `claims/<group>.json`. Expiry is the
@@ -375,7 +414,7 @@ export function groupDetail(model, id) {
   const notes = [...new Set(g._rows.map(r => r.note).filter(Boolean))].map(n => safe(n, 300));
   const rowsOut = g._rows.map(r => ({ fp: r.fp, route: safeOrNull(r.route, 200), status: r.status, firstSeen: r.firstSeen ?? null, lastSeen: r.lastSeen ?? null, regressedAt: r.regressedAt ?? null, goneAt: r.goneAt ?? null }));
   return {
-    ...publicGroup(g), instances, scenes, history, notes, rows: rowsOut, fps: [...fps].sort(), compare: compareOf(model, g),
+    ...publicGroup(g), instances, scenes, history, fixes: fixHistory(model, g.id), notes, rows: rowsOut, fps: [...fps].sort(), compare: compareOf(model, g),
     evidence: evidenceList(first), selector: safeOrNull(first?.selector, 300), box: first?.box || null,
     secret: g.rule === 'secret-in-client-bundle' ? { where: safe(redactUrl(String(first?.evidence?.url || '')), 300), kind: safe(first?.evidence?.kind || '', 80) } : null,
     code: codeOut(model.projectDir, code),

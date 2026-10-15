@@ -98,7 +98,7 @@ async function copy(text, btn) {
   try { await navigator.clipboard.writeText(text); if (btn) { const was = btn.textContent; btn.textContent = 'Copied'; setTimeout(() => { btn.textContent = was; }, 1500); } announce('Copied'); }
   catch { announce('Copy failed: select the text and copy it yourself'); }
 }
-const copyButton = (text, label = 'Copy') => { const b = h('button', { type: 'button', class: 'b' }, label); b.addEventListener('click', () => copy(text, b)); return b; };
+const copyButton = (text, label = 'Copy', { id = null, name = null } = {}) => { const b = h('button', { type: 'button', class: 'b', ...(id ? { id } : {}), ...(name ? { 'aria-label': name } : {}) }, label); b.addEventListener('click', () => copy(text, b)); return b; };
 
 // ---- the server ------------------------------------------------------------------------------------------------------
 
@@ -781,16 +781,17 @@ function renderDetail(focus = false) {
     g.notLookedAt ? [h('dt', null, 'Looked at'), h('dd', { class: 'warn' }, `Not looked at since run ${g.notLookedAt}: no run since has captured every screen it was on, so it cannot be marked fixed.`)] : null,
     g.verification ? [h('dt', null, 'Reviewer'), h('dd', null, `${g.verification.status}${g.verification.by ? ` · ${g.verification.by}` : ''}${g.verification.suspect ? ' · suspect' : ''}${g.verification.tooFewDecoys ? ` · ${W.WORDS['too-few-decoys']}: not a double-check` : ''}`)] : null,
     // a fix that landed is undone by the AI (`fix --undo`): the sentence to say (design §3.4 "Undo and reopen")
-    g.fix?.landed && g.fix.needs !== 'a' ? [h('dt', null, 'Fix'), h('dd', null, W.FIX_WORDS.landed(g.fix.commit), ' ', h('code', null, W.FIX_WORDS.undoSay(g.kindTitle, g.id)), ' ', copyButton(W.FIX_WORDS.undoSay(g.kindTitle, g.id)))] : null);
+    g.fix?.landed && !UNDO_ON_CARD.has(g.fix.needs) ? [h('dt', null, 'Fix'), h('dd', null, W.FIX_WORDS.landed(g.fix.commit), ' ', h('code', null, W.FIX_WORDS.undoSay(g.kindTitle, g.id)), ' ', copyButton(W.FIX_WORDS.undoSay(g.kindTitle, g.id)))] : null);
   const evidence = h('details', { class: 'evidence' }, h('summary', null, 'Evidence details'), h('dl', { class: 'facts-dl' },
     h('dt', null, 'Rule'), h('dd', { class: 'mono' }, `${g.lens} · ${g.rule}`), h('dt', null, 'Group'), h('dd', { class: 'mono' }, g.id),
     h('dt', null, 'Fingerprints'), h('dd', { class: 'mono' }, g.fps.join(' ')),
     g.selector ? [h('dt', null, 'Element'), h('dd', { class: 'mono' }, g.selector)] : null,
     g.evidence.map(e => [h('dt', null, e.k), h('dd', { class: e.mono ? 'mono' : '' }, e.v)]),
     h('dt', null, 'History'), h('dd', null, `first seen in run ${g.firstSeen || '—'} · last seen in run ${g.lastSeen || '—'}`)));
-  const history = g.history.length ? h('section', { class: 'decide', 'aria-labelledby': 'h-history' }, h('h2', { id: 'h-history' }, 'Decisions'),
-    h('ul', { class: 'history' }, g.history.map(x => h('li', null, h('b', null, W.decidedText(x.decision, x.reason)), h('span', { class: 'muted small' }, `${x.by || ''} · ${when(x.at)}${x.channelText ? ` · ${x.channelText}` : ''}`), x.note ? h('span', { class: 'small' }, `“${x.note}”`) : null))),
-    reopen ? h('p', null, reopen) : null) : null;
+  const attempts = fixRows(g);
+  const history = g.history.length || attempts ? h('section', { class: 'decide', 'aria-labelledby': 'h-history' }, h('h2', { id: 'h-history' }, 'Decisions'),
+    g.history.length ? h('ul', { class: 'history' }, g.history.map(x => h('li', null, h('b', null, W.decidedText(x.decision, x.reason)), h('span', { class: 'muted small' }, `${x.by || ''} · ${when(x.at)}${x.channelText ? ` · ${x.channelText}` : ''}`), x.note ? h('span', { class: 'small' }, `“${x.note}”`) : null))) : null,
+    attempts, reopen ? h('p', null, reopen) : null) : null;
   show(h('article', { class: 'view detail', 'aria-labelledby': 'h-detail' },
     h('nav', { class: 'detail-nav', 'aria-label': 'Finding navigation' }, h('a', { href: '#/findings' }, '← All findings'),
       h('span', { class: 'pn' }, prev ? h('a', { href: `#/finding/${prev}`, rel: 'prev' }, 'Previous (K)') : null, next ? h('a', { href: `#/finding/${next}`, rel: 'next' }, 'Next (J)') : null)),
@@ -805,28 +806,98 @@ function renderDetail(focus = false) {
 
 // ---- the fix loop's states in Detail (design §3.4 "Fix states on the board") --------------------------------------------
 
-// *Needs you* from the fix loop, with exactly the actions the design lists: (a) the fix also changed other parts of the
-// screen → [Looks fine, mark fixed] [Undo this fix] [Try again with a note…]; (b) the AI couldn't fix it in 2 tries →
-// [Try again with a note…] [Keep] [Later]; (c) it could not be re-checked → the sentence to say.
+// *Needs you* from the fix loop, with exactly the actions the design and the owner-approved mock-ups list: (a) the fix
+// also changed other parts of the screen → [Looks fine, mark fixed] [Undo this fix] [Try again with a note…]; (b) the
+// AI couldn't fix it in 2 tries → [Try again with a note…] [Keep] [Later]; (c) it could not be re-checked → the
+// sentence to say; diff (files only the person can approve) → the paths, [Copy path] [Undo this fix] [Try again with a
+// note…]; unbaselined (a screen with nothing to compare against) → [Undo this fix] [Try again with a note…];
+// interrupted → the sentence to say; revert (an undo that could not run) → the git command to run, [Copy]. The words
+// are the board's (FIX_WORDS); paths, routes and commits are the record's, as data.
+const UNDO_ON_CARD = new Set(['a', 'diff', 'unbaselined', 'interrupted', 'revert']);
 function fixNeedsBox(g) {
   const k = g.fix?.needs;
   if (!k) return null;
   const F = W.FIX_WORDS;
-  const btn = (label, fn) => { const b = h('button', { type: 'button', class: 'b' }, label); b.addEventListener('click', fn); return b; };
+  // ids: a live redraw gives the focus back to the same control (show())
+  const btn = (id, label, fn) => { const b = h('button', { type: 'button', class: 'b', id }, label); b.addEventListener('click', fn); return b; };
   const head = h('h2', { class: 'needs-h' }, F.needs);
-  // the other kinds (the change touched files only you can approve, a screen with nothing to compare against, an
-  // attempt interrupted, an undo that could not run): the engine's own line, and the sentence that undoes the fix
-  if (k === 'other') {
+  const c = g.fix.commit || '';
+  // what the last [Undo this fix] said, kept across redraws of this attempt
+  const said = S.detail?.undoSaid?.key === `${g.id}/${g.fix.record}` ? S.detail.undoSaid.text : null;
+  const msg = h('p', { class: 'needs-msg', id: 'fix-undo-msg', role: 'status' }, said || '');
+  const undo = () => btn('fix-undo', F.undo, () => undoFix(g));
+  const again = () => btn('fix-try', F.tryAgain, () => tryAgain(g));
+  let body = [], actions = [];
+  if (k === 'a') {
+    // pixels over the threshold say their share; geometry alone says what moved
+    body = [h('span', null, F.a(!g.fix.pixels && g.fix.moved ? `${g.fix.moved} other control${g.fix.moved === 1 ? '' : 's'} moved` : W.pctText(g.fix.share)))];
+    actions = [btn('fix-fine', F.looksFine, () => looksFine(g)), undo(), again()];
+  } else if (k === 'b') {
+    body = [h('span', null, F.b)];
+    actions = [again(), btn('fix-keep', F.keep, () => decide([g.id], 'keep', 'intended')), btn('fix-later', F.later, () => decide([g.id], 'hold', null))];
+  } else if (k === 'c') {
+    body = [h('span', null, F.c), h('span', null, F.cThen)];
+  } else if (k === 'diff') {
+    const paths = g.fix.paths || [];
+    body = [h('span', null, `${F.diff} `, h('span', { class: 'mono' }, W.listText(paths)))];
+    actions = [paths.length ? copyButton(paths.join('\n'), F.copyPath, { id: 'fix-copy-paths' }) : null, undo(), again()].filter(Boolean);
+  } else if (k === 'unbaselined') {
+    const routes = g.fix.routes || [], shows = (g.fix.shows || []).map(t => `‘${t}’`);
+    body = [h('span', null, F.unbaselined(W.listText(routes), routes.length)), shows.length ? h('span', null, F.nowShows(W.listText(shows, 3))) : null];
+    actions = [undo(), again()];
+  } else if (k === 'interrupted') {
+    body = [h('span', null, F.interrupted(c)), h('span', null, F.interruptedThen)];
+  } else if (k === 'revert') {
+    const why = F.revertWhy[g.fix.reason] || F.revertWhy.failed;
+    const cmd = F.revertSay(c);
+    body = [h('span', null, F.revert(c, why(W.listText(g.fix.paths || []), g.fix.branch))),
+      h('span', { class: 'copyline' }, F.revertThen, ' ', h('code', null, cmd), copyButton(cmd, 'Copy', { id: 'fix-copy-revert', name: `Copy ${cmd}` }))];
+  } else {
+    // a kind this board does not know yet: never a dead end
     const say = g.fix.landed ? F.undoSay(g.kindTitle, g.id) : null;
-    return h('div', { class: 'needs', role: 'note' }, head, g.fix.line ? h('span', null, g.fix.line) : null,
-      say ? h('span', null, 'To undo it, tell your AI: ', h('code', null, say), ' ', copyButton(say)) : null);
+    body = [h('span', null, F.other), say ? h('span', null, 'To undo it, tell your AI: ', h('code', null, say), ' ', copyButton(say)) : null];
   }
-  // pixels over the threshold say their share; geometry alone says what moved
-  const text = k === 'a' ? F.a(!g.fix.pixels && g.fix.moved ? `${g.fix.moved} other control${g.fix.moved === 1 ? '' : 's'} moved` : W.pctText(g.fix.share)) : k === 'b' ? F.b : F.c;
-  const actions = k === 'a' ? [btn(F.looksFine, () => looksFine(g)), btn(F.undo, () => undoSentence(g)), btn(F.tryAgain, () => tryAgain(g))]
-    : k === 'b' ? [btn(F.tryAgain, () => tryAgain(g)), btn(F.keep, () => decide([g.id], 'keep', 'intended')), btn(F.later, () => decide([g.id], 'hold', null))] : [];
-  return h('div', { class: 'needs', role: 'note' }, head, h('span', null, text), k === 'c' ? h('span', null, F.cThen) : null,
-    actions.length ? h('div', { class: 'actions' }, actions) : null);
+  const undoable = actions.some(b => b.id === 'fix-undo');
+  return h('div', { class: 'needs', role: 'note', 'aria-labelledby': 'fix-needs-h' }, Object.assign(head, { id: 'fix-needs-h' }), ...body.filter(Boolean),
+    actions.length ? h('div', { class: 'actions' }, actions) : null, undoable ? msg : null);
+}
+// [Undo this fix]: the same safe revert as the AI's fix --undo. A refusal is said on the card, in the board's words.
+async function undoFix(g) {
+  const F = W.FIX_WORDS, key = `${g.id}/${g.fix.record}`;
+  const say = text => { if (S.detail) S.detail.undoSaid = { key, text }; const m = $('fix-undo-msg'); if (m) m.textContent = text; };
+  const b = $('fix-undo');
+  if (b) b.disabled = true;
+  try { await api('/api/fix-undo', { method: 'POST', body: { group: g.id, attempt: g.fix.record } }); }
+  catch (e) {
+    if (b) { b.disabled = false; b.focus(); }
+    if (e.status === 401) return;
+    const d = e.data || {};
+    if (d.stale) { announce('This fix changed while you looked: the page is up to date now'); await refreshDetail(); return; }
+    const refusal = F.undoRefused[d.refused];
+    say(refusal ? refusal(g.fix.commit || '', { paths: W.listText(d.paths || []), branch: d.branch || '', on: d.on || null }) : `Not undone: ${e.message}`);
+    return;
+  }
+  if (S.detail) S.detail.undoSaid = null;
+  announce(F.undone);
+  await refreshDetail();
+  // the card is gone (or another one says why the undo could not run): the focus goes to the attempt's history row
+  const row = $(`attempt-${g.fix.record}`) || $('fix-undo');
+  if (row) { row.setAttribute('tabindex', '-1'); row.focus(); }
+}
+// Detail history: the fix attempts, newest first (Attempt n · outcome · commit → reverted in commit · when).
+function fixRows(g) {
+  const rows = Array.isArray(g.fixes) ? g.fixes : [];
+  if (!rows.length) return null;
+  const F = W.FIX_WORDS;
+  const commit = (c, id) => [h('span', { class: 'mono' }, c), copyButton(c, 'Copy', { id, name: F.copyCommit(c) })];
+  return [h('h3', { class: 'h-attempts', id: 'h-attempts' }, F.attemptsH), h('ul', { class: 'history attempts', 'aria-labelledby': 'h-attempts' }, rows.map(r => {
+    const what = r.outcome === 'needs' ? F.needsRow(r.needs) : F.outcome[r.outcome] || r.outcome;
+    const parts = [h('b', null, F.attempt(r.attempt ?? '?')), h('span', null, `· ${what}`)];
+    if (r.commit) parts.push(h('span', { class: 'sep' }, '·'), ...commit(r.commit, `copy-c-${r.record}`));
+    if (r.revert) parts.push(h('span', null, `→ ${F.revertedIn}`), ...commit(r.revert, `copy-r-${r.record}`));
+    if (r.at) parts.push(h('span', { class: 'muted small' }, `· ${when(r.at)}`));
+    return h('li', { id: `attempt-${r.record}` }, parts);
+  }))];
 }
 async function looksFine(g) {
   try { await api('/api/fix-accept', { method: 'POST', body: { group: g.id, attempt: g.fix.record } }); }
@@ -834,10 +905,6 @@ async function looksFine(g) {
   if (S.list?.groups[g.id]) S.list.groups[g.id] = { ...S.list.groups[g.id], status: 'fixed', statuses: { fixed: 1 } };
   announce('Marked fixed');
   await refreshDetail();
-}
-function undoSentence(g) {
-  const say = W.FIX_WORDS.undoSay(g.kindTitle, g.id);
-  dialog(W.FIX_WORDS.undo, h('p', { class: 'small' }, 'Tell your AI:'), h('p', { class: 'copyline' }, h('code', null, say)), h('p', null, copyButton(say)));
 }
 // [Try again with a note…]: a new Fix decision carrying the note (the fix loop counts attempts per decision)
 function tryAgain(g) {

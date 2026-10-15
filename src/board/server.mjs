@@ -336,6 +336,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     if (post && path === '/api/confirm') return confirm(res, await readJsonBody(req));
     if (post && path === '/api/approve-checks') return approveChecks(res, await readJsonBody(req));
     if (post && path === '/api/fix-accept') return fixAccept(res, await readJsonBody(req));
+    if (post && path === '/api/fix-undo') return fixUndo(res, await readJsonBody(req));
     return fail(res, 404, 'not found');
   };
 
@@ -512,6 +513,28 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     const r = acceptDrift(openFix({ cwd: project, root: project, warn: w => warnings.add(w) }), body.group, { attempt: body.attempt, by });
     cache = null;
     return r.ok ? send(res, 200, { ok: true, decided: 'Fixed' }) : fail(res, r.status || 409, r.error, { stale: true });
+  }
+
+  // [Undo this fix] on a *needs you* card: the same safe revert as the AI's `fix --undo` (only the fix's own last commit,
+  // on its branch, a clean tree, no file git does not show overwritten). A refusal is handed back as a key with its
+  // paths or branch, for the card to say in the board's words; a revert that could not run leaves the attempt *needs
+  // you* with its own card.
+  async function fixUndo(res, body) {
+    if (typeof body.group !== 'string' || !HEX12.test(body.group) || !Number.isInteger(body.attempt) || body.attempt < 1) return fail(res, 400, 'group and attempt of the fix');
+    const [{ openFix, undoFix }, { latestRecord }] = await Promise.all([import('../fix/loop.mjs'), import('../fix/records.mjs')]);
+    const ctx = openFix({ cwd: project, root: project, warn: w => warnings.add(w) });
+    const cur = latestRecord(ctx.stateDir, body.group);
+    if (!cur || cur.attempt !== body.attempt) return fail(res, 409, 'this fix changed while you looked', { stale: true });
+    const r = undoFix(ctx, body.group);
+    cache = null;
+    const why = r.json?.why;
+    if (r.json?.changed || why === 'none') return fail(res, 409, 'this fix changed while you looked', { stale: true });
+    if (r.code !== 0) {
+      const paths = [...new Set([].concat(r.json?.dirty || [], r.json?.occupied || []).filter(x => typeof x === 'string'))].sort().slice(0, 200).map(x => safe(x, 300));
+      return fail(res, 409, 'not undone', { refused: ['not-head', 'wrong-branch', 'dirty', 'occupied', 'filtered'].includes(why) ? why : 'failed', paths,
+        branch: typeof r.json?.branch === 'string' ? safe(r.json.branch, 200) : null, on: typeof r.json?.on === 'string' ? safe(r.json.on, 200) : null });
+    }
+    return send(res, 200, { ok: true, outcome: r.json?.outcome === 'undone' ? 'undone' : 'needs-you' });
   }
 
   function approveChecks(res, body) {
