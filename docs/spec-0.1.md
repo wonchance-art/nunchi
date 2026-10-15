@@ -472,14 +472,16 @@ through a live redraw (`test/board-m5b-e2e.test.mjs`); the
 CLI's progress file naming its machine (`test/quick-cli.test.mjs`). Each fails without its fix (checked by undoing it).
 
 *Measured (M5b, 2026-10-15 KST, this development container, shared with other sessions).* With the review of PR #36,
-on the merged head `6ffdcb1` (M4 and #37 merged in): 753 tests on Node 22.22.0 (20:08–20:15), on Node 24.21.0
-(20:15–20:21) and on Node 22 with bun off `PATH` (20:21–20:28), Chromium required (`NUNCHI_REQUIRE_BROWSER`): 752 pass
-and 1 skipped (Windows only) each time; `npm run validate:plugin` passes; `node bench/run.mjs --twice` (20:32–20:38)
-unchanged: rule recall 34/34, 0 false positives on 8 clean scenes, determinism identical (1,141 files), fingerprints
-100% (52/52), 155.2 s per capture. Two bench attempts found the benchmark app unreachable in the replay run (18:50, with
-the load average near 30 on 4 CPUs; 20:28, while another session's benchmark used the same port), so their evidence
-differed; each rerun on a quiet machine is the result. Before the review (18:20–19:04, head `54ecffa`) the same gates
-gave 742 tests, 741 pass, and the same bench.
+on the merged head `f7f5ab0` (M4, #37 and M6 merged in): 806 tests on Node 22.22.0 (21:04–21:11), on Node 24.21.0
+(21:11–21:16) and on Node 22 with bun off `PATH` (21:16–21:22), Chromium required (`NUNCHI_REQUIRE_BROWSER`), each run
+in a temp folder of its own: 805 pass and 1 skipped (Windows only) each time; `npm run validate:plugin` passes; `node
+bench/run.mjs --twice` (21:22–21:28) unchanged: rule recall 34/34, 0 false positives on 8 clean scenes, determinism
+identical (1,141 files), fingerprints 100% (52/52), 181.8 s per capture. Two bench attempts found the benchmark app
+unreachable in the replay run (18:50, with the load average near 30 on 4 CPUs; 20:28, while another session's
+benchmark used the same port), so their evidence differed; each rerun on a quieter machine is the result. CI on Windows
+with Node 24 failed M2's live-update test once (the stream reported the first of a decision's two generation bumps
+before the poll saw the second); the test now waits for the stream to settle on the polled version. Before the review
+(18:20–19:04, head `54ecffa`) the same gates gave 742 tests, 741 pass, and the same bench.
 
 **Skill.** A first look, then the full check: `capture --quick`, `findings`, then `capture` started in the background
 and `open` (review of PR #36: so the board opens on the full check running, not on "has not started" and two more
