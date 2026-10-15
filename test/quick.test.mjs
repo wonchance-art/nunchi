@@ -380,3 +380,21 @@ test('board: "Full check done: N new groups" once the full check lands after a f
   writeRun(p.root, '0003', { scenes, parent: '0002', findings: [] });
   assert.deepEqual((await boardSummary(p)).now, []);
 });
+
+test('a check after a first look that skipped an unsampled route still gets the lines, saying why; the static page counts it from the sweep before', async () => {
+  const p = firstLookProject();
+  const scenes = [...p.scenes, scene('/help', 'guest', 'normal', 'd')];
+  writeRun(p.root, '0002', { scenes, parent: '0001', wholeApp: false, findings: [
+    { lens: 'L8', rule: 'target-size-min', severity: 'low', scene: scenes[0].id, route: '/', viewport: 'd', selector: 'nav a', box: null, evidence: { width: 12 } },
+    { lens: 'L3', rule: 'dead-href', severity: 'medium', scene: scenes[2].id, route: '/help', viewport: 'd', selector: 'main a.more', box: null, evidence: { href: '#' } }] });
+  const runJson = join(p.nunchi, 'runs', '0002', 'run.json');
+  writeFileSync(runJson, JSON.stringify({ ...JSON.parse(readFileSync(runJson, 'utf8')), skipped: [{ route: '/posts/[id]', reason: 'needs-sample' }] }));
+  assert.deepEqual((await boardSummary(p)).now, ['Full check done: 1 new group · skipped /posts/[id] (needs-sample)']);
+  // the static page of that check: not "Since run 0001" (the first look); what the first look found counts as new
+  const out = tmp('nunchi-quick-export-');
+  const r = await cli(p.root, 'export', '--html', out);
+  assert.equal(r.code, 0, r.stderr);
+  const html = readFileSync(join(out, 'index.html'), 'utf8');
+  assert.match(html, /<h2 id="h-since">First run<\/h2>\s*<ul class="facts"><li><b class="good">0<\/b> fixed<\/li><li><b>2<\/b> new<\/li>/);
+  assert.doesNotMatch(html, /Since run 0001/);
+});

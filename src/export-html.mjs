@@ -14,7 +14,7 @@
 import { readFileSync, existsSync, mkdirSync, copyFileSync, writeFileSync, lstatSync, readdirSync, unlinkSync, renameSync, realpathSync, rmdirSync, constants as FS } from 'node:fs';
 import { join, resolve, relative, isAbsolute, dirname, basename } from 'node:path';
 import { createHash } from 'node:crypto';
-import { readState, foldRun, foldAi, foldOf, readDecisions, readApproved, view, groups as groupRows, titleOf, annotate, runForFold, migrateState, noteDecisions, byRun, originOf, captureRuns, latestRunOf, FINGERPRINT_VERSION } from './ledger.mjs';
+import { readState, foldRun, foldAi, foldOf, readDecisions, readApproved, view, groups as groupRows, titleOf, annotate, runForFold, migrateState, noteDecisions, byRun, originOf, captureRuns, latestRunOf, foldKindOf, FINGERPRINT_VERSION } from './ledger.mjs';
 import { stateRoot, stateFiles } from './state.mjs';
 import { foldFinding } from './ai-fold.mjs';
 import { readManifest, jpegSize, sceneIndex, sceneDir } from './hunt.mjs';
@@ -157,6 +157,14 @@ export function buildModel({ runDir, nunchiDir, ledger = null }) {
     .filter(r => present.has(r.fp) || (inLedger && r.goneAt === runId) || (aiInLedger && r.source === 'ai' && r.lastSeen === runId));
   // a run that could not tell what was fixed (the app unreachable, the recording stale, every screen the same page)
   const blind = inLedger && ruleState.blind ? str(ruleState.blind[runId]) : null;
+  // a sweep after a quick first look (M5): "since" is the sweep before the first look, and what the first look found
+  // counts as this check's (review of PR #33: the page said "Since run <the quick run>")
+  const firstLook = inLedger && foldKindOf(state, runId, stream) === 'sweep' ? (() => {
+    const before = own.filter(r => byRun(r, runId) < 0);
+    const prev = before.filter(r => foldKindOf(state, r, stream) === 'sweep').pop() ?? null;
+    const quick = before.filter(r => foldKindOf(state, r, stream) === 'quick' && (!prev || byRun(r, prev) > 0));
+    return quick.length ? { since: prev, runs: quick } : null;
+  })() : null;
 
   // scenes, in the wall's order (flow.json R7), canary copies left out
   const routeOrder = flow?.order || [];
@@ -243,7 +251,7 @@ export function buildModel({ runDir, nunchiDir, ledger = null }) {
   const kinds = [...kindMap.values()].sort((a, b) => Number(a.unchecked) - Number(b.unchecked) || SEV[a.severity] - SEV[b.severity] || b.groups.length - a.groups.length || cmp(a.rule, b.rule));
   const ordered = kinds.flatMap(k => k.groups);
 
-  return { runId, latest, asOfNow, blind, meta, manifest, inLedger, scenes, sceneById, images, instances, groups: ordered, kinds, rows, ai: aiFindings !== null, verify, coverage };
+  return { runId, latest, asOfNow, blind, meta, manifest, inLedger, firstLook, scenes, sceneById, images, instances, groups: ordered, kinds, rows, ai: aiFindings !== null, verify, coverage };
 }
 
 // ---- rendering helpers ----------------------------------------------------------------------------------
@@ -338,8 +346,10 @@ function progressView(m) {
   const since = m.inLedger ? (() => {
     const id = m.runId;
     const gs = pred => new Set(m.rows.filter(pred).map(r => r.group)).size;
-    const fixed = gs(r => r.goneAt === id), fresh = gs(r => r.firstSeen === id && !r.goneAt), back = gs(r => r.regressedAt === id && !r.goneAt);
-    const title = m.meta.parent ? `Since run ${t(m.meta.parent)}` : 'First run';
+    const here = x => x === id || !!m.firstLook?.runs.includes(x);                 // this run, or the first look before it
+    const fixed = gs(r => r.goneAt === id), fresh = gs(r => here(r.firstSeen) && !r.goneAt), back = gs(r => here(r.regressedAt) && !r.goneAt);
+    const parent = m.firstLook ? m.firstLook.since : m.meta.parent;
+    const title = parent ? `Since run ${t(parent)}` : 'First run';
     return `<section class="panel-box" aria-labelledby="h-since"><h2 id="h-since">${title}</h2>
 <ul class="facts"><li><b class="good">${fixed}</b> fixed</li><li><b>${fresh}</b> new</li>${back ? `<li><b class="warn">${back}</b> came back after a fix</li>` : ''}</ul>${m.runId !== m.latest ? `<p class="muted small">Run ${t(m.runId)} is not the latest (${t(m.latest)}): statuses are ${m.asOfNow ? 'as of now, with what was fixed or came back after it undone (its older runs are gone)' : 'as they stood after this run'}; decisions are as of now.</p>` : ''}</section>`;
   })() : '<section class="panel-box" aria-labelledby="h-since"><h2 id="h-since">Ledger</h2><p class="muted">This run is not in the local ledger, so there is nothing to compare with. Statuses come from your decisions only.</p></section>';
