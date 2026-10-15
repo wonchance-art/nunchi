@@ -814,7 +814,9 @@ unreadable one by one). Built in `src/ledger.mjs`:
   the board. A keep or false-positive no person made or confirmed shows as kept / dismissed but does not clear
   "Ready to ship" (summary.mjs).
 - **CLI:** `nunchi findings` (one row per kind; `--rule <rule>` lists its groups; `--status`, `--all`, `--json`),
-  `nunchi decide <id…> <decision> [--reason] [--note]`, `nunchi approve <id…>|--all`, `nunchi trust`.
+  `nunchi decide <id…> <decision> [--reason] [--note]`, `nunchi approve <id…>|--all`, `nunchi trust`. A note is
+  committed with its decision: secrets are scrubbed from it first (credential URL parts, `scrubSecrets`), then it is
+  clipped to 500 code points, so a clip never leaves half a key that no scanner would know (test).
   Since M1 `findings` lists double-checked AI kinds as `AI · <checklist item>` beside the rule kinds, collapses AI
   groups not double-checked (claimed only, or a verdict that was suspect, rejected or insufficient, or from a run with
   too few decoys to check the checker, §4) into one line
@@ -1842,8 +1844,9 @@ atomically, never through a link, never inside `.nunchi/runs`); what was left ou
   (`SECRET_PARAM`: `token`, `*_token`, `token_hash`, `oobCode`, `code`, `apikey` …), then `scrubSecrets` (§7.1; a
   random-looking path segment or query value of 24 characters or more is `url-path-token` / `url-query-token`): a hit
   becomes `[secret-shaped: <kind>]`. Selectors go through `redactSelector` first,
-  URLs through `redactUrl`, object keys too, and the SARIF writer scrubs every string of the log once more, whoever
-  built it. A secret finding gives its location and kind only. Tested with secrets in every field: selectors, a route
+  URLs through `redactUrl`, object keys too, and the JSON export cleans every key and string of its model once more
+  (an evidence key, the app's `package.json` path in a folder named like a key), as the SARIF writer does every string
+  of the log, whoever built it. A secret finding gives its location and kind only. Tested with secrets in every field: selectors, a route
   (`/reset/<key>` from `--routes`), an AI claim quote, evidence text, a decision note with URL userinfo, a bundle URL's
   query, a file path.
 - *Page text* is left out unless `--include-page-text`: evidence text and AI claim quotes always; control names

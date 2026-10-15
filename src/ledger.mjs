@@ -24,6 +24,8 @@ import { randomBytes } from 'node:crypto';
 import { sha, stableJson, writeAtomic } from './stable.mjs';
 import { listRuns } from './runs.mjs';
 import { readJsonFile as readJson, readDoc, updateDoc, corrupt, present } from './state.mjs';
+import { scrubSecrets } from './rules.mjs';
+import { redactText } from './network.mjs';
 
 export { readJsonFile } from './state.mjs';
 
@@ -860,12 +862,15 @@ export function reasonProblem(decision, reason, { asked = '--reason ' } = {}) {
   if (reasons.length) return reasons.includes(reason) ? null : `"${decision}" needs ${asked}${reasons.join(' | ')}`;
   return reason === null || reason === undefined ? null : `"${decision}" takes no reason`;
 }
+// A decision's note (committed, shared through git): secrets scrubbed first, then clipped to 500 characters (code
+// points), so a clip never leaves half a key that no scanner would know.
+export const noteOf = note => (note ? [...scrubSecrets(redactText(String(note)))].slice(0, 500).join('').toWellFormed() : null);
 export function buildDecision({ target, decision, reason = null, note = null, by, channel = null, batch = null }) {
   const bad = reasonProblem(decision, reason);
   if (bad) throw Object.assign(new Error(bad), { code: 'BAD_ARGS' });
   if (channel !== null && !CHANNELS.includes(channel)) throw Object.assign(new Error(`unknown channel "${channel}"`), { code: 'BAD_ARGS' });
   if (batch !== null && !BATCH_ID.test(String(batch))) throw Object.assign(new Error('a batch id is up to 40 letters, digits, _ or -'), { code: 'BAD_ARGS' });
-  return { schema: 1, id: newId(), target, decision, reason, note: note ? String(note).slice(0, 500) : null, by, at: kst(), fingerprintVersion: FINGERPRINT_VERSION,
+  return { schema: 1, id: newId(), target, decision, reason, note: noteOf(note), by, at: kst(), fingerprintVersion: FINGERPRINT_VERSION,
     ...(channel ? { channel } : {}), ...(batch ? { batch: String(batch) } : {}) };
 }
 
