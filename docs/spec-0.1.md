@@ -369,8 +369,8 @@ the latest capture of this worktree is a quick run:
   after the review of PR #33, to be confirmed with the owner;
 - the Now line is "First look: 8 key screens · full check running, 12 of 25 screens (about 6 min left)", in place of
   "Capture running · run N" for that capture. Screens here are routes, as in the design (8 key screens of a 25-route
-  app). `findings` prints the same line under the verdict (or, with nothing running, that the run is a quick first look
-  and no full check is running);
+  app). `findings` prints the same line under the verdict. With no full check after it (M5b, below): "First look: 8 key
+  screens · the full check has not started — tell your AI “full check”";
 - once that sweep lands, until the next capture does: "Full check done: 16 new groups" (groups whose first sighting is
   the sweep: the first look did not show them), and the verdict is the §7.2 formula again.
 
@@ -401,6 +401,47 @@ time. `gc` still removes such a folder after an hour. The verdict, the Now line 
 this.
 
 *Known limits.* The time left does not count the canaries, the inventory or the fold.
+
+**M5b: a first look, a capture running, a capture stopped** (built 2026-10-15 KST; the owner's text mock-ups of that
+day, their words). Computed once in `summary.mjs` (`firstLook.text`, `captures[{ run, state, text }]`) and said in the
+same words by the board's Now lines, Coverage's banner (with its own "This shows run 0004 until it finishes." after a
+running one) and `findings` (under the verdict; `findings --json` has them as `summary.captures`). The numbers are
+computed, never the mock-up's:
+- *a first look, no full check after it:* "First look: 8 key screens · the full check has not started — tell your AI
+  “full check”", while no capture of this worktree runs and none stopped after it (each has its own line, below);
+- *any other capture running* (the full check after a first look keeps the line above): "Capture running · run 0007 ·
+  12 of 25 screens (about 6 min left)", by the time-left rule above; "Capture running · run 0007" while no route is done
+  yet (or its folder has no progress file);
+- *a capture stopped:* "Capture stopped · run 0002 (no progress for 10 min) — tell your AI “capture again”". *No
+  progress*, precisely: a capture's last progress is its progress file's modification time (the CLI rewrites the file
+  after each route × person × viewport), or its folder's while it has none; it made no progress for 10 minutes when now
+  − that time ≥ 10 minutes (`runs.mjs` `captureStates`, `STALE_MS`: at 9:59 it is running, at 10:00 stopped; tested
+  with an injected clock, never by waiting). A writer that is gone on this host stops it sooner, and the line says
+  "(its process ended)" until the 10 minutes have passed. Only a capture of `nunchi capture` (its folder has a progress
+  file) is called stopped: a folder without one (a fix probe, whose attempt says itself that it was interrupted, §6.3;
+  an older nunchi) is running by its own time and then said no more. The newest stopped capture is said while it is the
+  latest thing of the worktree (newer than its latest run, and no capture running): a later capture, running or
+  complete, answers it. `gc` still removes the folder after an hour;
+- *the verdict while a capture is stopped:* as if it were not there. It goes by the complete runs (a first look's "Too
+  early to say", or the §7.2 formula), never "Too early to say · a capture is running", which only a running capture
+  gives;
+- *live:* the board's version names each capture folder (running or stopped, why, how far), so a line changes on an
+  open board without a ledger write, and a capture turns stopped there by the clock alone; a stopped line does not
+  change while the folder stays;
+- *the wall:* during a first look its screens say "First look" and the pages it did not open "Not checked yet" (§7.5).
+  A first look's `flow.json` now names every page of the app, captured or not, as the full check's does (`complete:
+  true`, `wholeApp: false`; its link-graph findings stay off), so the board knows which pages it did not open.
+
+*Choices (M5b).* (1) The stopped line says the rule's "10 min", not a count that grows: it stays the same while the
+folder stays, so the polite live region does not announce it again every minute, and "no progress for 10 min" is true
+for as long as it shows. (2) A writer known to be gone says "(its process ended)" before 10 minutes (the board knows
+sooner; "no progress for 2 min" would read as hasty), then the owner's words. (3) The verdict choice above (the
+recommended one). (4) No "has not started" line while another capture runs or after one stopped: "full check" then
+would start a second capture, or contradict the stopped line, whose "capture again" is the same step (the skill: step
+5). (5) The running line does not repeat a partial check's "· skipped …" (the first look's line keeps it): the owner's
+line has none. (6) "No progress for 10 minutes" moved from M5's "more than 10 minutes" to "10 minutes or more", so the
+owner's words hold at 10:00. (7) `findings` no longer prints "run N is a quick first look … no full check is running":
+the owner's line says it.
 
 **Skill.** A first look, then the full check: `capture --quick`, `findings`, `open`, then `capture`; the chat reports
 only what those print (§1, design §6).
@@ -1678,7 +1719,8 @@ not clear the group from "Ready to ship" (the verdict says "N to confirm"; `find
 from the agent counts (design §1 table). `decide` takes the board's words `not-a-problem` and `later`.
 
 **Interaction (§3.4).**
-- *Verdict* (summary.mjs): "Too early to say · a capture is running" (a `.partial` run folder), "· nothing captured
+- *Verdict* (summary.mjs): "Too early to say · a capture is running" (a `.partial` run folder whose capture is running;
+  one that stopped does not count, and the verdict goes by the complete runs: M5b, §2.6), "· nothing captured
   yet", "· this run had a problem"; then "Not yet · 1 blocker, 6 high: 4 to decide, 1 to confirm, 3 waiting for the AI,
   2 later" over blocker and high groups, each counted once by its most pressing reason (needs you, to decide, to
   confirm, not double-checked, verified by a suspect check, waiting for the AI, later); "Not yet · N fixes since the
@@ -1880,8 +1922,9 @@ order: AI trust, States & messages, the trend per run; none is in M7.
 
 **Which run.** Coverage shows the run Progress's verdict rests on: the last full check when there is one, else the
 latest capture. A newer capture is noted in the view's own words, and the full check's gaps stay: a first look (M5,
-§2.6) with "First look: N key screens, rule checks only · the full check isn’t done yet" (or the summary's line while
-the full check after it runs), a partial run (`--routes`, `--changed-since`) with "Run 0005 · Not a full check: only
+§2.6) with "First look: N key screens, rule checks only · the full check isn’t done yet" (or the summary's line: while
+the full check after it runs, or, M5b, "… · the full check has not started — tell your AI “full check”"), a partial
+run (`--routes`, `--changed-since`) with "Run 0005 · Not a full check: only
 the pages asked for. Whole-app checks can’t mark anything fixed.". A link to a screen the run shown does not have
 ("Coverage on this screen ▸" from a newer capture) says "This screen isn’t in run 0004." with nothing selected. With no
 full check yet, the latest capture is shown as it is. The wall and Screen detail show the latest capture, compared
@@ -1924,7 +1967,9 @@ with the last full check.
   the bundle, parity pairs; a test pins the table against the files that emit rule findings) beside its AI cells on
   checked screens, with what was not checked and why.
 - *States:* "Loading coverage…", then the view; coming back to it, the last one with "Updating…"; nothing captured; a
-  capture running (banner: the summary's captures whose writer is still there, M5); a first look (above; on the wall
+  capture running (banner: the summary's line, M5b: "Capture running · run 0007 · 12 of 25 screens (about 6 min left).
+  This shows run 0004 until it finishes."), or one stopped ("Capture stopped · run 0002 (no progress for 10 min) — tell
+  your AI “capture again”"); a first look (above; on the wall
   too), its line in place of the banner for the full check after it, as Progress says it (both follow the board's
   version); a first look with no full check before it, shown as it is: no AI cell of another run on its screens, no
   sentence to run the AI review (it hunts the full check), and the gaps the full check settles (states, pages not
@@ -1954,6 +1999,15 @@ with the last full check.
   card), Enter for Screen detail; Width, Who, State and Show are named beside their buttons; on a phone the filters
   are `select`s. The quick look gains [Open this screen ↵]. J/K
   walk the wall in the order it shows it (page groups).
+- *A first look on the wall (M5b, the owner's mock-up of 2026-10-15 KST):* each screen it captured has a "First look"
+  chip, and each page its `flow.json` names that it did not open (less a page that needs a sample address, which the
+  full check skips too) is a card per person × width of its scope, "Not checked yet": no screenshot, no finding, nothing
+  to open (Enter or Space shows what it is, with the first look's line; Screen detail's J/K walk only the screens it
+  has); "Not checked" counts them; the heading counts the screens captured. The chips are text in the board's chip
+  style (`.tag`): `--accent-ink` on `--accent-soft`, and `--ink-2` on the panel with a `--control` edge (measured: 9.7:1
+  and 8.3:1 light, 9.0:1 and 9.9:1 dark), with a 1 px edge in forced colours, and each card's accessible name says
+  them ("Plant shelf, Visitor · Desktop · Normal: 1 medium. First look…", "/checkout, Visitor · Desktop · Normal: Not
+  checked yet").
 - *Screen detail (`#/screens/<run>/<scene>`, the latest run's screens):* the badge, a coverage line ("Rule checks ✓ · AI
   2 of 3 lenses (L6 doesn’t count) · Changed since run 0009", so "clean" is never read as "fully looked at") and
   "Coverage ▸"; Width (Desktop, Phone, Both), State, Who, Whole screen and Compare in one `role=toolbar`; the screenshot
@@ -1976,9 +2030,11 @@ with the last full check.
 scope, health, ai: { run, latest, older, error, last, lenses, names, budget, budgetDefault, estimate }, totals,
 wholeLine, aiLine, gaps[], fine[], muted[], warnings[], routes[{ route, name, opened, why, whyText, cells[{ key, id,
 route, person, viewport, state, checked, why, ai: { run, seen, of, lenses[{ lens, name, status, reason, answers,
-findings, text }] }, open, changed?, say }] }], byLens[], running }`; `/api/summary`'s `ai.coverage` is `{ cells, seen,
+findings, text }] }, open, changed?, say }] }], byLens[], running, capture { run, state, text } }` (`capture`: the
+summary's line, M5b); `/api/summary`'s `ai.coverage` is `{ cells, seen,
 budget, run, aiRun }`, Coverage's count. `GET /api/screens` gains per screen `checked`, `changed`, `ai { seen, of,
-budget }`, `group`, `open`, and `baseline`, `quick` and `groups`. `GET /api/screens/:run/:scene` (the latest run only;
+budget }`, `group`, `open`, `look` (M5b: `first`, or `not-yet` on a page a first look did not open), and `baseline`,
+`quick` and `groups`. `GET /api/screens/:run/:scene` (the latest run only;
 ids checked; 404 otherwise) → `{ run, key, id, scene, baseline, page, widths, findings[{ group, n, …, viewports, others,
 at }], fixedHere[], compare[{ kind, id, label, per | gone }], coverage, siblings[], judged }`. Strings go out through
 `safe()` as everywhere. The live version also names the `coverage.json` of every run (its size and modification time: a
