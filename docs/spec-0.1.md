@@ -2124,15 +2124,17 @@ creates them); what was left out is said on stderr.
 - SARIF keeps 5,000 results (GitHub's display cap), not the 25,000 hard limit: GitHub would drop the rest anyway, and
   this way the order is nunchi's and stated.
 
-**Measured (2026-10-15 13:09 KST).** Pebble `node bench/run.mjs --twice` is unchanged: rule recall 34/34, 0 false
-positives on 8 clean scenes, determinism identical (1,141 files), fingerprints 100% (52/52), 162 s per capture.
+**Measured (2026-10-15 16:16 KST, after the review fixes and the merge of M5).** Pebble `node bench/run.mjs --twice`
+is unchanged: rule recall 34/34, 0 false positives on 8 clean scenes, determinism identical (1,141 files), fingerprints
+100% (52/52), 188.5 s per capture (another suite ran on the machine meanwhile; 162 s at 13:09 KST).
 `nunchi guard` on Pebble's source finds 2 `native-dialog` and 2 `dead-href` hits (its seeded `confirm` and `href="#"`)
 and no `raw-message`: Pebble stores the message first (`setError(e.message)`, then `{error}`), the stated limit of a
 guard without data flow. Tests: a fixture that triggers each guard and one of near misses that does not
-(`test/fixtures/guards/`), guards.json validation, the baseline, `--base`, `check`'s exit codes, the SARIF schema,
-redaction in every field of every format, Markdown escaping, determinism, the card's API and its page in Chromium with
-axe (light 1280 px, dark 390 px), the deny hook's new rules. `npm test`: 617 tests, 616 passing and 1 Windows-only
-skipped, on Node 22.22.0 and Node 24.21.0, Chromium included, with bun on PATH and without it.
+(`test/fixtures/guards/`), guards.json validation, the baseline, `--base`, `check`'s exit codes, the SARIF schema and
+what GitHub needs beyond it, redaction in every field of every format, Markdown escaping, determinism, the card's API
+and its page in Chromium with axe (light 1280 px, dark 390 px, forced colours), the owner's words, the deny hook's
+rules. `npm test`: 695 tests, 694 passing and 1 Windows-only skipped, on Node 22.22.0 and Node 24.21.0, Chromium
+included, with bun on PATH and without it.
 
 **Not done in M4:** a board view of the guards and their hits (deferred to 0.2 by the owner; "More views in 0.2"
 names `nunchi guard`); `--run` for md/json/sarif (they export the ledger, which is what CI and sharing need);
