@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium } from 'playwright-core';
-import { startBoard } from '../src/board/server.mjs';
+import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 import { smallProject } from './fixtures/board-project.mjs';
 
 let browser = null, browserOk = true;
@@ -16,7 +16,7 @@ before(async () => {
   try { browser = await chromium.launch({ executablePath: process.env.NUNCHI_BROWSER || undefined }); }
   catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
-after(async () => { await browser?.close(); });
+after(async () => { await closeBoards(); await browser?.close(); });
 const decisions = nunchi => { try { return readdirSync(join(nunchi, 'decisions'), { recursive: true }).map(String).filter(f => f.endsWith('.json')).map(f => JSON.parse(readFileSync(join(nunchi, 'decisions', f), 'utf8'))); } catch { return []; } };
 const until = async (fn, ms = 8000) => { const t = Date.now(); for (;;) { const v = await fn(); if (v) return v; if (Date.now() - t > ms) return v; await new Promise(r => setTimeout(r, 100)); } };
 
@@ -24,15 +24,11 @@ test('board e2e: an undo answered after the person moved to another row leaves t
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = smallProject();
   const blocker = p.findings.find(f => f.rule === 'secret-in-client-bundle').group;
-  const b = await startBoard({ projectDir: p.root });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  const page = await context.newPage();
   let release;
   const held = new Promise(r => { release = r; });
-  await page.route('**/api/undo', async route => { const res = await route.fetch(); await held; await route.fulfill({ response: res }); });
+  const s = await openBoard(browser, p, { setup: ({ page: pg }) => pg.route('**/api/undo', async route => { const res = await route.fetch(); await held; await route.fulfill({ response: res }); }) });
+  const { page } = s;
   try {
-    await page.goto(b.newLink());
-    await page.waitForSelector('#h-progress');
     await page.click('a[data-nav=findings]');
     await page.waitForSelector('#h-findings');
     await page.waitForFunction(() => document.activeElement?.classList.contains('row'));
@@ -56,5 +52,5 @@ test('board e2e: an undo answered after the person moved to another row leaves t
     await page.keyboard.press('Enter');
     await page.waitForSelector('dialog:not([open])', { state: 'attached' });
     assert.equal(decisions(p.nunchi).length, 4, 'nothing written for the reopened rows');
-  } finally { await context.close(); await b.close(); }
+  } finally { await s.close(); }
 });

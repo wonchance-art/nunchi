@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
-import { startBoard } from '../src/board/server.mjs';
+import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 import * as F from '../src/fix/loop.mjs';
 import { fixProject, edit, commitWith, tmp } from './fixtures/fix-project.mjs';
 import { ctxOf, attempt, board, decisionsOf } from './fixtures/board-fix-helpers.mjs';
@@ -21,16 +21,11 @@ before(async () => {
   try { browser = await chromium.launch({ executablePath: process.env.NUNCHI_BROWSER || undefined }); }
   catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
-after(async () => { await browser?.close(); });
+after(async () => { await closeBoards(); await browser?.close(); });
+// the board, a page on it and the first view (fixtures/board-browser.mjs: closed again, and said why, when a step fails)
 async function page(p, viewport = { width: 1280, height: 900 }) {
-  const b = await startBoard({ projectDir: p.root });
-  const context = await browser.newContext({ viewport });
-  const pg = await context.newPage();
-  const errors = [];
-  pg.on('pageerror', e => errors.push(String(e)));
-  await pg.goto(b.newLink());
-  await pg.waitForSelector('#h-progress');
-  return { b, pg, errors, close: async () => { await context.close(); await b.close(); } };
+  const s = await openBoard(browser, p, { ctx: { viewport } });
+  return { ...s, pg: s.page };
 }
 
 test('board e2e: needs you (a) in Detail — the text and exactly its three actions, before/after with a slider (←/→) for both viewports, Looks fine', { timeout: 120000 }, async t => {

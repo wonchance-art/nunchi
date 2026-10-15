@@ -7,7 +7,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright-core';
-import { startBoard } from '../src/board/server.mjs';
+import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 import { leafy } from './fixtures/coverage-project.mjs';
 
 let browser = null, browserOk = true;
@@ -15,18 +15,10 @@ before(async () => {
   try { browser = await chromium.launch({ executablePath: process.env.NUNCHI_BROWSER || undefined }); }
   catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
-after(async () => { await browser?.close(); });
+after(async () => { await closeBoards(); await browser?.close(); });
 
-async function open(p, ctx = {}) {
-  const b = await startBoard({ projectDir: p.root });
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, ...ctx });
-  const page = await context.newPage();
-  const errors = [];
-  page.on('pageerror', e => errors.push(String(e)));
-  await page.goto(b.newLink());
-  await page.waitForSelector('#h-progress');
-  return { b, page, errors, close: async () => { await context.close(); await b.close(); } };
-}
+// the board, a page on it and the first view (fixtures/board-browser.mjs: closed again, and said why, when a step fails)
+const open = (p, ctx = {}) => openBoard(browser, p, { ctx: { viewport: { width: 1440, height: 900 }, ...ctx } });
 // To a view, and wait for that view's `ready` element: the view drawn for this address, never the one before it (from
 // one Screen detail to another, `#h-screen` is there all along: keys pressed before the new one is drawn would go to
 // the old one, as on a slow CI runner)

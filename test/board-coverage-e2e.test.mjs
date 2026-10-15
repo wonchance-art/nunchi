@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
-import { startBoard } from '../src/board/server.mjs';
+import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 import { stableJson } from '../src/stable.mjs';
 import { leafy, coverageOf, leafyScenes } from './fixtures/coverage-project.mjs';
 
@@ -20,19 +20,10 @@ before(async () => {
   try { browser = await chromium.launch({ executablePath: process.env.NUNCHI_BROWSER || undefined }); }
   catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
-after(async () => { await browser?.close(); });
+after(async () => { await closeBoards(); await browser?.close(); });
 
-async function open(p, ctx = {}) {
-  const b = await startBoard({ projectDir: p.root });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, ...ctx });
-  const page = await context.newPage();
-  const errors = [], requests = [];
-  page.on('pageerror', e => errors.push(String(e)));
-  page.on('request', r => requests.push(r.url()));
-  await page.goto(b.newLink());
-  await page.waitForSelector('#h-progress');
-  return { b, page, errors, requests, close: async () => { await context.close(); await b.close(); } };
-}
+// the board, a page on it and the first view (fixtures/board-browser.mjs: closed again, and said why, when a step fails)
+const open = (p, ctx = {}) => openBoard(browser, p, { ctx: { viewport: { width: 1280, height: 900 }, ...ctx } });
 const until = async (fn, ms = 8000) => { const t = Date.now(); for (;;) { const v = await fn(); if (v) return v; if (Date.now() - t > ms) return v; await new Promise(r => setTimeout(r, 100)); } };
 async function axe(page) {
   await page.evaluate(AXE);
