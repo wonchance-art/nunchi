@@ -236,8 +236,10 @@ fixed: never say *fixed*, *undone* or *needs you* unless the engine printed it.
     - "Couldn't undo the fix … would overwrite or remove files that git does not show as changed (…)": the user moves
       those files somewhere safe, then says undo.
     The user undoes a fix by telling you "undo the fix of “<title>” (nunchi fix --undo <group>)" (the board gives them
-    that sentence) or "undo it": run `fix --undo <group>` (only while that fix is the last commit on its branch).
-    `fix --status` shows every attempt; `fix --abort <group>` stops one.
+    that sentence) or "undo it": run `fix --undo <group>` (only while that fix is the last commit on its branch). The
+    board's own [Undo this fix] runs the same undo; "Not undone: …" refusals (uncommitted changes, another branch, files
+    in the way) are the user's to clear, then they ask again. A fix the user undid or tried again in the board shows in
+    `fix --status`; do not redo it unless they ask. `fix --status` shows every attempt; `fix --abort <group>` stops one.
 
 ## Rules
 

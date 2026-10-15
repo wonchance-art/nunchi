@@ -1017,7 +1017,9 @@ only from the engine's probes.
 - `fix --verify <group>` checks the commit and the diff policy, captures P1 and judges. For AI items it writes
   `recheck-packets.json` into P1's run and waits for `fix --verify <group> --record <verdicts.json>` from a fresh
   re-checker (§4.1 rules: controls, suspect batches, keys outside the project).
-- `fix --undo <group>` reverts a fix that landed (fixed, or kept by *needs you*) while it is HEAD on its branch;
+- `fix --undo <group>` reverts a fix that landed (fixed, or kept by *needs you*) while it is HEAD on its branch (on
+  another branch at the same commit: "Not undone: you are on …, not on the fix branch …"; every refusal carries `why`
+  for the board);
   `--abort <group>` stops an attempt; `--status [<group>]` lists attempts and phases; `--summary` gives the batch line;
   `--approve-checks` approves the check profile from a TTY with a 4-character code typed back (channel `cli-tty`; the
   hook refuses it from the agent).
@@ -1189,19 +1191,35 @@ record changed by another command shows as words, never a stack trace (§6.1).
 
 A live claim shows "Claude Code is fixing · 4 min" ("just started" under a minute) on the group's row, in Detail and
 under Now; the row's accessible name adds who is fixing or "Needs you". Deciding against a live claim asks first, in
-the same question as a dismissal's when there is one. *Needs you* has the three kinds with their actions, while the Fix
+the same question as a dismissal's when there is one. *Needs you* has its kinds with their actions, while the Fix
 decision the attempt was made for stands (a Keep, a Later or a new Fix answers it): (a) "The fix also changed other
 parts of this screen (3%) [or: (2 other controls moved)]. Is that OK?" with [Looks fine, mark fixed] [Undo this fix]
 [Try again with a note…], and before and after with a slider (an overlay wipe: ←/→ in steps of 5, both viewports, the
 "Before/after width" toggle; the screen the fix changed most, its route named; a reverted attempt's after reads
 "Attempt 2 (undone)"); (b) "The AI couldn’t fix this in 2 tries." with [Try again with a note…] [Keep] [Later]; (c)
-"Couldn’t re-check: the screen didn’t load. Start your app, then tell your AI “retry”." The other kinds (the change
-touched files only the person can approve, a screen with nothing to compare against, an interrupted attempt, an undo
-that could not run) show the engine's own line and the undo sentence; their own cards wait for agreed words. *Looks
-fine* (`POST /api/fix-accept`) marks fixed only an attempt that is (a) with the defect gone and its decision still
-standing, and folds it as a fix. [Undo this fix] and a fix whose commit is still on the branch (also after a Keep or
-Later on (a)) show the sentence to tell the AI: "undo the fix of “Text cut off” (nunchi fix --undo <group>)". *Try
-again with a note…* records a new Fix decision whose note the next brief quotes as app data. The verdict counts a group
+"Couldn’t re-check: the screen didn’t load. Start your app, then tell your AI “retry”." The other kinds have their own
+cards (the owner's mock-ups, agreed 2026-10-15 KST), in the board's words from the one strings table (`FIX_WORDS`,
+never the engine's chat line; paths, routes, rule titles, a branch and commits come from the record as data): *diff*
+"The fix changed files only you can approve: public/robots.txt" (up to 5 paths, then "and N more") with [Copy path]
+(every path, one per line) [Undo this fix] [Try again with a note…]; *unbaselined* "The fix also reaches /help, which
+had no screenshot before. It now shows ‘Text cut off’." with [Undo this fix] [Try again with a note…]; *interrupted*
+"This fix (commit abc1234) wasn’t re-checked. Tell your AI “retry” to check it, or “undo it”."; *revert* (signing,
+uncommitted changes, another branch, git; the record's `reason`) "nunchi couldn’t undo this fix (commit abc1234):
+<reason>. Undo it yourself: git revert abc1234 [Copy]". A kind the board does not know says "nunchi couldn’t finish
+this fix on its own." and the undo sentence. *Looks fine* (`POST /api/fix-accept`) marks fixed only an attempt that is
+(a) with the defect gone and its decision still standing, and folds it as a fix. [Undo this fix] (`POST
+/api/fix-undo`, on (a), diff and unbaselined) is the AI's `fix --undo`: only the fix's own last commit, on its branch,
+a clean tree, no file git does not show overwritten; a refusal comes back as a key with its paths or branch and the
+card says it ("Not undone: you have changes that are not committed (notes.md). Commit or stash them, then press Undo
+this fix again."), the focus staying on the button; once undone the card goes and the focus lands on the attempt's
+history row. A fix whose commit is still on the branch with no card that undoes it (fixed, or after a Keep or Later)
+shows the sentence to tell the AI: "undo the fix of “Text cut off” (nunchi fix --undo <group>)". *Try again with a
+note…* records a person's Fix decision (channel `board`, the human Fix the attempt count starts from) whose note the
+next brief quotes as app data. Detail history lists the attempts under "Fix attempts", newest first: "Attempt 1 ·
+Broke something else — undone · abc1234 → reverted in def5678 · 12 min ago" (outcomes: Fixed; Undone at your request;
+Broke something else — undone; Didn’t remove it — undone; Undone to try again with your note; Stopped: you decided
+otherwise; Stopped before a commit; "Needs you — " and the card's short label), the attempt number per Fix decision,
+commits 7 characters in a mono font with a [Copy] named "Copy commit abc1234", times relative. The verdict counts a group
 whose fix waits for the person as *needs you*; the handoff ("All decided. N to fix…") leaves those out, and Decisions
 and `nunchi findings` say "N to fix need you" apart. "Needs you" is a heading; the slider and the width buttons keep
 the focus through a redraw.
@@ -1222,7 +1240,7 @@ the focus through a redraw.
   capture. `npm test` 545 of 546 (1 Windows-only test skipped) on Node 22.22.0 and on Node 24.21.0, Chromium included,
   with bun on PATH and without it (2026-10-15 08:08 KST).
 - Limits: the drift threshold (1%) is not calibrated yet (the gate does that); repositories with git filters are
-  refused, not handled; the other *needs you* kinds have no card of their own yet; guards (principle 6) are M4.
+  refused, not handled; guards (principle 6) are M4.
 
 ## 7. Progress board and exports (0.1-c)
 
@@ -1416,9 +1434,11 @@ sections; and every group of the ledger by id, so the page can update rows it sh
 addresses; evidence details; decisions on the group or its fingerprints with how each was made; code location),
 `GET /api/screens` (the latest run's screens with the export's badges and numbered findings),
 `GET /evidence/…`, `POST /api/decide`, `POST /api/undo`, `POST /api/confirm`, `POST /api/approve-checks`,
-`POST /api/fix-accept {group, attempt}` (the fix loop's [Looks fine, mark fixed], §6.6), `GET /api/live`, and
+`POST /api/fix-accept {group, attempt}` (the fix loop's [Looks fine, mark fixed], §6.6), `POST /api/fix-undo {group,
+attempt}` (the fix loop's [Undo this fix], `fix --undo`'s safe revert; 409 with `stale`, or `refused` (not-head,
+wrong-branch, dirty, occupied, filtered) with `paths`, `branch` and `on`, §6.6), `GET /api/live`, and
 `GET /api/generation` (the polling fallback). Added to the design's table: `POST /api/session`, `/api/screens`,
-`/api/generation`, `/api/undo`, `/api/fix-accept`. In label mode only `/api/label/pool`, `/api/label/item/:id`, `POST /api/label`, the evidence and
+`/api/generation`, `/api/undo`, `/api/fix-accept`, `/api/fix-undo`. In label mode only `/api/label/pool`, `/api/label/item/:id`, `POST /api/label`, the evidence and
 the live endpoints answer (the others 404, so nothing unblinds).
 - *Live updates:* the server watches the state folder (not recursively, 200 ms debounce) and polls every 3 s; what it
   compares is the generation **plus a signature of `.nunchi/decisions`** (names and times of its folders), because a
@@ -1510,8 +1530,8 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   Findings, once nothing is left to decide (AI findings not double-checked wait for the AI first; a group whose fix waits
   for the person is not counted to fix, §6.6).
 - *Fix states:* a live claim shows "<agent> is fixing · N min" ("just started" under a minute); *needs you* from a re-check that could not tell
-  ("Look at the screen, then decide; or tell your AI “re-check it”"). The fix loop's kinds (a), (b) and (c),
-  before/after and `fix --undo` are §6.6 (M3).
+  ("Look at the screen, then decide; or tell your AI “re-check it”"). The fix loop's kinds ((a), (b), (c), diff,
+  unbaselined, interrupted, revert), before/after, [Undo this fix] and the fix history are §6.6 (M3).
 - *Accessibility:* landmarks (nav, main), a skip link; the list is one listbox per section (multi-select, roving
   focus), sections are headings, the status tabs a tablist with arrows, the decision bar a toolbar with arrows; after
   a decision the focus moves to the next row and a polite live region says "Kept (intended). Next: Raw error text,
