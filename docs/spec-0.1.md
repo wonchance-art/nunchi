@@ -1172,8 +1172,10 @@ malicious one (design §1).
 **Hunt answers per agent** (`src/hunt-agents.mjs`, `src/agents.mjs`).
 - An answers file says who wrote it in its header: `{"plan", "agent", "vendor", "units"}` (a unit answer still refuses
   unknown keys, `agent` included). A declared name is one line of at most 40 characters without control characters
-  (C0, C1, bidi marks, line separators), its whitespace collapsed, compared without regard to case. A file whose
-  header holds anything else is refused, said in `rejected` ("answers file N: …; its answers were not used"); a call
+  (C0, C1, bidi marks, line separators), its whitespace collapsed, compared without regard to case. A vendor without
+  an agent names no one (two agents of one vendor would share one record, M6 review): a header with one is refused, as
+  is `hunt --plan --vendor` without `--agent` ("… a vendor without an agent: name the agent too (--agent), so two
+  agents of one vendor keep answers of their own"). A file whose header holds anything else is refused, said in `rejected` ("answers file N: …; its answers were not used"); a call
   with no readable file records nothing (exit 2). A file without a header is the undeclared agent's.
 - The run keeps each agent's latest record (`hunt-agents.json`: per agent the plan, the findings, the rejected answers
   and the cells), and `hunt --record` makes `ai-findings.json` and `coverage.json` from all of them:

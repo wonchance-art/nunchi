@@ -21,7 +21,7 @@ import { lensNumber } from './lenses.mjs';
 import { stableJson, writeStable } from './stable.mjs';
 import { present, readJsonFile } from './state.mjs';
 import { asClaim, claimHash } from './verify.mjs';
-import { declaredName, nameKey, agentList } from './agents.mjs';
+import { declaredName, nameKey, agentList, vendorOnly } from './agents.mjs';
 
 export const AGENTS_FILE = 'hunt-agents.json';
 const SEV = { blocker: 0, high: 1, medium: 2, low: 3 };
@@ -37,6 +37,8 @@ export function answersHeader(doc) {
   if (!isObj(doc)) return { agent: null, vendor: null, key: '' };             // recordHunt refuses the shape
   const a = declaredName(doc.agent, 'agent'), v = declaredName(doc.vendor, 'vendor');
   if (a.error || v.error) return { error: a.error || v.error };
+  const alone = vendorOnly(a.name, v.name, '"agent"');
+  if (alone) return { error: alone };
   return { agent: a.name, vendor: v.name, key: nameKey(a.name) };
 }
 

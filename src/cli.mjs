@@ -734,7 +734,7 @@ if (cmd === 'setup') {
   const { recordHunts, readAgentRecords, writeAgentRecords, formatAgents } = await import('./hunt-agents.mjs');
   const { noteHunt, huntProgress, huntInTheWay, huntLine } = await import('./activity.mjs');
   const V = await import('./verify.mjs');
-  const { declaredName } = await import('./agents.mjs');
+  const { declaredName, vendorOnly } = await import('./agents.mjs');
   const { writeStable } = await import('./stable.mjs');
   const fail = (msg, code = 1) => { console.error(`nunchi hunt: ${msg}`); process.exit(code); };
   if (!!args.plan === !!args.record) fail('use either --plan or --record <answers.json>');
@@ -772,6 +772,8 @@ if (cmd === 'setup') {
       const { plan, key } = planHuntWithKey({ runDir, lenses, lensIds, budget, budgetDefault, runId });
       const me = declaredName(args.agent, '--agent'), myVendor = declaredName(args.vendor, '--vendor');
       if (me.error || myVendor.error) fail(me.error || myVendor.error);
+      const alone = vendorOnly(me.name, myVendor.name, '--agent');
+      if (alone) fail(`--vendor: ${alone}`);
       // another agent hunting this run with the plan on disk would be left answering an old one: one plan per run
       let current = null;
       try { current = JSON.parse(readFileSync(planPath, 'utf8')).id ?? null; } catch {}

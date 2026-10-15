@@ -19,6 +19,9 @@ export function declaredName(v, what = 'agent') {
 // How two declared names are compared (and an agent's answers are kept apart): case and width do not matter. '' for none.
 export const nameKey = n => (typeof n === 'string' && n ? n.normalize('NFKC').toLowerCase() : '');
 export const sameName = (a, b) => !!nameKey(a) && nameKey(a) === nameKey(b);
+// A vendor alone names no agent: two agents of one vendor would share one record (M6 review). What is said, without the
+// field's spelling (`what`: how the agent is named where it was asked).
+export const vendorOnly = (agent, vendor, what = 'agent') => (vendor && !agent ? `a vendor without an agent: name the agent too (${what}), so two agents of one vendor keep answers of their own` : null);
 
 // A list of declared { agent, vendor } pairs, each once (by name, case aside), in one order; pairs with neither are
 // left out. Anything that is not a valid declared name is dropped (the list may come from a file anything can write).

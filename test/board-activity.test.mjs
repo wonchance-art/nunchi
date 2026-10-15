@@ -61,6 +61,9 @@ test('cli: hunt --plan starts the hunt under the declared agent, each hunt --rec
   const bad = spawnSync('node', [CLI, 'hunt', '--plan', '--agent', 'x'.repeat(41)], { cwd: p.cwd, encoding: 'utf8' });
   assert.equal(bad.status, 1);
   assert.match(bad.stderr, /--agent must be at most 40 characters/);
+  // a vendor alone names no agent (M6 review): refused, nothing started
+  const alone = spawnSync('node', [CLI, 'hunt', '--plan', '--vendor', 'OpenAI'], { cwd: p.cwd, encoding: 'utf8' });
+  assert.deepEqual([alone.status, alone.stderr.trim()], [1, 'nunchi hunt: --vendor: a vendor without an agent: name the agent too (--agent), so two agents of one vendor keep answers of their own']);
 });
 
 test('cli: a second plan is refused while another agent hunts this run with the plan on disk (one plan per run); the same plan, or the same agent, goes on', () => {

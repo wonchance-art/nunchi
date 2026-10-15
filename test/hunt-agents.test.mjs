@@ -111,6 +111,9 @@ test('header: a name that cannot be read refuses that file (said, its answers un
   assert.deepEqual(r.findings, [], 'the file with the unreadable name was not used');
   assert.deepEqual(r.rejected.map(x => [x.reason, x.detail]), [['bad-shape', 'answers file 1: agent must not hold control characters; its answers were not used']]);
   assert.throws(() => H.recordHunts({ runDir: p.runDir, plan, answers: [{ plan: plan.id, vendor: 7, units: [] }], root: p.cwd }), e => e.code === 'BAD_ANSWERS' && /answers file 1: vendor must be a short name/.test(e.message));
+  // a vendor alone names no agent: two agents of one vendor would share one record (M6 review)
+  const alone = record(p, plan, [{ plan: plan.id, vendor: 'OpenAI', units: [answerAll(u, 'none', deleteAll())] }, { plan: plan.id, ...CLAUDE, units: [answerAll(u, 'none')] }]);
+  assert.deepEqual([alone.findings, alone.rejected.map(x => x.detail)], [[], ['answers file 1: a vendor without an agent: name the agent too ("agent"), so two agents of one vendor keep answers of their own; its answers were not used']]);
   // a unit answer still refuses unknown keys: the header is the place for who answered (design §7)
   const inUnit = record(p, plan, [{ plan: plan.id, units: [{ ...answerAll(u, 'none'), agent: 'Codex' }] }]);
   assert.deepEqual(inUnit.rejected.map(x => x.detail), ['unknown key(s) agent']);
