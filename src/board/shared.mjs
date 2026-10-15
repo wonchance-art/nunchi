@@ -96,6 +96,34 @@ export const listText = (items, max = 5) => `${items.slice(0, max).join(', ')}${
 // "Claude Code is fixing · 4 min" (design §3.4), "just started" under a minute.
 export const fixingMinutes = minutes => (minutes === null || minutes === undefined ? 'just started' : minutes < 1 ? 'just started' : `${minutes} min`);
 export const fixingText = c => `${c.agent} is fixing · ${fixingMinutes(c.minutes)}`;
+// Several agents (design 0.1-c §7, M6; the mock-up the owner approved 2026-10-15 KST): an AI group's reviewer and who
+// found it, as declared, and the findings list's count of agents. Agent and vendor names are declared data: whoever
+// shows them clips and escapes them first.
+export const AGENT_WORDS = {
+  verdict: { confirmed: 'confirmed', rejected: 'rejected', insufficient: 'insufficient', claimed: 'not double-checked' },
+  crossVendor: vendor => (vendor ? `cross-vendor (${vendor}, as declared)` : 'cross-vendor'),
+  sameModel: 'same model',
+  asDeclared: '(as declared)',
+  agentsFound: n => `found by ${n} agents, as declared`,
+};
+// "confirmed · cross-vendor (OpenAI, as declared)", "rejected · same model · suspect", "not double-checked". `v`: an
+// item's verification ({ status, by, vendor, suspect, tooFewDecoys }); cross-vendor only when the ledger says so
+// (verify.mjs: every agent that claimed it declared another vendor than the verifier's).
+export function reviewerText(v) {
+  const parts = [AGENT_WORDS.verdict[v.status] || AGENT_WORDS.verdict.claimed];
+  if (v.status !== 'claimed' && v.by === 'cross-vendor') parts.push(AGENT_WORDS.crossVendor(v.vendor));
+  else if (v.status !== 'claimed' && v.by === 'same-model check') parts.push(AGENT_WORDS.sameModel);
+  if (v.suspect) parts.push('suspect');
+  if (v.tooFewDecoys) parts.push(`${WORDS['too-few-decoys']}: not a double-check`);
+  return parts.join(' · ');
+}
+// "Claude Code (Anthropic) and Codex (OpenAI), as declared"; a vendor that is not known is left out ("Codex, as
+// declared"). `agents`: [{ agent, vendor }], each once. → '' for none.
+export function foundByText(agents) {
+  const names = (agents || []).filter(a => a && (a.agent || a.vendor)).map(a => (a.agent ? `${a.agent}${a.vendor ? ` (${a.vendor})` : ''}` : `an agent of ${a.vendor}`));
+  if (!names.length) return '';
+  return `${names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`}, as declared`;
+}
 export const pctText = share => `${Math.max(1, Math.round((Number(share) || 0) * 100))}%`;
 export const REASON_LABEL = { intended: 'intended', 'out-of-scope': 'out of scope', 'not-a-problem': 'nothing wrong here', 'wrong-place': 'right issue, wrong spot' };
 // The decision bar's buttons: label and permanent sub-label (design §3.4).

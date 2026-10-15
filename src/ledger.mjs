@@ -24,6 +24,7 @@ import { randomBytes } from 'node:crypto';
 import { sha, stableJson, writeAtomic } from './stable.mjs';
 import { listRuns } from './runs.mjs';
 import { readJsonFile as readJson, readDoc, updateDoc, corrupt, present } from './state.mjs';
+import { agentList } from './agents.mjs';
 import { scrubSecrets } from './rules.mjs';
 import { redactText } from './network.mjs';
 
@@ -284,7 +285,8 @@ export function adoptLedger(legacy, stream = 'main') {
     const retagged = { ...it, hunts: (it.hunts || []).map(h => ({ ...h, stream })), rechecks: (it.rechecks || []).map(r => ({ ...r, stream })) };
     items[fp] = deriveAi(retagged) || retagged;
   }
-  return { ...s, folds: (s.folds || []).map(f => ({ ...f, stream })).sort(byFold), items };
+  const dormant = Object.fromEntries(Object.entries(s.dormant || {}).map(([fp, d]) => [fp, { ...d, hunts: (d.hunts || []).map(h => ({ ...h, stream })), rechecks: (d.rechecks || []).map(r => ({ ...r, stream })) }]));
+  return { ...s, folds: (s.folds || []).map(f => ({ ...f, stream })).sort(byFold), items, ...(s.dormant ? { dormant } : {}) };
 }
 // A second worktree's `.nunchi/state` ledger, when the shared ledger exists already: the open items the shared
 // ledger does not have (seen in runs since removed, say) are carried over as they stand, tagged with this worktree's
@@ -506,7 +508,8 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
     const lookedAt = [], gone = [];
     for (const [fp, item] of Object.entries(next.items)) {
       // only the worktree that last saw an item can say it is gone: worktrees on other branches would otherwise
-      // fix and bring back each other's items in turn (until M6 makes other branches' captures probes)
+      // fix and bring back each other's items in turn. M6 kept it so: only nunchi's fix branches are probes (design §7,
+      // the tracked branch is any other), so a worktree on another branch is a stream of its own
       if (isAi(item) || seen.has(fp) || streamOf(item) !== stream || byRun(item.lastSeen || id, id) > 0 || !lookedAgain(item, run, sets)) continue;
       lookedAt.push(fp);
       if (!item.goneAt) gone.push(fp);
@@ -556,11 +559,14 @@ const STATUS_RANK = { confirmed: 0, claimed: 1, insufficient: 2, rejected: 3 };
 const byEvent = (a, b) => byRun(String(a.run), String(b.run)) || cmp(a.stream ?? 'main', b.stream ?? 'main');
 export const STALE_HUNTS = 2;
 const AI_VERDICTS = new Set(['confirmed', 'rejected', 'insufficient']);
+const SAME_MODEL_CHECK = 'same-model check';                                  // verify.mjs SAME_MODEL
 
 // One AI item from its contributions; null when no hunt claims it as a defect any more (rejected and insufficient
 // claims never make an item, design §2.2).
 export function deriveAi(item) {
-  const hunts = (item.hunts || []).slice().sort(byEvent);
+  // a claim folded before claims kept the time they were first claimed (an older ledger): stamped once, from the
+  // item's own first sighting, so it is never read again
+  const hunts = (item.hunts || []).map(h => (h.claimed && CREATES(h.status) && !Number.isFinite(h.claimedAt) && Number.isFinite(h.at) ? { ...h, claimedAt: Math.min(h.at, Number.isFinite(item.addedAt) ? item.addedAt : h.at) } : h)).sort(byEvent);
   const rechecks = (item.rechecks || []).slice().sort(byEvent);
   const claims = hunts.filter(h => h.claimed);
   if (!claims.some(h => CREATES(h.status))) return null;
@@ -599,8 +605,13 @@ export function deriveAi(item) {
   const lastHunted = hunts.reduce((m, h) => maxRun(m, h.run), null);
   const silent = new Set(hunts.filter(h => h.silent && lastSeen && byRun(h.run, lastSeen) > 0).map(h => `${h.run}|${h.stream ?? 'main'}`));
   // the verdict: the latest one a verifier gave that was checked and not suspect, else the latest other one, else claimed
-  const judged = claims.filter(h => AI_VERDICTS.has(h.status));
+  // a rejection older than the newest claim that stands says nothing about that claim (M6 review: one folded before it,
+  // kept dormant, would otherwise date the item's verification before the claim it is about)
+  const newest = present.reduce((m, h) => maxRun(m, String(h.run)), null);
+  const judged = claims.filter(h => AI_VERDICTS.has(h.status) && (PRESENT(h) || !newest || byRun(String(h.run), newest) >= 0));
   const chosen = judged.filter(h => !weak(h)).pop() || judged.pop() || latest;
+  // first seen: the earliest time a claim that stands now was first claimed (never one rejected since, or gone)
+  const firsts = present.filter(h => CREATES(h.status) && Number.isFinite(h.claimedAt)).map(h => h.claimedAt);
   const verification = {
     status: chosen.status, by: chosen.by ?? null, ...(chosen.vendor ? { vendor: chosen.vendor } : {}), suspect: !!chosen.suspect,
     ...(chosen.tooFewDecoys && !chosen.suspect ? { tooFewDecoys: true } : {}), run: chosen.run,
@@ -617,35 +628,103 @@ export function deriveAi(item) {
     else for (const [c, s] of Object.entries(m.r.cells || {})) if (s?.verdict === 'unchanged' && seen[c]) note(c, { ...seen[c], scene: s.scene ?? seen[c].scene, top: s.top ?? null, full: s.full ?? null, textHash: s.textHash ?? null, src: s.src ?? null }, m.r.run);
   }
   const parts = cells.map(c => c.split('.'));
+  // who claimed it, as declared (M6): every agent of a claim that still stands
+  const agents = agentList(present.flatMap(h => h.agents || []));
   const out = {
-    fp: item.fp, group: latest.group || item.group, source: 'ai', stream: lastStream || streamOf(latest), lens: item.lens, rule: item.rule, route: item.route ?? null, inputs: item.inputs, addedAt: item.addedAt ?? null,
+    fp: item.fp, group: latest.group || item.group, source: 'ai', stream: lastStream || streamOf(latest), lens: item.lens, rule: item.rule, route: item.route ?? null, inputs: item.inputs, addedAt: firsts.length ? Math.min(...firsts) : item.addedAt ?? null,
     // displayed: the severity a verifier that confirmed it gave; rejected and insufficient keep the claimed one
     severity: (chosen.status === 'confirmed' ? chosen.verdictSeverity : null) || latest.claimedSeverity,
-    claimedSeverity: latest.claimedSeverity, protect: worst(present.flatMap(h => [h.claimedSeverity, h.verdictSeverity])) || latest.claimedSeverity,
+    claimedSeverity: latest.claimedSeverity, protect: worst(present.flatMap(h => [h.claimedSeverity, h.verdictSeverity, h.protectSeverity])) || latest.claimedSeverity,
     verification, cells, persons: [...new Set(parts.map(p => p[0]))].sort(), states: [...new Set(parts.map(p => p[1]))].sort(), viewports: [...new Set(parts.map(p => p[2]))].sort(),
     places: (latest.examples || []).length, examples: (latest.examples || []).slice(0, 5), selector: latest.selector ?? null, box: latest.box ?? null,
     evidence: latest.evidence || {}, identity: latest.identity || null, seen,
     firstSeen: present.reduce((m, h) => minRun(m, h.run), null) || latest.run, lastSeen: lastSeen || latest.run,
     lookedAt: [lastHunted, ...rechecks.map(r => r.run)].reduce(maxRun, null), lastHunted, silentHunts: silent.size,
-    goneAt, regressedAt, ...(needsYou ? { needsYou } : {}),
+    goneAt, regressedAt, ...(needsYou ? { needsYou } : {}), ...(agents.length ? { agents } : {}),
     hunts, rechecks,
   };
   return out;
 }
 
+// What each AI fold's hunt saw (`seen` on its fold entry, M6) → `lens|route|cell` → the folds that saw it.
+const refOf = h => `${h.run}|${h.stream ?? 'main'}`;
+function seenIndex(folds) {
+  const idx = new Map(), recorded = new Set();
+  for (const f of folds) {
+    if (f.source !== 'ai' || !Array.isArray(f.seen)) continue;
+    const ref = { run: f.run, stream: f.stream ?? 'main', at: Number.isFinite(f.at) ? f.at : null };
+    recorded.add(refOf(ref));
+    for (const k of f.seen) { if (!idx.has(k)) idx.set(k, []); idx.get(k).push(ref); }
+  }
+  return { idx, recorded };
+}
+// An AI item's silent hunts (staleness, design §2.4), derived from what every fold's hunt saw: each AI fold that saw a
+// cell of the item (its lens, on its route) and did not claim it. A fold that did not record what it saw (written
+// before M6) keeps the silent hunts it gave. So an item's silence does not depend on whether the hunt that saw its
+// screen was folded before or after the hunt that claimed it (two agents folding at once, M6). → the item's hunts.
+function silenced(it, { idx, recorded }) {
+  const hunts = it.hunts || [];
+  const claimed = new Set(hunts.filter(h => !h.silent).map(refOf));
+  const derived = new Map();
+  for (const c of it.cells || []) for (const r of idx.get(`${it.lens}|${it.route}|${c}`) || []) {
+    const k = refOf(r);
+    if (!claimed.has(k) && !derived.has(k)) derived.set(k, { run: r.run, stream: r.stream, at: r.at, silent: true });
+  }
+  return [...hunts.filter(h => !h.silent || !recorded.has(refOf(h))), ...derived.values()].sort(byEvent);
+}
+const silentOf = hunts => JSON.stringify(hunts.filter(h => h.silent).map(refOf));
+// What an AI fingerprint keeps while no hunt claims it as a defect (only rejected or insufficient claims, a claim a
+// re-hunt replaced, or re-checks folded before any claim): its contributions, so a later claim, folded in whatever
+// order, finds them (M6). Never shown. Only the contributions: what the item is (lens, route, ...) comes with the claim
+// that brings it back, and its silent hunts are derived again then (a fold written before M6 keeps the ones it gave),
+// so a dormant entry is one and the same however it came about.
+const dormantOf = (it, recorded) => ({ fp: it.fp, source: 'ai', hunts: (it.hunts || []).filter(h => !h.silent || !recorded.has(refOf(h))), rechecks: it.rechecks || [] });
+// A dormant entry, or a new one for a fingerprint nothing has claimed yet (a re-check folded before the claim it checked).
+const dormantFor = (dormant, fp) => dormant[fp] ?? { fp, source: 'ai', hunts: [], rechecks: [] };
+// A dormant fingerprint with nothing left (no contribution, never claimed) is no fingerprint at all: gone, so a state is
+// one and the same however it came about.
+const keepDormant = (dormant, fp) => { const d = dormant[fp]; if (d && !d.hunts?.length && !d.rechecks?.length) delete dormant[fp]; };
+// Derive the touched AI items (one no hunt claims any more goes dormant), then every AI item's silence from what the
+// folds saw. Changes `items` and `dormant` in place (both the caller's copies).
+function settleAi(items, dormant, touched, folds) {
+  const seen = seenIndex(folds);
+  for (const fp of touched) {
+    const d = deriveAi(items[fp]);
+    if (d) { items[fp] = d; delete dormant[fp]; } else { dormant[fp] = dormantOf(items[fp], seen.recorded); delete items[fp]; keepDormant(dormant, fp); }
+  }
+  for (const [fp, it] of Object.entries(items)) {
+    if (!isAi(it)) continue;
+    const hunts = silenced(it, seen);
+    if (silentOf(hunts) !== silentOf(it.hunts || [])) items[fp] = deriveAi({ ...it, hunts }) || it;
+  }
+  return { items, dormant };
+}
+// The state with these items, folds and dormant contributions (the key only while there are some, so the state is one
+// and the same whatever order the folds came in).
+const settled = (st, items, folds, dormant) => { const { dormant: _d, ...rest } = st; return { ...rest, items, folds, ...(Object.keys(dormant).length ? { dormant } : {}) }; };
+
 // Fold the (run, "ai") contribution of `stream` (design §2.2). `findings`: the run's AI findings that passed the
-// grounding re-check (ai-fold.mjs aiFoldInput), each with fp, group, its cell, its verdict and severities.
-// `seen`: the cells the hunt saw, as `lens|route|cell`. A finding rejected or insufficient never makes an item; on
-// an existing item it is the verdict this run gave. An item of the same lens whose cell the hunt saw and did not
-// claim gets a silent hunt (staleness). Folding the same inputs again changes nothing; other inputs replace.
+// grounding re-check (ai-fold.mjs aiFoldInput), each with fp, group, its cell, its verdict and severities, and the
+// agents that claimed it (declared, M6). `seen`: the cells the hunt saw, as `lens|route|cell`, kept on the fold
+// entry. A finding rejected or insufficient never makes an item; on an existing item it is the verdict this run gave
+// (with no item yet it waits, dormant, for a claim). An item of the same lens whose cell the hunt saw and did not
+// claim gets a silent hunt (staleness). Folding the same inputs again changes nothing; other inputs replace. The result
+// does not depend on the order in which folds of different runs come (M6: two agents fold at once): silence is
+// derived from every fold's `seen`, a verdict or re-check that came before its claim waits dormant, and `addedAt` is
+// the earliest time a claim that stands now was first claimed (test/ledger-commute.test.mjs).
 export function foldAi(state, { run, stream = 'main', key = null, findings = [], seen = [], now = Date.now() }) {
   const prior = foldOf(state, run, 'ai', stream);
   if (prior && key !== null && prior.key === key) return state;
   const st = upgrade(state, stream);
-  const items = { ...st.items };
+  const items = { ...st.items }, dormant = { ...(st.dormant || {}) };
   const touched = new Set();
   const mine = h => h.run === run && (h.stream ?? 'main') === stream;
-  if (prior) for (const [fp, it] of Object.entries(items)) if (isAi(it) && (it.hunts || []).some(mine)) { items[fp] = { ...it, hunts: it.hunts.filter(h => !mine(h)) }; touched.add(fp); }
+  // this run's earlier contribution (a re-hunt, a re-verify): replaced, each entry's first claim time kept
+  const before = new Map();
+  if (prior) {
+    for (const [fp, it] of Object.entries(items)) if (isAi(it) && (it.hunts || []).some(mine)) { before.set(fp, { h: it.hunts.find(mine), addedAt: it.addedAt }); items[fp] = { ...it, hunts: it.hunts.filter(h => !mine(h)) }; touched.add(fp); }
+    for (const [fp, d] of Object.entries(dormant)) if ((d.hunts || []).some(mine)) { before.set(fp, { h: d.hunts.find(mine) }); dormant[fp] = { ...d, hunts: d.hunts.filter(h => !mine(h)) }; keepDormant(dormant, fp); }
+  }
   const byFp = new Map();
   for (const f of findings) { if (!byFp.has(f.fp)) byFp.set(f.fp, []); byFp.get(f.fp).push(f); }
   for (const fp of [...byFp.keys()].sort()) {
@@ -653,34 +732,34 @@ export function foldAi(state, { run, stream = 'main', key = null, findings = [],
     let it = items[fp];
     if (it && !isAi(it)) continue;
     if (!it) {
-      if (!list.some(f => CREATES(f.status))) continue;
-      const f = list[0];
-      it = { fp, group: f.group, source: 'ai', lens: f.lens, rule: f.rule, route: f.route ?? null, inputs: f.inputs, addedAt: now, hunts: [], rechecks: [] };
+      const f = list[0], d = dormant[fp];
+      it = { fp, group: f.group, source: 'ai', lens: f.lens, rule: f.rule, route: f.route ?? null, inputs: f.inputs, hunts: d?.hunts || [], rechecks: d?.rechecks || [] };
     }
     const best = list.slice().sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status])[0];
     const scenes = {};
     for (const f of list) if (f.cell && f.sceneHash) scenes[f.cell] = { scene: f.scene, ...f.sceneHash, selector: f.selector ?? null, box: f.box ?? null };
+    const agents = agentList(list.flatMap(f => f.agents || []));
+    const protectSeverity = worst(list.map(f => f.protectSeverity));
+    // when this run's hunt first claimed it as a defect: kept while its claim stands (a re-verify keeps it), and a new
+    // time once it stood again after a rejection; the item's first sighting is the earliest of these (deriveAi)
+    const was = before.get(fp)?.h, wasAdded = before.get(fp)?.addedAt;
+    const claimedAt = CREATES(best.status) ? (was && CREATES(was.status) ? (Number.isFinite(was.claimedAt) ? was.claimedAt : Number.isFinite(wasAdded) ? Math.min(was.at, wasAdded) : was.at) : now) : null;
     const entry = {
-      run, stream, at: now, claimed: true, status: best.status, suspect: list.some(f => !!f.suspect), ...(list.some(f => !!f.tooFewDecoys) ? { tooFewDecoys: true } : {}),
-      by: best.by ?? null, ...(best.vendor ? { vendor: best.vendor } : {}),
+      run, stream, at: now, ...(claimedAt !== null ? { claimedAt } : {}), claimed: true, status: best.status, suspect: list.some(f => !!f.suspect), ...(list.some(f => !!f.tooFewDecoys) ? { tooFewDecoys: true } : {}),
+      // a same-model check of any of its findings makes the item's verdict one (M6 review: never cross-vendor because
+      // the finding that ranks first was)
+      by: list.some(f => AI_VERDICTS.has(f.status) && f.by === SAME_MODEL_CHECK) ? SAME_MODEL_CHECK : best.by ?? null, ...(best.vendor ? { vendor: best.vendor } : {}),
       claimedSeverity: worst(list.map(f => f.claimedSeverity)), verdictSeverity: worst(list.filter(f => AI_VERDICTS.has(f.status)).map(f => f.verdictSeverity)),
       cells: [...new Set(list.map(f => f.cell).filter(Boolean))].sort(), scenes, group: best.group,
       examples: [...new Set(list.map(f => f.scene).filter(Boolean))].sort().slice(0, 20), selector: best.selector ?? null, box: best.box ?? null,
-      evidence: best.evidence || {}, identity: best.identity || null,
+      evidence: best.evidence || {}, identity: best.identity || null, ...(agents.length ? { agents } : {}), ...(protectSeverity ? { protectSeverity } : {}),
     };
     items[fp] = { ...it, hunts: [...(it.hunts || []).filter(h => !mine(h)), entry].sort(byEvent) };
     touched.add(fp);
   }
-  // silent hunts: the hunt saw a cell of the item (same lens) and did not claim it
-  const seenSet = new Set(seen);
-  for (const [fp, it] of Object.entries(items)) {
-    if (!isAi(it) || byFp.has(fp)) continue;
-    if (!(it.cells || []).some(c => seenSet.has(`${it.lens}|${it.route}|${c}`))) continue;
-    items[fp] = { ...it, hunts: [...(it.hunts || []).filter(h => !mine(h)), { run, stream, at: now, silent: true }].sort(byEvent) };
-    touched.add(fp);
-  }
-  for (const fp of touched) { const d = deriveAi(items[fp]); if (d) items[fp] = d; else delete items[fp]; }
-  return { ...st, items, folds: withFold(st.folds, { run, source: 'ai', key, stream }) };
+  const folds = withFold(st.folds, { run, source: 'ai', key, stream, at: now, seen: [...new Set(seen)].sort() });
+  settleAi(items, dormant, touched, folds);
+  return settled(st, items, folds, dormant);
 }
 
 // Fold the (run, "recheck") contribution (design §2.4). `results`: per AI item, its verdict per cell
@@ -694,14 +773,18 @@ export function foldRecheck(state, { run, stream = 'main', key = null, suspect =
   const touched = new Set();
   const mine = r => r.run === run && (r.stream ?? 'main') === stream;
   if (prior) for (const [fp, it] of Object.entries(items)) if (isAi(it) && (it.rechecks || []).some(mine)) { items[fp] = { ...it, rechecks: it.rechecks.filter(r => !mine(r)) }; touched.add(fp); }
+  const dormant = { ...(st.dormant || {}) };
+  if (prior) for (const [fp, d] of Object.entries(dormant)) if ((d.rechecks || []).some(mine)) { dormant[fp] = { ...d, rechecks: d.rechecks.filter(r => !mine(r)) }; keepDormant(dormant, fp); }
   for (const r of results.slice().sort((a, b) => cmp(a.fp, b.fp))) {
-    const it = items[r.fp];
-    if (!it || !isAi(it)) continue;
+    // a fingerprint no claim has come for yet (its hunt folds after this re-check): the result waits dormant (M6)
+    const it = items[r.fp] ?? dormantFor(dormant, r.fp);
+    if (!isAi(it)) continue;
     items[r.fp] = { ...it, rechecks: [...(it.rechecks || []).filter(x => !mine(x)), { run, stream, at: now, suspect: !!suspect, cells: r.cells || {} }].sort(byEvent) };
     touched.add(r.fp);
   }
-  for (const fp of touched) { const d = deriveAi(items[fp]); if (d) items[fp] = d; else delete items[fp]; }
-  return { ...st, items, folds: withFold(st.folds, { run, source: 'recheck', key, stream }) };
+  const folds = withFold(st.folds, { run, source: 'recheck', key, stream });
+  settleAi(items, dormant, touched, folds);
+  return settled(st, items, folds, dormant);
 }
 
 // Fold a fix probe (design §4.4): the (run, "fix") contribution of P1 for one group, made by the fix loop only on
@@ -713,7 +796,7 @@ export function foldFix(state, { run, stream = 'main', key = null, group, gone =
   const prior = foldOf(state, run, 'fix', stream);
   if (prior && key !== null && prior.key === key) return state;
   const st = prior ? unfoldFix(state, { run, stream }) : upgrade(state, stream);
-  const items = { ...st.items };
+  const items = { ...st.items }, dormant = { ...(st.dormant || {}) };
   const done = [];
   for (const fp of [...new Set(gone)].sort()) {
     const it = items[fp];
@@ -723,13 +806,16 @@ export function foldFix(state, { run, stream = 'main', key = null, group, gone =
   }
   const touched = new Set();
   for (const r of rechecks.slice().sort((a, b) => cmp(a.fp, b.fp))) {
-    const it = items[r.fp];
-    if (!it || !isAi(it) || it.group !== group) continue;
+    // an item no hunt claims right now (dormant, or not claimed yet in this ledger) keeps the re-check for when one does,
+    // as a re-check's fold does (M6: the fold of the claim may come after this one)
+    const it = items[r.fp] ?? dormantFor(dormant, r.fp);
+    if (!isAi(it) || (it.group && it.group !== group)) continue;
     items[r.fp] = { ...it, rechecks: [...(it.rechecks || []).filter(x => !(x.run === run && (x.stream ?? 'main') === stream)), { run, stream, at: now, suspect: false, via: 'fix', cells: r.cells || {} }].sort(byEvent) };
     touched.add(r.fp);
   }
-  for (const fp of touched) { const d = deriveAi(items[fp]); if (d) items[fp] = d; else delete items[fp]; }
-  return { ...st, items, folds: withFold(st.folds, { run, source: 'fix', key, stream, group, gone: done, ai: [...touched].sort() }) };
+  const folds = withFold(st.folds, { run, source: 'fix', key, stream, group, gone: done, ai: [...touched].sort() });
+  settleAi(items, dormant, touched, folds);
+  return settled(st, items, folds, dormant);
 }
 // Undo a fix fold (`fix --undo`): what that (run, "fix") fold marked gone is open again (unless a later run decided
 // otherwise since), and its re-check entries go.
@@ -737,15 +823,19 @@ export function unfoldFix(state, { run, stream = 'main' }) {
   const f = foldOf(state, run, 'fix', stream);
   if (!f) return state;
   const st = upgrade(state, stream);
-  const items = { ...st.items };
+  const items = { ...st.items }, dormant = { ...(st.dormant || {}) };
   for (const fp of f.gone || []) { const it = items[fp]; if (it && it.goneAt === run) { const { fixedBy: _f, ...rest } = it; items[fp] = { ...rest, goneAt: null }; } }
+  const touched = new Set();
+  const ours = x => x.run === run && (x.stream ?? 'main') === stream && x.via === 'fix';
   for (const fp of f.ai || []) {
-    const it = items[fp];
-    if (!it || !isAi(it)) continue;
-    const d = deriveAi({ ...it, rechecks: (it.rechecks || []).filter(x => !(x.run === run && (x.stream ?? 'main') === stream && x.via === 'fix')) });
-    if (d) items[fp] = d;
+    const it = items[fp] ?? dormant[fp];
+    if (!it || !isAi(it) || !(it.rechecks || []).some(ours)) continue;
+    items[fp] = { ...it, rechecks: it.rechecks.filter(x => !ours(x)) };
+    touched.add(fp);
   }
-  return { ...st, items, folds: st.folds.filter(x => !sameFold(x, run, 'fix', stream)) };
+  const folds = st.folds.filter(x => !sameFold(x, run, 'fix', stream));
+  settleAi(items, dormant, touched, folds);
+  return settled(st, items, folds, dormant);
 }
 // Read, fold (or unfold) one fix probe, commit (state.mjs updateDoc). → the state as written.
 export function commitFix(stateFile, fn, { generation = null, timeoutMs } = {}) {
@@ -1102,6 +1192,7 @@ export function groups(rows) {
     g.places += r.places || 1;
     g.statuses[r.status] = (g.statuses[r.status] || 0) + 1;
     if (r.source === 'ai') g.checked = (g.checked ?? true) && !!r.checked;
+    if (r.agents) g.agents = agentList([...(g.agents || []), ...r.agents]);   // who claimed it, as declared (M6)
   }
   return [...by.values()].map(g => ({ ...g, routes: g.routes.sort(), fps: g.fps.sort(), status: Object.keys(g.statuses).length === 1 ? Object.keys(g.statuses)[0] : 'mixed' }))
     .sort((a, b) => SEVERITY[a.severity] - SEVERITY[b.severity] || b.routes.length - a.routes.length || b.places - a.places || (a.group < b.group ? -1 : 1));

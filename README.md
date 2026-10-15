@@ -67,6 +67,12 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
   yours), or *needs you* (it also changed other parts of the screen: the board shows before and after, with a slider).
   It never pushes, resets or forces, never mixes your uncommitted work into an undo, and an AI saying "fixed" changes
   nothing
+- **Several agents at once** (say, Claude Code and Codex in two worktrees): each says who it is, and nunchi records
+  it as declared. Their hunts' answers stand side by side, the same defect found by both is one finding (its Detail
+  says who found it), a verifier of another vendor than every agent that found it is labelled *cross-vendor* (never
+  an approval), the board shows who is fixing and hunting right now ("Codex · AI review L6 · 12/40 units · 3 min"),
+  and each worktree fixes against its own app server. Claims keep
+  cooperating agents from fixing one finding, or one file, at once; they do not stop a malicious one
 - **Runs** you can compare: each capture is its own folder with the commit and working-tree state it came from;
   a login that expired or an app that isn't running is reported once, not as a hundred findings
 - **Guards** that keep a fixed kind of defect from coming back: `window.confirm`/`alert`, `href="#"` and

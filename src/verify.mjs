@@ -5,12 +5,28 @@
 import { sha, stableJson } from './stable.mjs';
 import { ariaRoleName } from './ai-identity.mjs';
 import { WORDS } from './board/shared.mjs';
+import { sameName, declaredName } from './agents.mjs';
 
 export const DECOY_SHARE = 0.2;              // share of packets that are decoys
 export const SUSPECT_PASS_THROUGH = 0.1;     // decoy pass-through above this → the run's verifications are suspect
 export const VERDICTS = ['confirmed', 'rejected', 'insufficient'];
 export const SEVERITIES = ['blocker', 'high', 'medium', 'low'];
 export const SAME_MODEL = 'same-model check';
+export const CROSS_VENDOR = 'cross-vendor';
+// The vendors that hunted a claim, against the verifier's (`vendor`, declared): `own` when an agent that claimed it
+// declared the verifier's vendor, `unknown` when one did not declare a vendor (answers written before M6, by an agent
+// that did not say, or the undeclared agent's beside declared ones: `undeclaredHunter`), else `other`.
+export function hunterVendors(f, vendor) {
+  const v = declaredName(vendor, 'vendor').name;
+  const vendors = (Array.isArray(f?.agents) ? f.agents : []).map(a => declaredName(a?.vendor, 'vendor'));
+  if (v && vendors.some(x => !x.error && sameName(x.name, v))) return 'own';
+  if (f?.undeclaredHunter || !vendors.length || vendors.some(x => x.error || !x.name)) return 'unknown';
+  return 'other';
+}
+// Who checked a claim (design §7, H7): `cross-vendor` only when the verifier declared a vendor (`--vendor`) and every
+// agent that claimed it declared another one (M6 review: a hunter whose vendor is not known never makes a check
+// cross-vendor), else a same-model check. Declared, never checked, and never an approval: 0.1 auto-approves nothing.
+export const verifierOf = (f, vendor) => (declaredName(vendor, 'vendor').name && hunterVendors(f, vendor) === 'other' ? CROSS_VENDOR : SAME_MODEL);
 // the outcome of a run with fewer decoys than its claims called for: not suspect, and not double-checked either
 export const TOO_FEW_DECOYS = WORDS['too-few-decoys'];
 
@@ -162,7 +178,11 @@ export function planVerify({ findings, canaryScenes = new Set(), controlsOf = ()
 
 // verdicts: [{ packet, verdict, severity?, reason }] (or { verdicts: [...] }). Returns updated findings,
 // verify.json, and the problems that stopped it (nothing is written when there are any).
-export function recordVerdicts({ findings, key, verdicts, vendor = null }) {
+// `byHash` (the ledger reading a recorded round, M6 review): each packet's verdict goes to every finding whose claim
+// hash is the packet's, wherever it stands in the list now, and a packet whose claim is no longer there applies to
+// nothing; the round is never dropped as a whole because the list changed (another agent's hunt --record re-sorts it).
+// Without it (verify --record), the findings must be the ones the plan was made from, in the same places.
+export function recordVerdicts({ findings, key, verdicts, vendor = null, byHash = false }) {
   const list = Array.isArray(verdicts) ? verdicts : verdicts?.verdicts;
   const problems = [];
   if (!Array.isArray(list)) return { problems: ['verdicts must be a list of { packet, verdict, severity, reason }'] };
@@ -176,12 +196,15 @@ export function recordVerdicts({ findings, key, verdicts, vendor = null }) {
     if (v.severity != null && !SEVERITIES.includes(v.severity)) problems.push(`${where}: severity must be ${SEVERITIES.join(' | ')}`);
     if (typeof v.reason !== 'string' || !v.reason.trim() || /[\r\n]/.test(v.reason.trim()) || v.reason.length > 300) problems.push(`${where}: reason must be one line (≤300 characters)`);
     const k = key.packets[v.packet];
-    if (!k.decoy && (!findings[k.finding] || claimHash(findings[k.finding]) !== k.hash)) problems.push(`${where}: ai-findings.json changed since the plan; run verify --plan again`);
+    if (!k.decoy && !byHash && (!findings[k.finding] || claimHash(findings[k.finding]) !== k.hash)) problems.push(`${where}: ai-findings.json changed since the plan; run verify --plan again`);
   }
   if (problems.length) return { problems };
 
-  const verifier = vendor ? { label: 'cross-vendor', vendor } : { label: SAME_MODEL };
+  // the verifier's vendor as declared (whitespace collapsed); one that is no name is none
+  vendor = declaredName(vendor, 'vendor').name ?? null;
   const out = findings.map(f => ({ ...f }));
+  const byClaim = new Map();
+  if (byHash) findings.forEach((f, i) => { if (f && f.source === 'ai') { const h = claimHash(f); if (!byClaim.has(h)) byClaim.set(h, []); byClaim.get(h).push(i); } });
   const counts = { confirmed: 0, rejected: 0, insufficient: 0, unanswered: 0 };
   const decoys = { total: 0, answered: 0, passedThrough: 0, rate: null };
   const byPacket = new Map(list.map(v => [v.packet, v]));
@@ -196,16 +219,24 @@ export function recordVerdicts({ findings, key, verdicts, vendor = null }) {
     }
     if (!v) { counts.unanswered++; continue; }
     counts[v.verdict]++;
-    const f = out[k.finding];
-    // no severity given: the one claimed (on a re-verification, not the earlier verifier's correction)
-    const corrected = v.severity || f.verification?.claimedSeverity || f.severity;
-    out[k.finding] = {
-      ...f, status: v.verdict,
-      ...(v.verdict === 'confirmed' ? { severity: corrected } : {}),
-      verification: { packet: id, verdict: v.verdict, severity: corrected, claimedSeverity: f.verification?.claimedSeverity ?? f.severity, reason: v.reason.trim(), verifier: verifier.label, ...(vendor ? { vendor } : {}) },
-    };
-    touched.push(k.finding);
+    for (const i of byHash ? byClaim.get(k.hash) || [] : [k.finding]) {
+      const f = out[i];
+      // no severity given: the one claimed (on a re-verification, not the earlier verifier's correction)
+      const corrected = v.severity || f.verification?.claimedSeverity || f.severity;
+      out[i] = {
+        ...f, status: v.verdict,
+        ...(v.verdict === 'confirmed' ? { severity: corrected } : {}),
+        verification: { packet: id, verdict: v.verdict, severity: corrected, claimedSeverity: f.verification?.claimedSeverity ?? f.severity, reason: v.reason.trim(), verifier: verifierOf(f, vendor), ...(vendor ? { vendor } : {}) },
+      };
+      touched.push(i);
+    }
   }
+  // the run's verifier: cross-vendor unless no claim it judged was hunted only by other vendors; the claims its own
+  // vendor hunted, and those whose hunters did not declare a vendor, said apart (each finding carries its own label)
+  const kinds = vendor ? touched.map(i => hunterVendors(findings[i], vendor)) : [];
+  const same = kinds.filter(k => k === 'own').length, unknown = kinds.filter(k => k === 'unknown').length;
+  const verifier = !vendor ? { label: SAME_MODEL } : touched.length && same + unknown === touched.length ? { label: SAME_MODEL, vendor }
+    : { label: CROSS_VENDOR, vendor, ...(same ? { sameVendor: same } : {}), ...(unknown ? { undeclaredVendor: unknown } : {}) };
   decoys.rate = decoys.total ? decoys.passedThrough / decoys.total : null;
   // suspect (design §2.2): no decoy answered, or pass-through (confirmed or unanswered) above the threshold. A run whose
   // screens offered fewer decoys than the claims called for is not suspect: its verifier was not caught, but it could
@@ -242,14 +273,22 @@ export function asClaim(f) {
 export const keyRounds = key => [...(Array.isArray(key?.earlier) ? key.earlier : []), ...(key?.recorded ? [{ seed: key.seed, decoysPlanned: key.decoysPlanned, packets: key.packets, recorded: key.recorded }] : [])]
   .filter(r => r && r.packets && typeof r.packets === 'object' && r.recorded && Array.isArray(r.recorded.verdicts));
 // → the findings with statuses, severities and verifications recomputed from the key's recorded verdicts, round by
-// round (a round whose claims no longer match the findings is skipped: its findings stay claimed).
+// round, each verdict on the claims whose hash its packet holds (a claim reworded since, or gone, stays a claim; the
+// rest of the round still counts). A round whose verdicts are malformed (the key was edited) counts for nothing.
 export function verdictsFromKey(findings, key) {
   let cur = findings.map(asClaim);
   for (const r of keyRounds(key)) {
-    const res = recordVerdicts({ findings: cur, key: r, verdicts: r.recorded.verdicts, vendor: typeof r.recorded.vendor === 'string' ? r.recorded.vendor : null });
+    const res = recordVerdicts({ findings: cur, key: r, verdicts: r.recorded.verdicts, vendor: typeof r.recorded.vendor === 'string' ? r.recorded.vendor : null, byHash: true });
     if (!res.problems.length) cur = res.findings;
   }
   return cur;
 }
-// The rounds of an old key that still apply to these findings (kept when a new plan replaces the key).
-export const roundsStillValid = (findings, key) => keyRounds(key).filter(r => !recordVerdicts({ findings: findings.map(asClaim), key: r, verdicts: r.recorded.verdicts }).problems.length);
+// The claim hashes a key's recorded rounds give a verdict to (hunt-agents.mjs keeps those claims when it merges).
+export const backedClaims = key => new Set(keyRounds(key).flatMap(r => Object.entries(r.packets).filter(([id, k]) => k && !k.decoy && r.recorded.verdicts.some(v => v && v.packet === id)).map(([, k]) => k.hash)));
+// The rounds of an old key that still apply to these findings (kept when a new plan replaces the key): those with a
+// verdict on a claim still there.
+export const roundsStillValid = (findings, key) => {
+  const now = new Set(findings.map(asClaim).filter(f => f && f.source === 'ai').map(claimHash));
+  return keyRounds(key).filter(r => !recordVerdicts({ findings: findings.map(asClaim), key: r, verdicts: r.recorded.verdicts, byHash: true }).problems.length
+    && Object.values(r.packets).some(k => k && !k.decoy && now.has(k.hash)));
+};

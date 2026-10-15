@@ -380,17 +380,20 @@ export function checkSource(root, source, cache) {
   return { file: r.split(sep).join('/'), line };
 }
 
-// answers: one object {schema?, plan?, units: [{unit, items: {<item id>: {answer, reason?, defects?}}}]} or a
-// list of them (several answer files). Returns {findings, rejected, coverage}.
-export function recordHunt({ runDir, plan, answers, root, key = null }) {
+// answers: one object {schema?, plan?, agent?, vendor?, units: [{unit, items: {<item id>: {answer, reason?, defects?}}}]}
+// or a list of them (several answer files), all of one agent: hunt-agents.mjs recordHunts keeps several agents apart
+// (design §7) and calls this once per agent. `files`: each answers file's number in the whole call, for messages.
+// Returns {findings, rejected, coverage}.
+export function recordHunt({ runDir, plan, answers, root, key = null, files = null }) {
   const docs = Array.isArray(answers) ? answers : [answers];
+  const fileNo = d => (files ? files[d] : d + 1);
   if (key && key.plan !== plan.id) throw Object.assign(new Error(`hunt-key.json is for plan ${key.plan}, but hunt-plan.json is plan ${plan.id}. Run hunt --plan again.`), { code: 'STALE_ANSWERS' });
   const real = a => (key ? key.scenes[a] ?? a : a);
   const rejected = [];
   const reject = (r) => rejected.push(Object.fromEntries(Object.entries(r).filter(([, v]) => v !== undefined)));
   const given = [];
   for (const [d, doc] of docs.entries()) {
-    if (!isObj(doc) || !Array.isArray(doc.units)) { reject({ reason: 'bad-shape', detail: `answers file ${d + 1}: expected {"units": [...]}` }); continue; }
+    if (!isObj(doc) || !Array.isArray(doc.units)) { reject({ reason: 'bad-shape', detail: `answers file ${fileNo(d)}: expected {"units": [...]}` }); continue; }
     if (doc.plan !== undefined && doc.plan !== plan.id) throw Object.assign(new Error(`these answers are for plan ${doc.plan}, but the run's hunt-plan.json is plan ${plan.id}. Run hunt --plan again and answer its units.`), { code: 'STALE_ANSWERS' });
     for (const u of doc.units) given.push({ u, d });
   }
@@ -405,7 +408,7 @@ export function recordHunt({ runDir, plan, answers, root, key = null }) {
     const extra = Object.keys(u).filter(k => !UNIT_KEYS.includes(k));
     if (extra.length) { reject({ unit: u.unit, reason: 'bad-shape', detail: `unknown key(s) ${extra.sort().join(', ')}` }); continue; }
     if (!unitsById.has(u.unit)) { reject({ unit: u.unit, reason: 'unknown-unit' }); continue; }
-    if (counts.get(`${d}\0${u.unit}`) > 1) { reject({ unit: u.unit, reason: 'duplicate-unit', detail: `answered more than once in answers file ${d + 1}; none of those answers were used` }); answered.delete(u.unit); continue; }
+    if (counts.get(`${d}\0${u.unit}`) > 1) { reject({ unit: u.unit, reason: 'duplicate-unit', detail: `answered more than once in answers file ${fileNo(d)}; none of those answers were used` }); answered.delete(u.unit); continue; }
     answered.set(u.unit, u);
   }
 

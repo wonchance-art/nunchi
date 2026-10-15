@@ -30,7 +30,7 @@ import { coverageView, aiOnChecked } from './coverage.mjs';
 import { wallOut, screenDetail } from './screens.mjs';
 import { BASE_CSS, BOARD_CSS } from './look.mjs';
 import { VIEWS_CSS } from './look-views.mjs';
-import { decidedText, CAP_MS, fixingMinutes } from './shared.mjs';
+import { decidedText, CAP_MS, fixingMinutes, AGENT_WORDS } from './shared.mjs';
 import * as P from '../project.mjs';
 import { DECISIONS, protectOf, approvalKey, reasonProblem } from '../ledger.mjs';
 import { listRuns, workTree, captureStates } from '../runs.mjs';
@@ -42,6 +42,8 @@ import { writeStable, privateDir, sha } from '../stable.mjs';
 import { recordDecisionTime, metricsPath } from '../metrics.mjs';
 import { checkProfile, approvedProfiles, approveProfile, scriptsApprovedPath, checksRequestPath } from '../checks.mjs';
 import { labelPool, blindItem, lensTable, readLabels, writeLabel, LABELLER } from '../labels.mjs';
+import { listHunts, huntLine } from '../activity.mjs';
+import { declaredName } from '../agents.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
@@ -176,6 +178,16 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   // clock: claims bump no generation) changes the version
   const claimsDir = join(stateDir, 'claims');
   const claimsSig = () => { const c = readClaims(claimsDir, now()); return c.size ? sha([...c].map(([g, x]) => `${g}:${x.agent}`).join('|'), 12) : '-'; };
+  // the AI hunts in progress (design §7, src/activity.mjs): one that goes quiet drops out by the reader's clock, without
+  // a write, so the running ones are part of the version too
+  const order = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  const runningHunts = () => listHunts(stateDir, now()).filter(x => x.running).sort((a, b) => order(String(a.hunt.startedAt), String(b.hunt.startedAt)) || order(a.id, b.id));
+  // "Codex · AI review L6 · 12/40 units · 3 min" (design §7); the declared name is data, cleaned and clipped
+  // and its title: the name, "(as declared)" (M6 review: the line keeps the design's words, its title says whose word
+  // the name is); none for "Your AI"
+  const huntNow = () => { const t = now(); return runningHunts().map(x => { const n = declaredName(x.hunt.declaredAgent).name, name = n ? safe(n, 40) : null;
+    return { line: safe(huntLine({ ...x.hunt, declaredAgent: name }, t), 160), title: name ? `${name} ${AGENT_WORDS.asDeclared}` : null }; }); };
+  const huntsSig = () => { const h = runningHunts(); return h.length ? sha(h.map(x => `${x.id}:${x.hunt.answered}:${x.hunt.complete}:${x.hunt.units}`).join('|'), 12) : '-'; };
   // guards.json, committed and changed by the person's terminal or through git (neither bumps the generation): its mtime
   // and size
   const guardsSig = () => { try { const s = statSync(join(nunchiDir, 'guards.json')); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; } };
@@ -192,7 +204,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   // that stops writes nothing at all (it turns stopped by the reader's clock), so what the summary's words come from (each
   // folder's state, why and progress) is part of the version
   const capturesSig = () => { const c = captureStates(runsDir); return c.length ? sha(JSON.stringify(c), 12) : '-'; };
-  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${claimsSig()}.${coverageSig()}.${guardsSig()}.${capturesSig()}`;
+  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${huntsSig()}.${claimsSig()}.${coverageSig()}.${guardsSig()}.${capturesSig()}`;
   // claims as they are now (their minutes too) on a cached model
   const freshClaims = m => { const c = readClaims(claimsDir, now()); m.claims = c; for (const g of m.groups) g.fixing = c.get(g.id) || null; return m; };
   let cache = null;
@@ -330,8 +342,11 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     if (!limits.req.hit(t)) return fail(res, 429, 'too many requests');
     if (req.method === 'POST' && !limits.write.hit(t)) return fail(res, 429, 'too many changes at once');
     // the live stream and its polling fallback are not the person doing something: they do not keep the board up
-    if (path !== '/api/live' && path !== '/api/generation') lastActive = t;
-    return route(req, res, u, path);
+    const person = path !== '/api/live' && path !== '/api/generation';
+    if (person) lastActive = t;
+    // and the time spent answering the person is not idle time: a machine slow enough to take longer than the idle
+    // time over one answer (the first builds the model) never stops the board right after it (CI Windows, 2026-10-15)
+    try { return await route(req, res, u, path); } finally { if (person) lastActive = Math.max(lastActive, now()); }
   };
 
   // ---- routes (all with the token) -------------------------------------------------------------------------------------
@@ -442,7 +457,8 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     let coverage = null;
     try { coverage = aiOnChecked(m); } catch { coverage = null; }
     // the summary's Now lines (summary.mjs: the full check done, the first look, the captures running or stopped, M5b),
-    // then the fixes being made
+    // then the fixes being made (and, below, the hunts running: M6)
+    const hunting = huntNow();
     const nowLines = [...(s.now || []), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)} · ${fixingMinutes(c.minutes)}`)];
     return {
       version: version(), mode, project: safe(basename(project), 80), run: s.run, kind: s.kind, commit: s.commit ? safe(String(s.commit).slice(0, 7), 7) : null, dirty: s.dirty,
@@ -454,7 +470,11 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
         note: c.note ? safe(c.note, 500) : null, group: c.group, title: safe(c.title, 160), severity: c.severity })),
       health: { problems: s.health.problems.map(p => ({ status: safe(p.status, 40), scenes: p.scenes, of: p.of })), blind: s.health.blind ? safe(s.health.blind, 40) : null,
         scenes: { ...s.health.scenes, reasons: s.health.scenes.reasons.map(r => safe(r, 80)) } },
-      ai: { ...s.ai, coverage }, now: nowLines,
+      // design §7: "Now" lists captures, claims and, after them, the running hunts with their progress
+      ai: { ...s.ai, coverage }, now: [...nowLines, ...hunting.map(x => x.line)],
+      // a title per line of "Now": the declared name, "(as declared)", on the claims' and the hunts' lines (M6 review;
+      // "Your AI" is no declared name)
+      nowTitles: [...Array(nowLines.length - m.claims.size).fill(null), ...[...m.claims.values()].map(c => (c.agent !== 'Your AI' ? `${c.agent} ${AGENT_WORDS.asDeclared}` : null)), ...hunting.map(x => x.title)],
       checks: profile ? { requested, approved, profile: { hash: profile.hash, scripts: Object.fromEntries(Object.entries(profile.scripts).map(([k, v]) => [safe(k, 40), safe(v, 400)])), serve: Object.fromEntries(Object.entries(profile.serve || {}).map(([k, v]) => [safe(k, 40), safe(v, 400)])), others: Object.keys(profile.others || {}).length, files: Object.fromEntries(Object.entries(profile.files).map(([k, v]) => [safe(k, 120), v ? safe(v, 64) : null])), packageManager: profile.packageManager ? safe(profile.packageManager, 80) : null } } : null,
       // design §5: one card at the end of a fix batch, in its words; the rows a person toggles (Add)
       // `unreadable`: the line that says guards.json cannot be read (the rows then show without their toggles), or null;
