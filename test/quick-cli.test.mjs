@@ -41,7 +41,10 @@ test('a capture that fails, or is stopped, takes its unfinished run folder with 
   let stderr = '';
   child.stderr.on('data', d => { stderr += d; });
   const exited = new Promise(res => child.on('exit', (code, signal) => res(code ?? signal)));
-  for (let i = 0; i < 400 && !partial().some(p => existsSync(join(runs, p, 'progress.json'))); i++) await new Promise(r => setTimeout(r, 50));
+  // running: its progress file is there, and its browser has asked the app for data (the CLI writes the progress file
+  // before the browser starts, and a capture stopped while Playwright starts it leaves Playwright's half-made profile
+  // and artifacts folders in the temporary folder)
+  for (let i = 0; i < 600 && !(srv.hits.size > 0 && partial().some(p => existsSync(join(runs, p, 'progress.json')))); i++) await new Promise(r => setTimeout(r, 50));
   assert.equal(partial().length, 1, 'it is running');
   child.kill('SIGINT');
   assert.equal(await exited, 130, stderr);
