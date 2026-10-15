@@ -3,18 +3,21 @@
 // every suite then failed with ENOSPC. Now every test file makes its folders through tmp(), and the file's process
 // removes them when it ends. Here: the contract (no test file makes one any other way, with a fixture that trips the
 // check and one that does not); what a file's process leaves (nothing: the fixtures' projects, a failed test, a
-// stopping signal; NUNCHI_KEEP_TMP=1 keeps them); and a folder that cannot be removed.
+// stopping signal; NUNCHI_KEEP_TMP=1 keeps them); a folder that cannot be removed; and what CI's leftover check
+// (scripts/tmp-leftovers.mjs, run around `npm test`) counts.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, writeFileSync, realpathSync } from 'node:fs';
+import { readFileSync, readdirSync, writeFileSync, mkdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, basename, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { tmp, removeTmp, exitLine } from './fixtures/tmp.mjs';
+import { leftovers } from '../scripts/tmp-leftovers.mjs';
 
 const TEST = fileURLToPath(new URL('.', import.meta.url));
 const HELPER = join(TEST, 'fixtures', 'tmp.mjs');
+const LEFTOVERS = fileURLToPath(new URL('../scripts/tmp-leftovers.mjs', import.meta.url));
 const url = rel => JSON.stringify(pathToFileURL(join(TEST, 'fixtures', rel)).href);
 const POSIX = process.platform !== 'win32';
 
@@ -177,4 +180,33 @@ test('a folder that cannot be removed never fails or holds up the run: retried u
   assert.equal(exitLine({ code: 1, removed: 0, left: [] }), null);
   assert.equal(exitLine({ keep: true, kept: ['/t/a', '/t/b'] }), 'nunchi tests: kept 2 temporary folders (NUNCHI_KEEP_TMP=1): /t/a /t/b');
   assert.equal(exitLine({ keep: true, kept: [] }), null);
+});
+
+// ---- CI's leftover check -----------------------------------------------------------------------------------------------
+
+test('the leftover check: anything left trips it (a socket in the board\'s socket folder too); npm\'s compile cache, Chromium\'s shared memory and that folder empty do not', () => {
+  const d = tmp('nunchi-left-');
+  mkdirSync(join(d, 'node-compile-cache'));
+  writeFileSync(join(d, '.org.chromium.Chromium.DWilWC'), '');
+  mkdirSync(join(d, 'nunchi-501'));
+  assert.deepEqual(leftovers(d), []);
+  writeFileSync(join(d, 'nunchi-501', '0123456789abcdef.sock'), '');
+  mkdirSync(join(d, 'nunchi-board-AbC123'));
+  writeFileSync(join(d, 'outside'), '');
+  mkdirSync(join(d, 'playwright_chromiumdev_profile-XyZ789'));
+  assert.deepEqual(leftovers(d), ['nunchi-501', 'nunchi-board-AbC123', 'outside', 'playwright_chromiumdev_profile-XyZ789']);
+});
+
+test('the leftover check around a command: a folder left in its temporary folder fails it and is named; a command that leaves nothing passes', () => {
+  const dir = tmp('nunchi-left-cmd-');
+  const leaves = join(dir, 'leaves.mjs'), clean = join(dir, 'clean.mjs');
+  writeFileSync(leaves, `import { mkdirSync } from 'node:fs';\nimport { ${TD} } from 'node:os';\nmkdirSync(\`\${${TD}()}/nunchi-left-behind\`);\n`);
+  writeFileSync(clean, `import { tmp } from ${url('tmp.mjs')};\ntmp('nunchi-gone-');\n`);
+  const run = file => spawnSync(process.execPath, [LEFTOVERS, process.execPath, file], { encoding: 'utf8' });
+  const a = run(leaves);
+  assert.equal(a.status, 1, a.stdout + a.stderr);
+  assert.match(a.stderr, /left 1 entry in its temporary folder:\n {2}nunchi-left-behind\n/);
+  const b = run(clean);
+  assert.equal(b.status, 0, b.stdout + b.stderr);
+  assert.match(b.stdout, /left nothing in its temporary folder/);
 });
