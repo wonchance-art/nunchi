@@ -68,9 +68,9 @@ function evidenceOut(row, { pageText, signedIn }) {
       if (signedIn && !pageText && row.rule !== 'secret-in-client-bundle') { left++; continue; }
       out[k] = clean(redactUrl(v)); continue;
     }
-    if (DATA_KEYS.has(k)) { out[k] = deepClean(v); continue; }
-    if (NAME_KEYS.has(k) && (pageText || !signedIn)) { out[k] = deepClean(v); continue; }
-    if (pageText) { out[k] = deepClean(v); continue; }
+    if (DATA_KEYS.has(k)) { out[clean(k)] = deepClean(v); continue; }
+    if (NAME_KEYS.has(k) && (pageText || !signedIn)) { out[clean(k)] = deepClean(v); continue; }
+    if (pageText) { out[clean(k)] = deepClean(v); continue; }
     left++;
   }
   return { evidence: out, left };
@@ -126,7 +126,7 @@ export function findingsModel({ led, view, root, project, statuses = DEFAULT_STA
       fp: String(r.fp), status: r.status, severity: sevOf(r.severity), route,
       persons: [...(r.persons || [])].map(String).sort(), viewports: [...(r.viewports || [])].map(String).sort(), states: [...(r.states || [])].map(String).sort(),
       places: Number(r.places) || 1, element: el.element,
-      location: file ? { ...file, path: clean(file.path) } : page || (pkg ? { path: pkg, line: 1, from: 'app' } : null),
+      location: file ? { ...file, path: clean(file.path) } : page || (pkg ? { path: clean(pkg), line: 1, from: 'app' } : null),
       evidence: ev.evidence,
       decision: r.decision ? { decision: r.decision.decision, reason: r.decision.reason ?? null, human: r.decision.human ?? null, channel: r.decision.channel ?? null, ...(r.decision.note ? { note: clean(r.decision.note) } : {}) } : null,
       firstSeen: r.firstSeen ?? null, lastSeen: r.lastSeen ?? null, ...(r.goneAt ? { fixedIn: r.goneAt } : {}),
@@ -153,7 +153,8 @@ export function findingsModel({ led, view, root, project, statuses = DEFAULT_STA
   };
 }
 
-export const exportJson = model => stableJson(model);
+// Every key and string of the model once more, whoever put it there (an evidence key, the app's package.json path)
+export const exportJson = model => stableJson(deepClean(model));
 
 // ---- Markdown -------------------------------------------------------------------------------------------------------
 

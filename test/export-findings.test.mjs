@@ -145,6 +145,27 @@ test('page text of signed-in screens: an AI aria= node keeps its role, a masked 
   assert.equal(all['link-to-missing-route'].evidence.href, '/people/ana-fern-1987/diary?view=private');
 });
 
+test('JSON is cleaned whole: an evidence key and the app\'s package.json path in a folder named like a key', () => {
+  const outer = tmp('nunchi-export-f-deep-');
+  execFileSync('git', ['init', '-q'], { cwd: outer });
+  const root = join(outer, 'apps', `k-${GHP}`);
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fern', private: true }));
+  const sc = scene('/', 'guest', 'normal', 'd');
+  const KEY = 'sk_' + 'live_' + 'KeyAsJsonKey00000000000007';
+  writeRun(root, '0001', { scenes: [sc], findings: [
+    { lens: 'L1', rule: 'horizontal-overflow', severity: 'high', scene: sc.id, route: sc.route, viewport: sc.viewport, selector: 'html', box: null, evidence: { scrollWidth: 1400, viewportWidth: 1280, [KEY]: 'v', nested: { [`k-${AWS}`]: 1 } } },
+  ] });
+  for (const extra of [[], ['--include-page-text']]) for (const fmt of ['json', 'md', 'sarif']) {
+    const r = spawnSync(process.execPath, [CLI, 'export', '--format', fmt, ...extra], { cwd: root, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    for (const x of [GHP, KEY, AWS]) assert.ok(!r.stdout.includes(x), `${fmt} ${extra.join(' ')} leaks ${x.slice(0, 6)}…`);
+  }
+  const j = JSON.parse(spawnSync(process.execPath, [CLI, 'export', '--format', 'json', '--include-page-text'], { cwd: root, encoding: 'utf8' }).stdout);
+  assert.equal(j.groups[0].items[0].location.path, 'apps/k-[secret-shaped: github-token]/package.json');
+  assert.ok(Object.keys(j.groups[0].items[0].evidence).includes('[secret-shaped: stripe-live-secret-key]'));
+});
+
 test('Markdown: special characters escaped, no raw HTML, no link or image from data', () => {
   const p = project();
   const md = run(p, 'export', '--format', 'md', '--include-page-text').stdout;
