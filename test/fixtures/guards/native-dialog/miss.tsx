@@ -9,5 +9,8 @@ export async function RemovePlant() {
   dialog.confirm('a method of another object');
   const shelf = { prompt: () => true };
   shelf.prompt();
+  confirm`Remove this pot?`;
+  api.alert`not the browser`;
+  const note = String.raw`alert('in a raw string')`;
   return <p title="alert('x')">{text}</p>;
 }
