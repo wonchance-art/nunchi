@@ -25,12 +25,14 @@ import { join, dirname, resolve, relative, isAbsolute, basename } from 'node:pat
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir, userInfo } from 'node:os';
-import { buildBoardModel, groupList, groupDetail, screenWall, safe, readClaims, RUN_ID } from './model.mjs';
+import { buildBoardModel, groupList, groupDetail, safe, readClaims, RUN_ID } from './model.mjs';
+import { coverageView, aiOnChecked, runningRuns } from './coverage.mjs';
+import { wallOut, screenDetail } from './screens.mjs';
 import { BASE_CSS, BOARD_CSS } from './look.mjs';
 import { decidedText, CAP_MS, fixingMinutes } from './shared.mjs';
 import * as P from '../project.mjs';
 import { DECISIONS, protectOf, approvalKey, reasonProblem } from '../ledger.mjs';
-import { listRuns, workTree } from '../runs.mjs';
+import { listRuns, workTree, latestRun } from '../runs.mjs';
 import { readGeneration } from '../state.mjs';
 import { readManifest, sceneDir } from '../hunt.mjs';
 import { writeStable, privateDir, sha } from '../stable.mjs';
@@ -168,7 +170,10 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   // clock: claims bump no generation) changes the version
   const claimsDir = join(stateDir, 'claims');
   const claimsSig = () => { const c = readClaims(claimsDir, now()); return c.size ? sha([...c].map(([g, x]) => `${g}:${x.agent}`).join('|'), 12) : '-'; };
-  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${claimsSig()}`;
+  // the AI hunt's record of the latest run: `canaries --score` rewrites coverage.json without a ledger write (it bumps
+  // no generation), and Coverage must still show the cells it voided (M7)
+  const coverageSig = () => { const id = latestRun(runsDir); if (!id) return '-'; try { return String(statSync(join(runsDir, id, 'coverage.json')).mtimeMs); } catch { return '-'; } };
+  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${claimsSig()}.${coverageSig()}`;
   // claims as they are now (their minutes too) on a cached model
   const freshClaims = m => { const c = readClaims(claimsDir, now()); m.claims = c; for (const g of m.groups) g.fixing = c.get(g.id) || null; return m; };
   let cache = null;
@@ -330,7 +335,17 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     }
     const gm = /^\/api\/groups\/([0-9a-f]{12})$/.exec(path);
     if (get && gm) { const d = groupDetail(model(), gm[1]); return d ? send(res, 200, d) : fail(res, 404, 'no such group'); }
-    if (get && path === '/api/screens') return send(res, 200, screenWall(model()));
+    if (get && path === '/api/screens') return send(res, 200, wallOut(model()));
+    // M7: the Coverage view, and one screen of the latest run (Screens beyond the wall)
+    if (get && path === '/api/coverage') return send(res, 200, { ...coverageView(model()), running: runningRuns(runsDir) });
+    if (get && path.startsWith('/api/screens/')) {
+      const parts = path.split('/');
+      let run, scene;
+      try { [run, scene] = parts.slice(3).map(decodeURIComponent); } catch { return fail(res, 400, 'bad address'); }
+      if (parts.length !== 5 || !RUN_ID.test(run) || !scene || /[/\\\0]/.test(scene)) return fail(res, 400, 'bad address');
+      const d = screenDetail(model(), run, scene);
+      return d ? send(res, 200, d) : fail(res, 404, 'no such screen in the latest run');
+    }
     if (post && path === '/api/decide') return decide(res, await readJsonBody(req));
     if (post && path === '/api/undo') return undoDecisions(res, await readJsonBody(req));
     if (post && path === '/api/confirm') return confirm(res, await readJsonBody(req));
@@ -403,14 +418,10 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     try { approved = !!profile && approvedProfiles(scriptsApprovedPath(stateDir)).has(profile.hash); } catch {}
     const requested = existsSync(checksRequestPath(stateDir));
     const running = listRuns(runsDir).partial.map(p => p.replace(/\.partial$/, '')).filter(x => RUN_ID.test(x));
-    // the AI hunt's coverage of the latest run (coverage.json), with cells the budget cut said in the board's words
+    // the AI hunt's coverage of the latest run, counted on checked screens only (M7 decision D2: a screen that did not
+    // load is counted once, under Screens checked), with the cells the budget cut
     let coverage = null;
-    if (s.run && RUN_ID.test(s.run)) {
-      try {
-        const c = JSON.parse(readFileSync(join(runsDir, s.run, 'coverage.json'), 'utf8'))?.summary;
-        if (c && Number.isFinite(c.cells)) coverage = { cells: c.cells, seen: Number(c.seen) || 0, budget: Number(c.notSeen?.budget) || 0 };
-      } catch {}
-    }
+    try { coverage = aiOnChecked(m); } catch { coverage = null; }
     const nowLines = [...running.map(r => `Capture running · run ${r}`), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)} · ${fixingMinutes(c.minutes)}`)];
     return {
       version: version(), mode, project: safe(basename(project), 80), run: s.run, kind: s.kind, commit: s.commit ? safe(String(s.commit).slice(0, 7), 7) : null, dirty: s.dirty,
