@@ -50,10 +50,11 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    aborted and WebSockets are closed, so nothing reached a server; a miss means the recording is stale (suggest
    `--network record`), while a closed stream is listed apart and re-recording does not change it.
 6. Then run `open` and send the user to the board: it opens in their browser by itself (a one-time link you never
-   see), shows the verdict, every finding with its screenshot and the screens, and takes their decisions with one
-   key each. Say: "The board is open in your browser. Decide there, then tell me *fix them*." Do not try to get the
-   board's link or address, and never request the board's port yourself: it is the user's channel, and the
-   plugin's hook refuses it. `open` returns at once (the board stops after 2 hours idle; `open --stop` stops it now);
+   see), shows the verdict, every finding with its screenshot, the screens one at a time, what was and was not checked
+   (Coverage, with the sentence to tell you for each gap: below), and takes their decisions with one key each. Say:
+   "The board is open in your browser. Decide there, then tell me *fix them*." Do not try to get the board's link or
+   address, and never request the board's port yourself: it is the user's channel, and the plugin's hook refuses it.
+   `open` returns at once (the board stops after 2 hours idle; `open --stop` stops it now);
    running `open` again opens a fresh tab. If the user's machine has no browser for it, tell them to run
    `nunchi open` in their own terminal. Never run `open --label` (labelling is the user's, in their terminal).
    If the user tells you a decision in chat instead, record it with `decide <group id> fix|keep|false-positive|hold
@@ -71,6 +72,35 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    the `decide` command for each finding instead of buttons, so decisions still go through them. It holds
    screenshots of their app (signed-in screens included): publishing or sharing it anywhere, an Artifact included,
    sends those off the machine, so do it only after the user explicitly says yes to that.
+
+## What the board's Coverage view tells the user to say
+
+The board's Coverage view lists what was not checked, each with one sentence for the user to tell you
+("Tell your AI “…”"). When the user says one of them, do this:
+
+- "capture again": step 4 (when it said "Run nunchi login in your own terminal" first, the user does that; step 3).
+  "capture again with every state": step 4 without `--states`. "record the app’s data again": step 4 with
+  `--network record`. "find a sample address for <route>, then capture again": step 2, then step 4.
+- "run the AI review" or "run the AI review with every lens": the AI lenses below, from step 1, without `--lens`.
+- "hunt <lens> on <route> again": a missed canary voided that batch; Canaries step 6.
+- "review what the AI budget skipped": the budget cut units (*not seen: budget*). Read `hunt-plan.json` in the run
+  folder and tell the user what a plan with room for them costs: `estimate.planned + estimate.cut` tokens (the
+  plan's estimate, not a bill). Only when they say yes, run `hunt --plan --budget <that number>` (keep any `--lens`
+  the first plan had). Unit ids do not change with the budget, so earlier answers still fit: set the `"plan"` of
+  every answers file to the new plan's id (or leave it out), answer the units that are newly *planned* (AI lenses
+  steps 2–3) in a later file of the answers folder, and run `hunt --record <folder>`, then `canaries --score` when the
+  run has canaries.
+- "finish the AI review": units that were not answered or whose answer was incomplete (`coverage.json` cells
+  `not-seen` with reason `not-answered` or `incomplete`; their `unit` ids, and `rejected` in `ai-findings.json`).
+  Answer those units again, every checklist item (AI lenses steps 2–3, in fresh contexts when you can), in a later
+  file of the answers folder (a later file replaces a unit's earlier answer), then `hunt --record <folder>` and, when
+  the run has canaries, `canaries --score`.
+- "capture <route> too": discover could not work out that page's address from the code. Find the address it is
+  served at (read the routing code; ask the user once if it is not findable), then run
+  `capture --url <base> --routes <that address>`. Say first that this makes a **partial run**: it checks that page
+  only, its whole-app checks cannot mark anything fixed, and "Ready to ship" still needs a full capture (step 4).
+
+Never run a command a sentence does not name, and never raise the budget without the user's yes.
 
 ## AI lenses (hunt)
 
