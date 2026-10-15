@@ -90,9 +90,14 @@ export function coverageOf(run, scenes, { canary = true } = {}) {
 export const PLAN = { schema: 1, id: 'plan0000abcd', budget: 400000, budgetDefault: true, estimate: { total: 469500, planned: 400000, cut: 69500 },
   lenses: Object.keys(AI_LENSES).map(id => ({ id })), skippedLenses: [], units: [], notSeen: [] };
 
-// The project. `ai`: 'latest' (the hunt recorded on the latest run), 'older' (on run 0003 only), 'none';
-// `probes`: a fix attempt of the raw error with its probe runs (and a second whose probes were removed).
-export function leafy({ ai = 'latest', runs = 4, probes = true, prefix = 'nunchi-m7-' } = {}) {
+// The pages a quick first look of Leafy captures (M5: its key screens, the normal state only).
+export const QUICK = ['/', '/garden', '/cart'];
+
+// The project. `ai`: 'latest' (the hunt recorded on the last full check), 'older' (on run 0003 only), 'none';
+// `probes`: a fix attempt of the raw error with its probe runs (and a second whose probes were removed); `quick`: a
+// quick first look after the full checks, the latest capture (M5; not with `probes`, which take the same run ids).
+export function leafy({ ai = 'latest', runs = 4, probes = true, quick = false, prefix = 'nunchi-m7-' } = {}) {
+  if (quick && probes) throw new Error('leafy: a quick run and the fix probes would take the same run ids');
   const root = tmp(prefix);
   const nunchi = join(root, '.nunchi');
   const runIds = Array.from({ length: runs }, (_, i) => String(i + 1).padStart(4, '0'));
@@ -109,6 +114,18 @@ export function leafy({ ai = 'latest', runs = 4, probes = true, prefix = 'nunchi
       nodes: [...ORDER].sort().map(r => ({ route: r, captured: true, reachedBy: r === '/' ? 'entry' : 'link' })), edges: [] });
     state = foldRun(state, { ...runForFold(run), stream: 'main' });
     latest = { id, run, scenes };
+  }
+  // a quick first look after them (M5, design §6): the normal screens of three key pages, rule lenses only, folded
+  // as `quick`; its flow names every route, captured or not, as capture writes it
+  if (quick) {
+    const id = String(runs + 1).padStart(4, '0');
+    const scenes = leafyScenes().filter(s => QUICK.includes(s.route) && s.state === 'normal');
+    const { run } = writeRun(root, id, { scenes, findings: findingsOf(leafyScenes(), runs, runs).filter(x => scenes.some(s => s.id === x.scene)), parent: runIds[runs - 1], wholeApp: false });
+    write(join(run, 'run.json'), { schema: 1, id, parent: runIds[runs - 1], kind: 'quick', commit: null, dirty: null, wholeApp: false, health: { status: 'ok', problems: [] },
+      scope: { routes: [...QUICK].sort(), persons: ['guest', 'signed-in'], viewports: ['d', 'm'], states: ['normal'], changedSince: null }, skipped: [], unresolved: ['profile/edit'] });
+    write(join(run, 'flow.json'), { schema: 1, complete: true, wholeApp: false, entry: '/', order: QUICK, groups: [{ id: '/', routes: ['/', '/cart'] }, { id: '/garden', routes: ['/garden'] }],
+      nodes: [...ORDER].sort().map(r => ({ route: r, captured: QUICK.includes(r), reachedBy: r === '/' ? 'entry' : 'link' })), edges: [] });
+    state = foldRun(state, { ...runForFold(run), stream: 'main' });
   }
   // the AI hunt: a canary copy of /cart in the manifest (never shown, never counted), its record and plan
   const huntOn = ai === 'older' ? runIds[runs - 2] : runIds[runs - 1];

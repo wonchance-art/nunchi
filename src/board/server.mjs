@@ -26,7 +26,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir, userInfo } from 'node:os';
 import { buildBoardModel, groupList, groupDetail, safe, readClaims, RUN_ID } from './model.mjs';
-import { coverageView, aiOnChecked, runningRuns } from './coverage.mjs';
+import { coverageView, aiOnChecked } from './coverage.mjs';
 import { wallOut, screenDetail } from './screens.mjs';
 import { BASE_CSS, BOARD_CSS } from './look.mjs';
 import { VIEWS_CSS } from './look-views.mjs';
@@ -341,7 +341,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     if (get && gm) { const d = groupDetail(model(), gm[1]); return d ? send(res, 200, d) : fail(res, 404, 'no such group'); }
     if (get && path === '/api/screens') return send(res, 200, wallOut(model()));
     // M7: the Coverage view, and one screen of the latest run (Screens beyond the wall)
-    if (get && path === '/api/coverage') return send(res, 200, { ...coverageView(model()), running: runningRuns(runsDir) });
+    if (get && path === '/api/coverage') return send(res, 200, coverageView(model()));
     if (get && path.startsWith('/api/screens/')) {
       const parts = path.split('/');
       let run, scene;

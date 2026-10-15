@@ -212,3 +212,26 @@ test('coverage e2e: the view follows the live update — canaries --score voids 
     assert.deepEqual(s.errors, []);
   } finally { await s.close(); }
 });
+
+test('coverage e2e: a quick first look (M5) — Coverage and the wall say "First look", the AI row has no sentence to tell, the map\'s cells are rules only; axe finds nothing', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = leafy({ quick: true, probes: false });
+  const s = await open(p);
+  const { page } = s;
+  try {
+    await page.evaluate(() => { location.hash = '#/coverage'; });
+    await page.waitForSelector('#h-map');
+    const v = await page.evaluate(() => ({ banner: document.getElementById('cv-first-look')?.textContent, ai: document.querySelector('.cv-totals').textContent, copy: !!document.getElementById('cv-copy-ai'),
+      cell: document.getElementById('cv-0-0').textContent.trim(), gaps: [...document.querySelectorAll('.cv-gaps .cv-gap-line b')].map(b => b.textContent) }));
+    assert.equal(v.banner, 'First look: 3 key screens, rule checks only · the full check isn’t done yet');
+    assert.match(v.ai, /AI looked atAI review hasn’t run on run 0005Pages opened3 of 8/);
+    assert.equal(v.copy, false, 'no "run the AI review" to copy: the AI review hunts the full check');
+    assert.equal(v.cell, '○ Rules only');
+    assert.deepEqual(v.gaps, ['1 open finding can’t be marked fixed: not looked at since run 0001']);
+    assert.deepEqual(await axe(page), [], 'a first look');
+    await page.click('a[data-nav=screens]');
+    await page.waitForSelector('#h-screens');
+    assert.equal(await page.evaluate(() => document.getElementById('wall-first-look')?.textContent), 'First look: 3 key screens, rule checks only · the full check isn’t done yet');
+    assert.deepEqual(s.errors, []);
+  } finally { await s.close(); }
+});

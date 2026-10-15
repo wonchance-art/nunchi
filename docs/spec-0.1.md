@@ -1910,8 +1910,13 @@ States & messages, the trend per run; none is in M7.
   the bundle, parity pairs; a test pins the table against the files that emit rule findings) beside its AI cells on
   checked screens, with what was not checked and why.
 - *States:* "Loading coverage…", then the view; coming back to it, the last one with "Updating…"; nothing captured; a
-  capture running (banner); a quick run ("First look: …"); the AI review not run (every checked cell ○, the meter
-  replaced by the sentence); the AI review of an older run (its cells for this run's screens, with "changed since the AI
+  capture running (banner: the summary's captures whose writer is still there, M5); a quick first look (M5, §2.6),
+  shown as it is on Coverage and on the wall with "First look: N key screens, rule checks only · the full check isn’t
+  done yet", or, while the full check after it runs, the summary's line ("First look: 8 key screens · full check
+  running, 12 of 25 screens (about 6 min left)") in place of the banner for that check, as Progress says it (both
+  follow the board's version): no AI cell of another run on its screens, no sentence to run the AI review (it hunts
+  the full check), and the gaps the full check settles (states, pages not opened, the AI review) are not listed; the
+  AI review not run (every checked cell ○, the meter replaced by the sentence); the AI review of an older run (its cells for this run's screens, with "changed since the AI
   looked" where pixels or text differ); "Everything in this run’s scope was looked at."; "No page has a gap."
 - *Keys and accessibility:* the map is a `role=grid` table (`aria-rowcount`, `aria-colcount`, row headers) with one tab
   stop: arrows, Home/End, Ctrl+Home/End, J/K to the next or previous cell with a gap (anything but ● and ·), Enter or
@@ -1946,12 +1951,12 @@ States & messages, the trend per run; none is in M7.
   box drawn thicker with its number inverted), Enter, Esc (back to the wall, the focus on its card). After a new run it
   follows its screen, or says "This screen isn’t in run N." with the focus on that heading.
 
-**API.** `GET /api/coverage` → `{ run, kind, fullCheck, wholeApp, quick, scope, health, ai: { run, latest, older, error,
+**API.** `GET /api/coverage` → `{ run, kind, fullCheck, wholeApp, quick { screens, text }, scope, health, ai: { run, latest, older, error,
 last, lenses, names, budget, budgetDefault, estimate }, totals, wholeLine, aiLine, gaps[], fine[], muted[], warnings[],
 routes[{ route, name, opened, why, whyText, cells[{ key, id, route, person, viewport, state, checked, why, ai: { run,
 seen, of, lenses[{ lens, name, status, reason, answers, findings, text }] }, open, changed?, say }] }], byLens[], running
-}`. `GET /api/screens` gains per screen `checked`, `changed`, `ai { seen, of, budget }`, `group`, `open`, and `baseline`
-and `groups`. `GET /api/screens/:run/:scene` (the latest run only; ids checked; 404 otherwise) → `{ run, key, id, scene,
+}`. `GET /api/screens` gains per screen `checked`, `changed`, `ai { seen, of, budget }`, `group`, `open`, and `baseline`,
+`quick` and `groups`. `GET /api/screens/:run/:scene` (the latest run only; ids checked; 404 otherwise) → `{ run, key, id, scene,
 baseline, page, widths, findings[{ group, n, …, viewports, others, at }], fixedHere[], compare[{ kind, id, label, per |
 gone }], coverage, siblings[], judged }`. Strings go out through `safe()` as everywhere. The live version also names the
 latest run's `coverage.json` (its modification time): `canaries --score` rewrites it without a ledger write, so a
@@ -1982,11 +1987,13 @@ and Screen detail says "Previous (K)", "Next (J)" and its whole coverage line at
 
 **Tested.** `test/board-m7-words.test.mjs` (the words, the marks, stacked markers, the first view),
 `test/board-coverage.test.mjs` (the API on the synthetic app "Leafy", `test/fixtures/coverage-project.mjs`: totals,
-gaps and their order, cells, the AI review not run, older or unusable, scope gaps, the live version, Screens' fields
-and Screen detail, the rule-check table against the engine), `test/board-coverage-e2e.test.mjs` and
+gaps and their order, cells, the AI review not run, older or unusable, scope gaps, the live version, a quick first
+look with and without the full check running after it, Screens' fields and Screen detail, the rule-check table against
+the engine), `test/board-coverage-e2e.test.mjs` and
 `test/board-screens-e2e.test.mjs` (the keyboard paths above, axe with no violation light at 1280 px, dark at 390 px
 and at 1440 px, and at 200% zoom as 640 × 450 at 2× (the map a list, Screen detail's list under its image), 44 px
-targets, no sideways scroll at 390 px, reduced motion, no decision key in Screens, a screen gone after a new run),
+targets, no sideways scroll at 390 px, reduced motion, no decision key in Screens, a screen gone after a new run, a
+first look on both views),
 `test/board-m7-a11y.test.mjs` (what axe does not measure, light and dark: the map's marks as text at 4.5:1 or more,
 a selected cell's too, since axe skips text hidden from assistive technology; at 3:1 or more the focus rings of a
 cell, a phone row, a card, a finding and the toolbar, the selected cell's bar, the meters, the markers and the list's

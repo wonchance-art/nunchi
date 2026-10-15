@@ -32,6 +32,11 @@ const SPEND_ORDER = ['L1', 'L9', 'L6', 'L2', 'L10', 'L7', 'L5', 'L4'];
 // design system measured over every screen, `bundle` also the browser bundle (secrets), `parity` desktop against phone
 // per page and person, null: no rule check (the AI only). test/board-coverage.test.mjs pins it against the engine.
 export const RULE_CHECKS = { L1: 'screens', L2: 'pairs', L3: 'flow', L4: 'system', L5: null, L6: 'screens', L7: 'screens', L8: 'screens', L9: 'bundle', L10: 'parity' };
+// A quick first look (M5, design §6: some key screens, the normal state, rule lenses only) is shown as it is, "First
+// look" said (mock-up §3.5): the AI review hunts a full check, never one of these (`hunt` refuses it), so no AI cell
+// of another run is put on its screens, and the gaps the full check after it settles (states, pages not opened, the
+// AI review) are not listed for it.
+export const isQuick = model => model.latestEv?.meta?.kind === 'quick';
 
 // Every AI cell of the run the AI reviewed, for the latest run's screens. `src.run` is that run (the latest, an older
 // one, or null); `error`: its coverage.json could not be read.
@@ -43,6 +48,7 @@ export function aiSource(model) {
   const aiRuns = [...new Set(folds)].sort(byRun);
   const complete = new Set(listRuns(runsDir).complete);
   const out = { run: null, latest: false, older: false, error: false, cells: [], last: null, plan: null };
+  if (isQuick(model)) return (model._aiSource = out);
   const take = run => {
     const r = readJson(join(runsDir, run, 'coverage.json'));
     if (!r) return false;
@@ -99,7 +105,7 @@ function context(model) {
       openBy.get(f.scene)[g.severity] = (openBy.get(f.scene)[g.severity] || 0) + 1;
     }
   }
-  return (model._covCtx = { ev, src, scenes, raw, aiRaw, cellsBy, found, openBy });
+  return (model._covCtx = { ev, src, scenes, raw, aiRaw, cellsBy, found, openBy, quick: isQuick(model) });
 }
 
 const lensName = (model, id) => lensLabel(id, model.lenses?.[id]?.name);
@@ -122,12 +128,12 @@ function aiOf(model, cx, s) {
 }
 
 // The sentence a cell's panel offers (the cell's first gap), or null.
-function sayOf(cell, s) {
+function sayOf(cell, s, quick = false) {
   if (!cell.checked) {
     if (s.redirected || s.reason === 'redirected-off-origin') return null;
     return s.reason === 'login-expired' ? { say: C.say.again, sentence: C.loginThen } : { say: C.say.again, sentence: C.startThen };
   }
-  if (!cell.ai) return { say: C.say.run, sentence: C.tell(C.say.run) };
+  if (!cell.ai) return quick ? null : { say: C.say.run, sentence: C.tell(C.say.run) };
   const by = r => cell.ai.lenses.find(l => l.reason === r);
   const canary = by('canary-missed');
   if (canary) { const say = C.say.hunt(canary.lens, cell.route); return { say, sentence: C.tell(say) }; }
@@ -152,7 +158,7 @@ export function cellOf(model, s) {
     const a = cx.aiRaw.get(s.id), b = cx.raw.get(s.id);
     cell.changed = !!(a && b && (a.top !== b.top || a.full !== b.full || a.textHash !== b.textHash));
   }
-  cell.say = sayOf(cell, s);
+  cell.say = sayOf(cell, s, cx.quick);
   return cell;
 }
 
@@ -184,7 +190,8 @@ export function coverageView(model) {
   const nodes = (Array.isArray(flow.nodes) ? flow.nodes : []).filter(n => isObj(n) && typeof n.route === 'string');
   const sceneRoutes = new Set(scenes.map(s => s.route));
   const hasParam = r => /\[|:/.test(r);
-  const needsSample = scope.changedSince ? [] : nodes.filter(n => !n.captured && !sceneRoutes.has(n.route) && hasParam(n.route) && !unresolved.includes(n.route)).map(n => n.route).sort();
+  const quickLook = kind === 'quick';
+  const needsSample = scope.changedSince || quickLook ? [] : nodes.filter(n => !n.captured && !sceneRoutes.has(n.route) && hasParam(n.route) && !unresolved.includes(n.route)).map(n => n.route).sort();
   // pages: the routes discover resolved (flow.json nodes) and those it could not (run.json unresolved)
   const pages = nodes.length ? { opened: nodes.filter(n => n.captured).length, total: nodes.length + unresolved.length }
     : { opened: new Set(checked.filter(s => s.state === 'normal').map(s => s.route)).size, total: sceneRoutes.size + unresolved.length };
@@ -233,7 +240,7 @@ export function coverageView(model) {
       ...sentence(C.say.again, k === 'login-expired' ? C.loginThen : C.startThen), show: showOf(list) });
   }
   // the AI review
-  if (!src.run && checked.length) {
+  if (!src.run && checked.length && !quickLook) {
     push(gaps, { kind: 'ai-not-run', mark: MARKS.rules.sym, line: `${C.aiNotRun(run)}${src.last ? ` (last: run ${src.last})` : ''}`, ...sentence(C.say.run) });
   } else if (src.older) {
     push(gaps, { kind: 'ai-not-run', mark: MARKS.rules.sym, line: `${C.aiNotRun(run)} (last: run ${src.run})`, ...sentence(C.say.run) });
@@ -278,7 +285,7 @@ export function coverageView(model) {
     const routes = listText(needsSample.map(r => safe(r, 200)), 5);
     push(gaps, { kind: 'needs-sample', mark: MARKS.not.sym, line: C.gap.pages(needsSample.length, routes, C.gap.needsSampleWhy), ...sentence(C.say.sample(routes)) });
   }
-  if (unresolved.length) {
+  if (unresolved.length && !quickLook) {
     const routes = listText(unresolved.map(r => safe(r, 200)), 5);
     push(gaps, { kind: 'unresolved', mark: MARKS.not.sym, line: C.gap.pages(unresolved.length, routes, C.gap.unresolvedWhy), ...sentence(C.say.routeToo(routes)) });
   }
@@ -287,7 +294,7 @@ export function coverageView(model) {
     push(gaps, { kind: 'not-full', mark: '!', line: C.wholeNot(notFullWhy), ...sentence(C.say.again) });
   }
   // states not in scope
-  if (Array.isArray(scope.states) && scope.states.length && STATES.some(x => !scope.states.includes(x))) {
+  if (!quickLook && Array.isArray(scope.states) && scope.states.length && STATES.some(x => !scope.states.includes(x))) {
     push(gaps, { kind: 'states', mark: MARKS.none.sym, line: C.gap.states(andList(states.map(x => STATE_LABEL[x]))), ...sentence(C.say.states) });
   }
   // open findings that cannot be marked fixed
@@ -323,7 +330,7 @@ export function coverageView(model) {
   const routes = routeOrder.map(route => ({ route: safe(route, 200), name: nameOf(route), opened: true, why: null, whyText: null,
     cells: scenes.filter(s => s.route === route).map(s => cells.get(s.id)) }));
   for (const r of needsSample) routes.push({ route: safe(r, 200), name: null, opened: false, why: 'needs-sample', whyText: C.needsSample, cells: [] });
-  for (const r of unresolved) routes.push({ route: safe(r, 200), name: null, opened: false, why: 'unresolved', whyText: C.unresolved, cells: [] });
+  for (const r of quickLook ? [] : unresolved) routes.push({ route: safe(r, 200), name: null, opened: false, why: 'unresolved', whyText: C.unresolved, cells: [] });
 
   // ---- by lens: the rule checks (engine constants) beside the AI review's cells on checked screens -----------------
   const pairs = new Map();
@@ -350,7 +357,13 @@ export function coverageView(model) {
   const lensIds = [...new Set([...Object.keys(RULE_CHECKS), ...Object.keys(model.lenses || {}).filter(id => /^L\d+$/.test(id))])].sort(lensOrder);
   const byLens = lensIds.map(id => ({ lens: id, name: safe(lensName(model, id), 80), rule: ruleText(id), ai: aiText(id) || C.of(aiCells.filter(l => l.lens === id && l.status === 'seen').length, aiCells.filter(l => l.lens === id).length) }));
 
-  const quick = kind === 'quick' ? { screens: new Set(scenes.map(s => s.route)).size } : null;
+  // a first look: its key screens (pages, as M5 counts them) and, while the full check after it runs, the summary's
+  // line for it ("First look: 8 key screens · full check running, 12 of 25 screens (about 6 min left)")
+  const first = sum.firstLook && sum.firstLook.run === run ? sum.firstLook : null;
+  const quick = quickLook ? { screens: Number.isInteger(first?.screens) && first.screens > 0 ? first.screens : new Set(scenes.map(s => s.route)).size, text: first?.text ? safe(first.text, 300) : null } : null;
+  // captures being written by a writer that is still there (summary.mjs, M5: a killed one's folder is not "running");
+  // the full check after a first look is said by the first look's line instead, as on Progress
+  const running = (Array.isArray(sum.runningRuns) ? sum.runningRuns : []).map(String).filter(r => RUN_ID.test(r) && r !== sum.firstLook?.full?.run).sort(byRun);
   return (model._coverage = {
     run, kind, fullCheck, wholeApp: meta.wholeApp === true, quick,
     scope: { persons, viewports: vps, states },
@@ -362,7 +375,7 @@ export function coverageView(model) {
     totals: { screens: { checked: checked.length, total: scenes.length }, ai: aiTotals, pages },
     wholeLine, aiLine,
     gaps, fine, muted, warnings,
-    routes, byLens,
+    routes, byLens, running,
   });
 }
 
@@ -380,5 +393,3 @@ export function aiOnChecked(model) {
   return { cells: list.length, seen: list.filter(c => c.status === 'seen').length, budget: list.filter(c => c.status !== 'seen' && c.reason === 'budget').length };
 }
 
-// Capture runs in progress (a `.partial` folder): the banner "A capture is running (run 0013)".
-export const runningRuns = runsDir => listRuns(runsDir).partial.map(p => p.replace(/\.partial$/, '')).filter(x => RUN_ID.test(x)).sort(byRun);

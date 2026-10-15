@@ -95,7 +95,8 @@ export function render(focus = false) {
   const banners = [
     D.running?.length ? h('p', { class: 'banner', role: 'note' }, C.running(D.running[D.running.length - 1], D.run)) : null,
     S.summary?.treeChanged ? h('p', { class: 'banner banner-warn', role: 'note' }, W.WORDS['tree-differs']) : null,
-    D.quick ? h('p', { class: 'banner', role: 'note' }, C.quick(D.totals.screens.total)) : null,
+    // a first look (M5): the summary's line while the full check after it runs, as Progress says it; else the mock-up's
+    D.quick ? h('p', { class: 'banner', role: 'note', id: 'cv-first-look' }, D.quick.text || C.quick(D.quick.screens)) : null,
   ];
   X.show(h('section', { id: 'coverage', class: 'view', 'aria-labelledby': 'h-coverage' }, h('div', { class: 'stack' },
     h('div', null, h('h1', { id: 'h-coverage' }, C.title), h('p', { class: 'muted' }, C.sub(D.run, D.fullCheck)), V().updating ? h('p', { class: 'muted small', role: 'status' }, 'Updating…') : null),
@@ -115,7 +116,10 @@ function totals(D) {
   return h('dl', { class: 'panel-box cv-totals' },
     row(C.screensChecked, [h('span', { class: 'cv-num' }, C.of(sc.checked, sc.total)), meter(sc.checked, sc.total), sc.total > sc.checked ? h('span', { class: 'muted small' }, C.notCheckedN(sc.total - sc.checked)) : null]),
     row(C.aiLooked, ai ? [h('span', { class: 'cv-num' }, C.ofCells(ai.seen, ai.of)), meter(ai.seen, ai.of), ai.of > ai.seen ? h('span', { class: 'muted small' }, C.notN(ai.of - ai.seen)) : null]
-      : D.ai.error ? h('span', { class: 'warn' }, C.aiUnreadable(D.ai.run)) : [h('span', null, C.aiNotRun(D.run)), ' ', h('span', { class: 'cv-say' }, C.tell(C.say.run), ' ', X.copyButton(C.say.run, 'Copy', { id: 'cv-copy-ai', name: C.copy(C.say.run) }))]),
+      : D.ai.error ? h('span', { class: 'warn' }, C.aiUnreadable(D.ai.run))
+        // a first look has no AI review (it hunts the full check): no sentence to tell, the banner says what comes
+        : D.quick ? h('span', null, C.aiNotRun(D.run))
+          : [h('span', null, C.aiNotRun(D.run)), ' ', h('span', { class: 'cv-say' }, C.tell(C.say.run), ' ', X.copyButton(C.say.run, 'Copy', { id: 'cv-copy-ai', name: C.copy(C.say.run) }))]),
     row(C.pagesOpened, h('span', { class: 'cv-num' }, C.of(T.pages.opened, T.pages.total))),
     row(C.wholeApp, D.wholeLine, 'cv-wide'),
     D.aiLine ? row(C.aiReview, D.aiLine, 'cv-wide') : null);

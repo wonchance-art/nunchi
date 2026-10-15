@@ -114,6 +114,8 @@ export function renderWall(focus = false) {
   clear.addEventListener('click', () => { Object.assign(F, { vp: 'all', who: 'all', state: 'all', show: 'all', q: '' }); renderWall(); X.focusHeading(); });
   X.show(h('section', { id: 'screens', class: 'view', 'aria-labelledby': 'h-screens' }, h('div', { class: 'stack' },
     h('div', { class: 'head-row' }, h('div', null, h('h1', { id: 'h-screens' }, 'Screens'), h('p', { class: 'muted' }, `${W.plural(new Set(all.map(s => s.route)).size, 'page')}, ${W.plural(all.length, 'screen')} · every one nunchi captured in run ${S.screens.run || '—'}, as it saw it`))),
+    // a quick first look (M5) says so, as Coverage does
+    S.screens.quick ? h('p', { class: 'banner', role: 'note', id: 'wall-first-look' }, S.screens.quick.text || W.COVERAGE.quick(S.screens.quick.screens)) : null,
     h('div', { class: 'filters wall-filters' }, filter('Width', vps, W.WIDTH, 'vp'), filter('Who', whos, W.WHO, 'who'), filter('State', states, W.STATE_LABEL, 'state'),
       narrow ? (() => { const sel2 = h('select', { id: 'wall-show' }, ['all', ...showList].map(v => h('option', { value: v, selected: F.show === v }, v === 'all' ? T.all : `${{ open: T.open, not: T.not, changed: T.changed(base) }[v]} (${count('show', v)})`))); sel2.addEventListener('change', () => set('show', sel2.value)); return h('label', { class: 'field', for: 'wall-show' }, T.show, sel2); })()
         : h('span', { class: 'cv-fl' }, h('span', { class: 'muted small' }, T.show), h('div', { class: 'seg-b', role: 'group', 'aria-label': T.show }, ['all', ...showList].map(v => {

@@ -8,7 +8,7 @@ import { byRun } from '../ledger.mjs';
 import { allRecords } from '../fix/records.mjs';
 import { redactUrl } from '../network.mjs';
 import { screenWall, sceneOut, safe, RUN_ID } from './model.mjs';
-import { cellOf, sceneCoverage, checkedScene } from './coverage.mjs';
+import { cellOf, sceneCoverage, checkedScene, isQuick } from './coverage.mjs';
 import { SEV, VPS, STATUS_LABEL, MORE_STATUS, SCREENS as T, drawable, listText } from './shared.mjs';
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -66,7 +66,10 @@ export function wallOut(model) {
     const r = ev.scenes[i].route;
     if (!g.routes.includes(r)) g.routes.push(r);
   }
-  return (model._wall = { run: w.run, baseline: base, scenes, groups: groups.map(g => ({ id: g.id, title: safe(g.id === '/' ? `${T.pages} · ${listText(g.routes, 5)}` : `${g.id}/*`, 300) })) });
+  // a quick first look (M5) says so, in the words Coverage and Progress use for it
+  const first = model.summary.firstLook && model.summary.firstLook.run === w.run ? model.summary.firstLook : null;
+  const quick = isQuick(model) ? { screens: Number.isInteger(first?.screens) && first.screens > 0 ? first.screens : groups.reduce((n, g) => n + g.routes.length, 0), text: first?.text ? safe(first.text, 300) : null } : null;
+  return (model._wall = { run: w.run, baseline: base, quick, scenes, groups: groups.map(g => ({ id: g.id, title: safe(g.id === '/' ? `${T.pages} · ${listText(g.routes, 5)}` : `${g.id}/*`, 300) })) });
 }
 
 const statusText = s => STATUS_LABEL[s] || MORE_STATUS[s] || 'Mixed';

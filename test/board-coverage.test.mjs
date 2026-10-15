@@ -4,7 +4,7 @@
 // /api/screens/:run/:scene. The synthetic app "Leafy" (test/fixtures/coverage-project.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, readdirSync, utimesSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, utimesSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startBoard } from '../src/board/server.mjs';
@@ -237,6 +237,41 @@ test('screens: the wall\'s new fields (changed since the last full check, AI cel
     assert.equal((await call(`/api/screens/0004/${encodeURIComponent('../0003/x')}`)).status, 400);
     assert.equal((await call('/api/screens/0004/cart.signed-in.normal.d', { token: 'f'.repeat(64) })).status, 401);
     assert.equal((await call('/api/coverage', { token: 'f'.repeat(64) })).status, 401);
+  } finally { await b.close(); }
+});
+
+test('a quick first look (M5): Coverage and Screens show it as it is and say "First look"; no AI cell of another run, no gap the full check settles; the summary\'s line while the full check runs', async () => {
+  const p = leafy({ quick: true, probes: false });
+  let { b, call } = await board(p);
+  try {
+    const c = (await call('/api/coverage')).json;
+    assert.deepEqual([c.run, c.kind, c.fullCheck, c.quick], ['0005', 'quick', false, { screens: 3, text: null }], 'three key screens (pages, as M5 counts them)');
+    assert.deepEqual(c.totals, { screens: { checked: 12, total: 12 }, ai: null, pages: { opened: 3, total: 8 } });
+    assert.equal(c.wholeLine, 'Not a full check: a first look. Whole-app checks can’t mark anything fixed.');
+    assert.equal(c.aiLine, null);
+    // the AI hunted run 0004: none of its cells is put on the first look's screens, and no cell says "run the AI review"
+    const cells = c.routes.flatMap(r => r.cells);
+    assert.deepEqual([cells.length, cells.filter(x => x.ai || x.say).length], [12, 0]);
+    // not listed for a first look: the AI review, states, a page that needs a sample (/garden/[plot]), profile/edit
+    assert.deepEqual(c.gaps.map(g => g.kind), ['not-looked']);
+    assert.deepEqual(c.routes.map(r => r.route), ['/', '/garden', '/cart']);
+    assert.deepEqual(c.running, []);
+    const w = (await call('/api/screens')).json;
+    assert.deepEqual([w.quick, w.baseline, w.scenes.filter(s => s.ai).length], [{ screens: 3, text: null }, '0004', 0], 'the wall says it too, compared with the last full check');
+    const s = (await call('/api/summary')).json;
+    assert.deepEqual([s.verdict.text, s.ai.coverage], ['Too early to say', null], 'Progress: no AI cells for a first look (aiOnChecked agrees with the summary)');
+  } finally { await b.close(); }
+  // a full check being captured after it: the summary's line in place of "a capture is running", as on Progress
+  mkdirSync(join(p.nunchi, 'runs', '0006.partial'), { recursive: true });
+  writeFileSync(join(p.nunchi, 'runs', '0006.partial', 'progress.json'), JSON.stringify({ schema: 1, kind: 'sweep', wholeApp: true, routes: 7, done: 2, routeMs: [60000, 60000] }));
+  ({ b, call } = await board(p));
+  try {
+    const c = (await call('/api/coverage')).json;
+    const line = 'First look: 3 key screens · full check running, 2 of 7 screens (about 5 min left)';
+    assert.deepEqual([c.quick, c.running], [{ screens: 3, text: line }, []]);
+    assert.equal((await call('/api/screens')).json.quick.text, line);
+    const s = (await call('/api/summary')).json;
+    assert.deepEqual([s.verdict.text, s.now], ['Too early to say · full check running', [line]]);
   } finally { await b.close(); }
 });
 
