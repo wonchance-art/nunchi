@@ -106,6 +106,45 @@ test('page text is left out by default: evidence text, claim quotes, control nam
   assert.match(JSON.stringify(withText), /Ana Fern/);
 });
 
+test('page text of signed-in screens: an AI aria= node keeps its role, a masked name and its states; a URL is left out; both counted', () => {
+  const root = tmp('nunchi-export-f-aria-');
+  execFileSync('git', ['init', '-q'], { cwd: root });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fern-diary', private: true }));
+  mkdirSync(join(root, 'app', 'account'), { recursive: true });
+  writeFileSync(join(root, 'app', 'account', 'page.tsx'), 'export default function Page() { return <main />; }\n');
+  const s = { acct: scene('/account', 'signed-in', 'normal', 'd'), home: scene('/', 'guest', 'normal', 'd') };
+  const HASH = 'pkce_' + '9f8eAbC1d2E3f4G5h6I7j8K9L0mN', OOB = 'Q' + 'wErTy12UiOp34AsDf56GhJk78LzXc', CONFIRM = 'Zx9' + 'Yw8Vu7Ts6Rq5Po4Nm3Lk2Ji1';
+  const f = (lens, rule, severity, sc, selector, evidence) => ({ lens, rule, severity, scene: sc.id, route: sc.route, viewport: sc.viewport, selector, box: null, evidence });
+  writeRun(root, '0001', { scenes: Object.values(s), findings: [
+    f('L3', 'link-to-missing-route', 'high', s.acct, 'main > a:nth-of-type(2)', { href: '/people/ana-fern-1987/diary?view=private', note: 'no route of the app matches this link' }),
+    f('L7', 'dead-href', 'low', s.home, 'main > a.more', { href: `/verify?token_hash=${HASH}&oobCode=${OOB}&confirm=${CONFIRM}&reset_token=abc`, name: 'Read more' }),
+  ] });
+  const p = { root, nunchi: join(root, '.nunchi') };
+  withAi(p, [
+    { lens: 'L6', rule: 'L6.raw-technical-text', scene: s.acct, selector: 'aria=text: Welcome back, Ana Fern — balance 4,200', claim: 'Shows a balance', status: 'confirmed', severity: 'high' },
+    { lens: 'L5', rule: 'L5.same-action-different-verb', scene: s.acct, selector: 'aria=group "Week 3": Ana dentist Tuesday', claim: 'Two verbs', status: 'confirmed', severity: 'low' },
+    { lens: 'L6', rule: 'L6.vague-error', scene: s.acct, selector: 'aria=heading "Hello Ana" [level=1]', claim: 'Vague', status: 'confirmed', severity: 'medium' },
+  ]);
+  const items = j => Object.fromEntries(j.groups.flatMap(x => x.items.map(i => [x.rule, i])));
+  const j = JSON.parse(run(p, 'export', '--format', 'json').stdout);
+  const it = items(j);
+  assert.equal(it['L6.raw-technical-text'].element, 'aria=text');
+  assert.equal(it['L5.same-action-different-verb'].element, 'aria=group "…"');
+  assert.equal(it['L6.vague-error'].element, 'aria=heading "…" [level=1]');
+  assert.deepEqual(it['link-to-missing-route'].evidence, { note: 'no route of the app matches this link' }, 'a signed-in screen\'s link is page text');
+  // three claims, three nodes, one link
+  assert.equal(j.counts.pageTextLeftOut, 7);
+  for (const fmt of ['json', 'md', 'sarif']) {
+    const out = run(p, 'export', '--format', fmt).stdout;
+    for (const t of ['Ana', 'Welcome', 'dentist', 'balance', 'Week 3', 'diary']) assert.ok(!out.includes(t), `${fmt}: ${t}`);
+  }
+  // a visitor's link stays, its credentials and random-looking values redacted
+  assert.equal(it['dead-href'].evidence.href, '/verify?token_hash=REDACTED&oobCode=REDACTED&confirm=[secret-shaped: url-query-token]&reset_token=REDACTED');
+  const all = items(JSON.parse(run(p, 'export', '--format', 'json', '--include-page-text').stdout));
+  assert.equal(all['L5.same-action-different-verb'].element, 'aria=group "Week 3": Ana dentist Tuesday');
+  assert.equal(all['link-to-missing-route'].evidence.href, '/people/ana-fern-1987/diary?view=private');
+});
+
 test('Markdown: special characters escaped, no raw HTML, no link or image from data', () => {
   const p = project();
   const md = run(p, 'export', '--format', 'md', '--include-page-text').stdout;

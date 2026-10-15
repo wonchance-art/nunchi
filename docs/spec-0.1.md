@@ -1838,16 +1838,22 @@ one; where the hook does not run (Codex), `check --base` in CI catches a weakeni
 and later (what still counts for shipping; `--status` takes the ledger's words and the board's `later`,
 `not-a-problem`, `came-back`, or `all`) — grouped as the ledger groups them. To stdout, or `--out <file>` (written
 atomically, never through a link, never inside `.nunchi/runs`); what was left out is said on stderr.
-- *Redaction:* every string goes through the secret scanner at export time — credential URL parts and query values,
-  then `scrubSecrets` (§7.1): a hit becomes `[secret-shaped: <kind>]`. Selectors go through `redactSelector` first,
+- *Redaction:* every string goes through the secret scanner at export time — credential URL parts and query values
+  (`SECRET_PARAM`: `token`, `*_token`, `token_hash`, `oobCode`, `code`, `apikey` …), then `scrubSecrets` (§7.1; a
+  random-looking path segment or query value of 24 characters or more is `url-path-token` / `url-query-token`): a hit
+  becomes `[secret-shaped: <kind>]`. Selectors go through `redactSelector` first,
   URLs through `redactUrl`, object keys too, and the SARIF writer scrubs every string of the log once more, whoever
   built it. A secret finding gives its location and kind only. Tested with secrets in every field: selectors, a route
   (`/reset/<key>` from `--routes`), an AI claim quote, evidence text, a decision note with URL userinfo, a bundle URL's
   query, a file path.
 - *Page text* is left out unless `--include-page-text`: evidence text and AI claim quotes always; control names
-  (`name`, `label`, `placeholder`) and the quoted names in a selector (`button:has-text("…")`) when the finding was
-  seen on a signed-in screen. Numbers and enums the engine measured are kept; an evidence field nunchi does not know is
-  page text. How many fields were left out is said. HAR, network bodies, `text.txt` and `aria.yml` are never read.
+  (`name`, `label`, `placeholder`), URLs (`href`, `src`, `url`: a link to `/people/ana-fern/diary` says whose screen it
+  was; a secret finding's bundle URL is its location and stays), the quoted names in a selector
+  (`button:has-text("…")`) and an AI finding's `aria=` node (cut to its role, a masked name and its states:
+  `aria=group "Week 3": Ana dentist Tuesday` → `aria=group "…"`, `aria=text: Welcome back` → `aria=text`,
+  `aria=heading "Hello" [level=1]` → `aria=heading "…" [level=1]`) when the finding was seen on a signed-in screen.
+  Numbers and enums the engine measured are kept; an evidence field nunchi does not know is page text. How many fields
+  were left out is said (a selector with anything taken out of it counts as one). HAR, network bodies, `text.txt` and `aria.yml` are never read.
 - *Escaping:* Markdown gets no raw HTML and no structure from data: line breaks, control characters and bidi marks are
   flattened, and every character Markdown or GFM gives a meaning (`` \ ` * _ { } [ ] ( ) # + - . ! | < > ~ & : @ = $ % ^ " ' ``)
   is backslash-escaped, so no data opens a link, an image, a heading, an entity, an autolink or HTML. SARIF uses

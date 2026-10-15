@@ -4,9 +4,9 @@
 // - Redaction: every string that reaches an export goes through the secret scanner at export time (credential URL
 //   parts and query values, then `scrubSecrets`: a hit becomes `[secret-shaped: <kind>]`), selectors through
 //   `redactSelector`, keys of objects too. A secret finding gives location and kind only.
-// - Page text is left out unless `--include-page-text`: evidence text and AI claim quotes always, control names (and
-//   the quoted names in a selector) when the finding was seen on a signed-in screen. An evidence field nunchi does not
-//   know is page text.
+// - Page text is left out unless `--include-page-text`: evidence text and AI claim quotes always; control names, URLs,
+//   the quoted names in a selector and an `aria=` node's text when the finding was seen on a signed-in screen. An
+//   evidence field nunchi does not know is page text.
 // - Locations: paths relative to the repository root (`%SRCROOT%` in SARIF), route templates instead of URLs (no
 //   sample path, no origin, no screen id). Every SARIF result points at a file: the finding's own file:line, else the
 //   page file of its route (line 1), else the app's package.json (line 1, a whole-app finding); one with none of
@@ -43,8 +43,9 @@ const deepClean = v => (Array.isArray(v) ? v.map(deepClean)
   : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [clean(k), deepClean(v[k])]))
   : typeof v === 'string' ? clean(v) : v);
 
-// Evidence fields by what they hold. Numbers and enums the engine measured are data; URLs are redacted as URLs;
-// control names are page text from signed-in screens; anything else is page text.
+// Evidence fields by what they hold. Numbers and enums the engine measured are data; URLs are redacted as URLs, and
+// from signed-in screens are page text (a link to `/people/ana-fern/diary` says whose screen it was); control names are
+// page text from signed-in screens; anything else is page text.
 const DATA_KEYS = new Set(['status', 'scrollWidth', 'viewportWidth', 'clientWidth', 'width', 'height', 'minimum', 'recommended', 'band', 'threshold', 'method',
   'state', 'impact', 'type', 'count', 'kind', 'fonts', 'note']);
 const URL_KEYS = new Set(['url', 'href', 'src']);
@@ -62,7 +63,11 @@ function evidenceOut(row, { pageText, signedIn }) {
     const v = ev[k];
     if (v === null || v === undefined || k === 'file' || k === 'line' || k === 'masked') continue;
     if (row.rule === 'secret-in-client-bundle' && k !== 'kind' && k !== 'url') continue;      // location and kind only
-    if (URL_KEYS.has(k) && typeof v === 'string') { out[k] = clean(redactUrl(v)); continue; }
+    if (URL_KEYS.has(k) && typeof v === 'string') {
+      // a secret finding's url is where the bundle is: its location, never page text
+      if (signedIn && !pageText && row.rule !== 'secret-in-client-bundle') { left++; continue; }
+      out[k] = clean(redactUrl(v)); continue;
+    }
     if (DATA_KEYS.has(k)) { out[k] = deepClean(v); continue; }
     if (NAME_KEYS.has(k) && (pageText || !signedIn)) { out[k] = deepClean(v); continue; }
     if (pageText) { out[k] = deepClean(v); continue; }
@@ -70,10 +75,20 @@ function evidenceOut(row, { pageText, signedIn }) {
   }
   return { evidence: out, left };
 }
+// An AI finding's `aria=` selector is a node of the screen's accessibility tree, in the screen's own words:
+// `aria=button "Delete garden"`, `aria=heading "Tasks" [level=1]`, `aria=group "Week 3": Ana dentist Tuesday`,
+// `aria=text: Welcome back, Ana`. From a signed-in screen without page text it keeps its role, a masked name and its
+// states (`[level=1]`), and drops the text after `: `.
+const ARIA = /^aria=\s*([a-z]+)((?:\s+"(?:[^"\\]|\\.)*")?)((?:\s+\[[^\]"']*\])*)/;
+// → { element, left }: `left` 1 when page text was taken out of it
 const elementOut = (selector, { pageText, signedIn }) => {
-  if (typeof selector !== 'string' || !selector) return null;
+  if (typeof selector !== 'string' || !selector) return { element: null, left: 0 };
   const s = clean(redactSelector(selector));
-  return pageText || !signedIn ? s : s.replace(QUOTED, q => `${q[0]}…${q[0]}`);
+  if (pageText || !signedIn) return { element: s, left: 0 };
+  let kept;
+  if (s.startsWith('aria=')) { const m = ARIA.exec(s); kept = m ? `aria=${m[1]}${m[2] ? ' "…"' : ''}${m[3]}` : 'aria=…'; }
+  else kept = s.replace(QUOTED, q => `${q[0]}…${q[0]}`);
+  return { element: kept, left: kept === s ? 0 : 1 };
 };
 
 // Where an app path sits in the repository: `git rev-parse --show-prefix` of the app's root (hardened git), else the
@@ -102,14 +117,15 @@ export function findingsModel({ led, view, root, project, statuses = DEFAULT_STA
   for (const r of rows) {
     const signedIn = (r.persons || []).includes('signed-in');
     const ev = evidenceOut(r, { pageText, signedIn });
-    left += ev.left;
+    const el = elementOut(r.selector, { pageText, signedIn });
+    left += ev.left + el.left;
     const file = SAFE_FILE(r.evidence?.file) ? { path: `${prefix}${r.evidence.file}`, line: Number.isInteger(r.evidence?.line) && r.evidence.line > 0 ? r.evidence.line : 1, from: 'finding' } : null;
     const route = typeof r.route === 'string' ? clean(r.route) : null;
     const page = r.route && pageOf.has(r.route) ? { path: clean(pageOf.get(r.route)), line: 1, from: 'route' } : null;
     const item = {
       fp: String(r.fp), status: r.status, severity: sevOf(r.severity), route,
       persons: [...(r.persons || [])].map(String).sort(), viewports: [...(r.viewports || [])].map(String).sort(), states: [...(r.states || [])].map(String).sort(),
-      places: Number(r.places) || 1, element: elementOut(r.selector, { pageText, signedIn }),
+      places: Number(r.places) || 1, element: el.element,
       location: file ? { ...file, path: clean(file.path) } : page || (pkg ? { path: pkg, line: 1, from: 'app' } : null),
       evidence: ev.evidence,
       decision: r.decision ? { decision: r.decision.decision, reason: r.decision.reason ?? null, human: r.decision.human ?? null, channel: r.decision.channel ?? null, ...(r.decision.note ? { note: clean(r.decision.note) } : {}) } : null,
