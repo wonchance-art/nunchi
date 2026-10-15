@@ -1,0 +1,99 @@
+// SARIF 2.1.0 (design 0.1-c §5, spec §7.4): the vendored OASIS schema (sha256 pinned, no network) and a minimal
+// validator for the draft-04 keywords it uses; levels, security-severity only for L9, a physical location on every
+// result, partialFingerprints, repo-relative URIs, deterministic truncation to GitHub's limits, said when it happens.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { validate, SCHEMA, sarifProblems } from './fixtures/sarif/validate.mjs';
+import { sarifLog, uriOf, LEVEL, SECURITY_SEVERITY, GITHUB_LIMITS, truncationLine, SARIF_SCHEMA } from '../src/sarif.mjs';
+
+const SCHEMA_PATH = fileURLToPath(new URL('./fixtures/sarif/sarif-schema-2.1.0.json', import.meta.url));
+// raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json (its id: the OASIS
+// errata01 schema), fetched 2026-10-15 KST
+const SCHEMA_SHA256 = 'c3b4bb2d6093897483348925aaa73af03b3e3f4bd4ca38cef26dcb4212a2682e';
+
+const result = (i, extra = {}) => ({ ruleId: `rule-${i % 3}`, severity: ['blocker', 'high', 'medium', 'low'][i % 4], message: `Finding ${i} on /plants/[id]. More.`, path: `app/plants/[id]/page ${i}.tsx`, line: i + 1,
+  logical: [{ name: '/plants/[id]', kind: 'resource' }, { name: 'main > a.more', kind: 'element' }], fingerprints: { 'nunchi/group/v1': `g${i}`, 'nunchi/fp/v1': `f${i}` }, ...extra });
+const rules = new Map([['rule-0', { title: 'Rule zero', tags: ['L1', 'rule'] }], ['rule-1', { title: 'Secret', tags: ['L9', 'rule', 'security'], security: true }], ['rule-2', { title: 'Two' }]]);
+
+test('the vendored schema is the pinned one, and the validator is not vacuous', () => {
+  assert.equal(createHash('sha256').update(readFileSync(SCHEMA_PATH)).digest('hex'), SCHEMA_SHA256);
+  assert.equal(SCHEMA.id, SARIF_SCHEMA);
+  const good = sarifLog({ version: '0.0.2', rules, results: [result(0)] }).log;
+  assert.deepEqual(sarifProblems(good), []);
+  const bad = [
+    d => { delete d.version; },
+    d => { d.runs[0].results[0].level = 'critical'; },
+    d => { d.runs[0].results[0].message = {}; },
+    d => { d.runs[0].results[0].nonsense = 1; },
+    d => { d.runs[0].tool.driver.rules[0].defaultConfiguration.level = 'fatal'; },
+    d => { d.runs[0].results[0].locations[0].physicalLocation.region.startLine = 0; },
+    d => { d.runs = []; d.version = '2.0.0'; },
+  ];
+  for (const change of bad) {
+    const d = JSON.parse(JSON.stringify(good));
+    change(d);
+    assert.notDeepEqual(sarifProblems(d), [], String(change));
+  }
+});
+
+test('levels by severity; security-severity on L9 rules only; every result located; partialFingerprints; paths as URI references', () => {
+  const { log } = sarifLog({ version: '0.0.2', rules, results: [0, 1, 2, 3, 5].map(i => result(i)) });
+  assert.deepEqual(sarifProblems(log), []);
+  assert.deepEqual(LEVEL, { blocker: 'error', high: 'error', medium: 'warning', low: 'note' });
+  const run = log.runs[0];
+  for (const r of run.results) {
+    assert.equal(r.level, LEVEL[['blocker', 'high', 'medium', 'low'][Number(r.partialFingerprints['nunchi/fp/v1'].slice(1)) % 4]]);
+    assert.equal(r.locations.length, 1);
+    assert.equal(r.locations[0].physicalLocation.artifactLocation.uriBaseId, '%SRCROOT%');
+    assert.ok(r.locations[0].physicalLocation.region.startLine >= 1);
+    assert.match(r.locations[0].physicalLocation.artifactLocation.uri, /^app\/plants\/%5Bid%5D\/page%20\d\.tsx$/);
+    assert.deepEqual(Object.keys(r.partialFingerprints), ['nunchi/fp/v1', 'nunchi/group/v1']);
+    assert.deepEqual(Object.keys(r.message), ['text']);
+    assert.deepEqual(r.locations[0].logicalLocations.map(l => l.kind), ['resource', 'element']);
+  }
+  const byId = Object.fromEntries(run.tool.driver.rules.map(r => [r.id, r]));
+  assert.equal(byId['rule-1'].properties['security-severity'], SECURITY_SEVERITY.high);
+  assert.ok(!('security-severity' in byId['rule-0'].properties) && !('security-severity' in byId['rule-2'].properties));
+  assert.ok(byId['rule-1'].properties.tags.includes('security'));
+  assert.equal(byId['rule-0'].defaultConfiguration.level, 'error', 'the worst result of the rule');
+  assert.ok(!JSON.stringify(log).includes('file://'), 'no absolute path of this machine');
+  assert.equal(uriOf('a b/[c]/%d/é.tsx'), 'a%20b/%5Bc%5D/%25d/%C3%A9.tsx');
+});
+
+test('the same results in any order give the same bytes', () => {
+  const list = Array.from({ length: 40 }, (_, i) => result(i));
+  const a = sarifLog({ version: '1', rules, results: list }).text;
+  const b = sarifLog({ version: '1', rules, results: [...list].reverse() }).text;
+  assert.equal(a, b);
+});
+
+test('truncation to GitHub\'s limits: worst first, the same every time, and said', () => {
+  assert.equal(GITHUB_LIMITS.resultsKept, 5000);
+  assert.equal(GITHUB_LIMITS.gzipBytes, 10 * 1024 * 1024);
+  const list = Array.from({ length: 5003 }, (_, i) => result(i));
+  const r = sarifLog({ version: '1', rules, results: list });
+  assert.equal(r.kept, 5000);
+  assert.equal(r.log.runs[0].results.length, 5000);
+  assert.deepEqual(r.truncated, { kept: 5000, of: 5003, why: 'GitHub keeps 5,000 results per run' });
+  assert.equal(r.log.runs[0].properties.truncated.of, 5003);
+  assert.ok(r.log.runs[0].results.slice(0, 1251).every(x => x.level === 'error'));
+  assert.equal(r.log.runs[0].results.at(-1).level, 'note', 'the low ones go first');
+  assert.match(truncationLine(r.truncated), /^SARIF truncated: 5,000 of 5,003 results kept, worst first/);
+  assert.equal(sarifLog({ version: '1', rules, results: [...list].reverse() }).text, r.text);
+  // over the size limit: the most results that fit
+  const small = sarifLog({ version: '1', rules, results: list.slice(0, 50), maxBytes: 12000 });
+  assert.ok(Buffer.byteLength(small.text) <= 12000 && small.kept > 0 && small.kept < 50);
+  assert.match(small.truncated.why, /would be over/);
+  assert.deepEqual(sarifProblems(small.log), []);
+  assert.equal(sarifLog({ version: '1', rules, results: list.slice(0, 3) }).truncated, null);
+});
+
+test('every string of the log passes the secret scanner, whoever built it', () => {
+  const key = 'sk_' + 'live_' + 'FixtureOnly0000000000000009';
+  const { text } = sarifLog({ version: '1', rules: new Map([[`r-${key}`, { title: `t ${key}` }]]), results: [result(1, { ruleId: `r-${key}`, message: `m ${key}`, path: `app/${key}/page.tsx`, logical: [{ name: `/r/${key}`, kind: 'resource' }], fingerprints: { 'nunchi/fp/v1': key } })] });
+  assert.ok(!text.includes(key));
+  assert.match(text, /secret-shaped: stripe-live-secret-key/);
+});
