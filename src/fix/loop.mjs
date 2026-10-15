@@ -204,7 +204,7 @@ export function reconcile(ctx, group) {
     // a revert left half done is aborted only when it is nunchi's own: started by this attempt, undoing its commit
     if (ctx.git.inProgress().includes('REVERT_HEAD') && rec.revertStarted && ctx.git.revertHead() === rec.commit) ctx.git.abortRevert();
     if (ctx.git.head() === rec.commit && !ctx.git.inProgress().length) { const r = doRevert(ctx, rec, rec.revertWhy || 'resumed'); said.push(...r.lines); return { rec: latestRecord(ctx.stateDir, group), said }; }
-    close('needs-you', { outcome: { kind: 'needs-you', needsYou: 'revert-failed', commit: rec.commit, line: `Couldn't undo the fix of this finding (commit ${short(rec.commit)}): HEAD moved on or a revert was left half done. It needs you.` } });
+    close('needs-you', { outcome: { kind: 'needs-you', needsYou: 'revert-failed', reason: 'half-done', commit: rec.commit, line: `Couldn't undo the fix of this finding (commit ${short(rec.commit)}): HEAD moved on or a revert was left half done. It needs you.` } });
     return { rec, said: [rec.outcome.line] };
   }
   if (rec.phase === 'folding') { applyFold(ctx, rec); return { rec: latestRecord(ctx.stateDir, group), said }; }
@@ -795,7 +795,8 @@ function doRevert(ctx, rec, why, { cancelWord = null, quiet = false, title = rec
       : r.reason === 'occupied' ? occupiedLine(title, rec.commit, r.occupied)
       : r.reason === 'wrong-branch' ? `Couldn't undo the fix of '${title}' (commit ${short(rec.commit)}): ${r.message}. Switch back to ${rec.branch}, then tell your AI “undo it” — it needs you.`
       : `Couldn't undo the fix of '${title}' (commit ${short(rec.commit)}): ${r.message}. Nothing was reset; it needs you.`;
-    closeWith(ctx, rec, 'needs-you', { kind: 'needs-you', needsYou: kind, commit: rec.commit, line });
+    // the board says it in its own words: why (git's own reason, a key), the paths in the way, the branch
+    closeWith(ctx, rec, 'needs-you', { kind: 'needs-you', needsYou: kind, reason: r.reason, files: Array.isArray(r.files) ? r.files.slice(0, 200) : undefined, branch: rec.branch || undefined, commit: rec.commit, line });
     return out(quiet ? 1 : 0, line, { outcome: 'needs-you', needsYou: kind });
   }
   const lines = [];
@@ -842,14 +843,18 @@ function undoFixInner(ctx, id) {
   const found = findGroup(ctx, id);
   if (found.error) return refuse(found.error);
   let { rec, said } = reconcile(ctx, found.g.group);
-  if (!rec || !rec.commit || !['fixed', 'needs-you'].includes(rec.phase)) return refuse([...said, `No fix of '${found.title}' to undo (nunchi fix --status ${found.g.group}).`]);
-  if (ctx.git.head() !== rec.commit) return refuse([...said, `The fix of '${found.title}' (commit ${short(rec.commit)}) is no longer the last commit: nunchi undoes only its own last commit. Undo it by hand with git revert ${short(rec.commit)}.`]);
+  // every refusal carries `why` (and the paths or the branch), so the board can say it in its own words
+  if (!rec || !rec.commit || !['fixed', 'needs-you'].includes(rec.phase)) return refuse([...said, `No fix of '${found.title}' to undo (nunchi fix --status ${found.g.group}).`], { why: 'none' });
+  if (ctx.git.head() !== rec.commit) return refuse([...said, `The fix of '${found.title}' (commit ${short(rec.commit)}) is no longer the last commit: nunchi undoes only its own last commit. Undo it by hand with git revert ${short(rec.commit)}.`], { why: 'not-head', commit: rec.commit });
+  // on the fix branch only (another branch at the same commit is not where the fix lives)
+  const on = ctx.git.branch();
+  if (rec.branch && on !== rec.branch) return refuse([...said, `Not undone: you are ${on ? `on ${on}` : 'on a detached HEAD'}, not on the fix branch ${rec.branch}. Switch back to it (git switch ${rec.branch}), then tell your AI “undo it”.`], { why: 'wrong-branch', branch: rec.branch, on: on || null });
   const dirty = ctx.git.uncommitted();
-  if (dirty.length) return refuse([...said, dirtyLine(found.title, rec.commit, dirty, { refusal: true })], { dirty });
+  if (dirty.length) return refuse([...said, dirtyLine(found.title, rec.commit, dirty, { refusal: true })], { why: 'dirty', dirty });
   const taken = ctx.git.occupied(rec.commit);
-  if (taken.length) return refuse([...said, occupiedLine(found.title, rec.commit, taken, { refusal: true })], { occupied: taken.map(x => x.file) });
+  if (taken.length) return refuse([...said, occupiedLine(found.title, rec.commit, taken, { refusal: true })], { why: 'occupied', occupied: taken.map(x => x.file) });
   const filtered = filterRefusal(ctx);
-  if (filtered) return refuse([...said, filtered]);
+  if (filtered) return refuse([...said, filtered], { why: 'filtered' });
   rec = setPhase(ctx.stateDir, rec, 'undoing', { folded: rec.phase === 'fixed' }, gen(ctx));
   const r = doRevert(ctx, rec, 'the person asked to undo this fix', { title: found.title });
   return { ...r, lines: [...said, ...r.lines] };

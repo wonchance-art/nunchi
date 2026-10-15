@@ -136,10 +136,12 @@ test('revert: staged or unstaged work of the person → nothing reverted, nothin
   assert.equal(git(p.root, 'diff', '--cached', '--name-only'), 'notes.md', 'still staged');
   assert.equal(readFileSync(join(p.root, 'notes.md'), 'utf8'), 'my own work\n');
   assert.deepEqual([latest(p).phase, latest(p).outcome.needsYou], ['needs-you', 'dirty']);
+  assert.deepEqual([latest(p).outcome.reason, latest(p).outcome.files], ['dirty', ['notes.md']], 'the record keeps why and the paths in the way, for the board');
   // fix --undo refuses the same way, and touches no record; once committed elsewhere... stashed, it undoes
   const u = F.undoFix(ctxOf(p), p.group);
   assert.equal(u.code, 1);
   assert.match(u.lines.at(-1), /^Not undone: you have changes that are not committed \(notes\.md\)/);
+  assert.deepEqual([u.json.why, u.json.dirty], ['dirty', ['notes.md']]);
   assert.deepEqual([latest(p).phase, latest(p).outcome.needsYou], ['needs-you', 'dirty']);
   git(p.root, 'stash', 'push', '-q', '--include-untracked', '-m', 'mine');
   const ok = F.undoFix(ctxOf(p), p.group);
@@ -214,6 +216,7 @@ test('undo never overwrites a file git does not show: one the fix deleted that i
   assert.equal(u.code, 1);
   assert.match(u.lines.at(-1), /^Not undone: undoing it would overwrite or remove files that git does not show as changed \(local\.json: the fix deleted it, and a file of that name is there again\)\. Move them somewhere safe, then tell your AI “undo it”\.$/);
   assert.equal(readFileSync(join(p.root, 'local.json'), 'utf8'), '{"mine":1}\n');
+  assert.deepEqual([u.json.why, u.json.occupied], ['occupied', ['local.json']]);
   assert.equal(git(p.root, 'rev-parse', 'HEAD'), fixCommit);
   rmSync(join(p.root, 'local.json'));
   // a file the fix added, hidden from status (skip-worktree) and changed since

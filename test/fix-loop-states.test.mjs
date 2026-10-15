@@ -145,6 +145,22 @@ test('undo: a fix that landed is reverted while it is HEAD, and the ledger opens
   const no = F.undoFix(ctxOf(q), q.group);
   assert.equal(no.code, 1);
   assert.match(no.lines[0], /is no longer the last commit: nunchi undoes only its own last commit\. Undo it by hand with git revert [0-9a-f]{7}\./);
+  assert.equal(no.json.why, 'not-head', 'the board says it in its own words: the reason is a key');
+});
+
+test('undo: refused on another branch at the same commit (the fix lives on its own branch), with the branch named; done once back on it', async () => {
+  const p = await fixProject();
+  await attempt(p);
+  const fixCommit = git(p.root, 'rev-parse', 'HEAD');
+  const branch = latest(p).branch;
+  git(p.root, 'switch', '-q', '-c', 'elsewhere');
+  const no = F.undoFix(ctxOf(p), p.group);
+  assert.equal(no.code, 1);
+  assert.equal(no.lines.at(-1), `Not undone: you are on elsewhere, not on the fix branch ${branch}. Switch back to it (git switch ${branch}), then tell your AI “undo it”.`);
+  assert.deepEqual([no.json.why, no.json.branch, no.json.on], ['wrong-branch', branch, 'elsewhere']);
+  assert.deepEqual([git(p.root, 'rev-parse', 'HEAD'), latest(p).phase], [fixCommit, 'fixed'], 'nothing undone, no record touched');
+  git(p.root, 'switch', '-q', branch);
+  assert.match(F.undoFix(ctxOf(p), p.group).lines[0], /^Undid the fix of /);
 });
 
 test('git: a revert the repository requires to be signed, and signing fails → needs you; never committed unsigned, the tree left clean', async () => {
