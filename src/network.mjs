@@ -74,8 +74,9 @@ export function isDataRequest({ resourceType, headers }) {
 
 const VOLATILE_PARAMS = new Set(['_', '_t', 't', 'ts', 'timestamp', 'cb', 'cachebust', 'cache_bust', 'nonce', '_rsc', 'rand', 'random']);
 // Query and fragment parameters that carry credentials (magic links, signed URLs, OAuth codes,
-// Supabase's #access_token, `?apikey=`). Their values never reach evidence, recordings or keys.
-export const SECRET_PARAM = /^(access_token|refresh_token|id_token|provider_token|token|auth|authorization|apikey|api_key|key|secret|client_secret|password|pass|pwd|session|session_id|sessionid|sid|jwt|code|otp|signature|sig|x-amz-signature|x-amz-security-token|x-amz-credential|x-goog-signature|x-goog-credential)$/i;
+// Supabase's #access_token and ?token_hash=, Firebase's ?oobCode=, any `*_token`, `?apikey=`). Their values never reach
+// evidence, recordings or keys.
+export const SECRET_PARAM = /^(access_token|refresh_token|id_token|provider_token|[\w.-]*_token|token|token_hash|oobcode|auth|authorization|apikey|api_key|key|secret|client_secret|password|pass|pwd|session|session_id|sessionid|sid|jwt|code|otp|signature|sig|x-amz-signature|x-amz-security-token|x-amz-credential|x-goog-signature|x-goog-credential)$/i;
 const redactParams = (params, keep) => { for (const [k, v] of [...params]) if (SECRET_PARAM.test(k)) params.set(k, keep ? `REDACTED-${sha(v, 8)}` : 'REDACTED'); };
 const redactPart = (part, keep) => {
   if (!part.includes('=')) return part;
@@ -88,7 +89,8 @@ const redactPart = (part, keep) => {
 // A URL or path as it may be written into evidence: credential values replaced, in the query and in
 // a `#a=1&b=2` fragment, and `scheme://user:password@host` → `scheme://host` (credentials in the authority).
 // Nothing else before the query is changed.
-const USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^/?#@\s"'<>]*@/gi;
+// (the scheme starts where a scheme can: never retried inside a long word, which made a 40,000-letter string take 2 s)
+const USERINFO = /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*:\/\/)[^/?#@\s"'<>]*@/gi;
 export function redactUrl(url) {
   if (typeof url !== 'string') return url;
   const m = /^([^?#]*)(\?[^#]*)?(#.*)?$/s.exec(url);

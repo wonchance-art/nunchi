@@ -8,8 +8,8 @@ import { join, dirname, resolve } from 'node:path';
 import { existsSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { ensurePrivate } from './runs.mjs';
-import { resolveStateRoot, trackedState, stateFiles, ensureStateDir, adoptLegacy, present, bumpGeneration } from './state.mjs';
-import { syncLedger, newId, readDecisions, buildDecision, saveDecision, readApprovals, bindApproved, addApproved, approvalKey, seriousTarget, view, groups as groupRows,
+import { resolveStateRoot, stateRoot, trackedState, stateFiles, ensureStateDir, adoptLegacy, present, bumpGeneration } from './state.mjs';
+import { syncLedger, peekLedger, newId, readDecisions, buildDecision, saveDecision, readApprovals, bindApproved, addApproved, approvalKey, seriousTarget, view, groups as groupRows,
   adoptLedger, carryLedger, isLedger, isApprovedDoc, mergeApprovedDocs, DECISIONS } from './ledger.mjs';
 import { aiLoader, recheckLoader } from './ai-fold.mjs';
 import { sweepLeftovers } from './stable.mjs';
@@ -84,6 +84,24 @@ export function loadLedger(nunchiDir, { root = process.cwd(), warn = () => {} } 
     for (const l of r.left) warn(`the approval of decision ${l.id} was not carried over (${l.why}); if you made it, approve it again: nunchi approve ${l.id}`);
     ({ approved, channels, confirmed } = readApprovals(st.files.approved));
   }
+  return { state, decisions, approved, channels, confirmed, serious, st };
+}
+// The ledger for a command that only reads (`nunchi check --fail-on`): the same rows loadLedger gives, with nothing
+// created, moved, swept or written — runs and decisions not folded yet are folded in memory only, and approvals
+// written by older versions are bound in memory only. State committed to git is refused as loadLedger refuses it.
+export function readLedgerOnly(nunchiDir, { root = process.cwd() } = {}) {
+  const project = dirname(nunchiDir);
+  const sroot = stateRoot(project);
+  if (!sroot.shared) {
+    const committed = trackedState(project).filter(n => n !== 'fallback.json');
+    if (committed.length) throw fail('COMMITTED_STATE', `${committed.map(n => `.nunchi/state/${n}`).join(', ')} committed to git: state that came through git is never read (anyone with push access could have written it). Remove it from git (git rm --cached) and run again.`);
+  }
+  const st = { root: sroot, files: stateFiles(sroot.dir), runsDir: join(nunchiDir, 'runs'), nunchiDir, project };
+  const decisions = readDecisions(join(nunchiDir, 'decisions'));
+  const state = peekLedger(st.files.ledger, st.runsDir, { decisions, stream: sroot.stream, loaders: { ai: aiLoader({ root: resolve(root) }), recheck: recheckLoader } });
+  const serious = seriousTarget(state);
+  const { approved: raw, channels, confirmed } = readApprovals(st.files.approved);
+  const { approved } = bindApproved(raw, decisions, { serious });
   return { state, decisions, approved, channels, confirmed, serious, st };
 }
 // The rows and groups a ledger shows, with how each decision was made.
