@@ -147,8 +147,17 @@ export const KEY_HELP = [
 // Views that are built; the rest are listed with the CLI command that shows the same data (design §3.4 views).
 export const MORE_VIEWS = [
   ['Coverage map', 'nunchi findings --all'], ['Design system', 'nunchi tokens'], ['States & messages', 'nunchi inventory'],
-  ['Copy groups', 'nunchi inventory --json'], ['AI trust', 'nunchi trust'],
+  ['Copy groups', 'nunchi inventory --json'], ['AI trust', 'nunchi trust'], ['Guards', 'nunchi guard'],
 ];
+// The guard card's words (design §5, the owner's, 2026-10-15 KST). Backticks mark code. `added`: n hits there now
+// became the baseline of what was added; `takenBack`: the row's label (code already); `unreadable`: guards.json as the
+// repository names it, and why it cannot be read — the same line on the card, in `fix --summary` and `nunchi guard`.
+export const GUARD_WORDS = {
+  added: n => (n > 0 ? `Added · the ${n === 1 ? '1 already in your code is its' : `${n} already in your code are its`} baseline; a new one fails \`nunchi check\`. Commit \`.nunchi/guards.json\`.`
+    : 'Added · none in your code now.'),
+  takenBack: label => `Taken back · ${label} isn't guarded.`,
+  unreadable: (name, reason) => `Can't read \`${name}\`: ${reason}. Guards can't be added until it's fixed — \`git checkout -- .nunchi/guards.json\` restores the committed one.`,
+};
 export const LABELS = { 1: 'correct', 2: 'wrong', 3: 'unsure' };
 export const LABEL_WORDS = { correct: 'Correct: a real defect', wrong: 'Wrong: not a defect', unsure: 'Unsure' };
 

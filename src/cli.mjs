@@ -613,9 +613,9 @@ if (cmd === 'setup') {
     // design §5: a kind with ≥ 5 open places and a built-in guard nobody added: "guard available" (passive)
     {
       const { guardAvailable, AVAILABLE } = await import('./guard-offer.mjs');
-      const { readGuards, guardsPath, guardsName } = await import('./guard-kinds.mjs');
+      const { readGuards, guardsPath, guardsName, unreadableLine } = await import('./guard-kinds.mjs');
       let gdoc = null, unreadable = false;
-      try { gdoc = readGuards(guardsPath(nunchiDir), guardsName(st.root.prefix)); } catch (e) { unreadable = true; warn(e.message); }
+      try { gdoc = readGuards(guardsPath(nunchiDir), guardsName(st.root.prefix)); } catch (e) { unreadable = true; warn(unreadableLine(guardsName(st.root.prefix), e)); }
       // a guards file that cannot be read: what it covers is not known, so no kind is said to have a guard available
       const avail = unreadable ? new Set() : guardAvailable(rows, gdoc);
       for (const k of kinds) if (avail.has(k.rule)) k.guard = AVAILABLE;
@@ -1139,7 +1139,16 @@ if (cmd === 'setup') {
   const nunchiDir = resolve('.nunchi');
   const path = G.guardsPath(nunchiDir);
   let doc;
-  try { doc = G.readGuards(path); } catch (e) { usage(e.message); }
+  // a guards file that cannot be read: the owner's line (as the card and fix --summary say it), exit 2
+  try { doc = G.readGuards(path); }
+  catch (e) {
+    if (!['CORRUPT', 'UNSAFE_PATH'].includes(e.code)) throw e;
+    const { stateRoot } = await import('./state.mjs');
+    let prefix = null;
+    try { prefix = stateRoot(project).prefix; } catch {}
+    console.error(G.unreadableLine(G.guardsName(prefix), e));
+    process.exit(2);
+  }
   // the colour guard's allowed set: the measured tokens of the latest run (nunchi tokens), else unavailable
   const tokensNow = () => {
     const id = latestRun(join(nunchiDir, 'runs'));

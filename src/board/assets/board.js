@@ -47,6 +47,7 @@ const S = {
   list: null,            // the frozen list: { sections, unchecked, groups, ids }
   pending: null,         // a newer list, shown on R
   focus: null, selection: new Set(), anchor: null, openUnchecked: false,
+  guardNote: null,       // what the guard card's last press said: { kind, added, text }
   detail: null, details: new Map(),
   screens: null, screenSel: null, screenFilter: { vp: null, who: 'all', state: 'normal' },
   keysOn: store.get('nunchi.keys') !== 'off',
@@ -375,9 +376,12 @@ function renderProgress(focus = false) {
 // mark code; every piece is set as text.
 const codeParts = text => String(text).split('`').map((p, i) => (i % 2 ? h('code', null, p) : p)).filter(p => p !== '');
 // A toggle's name is always "Add" and its row ("Add `window.confirm` (fixed twice)"), pressed or not; pressed, it shows
-// "✓ Added", so the state is seen in forced colours too. When guards.json cannot be read (`unreadable`), the rows show
-// what was fixed, with no toggle. The live region says a neutral "Added" or "Taken back".
+// "✓ Added", so the state is seen in forced colours too. After a press the row says what happened in the owner's words
+// (W.GUARD_WORDS: how many hits there now became the baseline, or that the kind is no longer guarded), and the polite
+// live region says the same. When guards.json cannot be read (`unreadable`: the owner's line), the card says so and the
+// rows show what was fixed, with no toggle.
 function guardsPanel(c) {
+  const plain = text => String(text).replace(/`/g, '');
   const row = r => {
     const label = `guard-l-${r.kind}`, add = `guard-a-${r.kind}`, id = `guard-b-${r.kind}`;
     const what = h('span', { class: 'what', id: label }, ...codeParts(r.text));
@@ -387,16 +391,21 @@ function guardsPanel(c) {
     btn.addEventListener('click', async () => {
       btn.disabled = true;
       try {
-        await api('/api/guard', { method: 'POST', body: { kind: r.kind, add: !r.added } });
-        announce(r.added ? 'Taken back' : 'Added');
+        const res = await api('/api/guard', { method: 'POST', body: { kind: r.kind, add: !r.added } });
+        const text = res.added ? W.GUARD_WORDS.added(Number(res.baselined) || 0) : W.GUARD_WORDS.takenBack(r.label);
+        S.guardNote = { kind: r.kind, added: !!res.added, text };
         await refreshSummary(); renderProgress();
+        announce(plain(text));
         const again = d.getElementById(id);
         if (again) again.focus(); else { const hd = d.getElementById('h-guards'); if (hd) { hd.setAttribute('tabindex', '-1'); hd.focus(); } }
       } catch (e) { btn.disabled = false; announce(e.message); }
     });
-    return h('li', null, what, btn);
+    // what the last press said, while the row is as that press left it
+    const said = S.guardNote && S.guardNote.kind === r.kind && S.guardNote.added === !!r.added ? h('p', { class: 'guard-said small', id: `guard-n-${r.kind}` }, ...codeParts(S.guardNote.text)) : null;
+    return h('li', null, h('div', { class: 'guard-row' }, what, btn), said);
   };
   return h('section', { class: 'panel-box', 'aria-labelledby': 'h-guards' }, h('h2', { id: 'h-guards' }, c.title),
+    c.unreadable ? h('p', { class: 'banner banner-warn', role: 'note', id: 'guard-unreadable' }, ...codeParts(c.unreadable)) : null,
     h('ul', { class: 'confirm-list guard-list' }, c.rows.map(row)));
 }
 

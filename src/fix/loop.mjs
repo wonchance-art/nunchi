@@ -33,7 +33,7 @@ import { randomBytes } from 'node:crypto';
 import { probeView, probeProblems, judgeRules, judgeAi, MAX_ATTEMPTS, FLAKY, DRIFT_PIXELS } from './judge.mjs';
 import { diffPolicy, depsOf, rootCauseFiles } from './policy.mjs';
 import { fixBrief } from './brief.mjs';
-import { readGuards, guardsPath, guardKindOf } from '../guard-kinds.mjs';
+import { readGuards, guardsPath, guardKindOf, guardsName, unreadableLine } from '../guard-kinds.mjs';
 import { guardOffer, offerLine } from '../guard-offer.mjs';
 import { runChecks as runChecksReal, compareChecks } from './run.mjs';
 import { snapshotRecordings, snapshotIntact, proveByFile, serveApp, captureProbe, recaptureScenes, measureDrift, readProbe, controlsReader, sweepProbeFiles } from './probe.mjs';
@@ -939,18 +939,20 @@ export function summaryFix(ctx, { tighten = null } = {}) {
   const head = `Fixed ${fixed} of ${n}${fixed ? ` (re-checked ${screens} screen${screens === 1 ? '' : 's'}, ${tail})` : ''}.`;
   const line = `${head}${needs.length ? ` ${needs.length} need${needs.length === 1 ? 's' : ''} you: ${needs.map(t => `'${t}'`).join(', ')} → the board (nunchi open).` : ''}${other.length ? ` ${other.length} not finished yet.` : ''}`;
   // design §5: after a verified fix of a kind with a built-in guard, one offer at the end of the batch; adding one is
-  // the person's (the board's card), so the line points there. A guards file that cannot be read offers nothing
-  // (nunchi check says why).
-  let offer = null;
-  try { offer = guardOffer({ stateDir: ctx.stateDir, rows: ctx.rows, doc: readGuards(guardsPath(ctx.nunchiDir)) }); } catch { offer = null; }
+  // the person's (the board's card), so the line points there. A guards file that cannot be read offers nothing and
+  // gets the owner's line instead, as the card does (nothing can be added until it is fixed).
+  let offer = null, unreadable = null;
+  const name = guardsName(ctx.led?.st?.root?.prefix);
+  try { offer = guardOffer({ stateDir: ctx.stateDir, rows: ctx.rows, doc: readGuards(guardsPath(ctx.nunchiDir), name) }); }
+  catch (e) { offer = null; if (['CORRUPT', 'UNSAFE_PATH'].includes(e.code)) unreadable = unreadableLine(name, e); }
   const offered = (offer?.rows || []).filter(r => !r.added);
   // a verified fix that took baselined hits away: the baseline can be tightened so they cannot come back unseen
   const kinds = [...new Set(ctx.rows.filter(r => fixedGroups.has(r.group)).map(guardKindOf).filter(Boolean))].sort();
   let gone = 0;
   if (kinds.length && tighten) { try { gone = tighten(kinds) || 0; } catch { gone = 0; } }
-  const lines = [line, ...(offered.length ? [`${offerLine(offered)} → the board (nunchi open).`] : []),
+  const lines = [line, ...(unreadable ? [unreadable] : []), ...(offered.length ? [`${offerLine(offered)} → the board (nunchi open).`] : []),
     ...(gone ? [`${gone} baselined guard hit${gone === 1 ? ' is' : 's are'} gone with these fixes: tighten the baseline so ${gone === 1 ? 'it cannot come' : 'they cannot come'} back unseen (nunchi guard --baseline, in your own terminal; commit .nunchi/guards.json).`] : [])];
-  return out(0, lines, { fixed, of: n, screens, needsYou: needs, broke, open: other, guards: offered.map(r => ({ kind: r.kind, params: r.params, label: r.label, fixed: r.fixed })), tighten: gone });
+  return out(0, lines, { fixed, of: n, screens, needsYou: needs, broke, open: other, guards: offered.map(r => ({ kind: r.kind, params: r.params, label: r.label, fixed: r.fixed })), tighten: gone, ...(unreadable ? { guardsUnreadable: unreadable } : {}) });
 }
 export const startFix = guarded(startFixInner);
 export const checkFix = guarded(checkFixInner);

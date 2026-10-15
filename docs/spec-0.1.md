@@ -1749,7 +1749,9 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   buttons sit in one row without their sub-labels and the toast is on one line, still 44 px each: the dock takes 16%
   of a 640 × 360 window, 32% with the toast (32% and 51% before); tested at 640 × 360 and 800 × 420, measured in
   one evaluation.
-- *Views:* only Progress, Findings (and Detail) and Screens; "More views in 0.2" lists the commands that show the rest.
+- *Views:* only Progress, Findings (and Detail) and Screens; "More views in 0.2" lists the commands that show the rest
+  (Coverage map, Design system, States & messages, Copy groups, AI trust, and Guards: `nunchi guard`, the guards, what
+  each finds now and how many are new; the owner deferred a Guards view to 0.2 on 2026-10-15 KST).
   It and "Keys (?)" are at the foot of the sidebar, and in the header on a phone (≤ 760 px), 44 px each.
 - *Words:* one table (`shared.mjs`), English. Decision times show as relative or local; files keep KST. The main
   button's "Decide N" is the number the verdict says is to decide when it says one (blocker and high; they come first
@@ -1966,11 +1968,20 @@ offers `window.confirm` (`calls: ["confirm"]`), a fixed `href="#"` offers `href=
   "✓ Added", and in forced colours it takes `Highlight`, so the state is seen without colour too). Pressing it adds the
   guard (`POST /api/guard {kind, add}`, the board's key only; the hits there now become the baseline of what it adds);
   pressing it again takes back exactly what this card added (`state/guard-card.json`), never a guard the person had
-  before. The polite live region says a neutral "Added" or "Taken back" (the sentences it will say wait for the owner). The card stays, rows pressed, until the next fix plan. When guards.json cannot be read (a merge
-  conflict, a hand edit), the summary says `unreadable: true`: the rows show what was fixed with no toggle, no chip is
-  shown (what the file covers is not known), the warning names the file once by its repository path
-  (`web/.nunchi/guards.json is not valid JSON …`), and a toggle that had the focus leaves it on the card's heading.
-  (A note on the card saying so waits for the owner's words.)
+  before. Under the row it toggled, the card then says what happened in the owner's words (approved 2026-10-15 KST;
+  `GUARD_WORDS` in `board/shared.mjs`, code as code), and the polite live region says the same text:
+  "Added · the 2 already in your code are its baseline; a new one fails `nunchi check`. Commit `.nunchi/guards.json`."
+  ("the 1 already in your code is its baseline" for one; `baselined` from `POST /api/guard`), "Added · none in your
+  code now.", or "Taken back · `window.confirm` isn't guarded." (the row's label); the focus stays on the toggle. The
+  card stays, rows pressed, until the next fix plan.
+- *A guards.json that cannot be read* (a merge conflict, a hand edit, a link): the card says, in the owner's words,
+  "Can't read `.nunchi/guards.json`: it is not valid JSON (…). Guards can't be added until it's fixed — `git checkout --
+  .nunchi/guards.json` restores the committed one." (the file as the repository names it, `web/.nunchi/guards.json` in a
+  monorepo; the reason never holds a path of this machine); the rows stay and show what was fixed, with no toggle; no
+  chip is shown (what the file covers is not known); a toggle that had the focus leaves it on the card's heading. The
+  summary carries the line as `guards.unreadable` (null otherwise), the board's warnings say it once, and the CLI
+  prints the same line: `fix --summary` (instead of the offer; `--json`: `guardsUnreadable`), `nunchi guard` (exit 2)
+  and `findings` (a warning).
 - *The chat:* `fix --summary` adds the same words as a second line, pointing at the board: "Stop these coming back?
   `window.confirm` (fixed twice) · `href="#"` → the board (nunchi open)." (`--json`: `guards`). Rows already added are
   not said.
@@ -2123,9 +2134,8 @@ redaction in every field of every format, Markdown escaping, determinism, the ca
 axe (light 1280 px, dark 390 px), the deny hook's new rules. `npm test`: 617 tests, 616 passing and 1 Windows-only
 skipped, on Node 22.22.0 and Node 24.21.0, Chromium included, with bun on PATH and without it.
 
-**Not done in M4:** a board view of the guards and their hits (only the card and the chip are in the design's
-words; a mock-up is in the PR), the card's feedback sentences and its note when guards.json cannot be read (all three
-wait for the owner); `--run` for md/json/sarif (they export the ledger, which is what CI and sharing need);
+**Not done in M4:** a board view of the guards and their hits (deferred to 0.2 by the owner; "More views in 0.2"
+names `nunchi guard`); `--run` for md/json/sarif (they export the ledger, which is what CI and sharing need);
 re-baselining from the board; SARIF from `check` for the ledger without `--fail-on`.
 
 ## 8. Release gates (0.1)

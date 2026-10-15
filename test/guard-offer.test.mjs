@@ -4,7 +4,7 @@
 // guards.json. Synthetic projects (test/fixtures/board-project.mjs), fix records written as the fix loop writes them.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -156,7 +156,7 @@ test('the board: the card in the summary, the toggle through the key only, the c
     const s = await (await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) })).json();
     const call = (path, body, token = s.token) => boardRequest(origin, path, { token, body });
     let sum = (await call('/api/summary')).json;
-    assert.deepEqual(sum.guards, { title: 'Stop these coming back?', unreadable: false, rows: [{ kind: 'native-dialog', text: '`window.confirm`', added: false }] });
+    assert.deepEqual(sum.guards, { title: 'Stop these coming back?', unreadable: null, rows: [{ kind: 'native-dialog', text: '`window.confirm`', label: '`window.confirm`', added: false }] });
     const list = (await call('/api/groups?status=open&group=kind')).json;
     assert.equal(list.sections.find(x => x.key === 'dead-href').guard, 'available');
     assert.equal(list.sections.find(x => x.key === 'native-dialog')?.guard, undefined);
@@ -265,6 +265,8 @@ test('board e2e: the card on Progress in the design\'s words, the Add toggle pre
   plan(p, [c1, c2]);
   attempt(p, c1, 'fixed');
   attempt(p, c2, 'fixed');
+  mkdirSync(join(p.root, 'app'), { recursive: true });
+  writeFileSync(join(p.root, 'app', 'remove.jsx'), "export const R = () => <button onClick={() => confirm('Remove?')}>x</button>;\nexport const W = () => <button onClick={() => confirm('Water now?')}>y</button>;\n");
   const b = await startBoard({ projectDir: p.root });
   try {
     for (const [viewport, scheme] of [[{ width: 1280, height: 900 }, 'light'], [{ width: 390, height: 844 }, 'dark']]) {
@@ -287,8 +289,12 @@ test('board e2e: the card on Progress in the design\'s words, the Add toggle pre
         await pg.click('#guard-b-native-dialog');
         await pg.waitForFunction(() => document.getElementById('guard-b-native-dialog')?.getAttribute('aria-pressed') === 'true');
         assert.equal((await pg.evaluate(CARD)).focus, 'guard-b-native-dialog', 'the focus stays on the toggle');
-        assert.equal((await pg.evaluate(CARD)).rows[0].button.text, '✓ Added');
-        await pg.waitForFunction(() => document.getElementById('announce')?.textContent === 'Added');
+        // the row says what happened in the owner's words, the live region the same, and the focus stays: one evaluation
+        await pg.waitForFunction(() => /^Added/.test(document.getElementById('announce')?.textContent || ''));
+        const said = await pg.evaluate(() => ({ said: document.getElementById('guard-n-native-dialog')?.textContent, code: [...document.querySelectorAll('#guard-n-native-dialog code')].map(c => c.textContent),
+          live: document.getElementById('announce').textContent, focus: document.activeElement?.id, button: document.getElementById('guard-b-native-dialog')?.innerText }));
+        const words = 'Added · the 2 already in your code are its baseline; a new one fails nunchi check. Commit .nunchi/guards.json.';
+        assert.deepEqual(said, { said: words, code: ['nunchi check', '.nunchi/guards.json'], live: words, focus: 'guard-b-native-dialog', button: '✓ Added' });
         assert.deepEqual(G.readGuards(join(p.nunchi, 'guards.json')).guards, [{ kind: 'native-dialog', params: { calls: ['confirm'] } }]);
         assert.deepEqual(await axeRun(pg), [], 'pressed');
         // the passive chip on the kind's section
@@ -336,16 +342,23 @@ test('the board: a guards.json that cannot be read keeps the rows without toggle
     // a file that cannot be read (a merge conflict, a hand edit)
     writeFileSync(join(p.nunchi, 'guards.json'), '<<<<<<< ours\n{}\n');
     const sum = (await call('/api/summary')).json;
-    assert.deepEqual(sum.guards, { title: 'Stop these coming back?', unreadable: true, rows: [{ kind: 'native-dialog', text: '`window.confirm`', added: false }] });
-    assert.equal(sum.warnings.filter(w => w.includes('guards.json')).length, 1);
-    assert.match(sum.warnings.find(w => w.includes('guards.json')), /^\.nunchi\/guards\.json is not valid JSON/, 'its path once, as the repository names it');
+    const line = /^Can't read `\.nunchi\/guards\.json`: it is not valid JSON \(.+\)\. Guards can't be added until it's fixed — `git checkout -- \.nunchi\/guards\.json` restores the committed one\.$/;
+    assert.match(sum.guards.unreadable, line, 'the owner\'s line, its path as the repository names it');
+    assert.deepEqual({ ...sum.guards, unreadable: null }, { title: 'Stop these coming back?', unreadable: null, rows: [{ kind: 'native-dialog', text: '`window.confirm`', label: '`window.confirm`', added: false }] });
+    assert.deepEqual(sum.warnings.filter(w => w.includes('guards.json')), [sum.guards.unreadable], 'said once');
     const list = (await call('/api/groups?status=open&group=kind')).json;
     assert.ok(list.sections.every(x => x.guard === undefined), 'no chip: what the file covers is not known');
     assert.equal((await call('/api/guard', { kind: 'native-dialog', add: true })).status, 409);
     const f = spawnSync(process.execPath, [CLI, 'findings', '--json'], { cwd: p.root, encoding: 'utf8' });
     assert.equal(JSON.parse(f.stdout).kinds.find(k => k.rule === 'dead-href').guard, undefined);
-    assert.equal(f.stderr.split('\n').filter(l => l.includes('guards.json')).length, 1);
-    assert.match(f.stderr, /nunchi: \.nunchi\/guards\.json is not valid JSON/);
+    assert.deepEqual(f.stderr.split('\n').filter(l => l.includes('guards.json')), [`nunchi: ${sum.guards.unreadable}`]);
+    // the same line in the chat: fix --summary, and nunchi guard (exit 2)
+    const fs2 = spawnSync(process.execPath, [CLI, 'fix', '--summary'], { cwd: p.root, encoding: 'utf8' });
+    assert.ok(fs2.stdout.split('\n').includes(sum.guards.unreadable), fs2.stdout);
+    assert.ok(!/Stop these coming back/.test(fs2.stdout), 'nothing offered that cannot be added');
+    const gd = spawnSync(process.execPath, [CLI, 'guard'], { cwd: p.root, encoding: 'utf8' });
+    assert.equal(gd.status, 2);
+    assert.equal(gd.stderr.trim(), sum.guards.unreadable);
   } finally { await b.close(); }
 });
 
@@ -367,12 +380,42 @@ test('board e2e: a toggle in focus whose file turns unreadable leaves the focus 
     assert.equal(look[0].text, '✓ Added');
     assert.equal(look[1].text, 'Add');
     assert.notEqual(look[0].bg, look[1].bg, 'pressed and not pressed look different in forced colours');
+    // taken back: the row and the live region say so, the focus stays on the toggle (one evaluation)
+    await pg.waitForFunction(() => /^Added · none in your code now\.$/.test(document.getElementById('announce')?.textContent || ''));
+    await pg.click('#guard-b-native-dialog');
+    await pg.waitForFunction(() => /^Taken back/.test(document.getElementById('announce')?.textContent || ''));
+    const back = await pg.evaluate(() => ({ said: document.getElementById('guard-n-native-dialog')?.textContent, live: document.getElementById('announce').textContent,
+      focus: document.activeElement?.id, pressed: document.getElementById('guard-b-native-dialog')?.getAttribute('aria-pressed') }));
+    assert.deepEqual(back, { said: "Taken back · window.confirm isn't guarded.", live: "Taken back · window.confirm isn't guarded.", focus: 'guard-b-native-dialog', pressed: 'false' });
+    await pg.click('#guard-b-native-dialog');
+    await pg.waitForFunction(() => document.getElementById('guard-b-native-dialog')?.getAttribute('aria-pressed') === 'true');
     await pg.focus('#guard-b-dead-href');
     writeFileSync(join(p.nunchi, 'guards.json'), '{"schema":1,"guards":[],"baseline":[],"regex":".*"}\n');
     await pg.waitForFunction(() => !document.getElementById('guard-b-dead-href'), null, { timeout: 15000 });
-    assert.equal(await pg.evaluate(() => document.activeElement?.id), 'h-guards', 'the focus stays on the card');
-    assert.deepEqual(await pg.evaluate(() => [...document.querySelectorAll('.guard-list li')].map(li => [li.textContent, !!li.querySelector('button')])), [['window.confirm (fixed twice)', false], ['href="#"', false]]);
+    const card = await pg.evaluate(() => ({ focus: document.activeElement?.id, note: document.getElementById('guard-unreadable')?.textContent,
+      rows: [...document.querySelectorAll('.guard-list li')].map(li => [li.textContent, !!li.querySelector('button')]) }));
+    assert.equal(card.focus, 'h-guards', 'the focus stays on the card');
+    assert.match(card.note, /^Can't read \.nunchi\/guards\.json: it is not a guards file nunchi can use \(.+\)\. Guards can't be added until it's fixed — git checkout -- \.nunchi\/guards\.json restores the committed one\.$/);
+    assert.deepEqual(card.rows, [['window.confirm (fixed twice)', false], ['href="#"', false]]);
     assert.deepEqual(await axeRun(pg), []);
     await context.close();
   } finally { await b.close(); }
+});
+
+test('the card\'s words: the owner\'s, singular and plural; "More views in 0.2" names nunchi guard for the Guards view', async () => {
+  const W = await import('../src/board/shared.mjs');
+  assert.equal(W.GUARD_WORDS.added(0), 'Added · none in your code now.');
+  assert.equal(W.GUARD_WORDS.added(1), 'Added · the 1 already in your code is its baseline; a new one fails `nunchi check`. Commit `.nunchi/guards.json`.');
+  assert.equal(W.GUARD_WORDS.added(3), 'Added · the 3 already in your code are its baseline; a new one fails `nunchi check`. Commit `.nunchi/guards.json`.');
+  assert.equal(W.GUARD_WORDS.takenBack('`window.confirm`'), "Taken back · `window.confirm` isn't guarded.");
+  assert.equal(G.unreadableLine('web/.nunchi/guards.json', Object.assign(new Error('x'), { reason: 'it is not a file' })),
+    "Can't read `web/.nunchi/guards.json`: it is not a file. Guards can't be added until it's fixed — `git checkout -- .nunchi/guards.json` restores the committed one.");
+  assert.deepEqual(W.MORE_VIEWS.at(-1), ['Guards', 'nunchi guard']);
+  // every way guards.json cannot be read has a reason without a path of this machine
+  const dir = tmp('nunchi-offer-reason-');
+  for (const text of ['<<<<<<< ours\n', '{"schema":2,"guards":[],"baseline":[]}', '[]']) {
+    writeFileSync(join(dir, 'guards.json'), text);
+    try { G.readGuards(join(dir, 'guards.json'), '.nunchi/guards.json'); assert.fail('read'); }
+    catch (e) { assert.ok(e.reason && !e.reason.includes(dir), e.reason); }
+  }
 });

@@ -436,8 +436,10 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
       ai: { ...s.ai, coverage }, now: nowLines,
       checks: profile ? { requested, approved, profile: { hash: profile.hash, scripts: Object.fromEntries(Object.entries(profile.scripts).map(([k, v]) => [safe(k, 40), safe(v, 400)])), serve: Object.fromEntries(Object.entries(profile.serve || {}).map(([k, v]) => [safe(k, 40), safe(v, 400)])), others: Object.keys(profile.others || {}).length, files: Object.fromEntries(Object.entries(profile.files).map(([k, v]) => [safe(k, 120), v ? safe(v, 64) : null])), packageManager: profile.packageManager ? safe(profile.packageManager, 80) : null } } : null,
       // design §5: one card at the end of a fix batch, in its words; the rows a person toggles (Add)
-      // `unreadable`: guards.json cannot be read, so the rows show without their toggles
-      guards: m.guardOffer?.rows.length ? { title: OFFER_TITLE, unreadable: !!m.guardsUnreadable, rows: m.guardOffer.rows.map(r => ({ kind: r.kind, text: safe(rowText(r), 200), added: r.added })) } : null,
+      // `unreadable`: the line that says guards.json cannot be read (the rows then show without their toggles), or null;
+      // `label`: what a row guards, for the words a toggle says
+      guards: m.guardOffer?.rows.length ? { title: OFFER_TITLE, unreadable: m.guardsUnreadable ? safe(m.guardsUnreadable, 600) : null,
+        rows: m.guardOffer.rows.map(r => ({ kind: r.kind, text: safe(rowText(r), 200), label: safe(r.label, 200), added: r.added })) } : null,
       counts: { groups: m.groups.length, screens: m.latestEv?.scenes.length || 0 },
       treeChanged: !!(runTree && now && now !== runTree),
       warnings: [...warnings].map(w => safe(w, 400)),

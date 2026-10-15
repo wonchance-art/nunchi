@@ -6,6 +6,7 @@ import { readFileSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseColor } from './tokens.mjs';
 import { stableJson, writeAtomic, refuseLink } from './stable.mjs';
+import { GUARD_WORDS } from './board/shared.mjs';
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const fail = (code, message) => Object.assign(new Error(message), { code });
@@ -100,8 +101,10 @@ export function paramsProblem(kind, p) {
 }
 
 // Validates a parsed guards.json; → the document, normalised (lists sorted). A problem throws CORRUPT (exit 2).
+// Each error says why in `reason` too (no file name in it), for the line the card and the CLI say.
+const failWhy = (code, message, reason) => Object.assign(fail(code, message), { reason });
 export function validateGuards(doc, file = 'guards.json') {
-  const bad = why => { throw fail('CORRUPT', `${file} is not a guards file nunchi can use: ${why}. Fix it by hand or remove it (git checkout -- ${file} restores the committed one).`); };
+  const bad = why => { throw failWhy('CORRUPT', `${file} is not a guards file nunchi can use: ${why}. Fix it by hand or remove it (git checkout -- ${file} restores the committed one).`, `it is not a guards file nunchi can use (${why})`); };
   if (!exact(doc, ['schema', 'guards', 'baseline'])) bad('the top level holds only "schema", "guards" and "baseline"');
   if (doc.schema !== 1) bad('"schema" must be 1');
   if (!Array.isArray(doc.guards) || doc.guards.length > KINDS.length) bad('"guards" must be a list of the built-in kinds');
@@ -139,22 +142,25 @@ export const emptyGuards = () => ({ schema: 1, guards: [], baseline: [] });
 
 // Reads and validates a guards file's text (a file, or a blob read from git for `--base`).
 export function parseGuards(text, file = 'guards.json') {
-  if (Buffer.byteLength(text) > MAX_GUARDS_BYTES) throw fail('CORRUPT', `${file} is larger than ${MAX_GUARDS_BYTES / 1024 / 1024} MB`);
+  if (Buffer.byteLength(text) > MAX_GUARDS_BYTES) throw failWhy('CORRUPT', `${file} is larger than ${MAX_GUARDS_BYTES / 1024 / 1024} MB`, `it is larger than ${MAX_GUARDS_BYTES / 1024 / 1024} MB`);
   let doc;
-  try { doc = JSON.parse(text); } catch (e) { throw fail('CORRUPT', `${file} is not valid JSON (${String(e.message).split('\n')[0]}). Fix it by hand or remove it.`); }
+  try { doc = JSON.parse(text); } catch (e) { const why = `it is not valid JSON (${String(e.message).split('\n')[0].slice(0, 120)})`; throw failWhy('CORRUPT', `${file} is not valid JSON (${String(e.message).split('\n')[0]}). Fix it by hand or remove it.`, why); }
   return validateGuards(doc, file);
 }
 // → the document, or null when there is no guards file. A link, a folder or an unreadable file is an error. `name`: the
 // file as messages say it (the repository's path, `web/.nunchi/guards.json`), the path itself by default.
 export function readGuards(path, name = path) {
   let st;
-  try { st = lstatSync(path); } catch (e) { if (e.code === 'ENOENT') return null; throw fail('CORRUPT', `${name} cannot be read (${e.code})`); }
-  if (st.isSymbolicLink()) throw fail('UNSAFE_PATH', `${name} is a symbolic link; nunchi reads its guards from a plain file`);
-  if (!st.isFile()) throw fail('CORRUPT', `${name} is not a file`);
+  try { st = lstatSync(path); } catch (e) { if (e.code === 'ENOENT') return null; throw failWhy('CORRUPT', `${name} cannot be read (${e.code})`, `it cannot be opened (${e.code})`); }
+  if (st.isSymbolicLink()) throw failWhy('UNSAFE_PATH', `${name} is a symbolic link; nunchi reads its guards from a plain file`, 'it is a symbolic link (nunchi reads its guards from a plain file)');
+  if (!st.isFile()) throw failWhy('CORRUPT', `${name} is not a file`, 'it is not a file');
   let text;
-  try { text = readFileSync(path, 'utf8'); } catch (e) { throw fail('CORRUPT', `${name} cannot be read (${e.code})`); }
+  try { text = readFileSync(path, 'utf8'); } catch (e) { throw failWhy('CORRUPT', `${name} cannot be read (${e.code})`, `it cannot be opened (${e.code})`); }
   return parseGuards(text, name);
 }
+// The line a guards.json that cannot be read gets, on the card and in the CLI (the owner's words): `name` as the
+// repository names it, `e` the error readGuards threw.
+export const unreadableLine = (name, e) => GUARD_WORDS.unreadable(name, e?.reason || String(e?.message || e).split('\n')[0].slice(0, 200));
 // guards.json as the repository names it: the app's place in it (git's prefix, '' at the top or without git)
 export const guardsName = prefix => `${prefix || ''}.nunchi/guards.json`;
 // Written stable (sorted keys and lists) and atomically, never through a link. A committed file: its mode stays the

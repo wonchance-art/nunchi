@@ -265,7 +265,10 @@ fixed: never say *fixed*, *undone* or *needs you* unless the engine printed it.
     the board or `findings` is passive: mention it only if the user asks about guards. When the user asks to add a
     guard (or which guards there are), run `nunchi guard` first and say what each would find now and how many of
     those are already there (they become its baseline), then point them to the card or to `nunchi guard --add <kind>`
-    in their own terminal, and remind them to commit `.nunchi/guards.json` so CI checks the same guards. You may run
+    in their own terminal, and remind them to commit `.nunchi/guards.json` so CI checks the same guards. If
+    `fix --summary`, `guard` or `findings` prints "Can't read `.nunchi/guards.json`: … Guards can't be added until it's
+    fixed — `git checkout -- .nunchi/guards.json` restores the committed one.", say it as printed: the user fixes or
+    restores the file (never you: the hook refuses it), and until then nothing is offered. You may run
     `guard --lint` and show the ESLint config object it prints for the user to paste into their own
     `eslint.config.*` with its warning (it replaces any earlier `no-restricted-syntax` list for those files, and a later
     one with options replaces it: they merge them into one list); never edit their ESLint config yourself.

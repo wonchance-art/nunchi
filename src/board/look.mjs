@@ -204,6 +204,8 @@ dialog h2{font-size:17px;margin:0 0 10px}.dialog-actions{display:flex;flex-wrap:
 .confirm-list li{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;padding:10px 12px;border:1px solid var(--line-soft);border-radius:8px}
 .confirm-list .what{flex:1 1 260px;display:flex;flex-direction:column;gap:2px;min-width:0}
 /* the guard card (design §5): a row of text with code, and its Add toggle; pressed = added */
+.guard-list li{flex-direction:column;align-items:stretch}.guard-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px}
+.guard-said{margin:0;color:var(--ink-2)}
 .guard-list .what{display:block;flex:1 1 160px}.guard-list code{font:13px/1.4 var(--mono);padding:0 3px;border-radius:4px;background:var(--soft)}
 .guard-list .b[aria-pressed=true]{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
 @media (prefers-color-scheme:dark){.guard-list .b[aria-pressed=true]{color:#141518}}
