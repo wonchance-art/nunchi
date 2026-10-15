@@ -1887,7 +1887,11 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   sends the ids of the decisions it made (`POST /api/undo {decisions}`); the server reopens exactly their targets (the
   fingerprints of a group decided on its fingerprints), only for decisions approved with channel `board`, and answers
   409 unless each target still shows that decision (decided again since, here, in the terminal or through git:
-  nothing is undone). Buttons carry the permanent sub-labels, except in a window 420 px high or less (below).
+  nothing is undone). Once the undo is answered the focus goes to the row (or the finding) it reopened, but only if
+  the person is still where they pressed Z: one who moved to another row meanwhile keeps it, so the next decision key
+  acts on the row they chose (2026-10-15 KST: on a slow macOS runner X dismissed the reopened row instead of asking
+  about the blocker the test had focused; `test/board-undo-race-e2e.test.mjs` holds the answer back to show it).
+  Buttons carry the permanent sub-labels, except in a window 420 px high or less (below).
 - *Frozen list:* while Findings or Detail is open, order and members stay; rows take new statuses in place; a banner
   says "Updated: 2 new, 1 fixed · Show (R)". Decisions target group ids.
 - *Batches:* group by kind (default), root-cause file (the grounded file of an AI item, else "No file known"),

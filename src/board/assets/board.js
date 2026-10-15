@@ -672,14 +672,19 @@ async function undo() {
   const u = S.undo;
   if (!u) return announce('Nothing to undo');
   hideToast();
+  // where the person was when they pressed Z: the answer takes them to what it reopened only if they are still there.
+  // One who moved on meanwhile keeps their place, so a decision key pressed next acts on the row they chose, never on
+  // one the answer moved them to (CI macOS, 2026-10-15 KST: X dismissed the reopened row instead of the blocker)
+  const from = { hash: location.hash, focus: S.focus };
   try { await api('/api/undo', { method: 'POST', body: { decisions: u.decisions } }); }
   catch (e) {
     if (e.status === 409) { announce('Not undone: it was decided again since'); await loadList(); return renderFindings(true); }
     return announce(`Not undone: ${e.message}`);
   }
   for (const id of u.ids) { const g = S.list?.groups[id]; if (g) S.list.groups[id] = { ...g, status: 'open', statuses: { open: 1 }, decision: null }; }
-  if (S.route.view === 'findings') { updateRowsInPlace(); setFocus(u.ids[0]); }
-  else if (S.route.view === 'detail') go('#/finding/' + u.ids[0]);       // back to the finding it reopened, its heading focused
+  const stayed = location.hash === from.hash && S.focus === from.focus;
+  if (S.route.view === 'findings') { updateRowsInPlace(); if (stayed) setFocus(u.ids[0]); }
+  else if (S.route.view === 'detail' && stayed) go('#/finding/' + u.ids[0]);       // back to the finding it reopened, its heading focused
   announce(`Undone: ${W.plural(u.ids.length, 'group')} back to open`);
   toast('Undone · back to open', null);
 }
