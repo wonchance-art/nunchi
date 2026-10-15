@@ -7,8 +7,9 @@
 // Not counted, by name (what other programs leave there, and the one folder nunchi keeps there on purpose):
 // - node-compile-cache: npm's (npm 10.9 and later turn on Node's module compile cache, and keep it there);
 // - .org.chromium.Chromium.XXXXXX: a shared-memory file of Chromium's (Playwright starts it with
-//   --disable-dev-shm-usage, so these live in the temporary folder, not /dev/shm); now and then one outlives a browser
-//   that was closed normally (seen 2026-10-15 KST after board-e2e and capture, no browser killed);
+//   --disable-dev-shm-usage, so these live in the temporary folder, not /dev/shm). A browser killed when a capture is
+//   stopped leaves one (quick-cli's stopped capture: 8 of 8 runs), and now and then a browser closed normally does too
+//   (seen 2026-10-16 KST after board-e2e and capture);
 // - nunchi-<uid>, while empty: the folder a board's control socket goes to when the state folder's path is too long
 //   for a socket (src/board/server.mjs controlPath; macOS's temporary folder is). It is kept for the next board, as
 //   tmux keeps its own; a socket left in it is a board left running, and counts.
