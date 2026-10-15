@@ -40,11 +40,14 @@ export function fixGit(root) {
   const run = gitRunner(root);
   const git = (args, opts = {}) => run(args, { encoding: 'utf8', ...opts });
   const tryGit = (args, opts) => { try { return git(args, opts); } catch { return null; } };
+  let top = null;
   const api = {
     root,
     head: () => { const h = tryGit(['rev-parse', '--verify', '--quiet', 'HEAD^{commit}']); return h ? h.trim() : null; },
     branch: () => { const b = tryGit(['symbolic-ref', '--quiet', '--short', 'HEAD']); return b ? b.trim() : null; },
-    toplevel: () => git(['rev-parse', '--show-toplevel']).trim(),
+    // asked once: a folder's top level does not change while a command runs, and every git process counts on Windows,
+    // where the fix loop's commands ask for it several times each (M6: which folder holds an attempt)
+    toplevel: () => (top ??= git(['rev-parse', '--show-toplevel']).trim()),
     gitPath: name => git(['rev-parse', '--path-format=absolute', '--git-path', name]).trim(),
     // [rev, its parents…]
     parents: (rev = 'HEAD') => git(['rev-list', '--parents', '-n1', '--end-of-options', rev]).trim().split(/\s+/).filter(Boolean),
