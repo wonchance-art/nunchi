@@ -1037,14 +1037,33 @@ unreadable one by one). Built in `src/ledger.mjs`:
     pid alone, so a reused pid makes takers wait and end in LOCKED, never take a live lock); one on another
     machine, after 30 s without a touch. One taker at a time removes a
     stale lock, after checking again that it still holds the owner judged stale; a lock is never given back and is
-    released only by its owner. Waiting is fair (2026-10-15 KST): a waiter that has waited 20 ms makes a ticket of
-    its own (`<file>.lock.d.wait-<since>-<token>`, an empty file made once, never renamed or rewritten, its order in
-    its name), and while live tickets exist only the waiter with the lowest takes the lock, so a process that releases
-    and takes the lock again at once cannot starve the others. Fairness is measured as overtakes (how many
-    acquisitions by others come between a request and its turn; at most N − 1 for N waiters, however fast the
-    machine): 4 processes × 15 holds of 80 ms, at most 45 before, 3 after (2026-10-15 KST). A waiter renews its
-    ticket's time while it waits; one not renewed for 1 s, or that cannot be read, does not count; a crash's ticket
-    goes after 30 s or with the hour-old leftovers. A waiter judges the holder stale at most every 100 ms, since on
+    released only by its owner. Waiting is fair (2026-10-15 KST): a waiter that finds the lock taken makes a ticket
+    of its own at once (`<file>.lock.d.wait-<since>-<token>`, an empty file made once, never renamed or rewritten,
+    its order in its name; a free lock is taken without one), and while live tickets exist only the waiter with the
+    lowest takes the lock, so a process that releases and takes the lock again at once cannot starve the others.
+    Fairness is measured as overtakes: how many acquisitions by others come between the moment a request is in line
+    (its ticket made) and its turn; at most N − 1 for N waiters, however busy the machine: 4 processes × 15 holds of
+    80 ms, at most 45 before, 3 after (2026-10-15 KST). A waiter renews its ticket's time while it waits; one not
+    renewed for 1 s, or that cannot be read, does not count, so a waiter that has not run for a second (stopped, or
+    set aside that long by the machine) is passed until it runs again, and is then first again: judged by its process
+    instead, one stopped waiter would hold up every other until each failed with LOCKED. A crash's ticket goes after
+    30 s or with the hour-old leftovers.
+    *Under load (follow-ups, 2026-10-15 KST):* the fair-lock test once counted 4 overtakes on a machine busy with
+    three other test suites, while the lock served every ticket in order. Two causes: (1) the test started counting
+    before the process called the lock. The process that has just held the lock for 80 ms of CPU is the one the machine
+    sets aside next, right after it reads the clock (up to 490 ms seen), so a process that asked after it but reached the
+    lock first was rightly first. The test now counts from the ticket, which each process sees made and renewed
+    through the lock's `io`. (2) A waiter made its ticket only after it had waited 20 ms (three sleeps), so one woken
+    late had no place in line yet and later requests passed it; it now makes it at its first try.
+    *Measured (2026-10-15 KST, 4-core Linux, the test's 4 processes):* with 40 busy processes on their core, counted
+    from asking: 4 overtakes in 3 of 12 runs, each of them (1) (the passed process set aside 113–161 ms between the
+    clock and the lock); with (2) fixed alone, still in 2 of 12. Counted from the ticket: at most 3 in all 24. A request
+    set aside 250 ms right after asking (10% of requests): over 3 from asking in 10 of 10 runs (worst 6), at most 3
+    from the ticket. Sleeps woken 300 ms late (10%): from the first try, over 3 in 2 of 10 runs before (2) (first try
+    to ticket: median 37 ms, up to 335 ms), none after (median 0.2 ms, at most 20 ms). A waiter stopped for 1.3 s is
+    passed 6–9 times while it does not run, at most 3 times from the renewal that ends the gap.
+    `test/ledger-integrity.test.mjs` replays (1) and (2) step by step, and the stopped waiter.
+    A waiter judges the holder stale at most every 100 ms, since on
     Windows each read of `owner.json` by another process holds up the release. Windows' rules (a file open in another
     process cannot be renamed over or deleted at once; a folder holding one cannot be renamed) are emulated on any
     machine through the lock's `io` (`test/fixtures/windows-io.mjs`); under them tickets keep 3 overtakes (a single
@@ -1961,8 +1980,8 @@ construct never count.
 
 | Kind | A hit is | Parameters (typed; nothing else is read) |
 |---|---|---|
-| `native-dialog` | a call of `window.confirm`, `alert` or `prompt`: `window.`/`globalThis.`/`self.`, `window['confirm']`, `?.()`, or the bare name unless the file declares its own (`import { confirm }`, a parameter, a function) | `calls`: some of `alert`, `confirm`, `prompt` |
-| `dead-href` | an `href` in JSX that is `#` or a `javascript:` URL (a string, `{'#'}`, a template with no expression, either branch of `?:`; tabs and line breaks inside the scheme dropped, as browsers do). `#top`, `` `#${id}` `` and `'#' + id` are not | `values`: some of `#`, `javascript:` |
+| `native-dialog` | a call of `window.confirm`, `alert` or `prompt`: `window.`/`globalThis.`/`self.`, `window['confirm']`, `?.()`, a tagged template (``alert`Saved` `` calls `alert`), or the bare name unless the file declares its own (`import { confirm }`, a parameter, a function) | `calls`: some of `alert`, `confirm`, `prompt` |
+| `dead-href` | an `href` in JSX that is `#` or a `javascript:` URL (a string, `{'#'}`, a template with no expression, either branch of `?:`), read as a browser reads it (the URL standard): C0 controls and spaces around stripped, tabs and line breaks dropped anywhere, so `"\u0001javascript:…"` and `"java&#9;script:…"` count; a no-break space is kept (`"\u00a0#"` is a path). `#top`, `` `#${id}` `` and `'#' + id` are not | `values`: some of `#`, `javascript:` |
 | `raw-message` | a JSX expression whose value can be `<x>.message`: `{e.message}`, `{err?.message}`, `{(e as Error).message}`, `{e['message']}`, `{a && e.message}`, `{e.message ?? '…'}`, either branch of `?:`; as a child (also in `<pre>`) or in an attribute that is text (not `className`, `class`, `style`, `key`, `ref`, `id`, `href`, `src`, `data-*`, `on*`, `aria-describedby` …) | none |
 | `mustache-text` | `{{` or `}}` in JSX text: the text itself (entities decoded, so `&#123;&#123;` counts), a string or template child, and text attributes (`alt`, `title`, `placeholder`, `label`, `aria-label` …). Not inside `<code>`, `<pre>`, `<kbd>`, `<samp>`, `<style>`, `<script>`; never an object child (`<Trans>{{ name }}</Trans>` is react-i18next's own syntax) or `style={{…}}` | none |
 | `colour-literal` | a colour literal outside the measured tokens: hex, `rgb()`/`hsl()`/`hwb()`/`lab()`/`lch()`/`oklab()`/`oklch()`/`color()` with literal arguments, a CSS named colour where a colour is expected (`color: tomato`, not `font-family: Tomato`); in JSX `style` objects, Tailwind arbitrary values in class names (`bg-[#…]`, inside `cn(…)` too), SVG colour attributes (`fill`, `stroke`, `stopColor` …) and `.css` declarations. Comments, strings, `url()`, `var()` (its fallback included) and custom-property definitions (`--brand: …`, a token's own definition) are left out. A literal within ΔE_OK `deltaE` and alpha ±0.1 of a token is that token | `colors`: the token values of the latest run's `tokens.json` (§3.2.1), copied in when the guard is added, so CI (which has no runs) checks the same set; `deltaE`: 0.03 (`tokens.mjs` MERGE_DE). Without `tokens.json` the guard is *unavailable* and says so (`nunchi guard`) |
@@ -1983,7 +2002,10 @@ CRLF checkout (Git for Windows' `core.autocrlf`) gives the same hits, lines, col
 A hit is reported by file:line:column and kind, never with its source line, so a key in the source never reaches the
 output.
 
-*Limits, stated:* there is no data flow (`const m = e.message; <p>{m}</p>` is missed: a fixture pins it); a name is
+*Limits, stated:* there is no data flow (`const m = e.message; <p>{m}</p>` is missed: a fixture pins it), so a dialog
+reached under another name is missed too (`const c = window.confirm; c()`, `onClick={window.alert}`; `const { alert } =
+window` declares an `alert`, taken for the file's own); attributes passed in a spread are not read (`<a {...{ href: '#'
+}}>`, `<a {...(ok ? {} : { href: '#' })}>`, `<a {...linkProps}>`: only the last is common, and it needs data flow); a name is
 judged per file, not per scope (a parameter called `confirm` anywhere in the file makes every bare `confirm()` there
 local); a `toast(e.message)` is not JSX and not this guard; colours in CSS-in-JS templates, SCSS/Less, theme objects
 in code and `var()` fallbacks are not read; Vue, Svelte, Astro and MDX (`.mdx`: Markdown with JSX, a docs site's pages) files are not read, so a `{error.message}` or an `alert()` in an `.mdx` page is not seen.
@@ -2005,7 +2027,9 @@ not make it new, while the same call once more in the file is new (counts are co
 in file order are the baselined ones), a changed call is new (and its old entry gone), and the same text in another
 file is that file's hit. Adding a guard baselines what is there; widening one (another call, another link kind)
 baselines only the hits of what it adds, so a hit the guard already catches is never baselined by an add. A file
-renamed makes its hits new (a stated limit).
+renamed makes its hits new (a stated limit). A guard that catches more in a later version moves no anchor it gave:
+`test/fixtures/guards/anchors-m4.json` is the baseline the M4 guards gave over the fixtures, and a test checks that
+every hit it held is still held and that only the lines added since are new (follow-ups, 2026-10-15 KST).
 
 **`nunchi check [--fail-on blocker|high|medium|low] [--sarif <file>] [--base <ref>] [--root <dir>] [--json]`**
 (`src/check.mjs`): no capture, no browser, no network; nothing is written but the SARIF file asked for (a test checks
@@ -2081,20 +2105,26 @@ offers `window.confirm` (`calls: ["confirm"]`), a fixed `href="#"` offers `href=
 new (colour: *unavailable* without `tokens.json`); the agent may run it and propose. **`nunchi guard --lint`** prints
 an ESLint flat-config object to paste into the user's `eslint.config.*` — nunchi never writes their config: core rules
 only (`no-alert`, which covers alert, confirm and prompt alike; `no-restricted-syntax` with esquery selectors for
-`href="#"` (a string, `{'#'}`, `` {`#`} ``, either branch of `?:`), `javascript:` links, an error's `.message` or
-`['message']` (the guard's names, never through `errors`, `formState` or `fieldState`; directly, on the rendered side
-of `&&`, `??`, `||` and `?:`, in a template, after `+` or in `String()`) in JSX outside the attributes that are not
-text, and `{{`/`}}` in JSX text, a string or a template child, outside `<code>`, `<pre>`, `<kbd>`, `<samp>`, `<style>`,
-`<script>`), as a separate object scoped to `files` whose `ignores` are what `check` leaves out (tests, stories,
+a tagged template of alert, confirm or prompt (bare, or on `window`, `globalThis`, `self`: `no-alert` sees only
+calls), `href="#"` (a string, `{'#'}`, `` {`#`} ``, either branch of `?:`) and `javascript:` links, their values
+read as the guard reads them (C0 controls and spaces around, tabs and line breaks in the scheme; the characters are in
+the selector itself, printed `\u0000`, `\t` …, since esquery 1.6 and later read no escape inside a character class),
+an error's `.message` or `['message']` (the guard's names, never through `errors`, `formState` or `fieldState`;
+directly, on the rendered side of `&&`, `??`, `||` and `?:`, in a template, after `+`, in `String()` or kept whole by
+`.toString()`/`.trim()`) in JSX outside the attributes that are not text, and `{{`/`}}` in JSX text, a string or a
+template child, outside `<code>`, `<pre>`, `<kbd>`, `<samp>`, `<style>`, `<script>`, and in the text attributes (`alt`,
+`title`, `placeholder`, `aria-label` …)), as a separate object scoped to `files` whose `ignores` are what `check` leaves out (tests, stories,
 `*.cy.*`, `*.story.*`, `e2e/`, `cypress/`, the top-level test folders, config files, the skipped folders; a test turns
 the globs into patterns and checks them against `check`'s own list), with the warning that ESLint does not merge rule
 options: this object replaces any earlier `no-restricted-syntax` list for these files, a later object that sets it
-with options replaces this one, so merge them into one list. Verified with ESLint 9.39.1 on 2026-10-15 KST: the
-selectors flag every hit of a JSX copy of the fixtures (23: two `no-alert`, six links, eleven messages, four
-placeholders) and none of the near misses (`className={styles.message}`, `toast.message`, `errors.email?.message`,
-`{e.message && <b>…</b>}`, `#top`, `` `#${id}` ``, `<Trans>{{ name }}</Trans>`, `<code>{'{{name}}'}</code>`), files
+with options replaces this one, so merge them into one list. Verified with ESLint 9.39.1 on 2026-10-15 KST: files
 under `e2e/`, `cypress/` and `__tests__/` and `*.cy.*` and `*.story.*` files get none, and with a later object that sets
-`no-restricted-syntax` only `no-alert` was left. Proposed only when already installed (the app's package.json or
+`no-restricted-syntax` only `no-alert` was left. Checked again after the follow-ups (2026-10-15 KST, ESLint 9.39.1) over
+JSX copies of the whole native-dialog, dead-href, raw-message and mustache-text fixtures (types blanked, lines kept),
+line by line against the guards: the same 36 lines in the hit files (six `no-alert`, two tagged templates, ten links,
+thirteen messages, five placeholders), where before a message kept by `.toString()` and the placeholders in text
+attributes were the guards' alone; in the near misses nothing, but ``confirm`…` `` in a file that imports its own
+`confirm` (a selector does not see the names a file declares; `no-alert` does, for calls). Proposed only when already installed (the app's package.json or
 `node_modules`): `jsx-a11y/anchor-is-valid` when `eslint-plugin-jsx-a11y` is (or `eslint-config-next`, which depends on
 it: eslint-config-next 16.4.1 turns on six jsx-a11y rules, `alt-text`, `aria-props`, `aria-proptypes`,
 `aria-unsupported-elements`, `role-has-required-aria-props`, `role-supports-aria-props`, and not `anchor-is-valid`,

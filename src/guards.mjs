@@ -235,9 +235,11 @@ export function scanCode(src, file, guards) {
   const rawAncestor = (anc, tags = RAW_TAGS) => anc.some(a => a.type === 'JSXElement' && tags.has(tagOf(a)));
   traverse(ast.program, (n, anc) => {
     const parent = anc[anc.length - 1];
-    // window.confirm / alert / prompt (a call; a local function of that name is not the browser's)
-    if ((n.type === 'CallExpression' || n.type === 'OptionalCallExpression') && want.has('native-dialog')) {
-      const c = unwrap(n.callee);
+    // window.confirm / alert / prompt (a call, or a tagged template: alert`Saved` calls it too; a local function of that
+    // name is not the browser's)
+    const callee = n.type === 'CallExpression' || n.type === 'OptionalCallExpression' ? n.callee : n.type === 'TaggedTemplateExpression' ? n.tag : null;
+    if (callee && want.has('native-dialog')) {
+      const c = unwrap(callee);
       let call = null;
       if (c?.type === 'Identifier' && !names.has(c.name)) call = c.name;
       else if ((c?.type === 'MemberExpression' || c?.type === 'OptionalMemberExpression')) {
@@ -554,28 +556,47 @@ const has = (pkg, name) => !!(pkg && ['dependencies', 'devDependencies', 'peerDe
 // ESLint selectors (esquery) for the guards ESLint's core rules can express; the colour guard has none. They say what
 // the guards say, as far as a selector can (no data flow, no names declared in the file).
 const HREF = "JSXAttribute[name.name='href']";
+// The href values the guard reads as `#` and as a `javascript:` URL (hrefValue: C0 controls and spaces around, tabs and
+// line breaks anywhere), as esquery regexes. The control characters are in the selector string itself (the proposal
+// prints them as \u0000, \t …): esquery 1.6 and later read no escape inside a character class.
+const C0 = '[\u0000- ]*', TAB_NL = '[\t\n\r]*';
+const NOWHERE = `/^${C0}#${C0}$/`;
+const SCRIPT = `/^${C0}${[...'javascript:'].join(TAB_NL)}/i`;
+// A tagged template calls its tag: alert`Saved` opens the dialog as alert('Saved') does, and no-alert sees only calls.
+const DIALOG = `/^(${CALLS.join('|')})$/`;
 // a JSX expression in a place that is text: a child, or an attribute that is not a class, a key, an id, a handler …
 const SHOWN = `JSXExpressionContainer:not(JSXAttribute[name.name=/${NOT_TEXT_ATTR.source}/] > *)`;
 // `<x>.message` or `<x>['message']` whose chain names an error and not a form library's state
 const MESSAGE = `MemberExpression:matches([property.name='message'], [property.value='message']):has(Identifier[name=/${ERROR_NAME.source}/]):not(:has(Identifier[name=/${FORM_NAME.source}/]))`;
-const ENDS = `:matches(${MESSAGE}, ChainExpression:has(> ${MESSAGE}))`;
+// …or kept whole by `.toString()` or `.trim()` (`err?.message.toString()`)
+// (one `>` per :has: esquery 1.7 finds nothing for `:has(> a > b)`)
+const WHOLE = `CallExpression[arguments.length=0]:matches([callee.property.name='toString'], [callee.property.name='trim']):has(> MemberExpression:has(> ${MESSAGE}))`;
+const ENDS = `:matches(${MESSAGE}, ChainExpression:has(> ${MESSAGE}), ${WHOLE}, ChainExpression:has(> ${WHOLE}))`;
 // a placeholder in text that is not a code sample, a stylesheet or a script
 const NOT_RAW = `:not(JSXElement[openingElement.name.name=/^(${[...RAW_TAGS].join('|')})$/] *)`;
 const MUSTACHE = '/\\{\\{|\\}\\}/';
+const TEXT = `JSXAttribute[name.name=/^(${[...TEXT_ATTR].join('|')})$/]`;
 const SELECTORS = {
+  'native-dialog': () => {
+    const message = 'A browser dialog called through a tagged template: use your app\'s own dialog.';
+    return [
+      { selector: `TaggedTemplateExpression[tag.name=${DIALOG}]`, message },
+      { selector: `TaggedTemplateExpression[tag.object.name=/^(${GLOBALS.join('|')})$/]:matches([tag.property.name=${DIALOG}], [tag.property.value=${DIALOG}])`, message },
+    ];
+  },
   'dead-href': p => {
     const nowhere = 'A link to "#" goes nowhere: link to a real page, or use a <button>.', script = 'A javascript: link: use a <button> with an onClick.';
     return [
       ...(p.values.includes('#') ? [
-        { selector: `${HREF}[value.value='#']`, message: nowhere },
-        { selector: `${HREF} > JSXExpressionContainer > Literal[value='#']`, message: nowhere },
-        { selector: `${HREF} > JSXExpressionContainer > ConditionalExpression > Literal[value='#']`, message: nowhere },
-        { selector: `${HREF} > JSXExpressionContainer > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked='#']`, message: nowhere },
+        { selector: `${HREF}[value.value=${NOWHERE}]`, message: nowhere },
+        { selector: `${HREF} > JSXExpressionContainer > Literal[value=${NOWHERE}]`, message: nowhere },
+        { selector: `${HREF} > JSXExpressionContainer > ConditionalExpression > Literal[value=${NOWHERE}]`, message: nowhere },
+        { selector: `${HREF} > JSXExpressionContainer > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=${NOWHERE}]`, message: nowhere },
       ] : []),
       ...(p.values.includes('javascript:') ? [
-        { selector: `${HREF}[value.value=/^\\s*javascript:/i]`, message: script },
-        { selector: `${HREF} > JSXExpressionContainer > Literal[value=/^\\s*javascript:/i]`, message: script },
-        { selector: `${HREF} > JSXExpressionContainer > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/^\\s*javascript:/i]`, message: script },
+        { selector: `${HREF}[value.value=${SCRIPT}]`, message: script },
+        { selector: `${HREF} > JSXExpressionContainer > Literal[value=${SCRIPT}]`, message: script },
+        { selector: `${HREF} > JSXExpressionContainer > TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=${SCRIPT}]`, message: script },
       ] : []),
     ];
   },
@@ -596,6 +617,10 @@ const SELECTORS = {
       { selector: `JSXText[value=${MUSTACHE}]${NOT_RAW}`, message },
       { selector: `:matches(JSXElement, JSXFragment) > JSXExpressionContainer > Literal[value=${MUSTACHE}]${NOT_RAW}`, message },
       { selector: `:matches(JSXElement, JSXFragment) > JSXExpressionContainer > TemplateLiteral > TemplateElement[value.cooked=${MUSTACHE}]${NOT_RAW}`, message },
+      // the attributes that are shown as text (alt, title, placeholder, aria-label …)
+      { selector: `${TEXT}[value.value=${MUSTACHE}]`, message },
+      { selector: `${TEXT} > JSXExpressionContainer > Literal[value=${MUSTACHE}]`, message },
+      { selector: `${TEXT} > JSXExpressionContainer > TemplateLiteral > TemplateElement[value.cooked=${MUSTACHE}]`, message },
     ];
   },
 };

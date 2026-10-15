@@ -6,6 +6,8 @@ export function RemovePlant({ onRemove }: { onRemove: () => void }) {
     globalThis.prompt?.('Why?'); /* HIT native-dialog */
     window['confirm']('Really?'); /* HIT native-dialog */
     window?.alert('Gone'); /* HIT native-dialog */
+    alert`Saved`; /* HIT native-dialog (follow-up: a tagged template calls its tag) */
+    window.confirm`Remove the pot too?`; /* HIT native-dialog (follow-up: a tagged template) */
   };
   return <button onClick={() => confirm('Sure?')}>Remove</button>; /* HIT native-dialog */
 }
