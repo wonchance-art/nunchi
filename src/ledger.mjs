@@ -557,6 +557,7 @@ const STATUS_RANK = { confirmed: 0, claimed: 1, insufficient: 2, rejected: 3 };
 const byEvent = (a, b) => byRun(String(a.run), String(b.run)) || cmp(a.stream ?? 'main', b.stream ?? 'main');
 export const STALE_HUNTS = 2;
 const AI_VERDICTS = new Set(['confirmed', 'rejected', 'insufficient']);
+const SAME_MODEL_CHECK = 'same-model check';                                  // verify.mjs SAME_MODEL
 
 // One AI item from its contributions; null when no hunt claims it as a defect any more (rejected and insufficient
 // claims never make an item, design §2.2).
@@ -743,7 +744,9 @@ export function foldAi(state, { run, stream = 'main', key = null, findings = [],
     const claimedAt = CREATES(best.status) ? (was && CREATES(was.status) ? (Number.isFinite(was.claimedAt) ? was.claimedAt : Number.isFinite(wasAdded) ? Math.min(was.at, wasAdded) : was.at) : now) : null;
     const entry = {
       run, stream, at: now, ...(claimedAt !== null ? { claimedAt } : {}), claimed: true, status: best.status, suspect: list.some(f => !!f.suspect), ...(list.some(f => !!f.tooFewDecoys) ? { tooFewDecoys: true } : {}),
-      by: best.by ?? null, ...(best.vendor ? { vendor: best.vendor } : {}),
+      // a same-model check of any of its findings makes the item's verdict one (M6 review: never cross-vendor because
+      // the finding that ranks first was)
+      by: list.some(f => AI_VERDICTS.has(f.status) && f.by === SAME_MODEL_CHECK) ? SAME_MODEL_CHECK : best.by ?? null, ...(best.vendor ? { vendor: best.vendor } : {}),
       claimedSeverity: worst(list.map(f => f.claimedSeverity)), verdictSeverity: worst(list.filter(f => AI_VERDICTS.has(f.status)).map(f => f.verdictSeverity)),
       cells: [...new Set(list.map(f => f.cell).filter(Boolean))].sort(), scenes, group: best.group,
       examples: [...new Set(list.map(f => f.scene).filter(Boolean))].sort().slice(0, 20), selector: best.selector ?? null, box: best.box ?? null,

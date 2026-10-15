@@ -168,7 +168,8 @@ test('verdicts: written back to the findings; corrected severity; same-model che
   assert.deepEqual(r.verify.decoys, { total: 3, answered: 3, passedThrough: 0, rate: 0 });
   assert.equal(r.verify.complete, true);
   const x = recordVerdicts({ findings: FINDINGS, key, verdicts: { verdicts: verdictsFor(key, 'rejected') }, vendor: 'other-vendor' });
-  assert.deepEqual(x.verify.verifier, { label: 'cross-vendor', vendor: 'other-vendor' });
+  // claims whose hunters declared no vendor: never cross-vendor, whatever --vendor says (M6 review)
+  assert.deepEqual(x.verify.verifier, { label: SAME_MODEL, vendor: 'other-vendor' });
   // rejected and insufficient keep the claimed severity
   const real = Object.entries(key.packets).find(([, k]) => !k.decoy)[0];
   const y = recordVerdicts({ findings: FINDINGS, key, verdicts: [{ packet: real, verdict: 'rejected', severity: 'low', reason: 'the button has a label' }] });

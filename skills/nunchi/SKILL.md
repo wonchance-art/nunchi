@@ -161,8 +161,9 @@ nothing in it, so never do it to change a status — verify or re-check again in
    "severity": "blocker" | "high" | "medium" | "low", "reason": "<one line>" }`; write the list to a file.
 9. `verify --record <that file>` (add `--root <dir>` when the app's source is not the current folder). Add
    `--vendor <name>` only when the verifier really was another vendor's model and the user opted into that;
-   otherwise it is recorded as *same-model check*. A claim is *cross-vendor* only when the agents that hunted it
-   declared a vendor other than the verifier's; a cross-vendor verdict is still never an approval: the user decides.
+   otherwise it is recorded as *same-model check*. A claim is *cross-vendor* only when every agent that hunted it
+   declared a vendor and none of them is the verifier's (a hunter that gave no vendor makes it a same-model check);
+   a cross-vendor verdict is still never an approval: the user decides.
    It also puts the run's AI findings into the ledger, so
    `findings` lists them beside the rule findings (`AI · <checklist item>`). Have the verifier answer every packet:
    a decoy left unanswered counts as passed through. If it prints `SUSPECT` (decoys passed

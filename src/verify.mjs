@@ -5,7 +5,7 @@
 import { sha, stableJson } from './stable.mjs';
 import { ariaRoleName } from './ai-identity.mjs';
 import { WORDS } from './board/shared.mjs';
-import { agentList, sameName } from './agents.mjs';
+import { sameName, declaredName } from './agents.mjs';
 
 export const DECOY_SHARE = 0.2;              // share of packets that are decoys
 export const SUSPECT_PASS_THROUGH = 0.1;     // decoy pass-through above this → the run's verifications are suspect
@@ -13,11 +13,20 @@ export const VERDICTS = ['confirmed', 'rejected', 'insufficient'];
 export const SEVERITIES = ['blocker', 'high', 'medium', 'low'];
 export const SAME_MODEL = 'same-model check';
 export const CROSS_VENDOR = 'cross-vendor';
-// Who checked a claim (design §7, H7): `cross-vendor` when the verifier's declared vendor (`--vendor`) differs from the
-// vendor of every agent that claimed it, else a same-model check. A claim whose hunters declared no vendor (answers
-// written before M6, or by an agent that did not say) takes `--vendor` as it always did: the person opted into another
-// vendor's model (spec §4). Declared, never checked, and never an approval: 0.1 auto-approves nothing.
-export const verifierOf = (f, vendor) => (vendor && !agentList(f?.agents).some(a => sameName(a.vendor, vendor)) ? CROSS_VENDOR : SAME_MODEL);
+// The vendors that hunted a claim, against the verifier's (`vendor`, declared): `own` when an agent that claimed it
+// declared the verifier's vendor, `unknown` when one did not declare a vendor (answers written before M6, by an agent
+// that did not say, or the undeclared agent's beside declared ones: `undeclaredHunter`), else `other`.
+export function hunterVendors(f, vendor) {
+  const v = declaredName(vendor, 'vendor').name;
+  const vendors = (Array.isArray(f?.agents) ? f.agents : []).map(a => declaredName(a?.vendor, 'vendor'));
+  if (v && vendors.some(x => !x.error && sameName(x.name, v))) return 'own';
+  if (f?.undeclaredHunter || !vendors.length || vendors.some(x => x.error || !x.name)) return 'unknown';
+  return 'other';
+}
+// Who checked a claim (design §7, H7): `cross-vendor` only when the verifier declared a vendor (`--vendor`) and every
+// agent that claimed it declared another one (M6 review: a hunter whose vendor is not known never makes a check
+// cross-vendor), else a same-model check. Declared, never checked, and never an approval: 0.1 auto-approves nothing.
+export const verifierOf = (f, vendor) => (declaredName(vendor, 'vendor').name && hunterVendors(f, vendor) === 'other' ? CROSS_VENDOR : SAME_MODEL);
 // the outcome of a run with fewer decoys than its claims called for: not suspect, and not double-checked either
 export const TOO_FEW_DECOYS = WORDS['too-few-decoys'];
 
@@ -191,6 +200,8 @@ export function recordVerdicts({ findings, key, verdicts, vendor = null, byHash 
   }
   if (problems.length) return { problems };
 
+  // the verifier's vendor as declared (whitespace collapsed); one that is no name is none
+  vendor = declaredName(vendor, 'vendor').name ?? null;
   const out = findings.map(f => ({ ...f }));
   const byClaim = new Map();
   if (byHash) findings.forEach((f, i) => { if (f && f.source === 'ai') { const h = claimHash(f); if (!byClaim.has(h)) byClaim.set(h, []); byClaim.get(h).push(i); } });
@@ -220,10 +231,12 @@ export function recordVerdicts({ findings, key, verdicts, vendor = null, byHash 
       touched.push(i);
     }
   }
-  // the run's verifier: cross-vendor unless every claim it judged was hunted by its own vendor; the claims of its own
-  // vendor said apart (each finding carries its own label)
-  const same = vendor ? touched.filter(i => out[i].verification.verifier === SAME_MODEL).length : 0;
-  const verifier = !vendor ? { label: SAME_MODEL } : touched.length && same === touched.length ? { label: SAME_MODEL, vendor } : { label: CROSS_VENDOR, vendor, ...(same ? { sameVendor: same } : {}) };
+  // the run's verifier: cross-vendor unless no claim it judged was hunted only by other vendors; the claims its own
+  // vendor hunted, and those whose hunters did not declare a vendor, said apart (each finding carries its own label)
+  const kinds = vendor ? touched.map(i => hunterVendors(findings[i], vendor)) : [];
+  const same = kinds.filter(k => k === 'own').length, unknown = kinds.filter(k => k === 'unknown').length;
+  const verifier = !vendor ? { label: SAME_MODEL } : touched.length && same + unknown === touched.length ? { label: SAME_MODEL, vendor }
+    : { label: CROSS_VENDOR, vendor, ...(same ? { sameVendor: same } : {}), ...(unknown ? { undeclaredVendor: unknown } : {}) };
   decoys.rate = decoys.total ? decoys.passedThrough / decoys.total : null;
   // suspect (design §2.2): no decoy answered, or pass-through (confirmed or unanswered) above the threshold. A run whose
   // screens offered fewer decoys than the claims called for is not suspect: its verifier was not caught, but it could

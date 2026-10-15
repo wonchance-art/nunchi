@@ -853,6 +853,10 @@ if (cmd === 'setup') {
   const known = new Set(manifest.scenes.map(s => s.id));
   const canaryScenes = new Set(manifest.scenes.filter(s => s.canary !== undefined).map(s => s.id));
   const guard = fn => { try { return runLock(dir, fn); } catch (e) { if (!['CORRUPT', 'LOCKED', 'UNSAFE_PATH'].includes(e.code)) throw e; console.error('nunchi verify: ' + e.message); process.exit(2); } };
+  // the verifier's vendor, as declared (a name like any agent's: one line, no control characters, M6 review)
+  const { declaredName } = await import('./agents.mjs');
+  const vendor = declaredName(args.vendor, '--vendor');
+  if (vendor.error) { console.error(`nunchi verify: ${vendor.error}`); process.exit(1); }
   if (args.plan) {
     const controlsOf = scene => (known.has(scene) && existsSync(join(dir, scene, 'controls.json')) ? readJson(join(dir, scene, 'controls.json')) : null);
     const filesOf = scene => (known.has(scene) ? ['top.jpg', 'full.jpg', 'aria.yml', 'text.txt', 'controls.json', 'styles.json', 'links.json', 'measure.json'].filter(f => existsSync(join(dir, scene, f))).map(f => `${scene}/${f}`) : []);
@@ -892,12 +896,12 @@ if (cmd === 'setup') {
       const given = readJson(resolve(args.record));
       const list = Array.isArray(given) ? given : given?.verdicts;
       const { recorded: _replaced, ...plan } = key;
-      const res = V.recordVerdicts({ findings, key, verdicts: given, vendor: args.vendor || null });
+      const res = V.recordVerdicts({ findings, key, verdicts: given, vendor: vendor.name });
       if (res.problems.length) return res;
       // the verdicts go into the key first (outside the project): what the ledger folds; ai-findings.json and
       // verify.json are copies for people and the review page
       const kept = list.map(v => ({ packet: v.packet, verdict: v.verdict, ...(v.severity != null ? { severity: v.severity } : {}), reason: v.reason.trim() }));
-      writeKey(dir, 'verify-key.json', { ...plan, recorded: { verdicts: kept, vendor: args.vendor || null } });
+      writeKey(dir, 'verify-key.json', { ...plan, recorded: { verdicts: kept, vendor: vendor.name } });
       writeStable(aiPath, Array.isArray(doc) ? res.findings : { ...doc, findings: res.findings });
       writeStable(join(dir, 'verify.json'), res.verify);
       return res;
@@ -908,7 +912,8 @@ if (cmd === 'setup') {
     if (args.json) console.log(JSON.stringify({ ...r.verify, folded }, null, 2));
     else {
       const c = r.verify.claims, d = r.verify.decoys;
-      console.log(`verified by ${r.verify.verifier.label}${r.verify.verifier.vendor ? ` (${r.verify.verifier.vendor}, as declared)` : ''}${r.verify.verifier.sameVendor ? `, a same-model check for the ${r.verify.verifier.sameVendor} claim(s) its own vendor hunted` : ''}: confirmed ${c.confirmed} · rejected ${c.rejected} · insufficient ${c.insufficient}${c.unanswered ? ` · unanswered ${c.unanswered}` : ''}`);
+      const w = r.verify.verifier, apart = [w.sameVendor ? `the ${w.sameVendor} claim(s) its own vendor hunted` : null, w.undeclaredVendor ? `the ${w.undeclaredVendor} claim(s) whose hunters did not declare a vendor` : null].filter(Boolean);
+      console.log(`verified by ${w.label}${w.vendor ? ` (${w.vendor}, as declared)` : ''}${apart.length ? `, a same-model check for ${apart.join(' and ')}` : ''}: confirmed ${c.confirmed} · rejected ${c.rejected} · insufficient ${c.insufficient}${c.unanswered ? ` · unanswered ${c.unanswered}` : ''}`);
       console.log(`decoys passed through: ${d.passedThrough}/${d.answered}${d.answered < d.total ? ` (${d.total - d.answered} unanswered)` : ''}`);
       if (r.verify.suspect) console.log(`SUSPECT: ${r.verify.suspectReason}. This run's verifications are marked suspect; verify again in a fresh context (verify --plan --again).`);
       else if (r.verify.outcome === 'too-few-decoys') console.log(`NOT DOUBLE-CHECKED: ${r.verify.tooFewDecoys}. The verdicts are recorded, but they count as no double-check: \`findings\` keeps these AI findings with those not double-checked. A run that captures more screens offers more decoys.`);

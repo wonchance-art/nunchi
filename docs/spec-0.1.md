@@ -687,8 +687,9 @@ view). Each names the rule findings it must not repeat. Their recall is unmeasur
   packet → `status` and `verification` on each finding in `ai-findings.json` (confirmed takes the corrected
   severity); `verify.json` has counts, decoy pass-through (confirmed decoys ÷ answered decoys) and `suspect`
   when it is above 10% or no decoy was answered (then every verification of the run carries `suspect: true`).
-  The verifier is recorded as *same-model check* unless `--vendor` names another vendor; nothing is sent
-  anywhere. A plan refuses verdicts once the claims it was built from changed.
+  The verifier is recorded as *same-model check* unless `--vendor` names another vendor (since M6, another than
+  every vendor the claim's hunters declared, §5.2); nothing is sent anywhere. A plan refuses verdicts once the
+  claims it was built from changed.
 - *M1 (2026-10-14 KST, design 0.1-c §2.2):*
   - **Fewer decoys than planned is no double-check.** The key records `decoysPlanned` (max(3, ⌈n/4⌉) for n claims)
     and `verify.json` says it too, so a run with no decoy target can no longer pass unchecked. *Changed (review of PR
@@ -1175,8 +1176,9 @@ malicious one (design §1).
   (C0, C1, bidi marks, line separators), its whitespace collapsed, compared without regard to case. A vendor without
   an agent names no one (two agents of one vendor would share one record, M6 review): a header with one is refused, as
   is `hunt --plan --vendor` without `--agent` ("… a vendor without an agent: name the agent too (--agent), so two
-  agents of one vendor keep answers of their own"). A file whose header holds anything else is refused, said in `rejected` ("answers file N: …; its answers were not used"); a call
-  with no readable file records nothing (exit 2). A file without a header is the undeclared agent's.
+  agents of one vendor keep answers of their own"). A file whose header holds anything else is refused, said in
+  `rejected` ("answers file N: …; its answers were not used"); a call with no readable file records nothing (exit 2).
+  A file without a header is the undeclared agent's.
 - The run keeps each agent's latest record (`hunt-agents.json`: per agent the plan, the findings, the rejected answers
   and the cells), and `hunt --record` makes `ai-findings.json` and `coverage.json` from all of them:
   - *a re-hunt replaces answers within the same agent only*: in one call a later file replaces a unit's earlier answer
@@ -1231,14 +1233,19 @@ malicious one (design §1).
   §5.1: an older sweep folded after a newer one only adds, and a quick first look keeps the worktree that last saw an
   item, M5), as do a fix probe's `gone` rule items, which it marks only once a capture has folded them.
 
-**Cross-vendor verdicts** (`src/verify.mjs`). A verdict is labelled `cross-vendor` when the verifier's declared vendor
-(`--vendor`) differs from the vendor of every agent that claimed the finding; a claim its own vendor hunted is a
-`same-model check`; a claim whose hunters declared no vendor keeps what `--vendor` always meant (§4: the person opted
-into another vendor's model). The label is per finding (`verification.verifier`); `verify.json`'s verifier is
-`cross-vendor` unless every judged claim was its own vendor's, with `sameVendor: N` when some were ("verified by
-cross-vendor (OpenAI, as declared), a same-model check for the 2 claim(s) its own vendor hunted"). The ledger
-recomputes it from the verify key's recorded vendor and the findings. Packets never say who hunted (a decoy has no
-hunter). A cross-vendor confirmation approves nothing: the item stays open, to decide (0.1 never auto-approves).
+**Cross-vendor verdicts** (`src/verify.mjs`). A verdict is labelled `cross-vendor` only when the verifier declared a
+vendor (`--vendor`, a declared name like an agent's: whitespace collapsed, one with control characters refused) and
+every agent that claimed the finding declared a vendor, none of them the verifier's. Anything else is a `same-model
+check`: a claim its own vendor hunted, and (M6 review) a claim one of whose hunters did not declare a vendor (answers
+without a header, an agent that gave no vendor, or the undeclared agent's answers beside declared ones,
+`undeclaredHunter`): a vendor that is not known is never another one. The label is per finding
+(`verification.verifier`); an item's (`verification.by`) is a same-model check when any of its findings in that run's
+fold was one, never cross-vendor because the finding that ranks first was. `verify.json`'s verifier is `cross-vendor`
+unless no judged claim was hunted by other vendors only, with `sameVendor: N` and `undeclaredVendor: N` for the rest
+("verified by cross-vendor (OpenAI, as declared), a same-model check for the 2 claim(s) its own vendor hunted and the
+1 claim(s) whose hunters did not declare a vendor"). The ledger recomputes it from the verify key's recorded vendor
+and the findings. Packets never say who hunted (a decoy has no hunter). A cross-vendor confirmation approves nothing:
+the item stays open, to decide (0.1 never auto-approves).
 
 **Board activity** (`src/activity.mjs`, design §3 "Now").
 - `hunt --plan [--agent <name>] [--vendor <name>]` starts a hunt record (`state/hunts/<id>.json`, one per worktree, run
