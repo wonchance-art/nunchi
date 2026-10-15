@@ -54,6 +54,9 @@ function partial(p, id, doc, at = Date.now()) {
   return dir;
 }
 const SWEEP = { schema: 1, kind: 'sweep', wholeApp: true, routes: 25, done: 12, routeMs: Array(12).fill(27000), pid: process.pid, ...thisMachine() };
+// a capture written by another machine (a shared folder): its writer cannot be asked, its file's time decides
+const ELSEWHERE = { ...SWEEP, host: 'another-machine.invalid' };
+const QUIET = run => `Capture running · run ${run} · 12 of 25 screens (no progress for 10 min)`;
 // the summary as the board and `findings` compute it, with the clock and the process check given
 function sumAt(p, now, alive = () => true) {
   const led = P.loadLedger(p.nunchi, { root: p.root });
@@ -67,20 +70,25 @@ async function board(p) {
   return { b, call };
 }
 
-test('no progress, precisely: the progress file\'s time (or the folder\'s, without one); 9:59 is running, 10:00 is stopped; a writer gone on this host stops it sooner', () => {
+test('no progress, precisely: the progress file\'s time (or the folder\'s, without one), 9:59 against 10:00; a writer that runs here stays running, one gone is stopped for good, one that cannot be asked stops at 10:00', () => {
   const p = project();
-  partial(p, '0002', SWEEP, T);
   const at = (ms, alive) => R.captureStates(p.runs, { now: T + ms, alive }).map(c => [c.run, c.state, c.why]);
-  assert.deepEqual(at(10 * MIN - 1, () => true), [['0002', 'running', null]], '9:59.999');
-  assert.deepEqual(at(10 * MIN, () => true), [['0002', 'stopped', 'no-progress']], '10:00');
   assert.equal(R.STALE_MS, 10 * MIN);
+  // a writer that cannot be asked (another machine): running at 9:59.999, stopped at 10:00
+  partial(p, '0002', ELSEWHERE, T);
+  assert.deepEqual(at(10 * MIN - 1, () => false), [['0002', 'running', null]], '9:59.999');
+  assert.deepEqual(at(10 * MIN, () => false), [['0002', 'stopped', 'no-progress']], '10:00');
   assert.deepEqual(R.runningCaptures(p.runs, { now: T + 10 * MIN - 1 }).map(c => c.run), ['0002']);
   assert.deepEqual(R.runningCaptures(p.runs, { now: T + 10 * MIN }), []);
-  // its writer is gone (this host): stopped at once, and the reason is that; on another machine its file's time decides
+  // its writer runs here (a laptop asleep, a long end phase): running however long, "no progress" from 10:00 (the owner's
+  // decision on the review of PR #36: no "capture again" beside a capture that runs)
+  partial(p, '0002', SWEEP, T);
+  assert.deepEqual(at(10 * MIN - 1, () => true), [['0002', 'running', null]], '9:59.999');
+  assert.deepEqual(at(10 * MIN, () => true), [['0002', 'running', 'no-progress']], '10:00');
+  assert.deepEqual(at(600 * MIN, () => true), [['0002', 'running', 'no-progress']], '10 hours');
+  // its writer is gone (this machine): stopped at once, and for good with that reason (it never changes at 10:00)
   assert.deepEqual(at(1 * MIN, () => false), [['0002', 'stopped', 'ended']]);
-  assert.deepEqual(at(10 * MIN, () => false), [['0002', 'stopped', 'no-progress']], 'past 10 minutes, the owner\'s reason');
-  partial(p, '0002', { ...SWEEP, host: 'another-machine.invalid' }, T);
-  assert.deepEqual(at(1 * MIN, () => false), [['0002', 'running', null]]);
+  assert.deepEqual(at(10 * MIN, () => false), [['0002', 'stopped', 'ended']]);
   // a folder without a progress file (a fix probe, an older nunchi): running by its own time, never "stopped"
   rmSync(join(p.runs, '0002.partial'), { recursive: true });
   partial(p, '0003', null, T);
@@ -107,18 +115,27 @@ test('"Capture running · run N · i of n screens (about m min left)": how far, 
   assert.deepEqual(sumAt(p, T + MIN).captures.map(c => c.text), ['Capture running · run 0002 · 3 of 3 screens']);
 });
 
-test('"Capture stopped · run N (no progress for 10 min) — tell your AI “capture again”": at 10:00, not at 9:59; the verdict goes by the complete runs; a later capture answers it', () => {
+test('"Capture stopped · run N (no progress for 10 min) — tell your AI “capture again”": at 10:00, not at 9:59; the verdict goes by the complete runs; a later capture answers it; a writer that runs here says "no progress" and is no stop', () => {
   const p = project();
   const before = sumAt(p, T).verdict.text;
   assert.equal(before, 'Probably · rules only — the AI review hasn’t run');
-  partial(p, '0002', SWEEP, T);
+  partial(p, '0002', ELSEWHERE, T);
   let s = sumAt(p, T + 10 * MIN - 1);
   assert.deepEqual([s.captures, s.verdict.text], [[{ run: '0002', state: 'running', text: RUNNING('0002') }], 'Too early to say · a capture is running'], '9:59.999: still running');
   s = sumAt(p, T + 10 * MIN);
   assert.deepEqual([s.captures, s.verdict.text, s.running, s.runningRuns], [[{ run: '0002', state: 'stopped', text: STOPPED('0002') }], before, false, []], '10:00: stopped, and the verdict is as if it were not there');
-  // its writer gone sooner: stopped, saying so
+  // its writer runs on this machine: still running, with no time left and no "capture again"
+  partial(p, '0002', SWEEP, T);
+  s = sumAt(p, T + 10 * MIN);
+  assert.deepEqual([s.captures, s.verdict.text], [[{ run: '0002', state: 'running', text: QUIET('0002') }], 'Too early to say · a capture is running']);
+  partial(p, '0002', { ...SWEEP, done: 0, routeMs: [] }, T);
+  assert.deepEqual(sumAt(p, T + 10 * MIN).captures.map(c => c.text), ['Capture running · run 0002 (no progress for 10 min)']);
+  // its writer gone: stopped, saying so, before and after 10 minutes alike
+  partial(p, '0002', SWEEP, T);
   assert.deepEqual(sumAt(p, T + MIN, () => false).captures.map(c => c.text), ['Capture stopped · run 0002 (its process ended) — tell your AI “capture again”']);
-  // a capture running after it: only that one is said
+  assert.deepEqual(sumAt(p, T + 10 * MIN, () => false).captures.map(c => c.text), ['Capture stopped · run 0002 (its process ended) — tell your AI “capture again”']);
+  // a capture running after a stopped one: only that one is said
+  partial(p, '0002', ELSEWHERE, T);
   partial(p, '0003', SWEEP, T + 9 * MIN);
   assert.deepEqual(sumAt(p, T + 10 * MIN).captures.map(c => c.text), [RUNNING('0003')]);
   // one that completed after it: nothing about the stopped one
@@ -135,7 +152,11 @@ test('"First look: N key screens · the full check has not started — tell your
   partial(p, '0003', SWEEP, T);
   s = sumAt(p, T + MIN);
   assert.deepEqual([s.firstLook.text, s.captures], ['First look: 2 key screens · full check running, 12 of 25 screens (about 6 min left)', []]);
+  // no progress for 10 minutes, its writer here: still the full check running, with no time left
+  s = sumAt(p, T + 10 * MIN);
+  assert.deepEqual([s.firstLook.text, s.captures, s.verdict.text], ['First look: 2 key screens · full check running, 12 of 25 screens (no progress for 10 min)', [], 'Too early to say · full check running']);
   // that full check stopped: the stopped line, and no "has not started"
+  partial(p, '0003', ELSEWHERE, T);
   s = sumAt(p, T + 10 * MIN);
   assert.deepEqual([s.firstLook.text, s.captures.map(c => c.text), s.verdict.text], [null, [STOPPED('0003')], 'Too early to say']);
   // another first look running: its own line
@@ -148,7 +169,7 @@ test('"First look: N key screens · the full check has not started — tell your
 
 test('the same words on the board\'s Now lines, Coverage and `findings`; a capture that stops changes the live version by the clock alone', async () => {
   const p = project();
-  partial(p, '0002', SWEEP);
+  partial(p, '0002', ELSEWHERE);
   const { b, call } = await board(p);
   try {
     let s = await call('/api/summary');
@@ -180,25 +201,19 @@ test('the wall during a first look: "First look" on its key screens; before any 
   let { b, call } = await board(p);
   try {
     const w = await call('/api/screens');
-    const first = w.scenes.filter(s => s.look === 'first'), notYet = w.scenes.filter(s => s.look === 'not-yet');
-    assert.equal(first.length, w.scenes.length - notYet.length, 'every screen the first look captured');
-    assert.deepEqual([first.length, [...new Set(first.map(s => s.route))]], [12, ['/', '/garden', '/cart']]);
-    // the pages it did not open (its flow names every page), one card per person × width, in the flow's order
-    // (this fixture's flow orders only the pages it opened: the others by name)
-    assert.deepEqual([...new Set(notYet.map(s => s.route))], ['/checkout', '/garden/[plot]', '/help', '/login']);
-    assert.deepEqual([notYet.length, notYet.slice(0, 4).map(s => `${s.person} ${s.viewport}`)], [16, ['guest d', 'guest m', 'signed-in d', 'signed-in m']]);
-    assert.deepEqual(notYet[0], { key: '0001/not-yet.guest.d:/checkout', run: '0001', id: 'not-yet.guest.d:/checkout', route: '/checkout', person: 'guest', state: 'normal', viewport: 'd',
-      h1: null, label: 'Visitor · Desktop · Normal', status: 'not-captured', reason: null, redirected: false, finalPath: null, finalOrigin: null, img: null, badge: 'Not checked yet', kind: 'notyet',
-      note: '', findings: [], look: 'not-yet', checked: false, changed: null, ai: null, group: '/', open: 0 });
-    assert.equal(notYet.find(s => s.route === '/garden/[plot]').group, '/garden', 'in its section');
-    assert.deepEqual(w.groups.map(g => g.id), ['/', '/garden']);
+    // every screen is one the first look captured, and says so; the screens' groups and counts are theirs alone
+    assert.deepEqual([w.scenes.length, w.scenes.every(s => s.look === 'first'), [...new Set(w.scenes.map(s => s.route))]], [12, true, ['/', '/garden', '/cart']]);
+    assert.deepEqual(w.groups, [{ id: '/', title: 'Pages · /, /cart' }, { id: '/garden', title: '/garden/*' }]);
+    // the pages it did not open (its flow names every page), one card per page, apart from the screens, in the flow's
+    // order (this fixture's flow orders only the pages it opened: the others by name)
+    assert.deepEqual(w.notYet, ['/checkout', '/garden/[plot]', '/help', '/login'].map(route => ({ key: `0001/not-yet:${route}`, run: '0001', route, look: 'not-yet' })));
   } finally { await b.close(); }
   // a page that needs a sample address is skipped by the full check too: not "not checked yet"
   const meta = join(p.nunchi, 'runs', '0001', 'run.json');
   writeFileSync(meta, stableJson({ ...JSON.parse(readFileSync(meta, 'utf8')), skipped: [{ route: '/garden/[plot]', reason: 'needs-sample' }] }));
   ({ b, call } = await board(p));
   try {
-    assert.deepEqual([...new Set((await call('/api/screens')).scenes.filter(s => s.look === 'not-yet').map(s => s.route))], ['/checkout', '/help', '/login']);
+    assert.deepEqual((await call('/api/screens')).notYet.map(pg => pg.route), ['/checkout', '/help', '/login']);
   } finally { await b.close(); }
   // a first look written before M5b (its flow names only its own pages): its screens only
   const flow = join(p.nunchi, 'runs', '0001', 'flow.json');
@@ -207,7 +222,7 @@ test('the wall during a first look: "First look" on its key screens; before any 
   ({ b, call } = await board(p));
   try {
     const w = await call('/api/screens');
-    assert.deepEqual([w.scenes.length, w.scenes.every(s => s.look === 'first')], [12, true]);
+    assert.deepEqual([w.scenes.length, w.scenes.every(s => s.look === 'first'), w.notYet], [12, true, []]);
   } finally { await b.close(); }
   // a first look after full checks (M5b review): the pages it did not open were checked by the last full check, which
   // Coverage shows with their findings; the wall says "First look" on its own screens and adds nothing
@@ -215,13 +230,14 @@ test('the wall during a first look: "First look" on its key screens; before any 
   ({ b, call } = await board(after));
   try {
     const w = await call('/api/screens');
-    assert.deepEqual([w.run, w.baseline, w.scenes.length, w.scenes.every(s => s.look === 'first')], ['0005', '0004', 12, true]);
+    assert.deepEqual([w.run, w.baseline, w.scenes.length, w.scenes.every(s => s.look === 'first'), w.notYet], ['0005', '0004', 12, true, []]);
   } finally { await b.close(); }
   // no first look: no such word
   const q = leafy({ probes: false });
   ({ b, call } = await board(q));
   try {
-    assert.ok((await call('/api/screens')).scenes.every(s => !('look' in s)));
+    const w = await call('/api/screens');
+    assert.deepEqual([w.scenes.every(s => !('look' in s)), 'notYet' in w], [true, false]);
   } finally { await b.close(); }
 });
 
@@ -289,7 +305,7 @@ test('review: one order of the Now lines for the board and `findings` (the full 
   } finally { await b.close(); }
 });
 
-test('review: the live version changes with how far a capture is, and with why it stopped; Coverage says the newest capture', async () => {
+test('review: the live version changes with how far a capture is, and with its reason (no progress, ended); Coverage says the newest capture', async () => {
   const p = leafy({ probes: false });
   const dir = join(p.nunchi, 'runs', '0005.partial');
   const prog = (doc, at = Date.now()) => { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'progress.json'), JSON.stringify(doc)); utimesSync(join(dir, 'progress.json'), new Date(at), new Date(at)); };
@@ -303,15 +319,16 @@ test('review: the live version changes with how far a capture is, and with why i
     prog({ ...SWEEP, done: 2, routeMs: [27000, 27000] });
     const v2 = await version();
     assert.notEqual(v2, v1, 'a route done (still running)');
-    // its writer gone (this machine): stopped, "its process ended"; then 10 minutes without progress: the reason changes
-    const dead = spawnSync(process.execPath, ['-e', '0']).pid;
-    prog({ ...SWEEP, done: 2, routeMs: [27000, 27000], pid: dead });
-    assert.equal((await call('/api/summary')).now[0], 'Capture stopped · run 0005 (its process ended) — tell your AI “capture again”');
+    // 10 minutes without progress, its writer here: still running, another reason ("no progress" for the time left)
+    assert.equal((await call('/api/summary')).now[0], 'Capture running · run 0005 · 2 of 25 screens (about 11 min left)');
     const v3 = await version();
     assert.equal(await version(), v3);
-    prog({ ...SWEEP, done: 2, routeMs: [27000, 27000], pid: dead }, Date.now() - 10 * MIN - 1000);
-    assert.notEqual(await version(), v3, 'still stopped, another reason');
-    assert.equal((await call('/api/summary')).now[0], STOPPED('0005'));
+    prog({ ...SWEEP, done: 2, routeMs: [27000, 27000] }, Date.now() - 10 * MIN - 1000);
+    assert.notEqual(await version(), v3, 'still running, another reason');
+    assert.equal((await call('/api/summary')).now[0], 'Capture running · run 0005 · 2 of 25 screens (no progress for 10 min)');
+    // its writer gone (this machine): stopped, "its process ended"
+    prog({ ...SWEEP, done: 2, routeMs: [27000, 27000], pid: spawnSync(process.execPath, ['-e', '0']).pid });
+    assert.equal((await call('/api/summary')).now[0], 'Capture stopped · run 0005 (its process ended) — tell your AI “capture again”');
     // two captures running: Coverage says the newest, as Progress lists both
     rmSync(dir, { recursive: true });
     partial({ runs: join(p.nunchi, 'runs') }, '0005', { ...SWEEP, done: 1, routeMs: [27000] });

@@ -55,9 +55,9 @@ export function latestSweep(dir) {
 export const PROGRESS_FILE = 'progress.json';
 // A capture that was killed (no exit handler ran) leaves its `.partial` folder: it is not "running" once its writer is
 // gone (a progress file names its pid and machine — host, boot and pid namespace, M5b review: a container with host
-// networking shares the host name, not the pids; on this machine a pid that no longer runs is gone) or it made no progress
-// for STALE_MS (review of PR #33). A folder without a progress file (a fix probe, a capture of an older nunchi) counts
-// by the folder's own time.
+// networking shares the host name, not the pids; on this machine a pid that no longer runs is gone), or, when its writer
+// cannot be asked, once it made no progress for STALE_MS (review of PR #33). A folder without a progress file (a fix
+// probe, a capture of an older nunchi) counts by the folder's own time.
 // *No progress* (M5b): its last progress is the progress file's modification time (the CLI rewrites it after each route ×
 // person × viewport), or the folder's own when it has none yet; a capture has made no progress for STALE_MS when
 // now − that time ≥ STALE_MS (9:59 is still running, 10:00 is not).
@@ -67,10 +67,15 @@ export function pidAlive(pid) {
 }
 // Every `.partial` folder that is a capture the board can speak of, oldest first: → [{ run, state: 'running' |
 // 'stopped', why, progress: { kind, wholeApp, routesGiven, routes, done, routeMs, skipped } | null }].
-// `stopped` (M5b): a capture of `nunchi capture` (its folder has a progress file) that is not running any more: `why` is
-// 'no-progress' (none for STALE_MS) or 'ended' (sooner: its writer, on this host, no longer runs). A folder without a
-// progress file is running by its own time and is never called stopped: a fix probe's attempt says when it was
-// interrupted (§6.3). A link, a folder, a progress file over 64 KB or one that does not parse is not read.
+// A capture of `nunchi capture` (its folder has a progress file), by its writer (M5b; the owner's decision on the review
+// of PR #36):
+// - its writer runs on this machine: running, however long since its last progress (a laptop asleep, a long end phase:
+//   "capture again" would start a second capture beside it); `why` 'no-progress' once none came for STALE_MS;
+// - its writer, on this machine, no longer runs: stopped, `why` 'ended', at once and for good;
+// - its writer cannot be asked (another machine, no pid): running until no progress came for STALE_MS, then stopped,
+//   `why` 'no-progress'.
+// A folder without a progress file is running by its own time and is never called stopped: a fix probe's attempt says
+// when it was interrupted (§6.3). A link, a folder, a progress file over 64 KB or one that does not parse is not read.
 // `now`, `alive` and `machine` are the clock, the process check and this machine (thisMachine; a test's own).
 export function captureStates(dir, { now = Date.now(), alive = pidAlive, machine = thisMachine() } = {}) {
   const out = [];
@@ -87,8 +92,8 @@ export function captureStates(dir, { now = Date.now(), alive = pidAlive, machine
       const doc = JSON.parse(readFileSync(f, 'utf8'));
       const quiet = now - st.mtimeMs >= STALE_MS;
       const here = doc?.host === machine.host && (doc.boot ?? null) === (machine.boot ?? null) && (doc.ns ?? null) === (machine.ns ?? null);
-      const gone = Number.isInteger(doc?.pid) && doc.pid > 0 && here && !alive(doc.pid);
-      const state = quiet || gone ? 'stopped' : 'running', why = quiet ? 'no-progress' : gone ? 'ended' : null;
+      const asked = Number.isInteger(doc?.pid) && doc.pid > 0 && here, gone = asked && !alive(doc.pid);
+      const state = gone || (!asked && quiet) ? 'stopped' : 'running', why = gone ? 'ended' : quiet ? 'no-progress' : null;
       const count = n => (Number.isInteger(n) && n >= 0 ? n : null);
       const routes = count(doc?.routes), done = count(doc?.done);
       if (routes === null || done === null || done > routes || typeof doc.kind !== 'string') { out.push({ run, state, why, progress: null }); continue; }

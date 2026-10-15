@@ -46,6 +46,7 @@ const chips = page => page.evaluate(() => {
     edge: [...new Set(els.map(e => `${getComputedStyle(e).borderTopStyle} ${getComputedStyle(e).borderTopWidth}`))] }; };
   const name = sel => document.querySelector(sel)?.closest('button')?.getAttribute('aria-label') ?? null;
   return { first: of('.card .tag-first'), notYet: of('.card .tag-notyet'), firstName: name('.card .tag-first'), notYetName: name('.card .tag-notyet'),
+    heading: document.getElementById('wall-g-notyet')?.textContent ?? null, counts: [document.querySelector('#screens .muted').textContent, document.getElementById('wall-shown').textContent],
     forced: matchMedia('(forced-colors: active)').matches, sideways: document.documentElement.scrollWidth > window.innerWidth + 1 };
 });
 
@@ -59,21 +60,23 @@ test('m5b e2e: the wall during a first look — "First look" and "Not checked ye
       await page.evaluate(() => { location.hash = '#/screens'; });
       await page.waitForSelector('#h-screens');
       const c = await chips(page);
-      // the wall's default width is Desktop: 3 key pages and 4 not opened, for a visitor and signed in
-      assert.deepEqual([c.first.n, c.first.words, c.notYet.n, c.notYet.words], [6, ['First look'], 8, ['Not checked yet']], scheme);
+      // the wall's default width is Desktop: its 3 key pages for a visitor and signed in; the 4 pages not opened, one
+      // card each, in a section of their own; the counts are the screens'
+      assert.deepEqual([c.first.n, c.first.words, c.notYet.n, c.notYet.words], [6, ['First look'], 4, ['Not checked yet']], scheme);
+      assert.deepEqual([c.heading, c.counts], ['Not checked yet · 4 pages', ['3 pages, 12 screens · every one nunchi captured in run 0001, as it saw it', '6 shown of 12']]);
       assert.ok(c.first.least >= 4.5 && c.notYet.least >= 4.5, `${scheme}: ${c.first.least.toFixed(2)}:1, ${c.notYet.least.toFixed(2)}:1`);
       assert.match(c.firstName, /^Plant shelf, Visitor · Desktop · Normal: .+\. First look/);
-      assert.equal(c.notYetName, '/checkout, Visitor · Desktop · Normal: Not checked yet');
+      assert.equal(c.notYetName, '/checkout: Not checked yet');
       assert.equal(c.sideways, false);
       assert.deepEqual(await axe(page), [], `${scheme} at ${width} px`);
       // Enter on a page the first look did not open: what it is, and the first look's line; nothing to open
-      await page.focus('[data-key="0001/not-yet.guest.d:/checkout"]');
+      await page.focus('[data-key="0001/not-yet:/checkout"]');
       await page.keyboard.press('Enter');
       await page.waitForSelector('.sp-notyet');
       const panel = await page.evaluate(() => ({ h: document.getElementById('panel-h').textContent, chip: document.querySelector('.sp-notyet .tag-notyet')?.textContent, text: document.querySelector('.sp-notyet .small')?.textContent,
         open: !!document.getElementById('sp-open'), hash: location.hash }));
       assert.deepEqual(panel, { h: '/checkout', chip: 'Not checked yet', text: 'First look: 3 key screens · the full check has not started — tell your AI “full check”', open: false,
-        hash: `#/screen/${encodeURIComponent('0001/not-yet.guest.d:/checkout')}` });
+        hash: `#/screen/${encodeURIComponent('0001/not-yet:/checkout')}` });
       assert.deepEqual(s.errors, []);
     } finally { await s.close(); }
   }
@@ -92,7 +95,7 @@ test('m5b e2e: a capture that stops reaches the open board by itself — Progres
   const p = leafy({ probes: false });
   const dir = join(p.nunchi, 'runs', '0005.partial');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'progress.json'), JSON.stringify({ schema: 1, kind: 'sweep', wholeApp: true, routes: 25, done: 12, routeMs: Array(12).fill(27000), pid: process.pid, ...thisMachine() }));
+  writeFileSync(join(dir, 'progress.json'), JSON.stringify({ schema: 1, kind: 'sweep', wholeApp: true, routes: 25, done: 12, routeMs: Array(12).fill(27000), pid: process.pid, ...thisMachine(), host: 'another-machine.invalid' }));
   const s = await open(p);
   const { page } = s;
   try {
@@ -116,9 +119,10 @@ test('m5b e2e: a capture that stops reaches the open board by itself — Progres
 
 // ---- the review of PR #36 (2026-10-15 KST) ----------------------------------------------------------------------------
 
+// (written by another machine: its writer cannot be asked, so 10 minutes without progress is a stop)
 const progress = (dir, done, at = Date.now()) => {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'progress.json'), JSON.stringify({ schema: 1, kind: 'sweep', wholeApp: true, routes: 25, done, routeMs: Array(done).fill(27000), pid: process.pid, ...thisMachine() }));
+  writeFileSync(join(dir, 'progress.json'), JSON.stringify({ schema: 1, kind: 'sweep', wholeApp: true, routes: 25, done, routeMs: Array(done).fill(27000), pid: process.pid, ...thisMachine(), host: 'another-machine.invalid' }));
   utimesSync(join(dir, 'progress.json'), new Date(at), new Date(at));
 };
 

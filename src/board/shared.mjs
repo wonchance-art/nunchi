@@ -375,6 +375,7 @@ export const SCREENS = {
   first: 'This is the first screen', last: 'This is the last screen', loading: 'Loading screens…',
   said: (name, label, badge, i, n) => `${name}, ${label}: ${badge}. ${i} of ${n}.`,
   firstLook: 'First look', notYet: 'Not checked yet',   // during a first look (M5b): its key screens, and the others
+  notYetPages: n => `Not checked yet · ${plural(n, 'page')}`,
 };
 
 // ---- screenshot geometry (shared by the static export's markup and the board's DOM) -----------------------------

@@ -398,8 +398,8 @@ it) as it exits, and says so; the runs before it are untouched. A kill that runs
 board no longer calls it running (`runs.mjs` `runningCaptures`, the one place `summary()` reads the clock and the
 process table) once its writer is gone — the pid in `progress.json` no longer runs on this machine: the same host, boot
 and pid namespace, as the state's lock compares its owner (review of PR #36: a container with host networking has the
-host's name, not its pids) — or nothing was
-written for 10 minutes (`STALE_MS`); a folder without a progress file (a fix probe, an older nunchi) counts by its own
+host's name, not its pids) — or, when its writer cannot be asked (another machine), nothing was
+written for 10 minutes (`STALE_MS`; a writer that runs on this machine keeps it running: M5b, below); a folder without a progress file (a fix probe, an older nunchi) counts by its own
 time. `gc` still removes such a folder after an hour. The verdict, the Now line and "Capture running · run N" all go by
 this.
 
@@ -418,9 +418,16 @@ computed, never the mock-up's:
 - *a capture stopped:* "Capture stopped · run 0002 (no progress for 10 min) — tell your AI “capture again”". *No
   progress*, precisely: a capture's last progress is its progress file's modification time (the CLI rewrites the file
   after each route × person × viewport), or its folder's while it has none; it made no progress for 10 minutes when now
-  − that time ≥ 10 minutes (`runs.mjs` `captureStates`, `STALE_MS`: at 9:59 it is running, at 10:00 stopped; tested
-  with an injected clock, never by waiting). A writer that is gone on this host stops it sooner, and the line says
-  "(its process ended)" until the 10 minutes have passed. Only a capture of `nunchi capture` (its folder has a progress
+  − that time ≥ 10 minutes (`runs.mjs` `captureStates`, `STALE_MS`: at 9:59 it is running, at 10:00 not; tested with an
+  injected clock, never by waiting). By its writer (the owner's decisions on the review of PR #36, 2026-10-15 KST):
+  - a writer that runs on this machine keeps the capture running, however long (a laptop asleep, a long end phase:
+    "capture again" would start a second capture beside it); after 10 minutes without progress its line says so in
+    place of the time left: "Capture running · run 0007 · 12 of 25 screens (no progress for 10 min)" (and the first
+    look's: "… full check running, 12 of 25 screens (no progress for 10 min)");
+  - a writer gone on this machine stops it at once, and the line says "(its process ended)" for as long as it shows;
+  - a writer that cannot be asked (another machine) stops it at 10:00, with the owner's words.
+
+  Only a capture of `nunchi capture` (its folder has a progress
   file) is called stopped: a folder without one (a fix probe, whose attempt says itself that it was interrupted, §6.3;
   an older nunchi) is running by its own time and then said no more. The newest stopped capture is said while it is the
   latest thing of the worktree (newer than its latest run, and no capture running): a later capture, running or
@@ -440,8 +447,8 @@ computed, never the mock-up's:
 
 *Choices (M5b).* (1) The stopped line says the rule's "10 min", not a count that grows: it stays the same while the
 folder stays, so the polite live region does not announce it again every minute, and "no progress for 10 min" is true
-for as long as it shows. (2) A writer known to be gone says "(its process ended)" before 10 minutes (the board knows
-sooner; "no progress for 2 min" would read as hasty), then the owner's words. (3) The verdict choice above (the
+for as long as it shows. (2) A writer known to be gone says "(its process ended)", and keeps saying it (the owner's
+decision: it never turns into "no progress for 10 min" and is never announced twice). (3) The verdict choice above (the
 recommended one). (4) No "has not started" line while another capture runs or after one stopped: "full check" then
 would start a second capture, or contradict the stopped line, whose "capture again" is the same step (the skill: step
 5). (5) The running line does not repeat a partial check's "· skipped …" (the first look's line keeps it): the owner's
@@ -2558,13 +2565,16 @@ with the last full check.
 - *A first look on the wall (M5b, the owner's mock-up of 2026-10-15 KST):* each screen it captured has a "First look"
   chip, and, while no full check has been made (after one, the last full check checked those pages: Coverage shows
   how), each page its `flow.json` names that it did not open (less a page that needs a sample address, which the
-  full check skips too) is a card per person × width of its scope, "Not checked yet": no screenshot, no finding, nothing
-  to open (Enter or Space shows what it is, with the first look's line; Screen detail's J/K walk only the screens it
-  has); "Not checked" counts them; the heading counts the screens captured. The chips are text in the board's chip
+  full check skips too) is one card, "Not checked yet", in a section of its own after the page groups ("Not checked yet
+  · 4 pages"; the owner's decision on the review of PR #36): no screenshot, no finding, nothing to open (Enter or Space
+  shows what it is, with the first look's line). They are pages, not screens: shown under Show "All" and the search
+  whatever the width, who and state; never in a screen count (the heading, "N shown of M", the filters' counts, "not
+  checked", Progress's "Screens checked"); "Not checked" keeps the captured screens that did not load; the page groups
+  name only the pages captured. The chips are text in the board's chip
   style (`.tag`): `--accent-ink` on `--accent-soft`, and `--ink-2` on the panel with a `--control` edge (measured: 9.7:1
   and 8.3:1 light, 9.0:1 and 9.9:1 dark), with a 1 px edge in forced colours, and each card's accessible name says
-  them ("Plant shelf, Visitor · Desktop · Normal: 1 medium. First look…", "/checkout, Visitor · Desktop · Normal: Not
-  checked yet"). A live redraw keeps what is being typed in the search, and where (review of PR #36).
+  them ("Plant shelf, Visitor · Desktop · Normal: 1 medium. First look…", "/checkout: Not checked yet"). A live redraw
+  keeps what is being typed in the search, and where (review of PR #36).
 - *Screen detail (`#/screens/<run>/<scene>`, the latest run's screens):* the badge, a coverage line ("Rule checks ✓ · AI
   2 of 3 lenses (L6 doesn’t count) · Changed since run 0009", so "clean" is never read as "fully looked at") and
   "Coverage ▸"; Width (Desktop, Phone, Both), State, Who, Whole screen and Compare in one `role=toolbar`; the screenshot
@@ -2590,8 +2600,8 @@ route, person, viewport, state, checked, why, ai: { run, seen, of, lenses[{ lens
 findings, text }] }, open, changed?, say }] }], byLens[], running, capture { run, state, text } }` (`capture`: the
 summary's line, M5b); `/api/summary`'s `ai.coverage` is `{ cells, seen,
 budget, run, aiRun }`, Coverage's count. `GET /api/screens` gains per screen `checked`, `changed`, `ai { seen, of,
-budget }`, `group`, `open`, `look` (M5b: `first`, or `not-yet` on a page a first look did not open), and `baseline`,
-`quick` and `groups`. `GET /api/screens/:run/:scene` (the latest run only;
+budget }`, `group`, `open`, `look` (M5b: `first` on a first look's screens), and `baseline`, `quick`, `groups` and,
+during a first look, `notYet` (M5b: the pages it did not open, `{ key, run, route, look }`, one each). `GET /api/screens/:run/:scene` (the latest run only;
 ids checked; 404 otherwise) → `{ run, key, id, scene, baseline, page, widths, findings[{ group, n, …, viewports, others,
 at }], fixedHere[], compare[{ kind, id, label, per | gone }], coverage, siblings[], judged }`. Strings go out through
 `safe()` as everywhere. The live version also names the `coverage.json` of every run (its size and modification time: a
