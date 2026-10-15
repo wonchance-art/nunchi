@@ -3,17 +3,17 @@
 // or weakened since a ref. Synthetic fixtures only (test/fixtures/guards).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, symlinkSync, cpSync, chmodSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, symlinkSync, cpSync, chmodSync } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as G from '../src/guards.mjs';
+import { tmp as tmpDir } from './fixtures/tmp.mjs';
 
 const FIX = fileURLToPath(new URL('./fixtures/guards/', import.meta.url));
 const TOKENS = { colors: ['#1f2937', '#ffffff', 'rgb(37, 99, 235)'], deltaE: 0.03 };
 const paramsOf = kind => (kind === 'colour-literal' ? TOKENS : G.defaultParams(kind));
 const guardsOf = kinds => kinds.map(kind => ({ kind, params: paramsOf(kind) }));
-const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-guards-')));
+const tmp = () => tmpDir('nunchi-guards-');
 const put = (root, rel, text) => { mkdirSync(dirname(join(root, rel)), { recursive: true }); writeFileSync(join(root, rel), text); };
 const fixture = (kind, name) => readFileSync(join(FIX, kind, name), 'utf8');
 // the lines a fixture marks with "HIT <kind>"

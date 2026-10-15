@@ -12,7 +12,8 @@ import * as C from '../src/fix/claims.mjs';
 import * as P from '../src/project.mjs';
 import * as L from '../src/ledger.mjs';
 import { readKey } from '../src/state.mjs';
-import { fixProject, edit, commitWith, git, tmp, ROUTES } from './fixtures/fix-project.mjs';
+import { fixProject, edit, commitWith, git, ROUTES } from './fixtures/fix-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 import { proveOk, ctxOf, stateDir, latest, rowOf, trailers, TITLE, attempt, aiProject, verdictsFor, servedProject } from './fixtures/fix-loop-helpers.mjs';
 

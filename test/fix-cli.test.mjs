@@ -9,7 +9,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as F from '../src/fix/loop.mjs';
 import * as P from '../src/project.mjs';
-import { fixProject, edit, commitWith, tmp } from './fixtures/fix-project.mjs';
+import { fixProject, edit, commitWith } from './fixtures/fix-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 process.env.XDG_STATE_HOME = tmp('nunchi-fixcli-xdg-');

@@ -2,19 +2,19 @@
 // no-AI classification pass whose candidates feed L2/L5/L6/L7/L9. Fixture apps are synthetic.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { discover } from '../src/discover.mjs';
 import { buildInventory } from '../src/inventory.mjs';
 import { stableJson } from '../src/stable.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 function tree(files) {
-  const root = mkdtempSync(join(tmpdir(), 'nunchi-inv-'));
+  const root = tmp('nunchi-inv-');
   for (const [p, body] of Object.entries(files)) {
     mkdirSync(dirname(join(root, p)), { recursive: true });
     writeFileSync(join(root, p), typeof body === 'string' ? body : JSON.stringify(body));

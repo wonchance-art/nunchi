@@ -7,7 +7,8 @@ import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { foldRun, runForFold, emptyState } from '../../src/ledger.mjs';
 import { stableJson } from '../../src/stable.mjs';
-import { tmp, scene, writeRun } from './board-project.mjs';
+import { scene, writeRun } from './board-project.mjs';
+import { tmp } from './tmp.mjs';
 
 const write = (p, v) => { mkdirSync(join(p, '..'), { recursive: true }); writeFileSync(p, typeof v === 'string' ? v : stableJson(v)); };
 export const STATES5 = ['normal', 'empty', 'error', 'slow', 'offline'];

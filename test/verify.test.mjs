@@ -2,16 +2,16 @@
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { planVerify, recordVerdicts, claimOf, decoyCount, decoysWanted, MIN_CONTROLS, DECOY_TEMPLATES, SAME_MODEL } from '../src/verify.mjs';
 import { keyPath } from '../src/state.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 // answer keys live in the user's state folder (design §2.2): a private one for these tests, inherited by the CLI
-process.env.XDG_STATE_HOME = mkdtempSync(join(tmpdir(), 'nunchi-verify-state-'));
+process.env.XDG_STATE_HOME = tmp('nunchi-verify-state-');
 
 // Synthetic scene evidence: controls.json rows as collect() writes them.
 const ctl = (selector, name, extra = {}) => ({ selector, tag: 'button', role: null, name, hasText: true, text: name, box: [16, 100 + selector.length, 120, 44], href: null, inline: false, ...extra });
@@ -221,7 +221,7 @@ test('bad verdicts are refused and nothing is recorded', () => {
 });
 
 test('CLI verify --plan / --record on a run folder', () => {
-  const work = mkdtempSync(join(tmpdir(), 'nunchi-verify-'));
+  const work = tmp('nunchi-verify-');
   const run = join(work, '.nunchi', 'runs', '0003');
   mkdirSync(run, { recursive: true });
   writeFileSync(join(work, '.nunchi', 'runs', 'latest'), '0003\n');

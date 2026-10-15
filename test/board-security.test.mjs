@@ -5,13 +5,14 @@ import assert from 'node:assert/strict';
 import { request } from 'node:http';
 import { connect } from 'node:net';
 import { readFileSync, writeFileSync, mkdirSync, symlinkSync, readdirSync, statSync, cpSync, openSync, closeSync, readlinkSync, realpathSync } from 'node:fs';
-import { join, relative, isAbsolute } from 'node:path';
+import { join, relative, isAbsolute, dirname, basename } from 'node:path';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
-import { startBoard, CSP, SECURITY_HEADERS, MAX_BODY, MAX_SESSION_BODY, MAX_CONNECTIONS, LIMITS, MAX_STREAMS, openerCommand, openerEnv, sameSecret, CODE_TTL_MS } from '../src/board/server.mjs';
+import { startBoard, CSP, SECURITY_HEADERS, MAX_BODY, MAX_SESSION_BODY, MAX_CONNECTIONS, LIMITS, MAX_STREAMS, openerCommand, openerEnv, sameSecret, CODE_TTL_MS, controlPath } from '../src/board/server.mjs';
 import { openBoard, stopBoards, serverEnv, real, serverCwd } from '../src/board/launch.mjs';
 import { smallProject, jpeg, writeRun } from './fixtures/board-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const POSIX = process.platform !== 'win32';
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -479,7 +480,9 @@ test('§3.1 the link never reaches stdout: the server started directly, with any
     });
     return { child, line };
   };
-  const stop = c => new Promise(r => { c.on('exit', r); c.kill('SIGTERM'); });
+  // Windows: a kill ends a process without its exit handlers (its record, its folder in the temp folder stay): it is
+  // asked to stop through its control pipe instead
+  const stop = c => new Promise(r => { c.on('exit', r); if (POSIX) c.kill('SIGTERM'); else stopBoards(join(p.nunchi, 'state'), p.root).catch(() => c.kill()); });
   // no fd 3: the port, nothing else
   const a = start(['ignore', 'pipe', 'ignore']);
   const out = await a.line;
@@ -523,9 +526,22 @@ test('§3.1 nunchi open twice at once starts one board (a launch lock); a runnin
   } finally { await stopBoards(stateDir, p.root); }
 });
 
+test('§3.1 the control socket: in the state folder when the path fits, else in a folder of this user in the temp folder, else in /tmp when the temp folder\'s path is too long too (a socket path has a limit: 104 bytes on macOS)', () => {
+  const short = join('/p', '.nunchi', 'state'), long = join(`/${'d'.repeat(90)}`, '.nunchi', 'state');
+  assert.equal(controlPath(short, 4242, 'linux', '/t'), join(short, 'boards', '4242.sock'));
+  const inTmp = controlPath(long, 4242, 'linux', join('/var', 't'));
+  assert.equal(dirname(dirname(inTmp)), join('/var', 't'));
+  assert.match(basename(dirname(inTmp)), /^nunchi-(-?\d+|u)$/, 'a folder of this user');
+  assert.match(basename(inTmp), /^[0-9a-f]{16}\.sock$/);
+  const deep = controlPath(long, 4242, 'linux', join(`/${'t'.repeat(80)}`));
+  assert.equal(deep, join('/tmp', basename(dirname(inTmp)), basename(inTmp)), 'the same folder and name, in /tmp');
+  for (const p of [inTmp, deep]) assert.ok(Buffer.byteLength(p) < 100, p);
+  assert.match(controlPath(long, 4242, 'win32'), /^\\\\\.\\pipe\\nunchi-board-[0-9a-f]{16}$/, 'Windows: a named pipe');
+});
+
 test('§3.1 nunchi open compares projects by the file system\'s own real path (macOS case, Windows long names)', { skip: !POSIX && 'symlinks need privileges on Windows' }, () => {
   const p = smallProject();
-  const link = join(p.root, '..', `${p.root.split(/[\\/]/).pop()}-link`);
+  const link = join(tmp('nunchi-link-'), `${p.root.split(/[\\/]/).pop()}-link`);
   symlinkSync(p.root, link);
   assert.equal(real(link), realpathSync.native(p.root));
   assert.equal(real(join(p.root, 'not-there')), join(p.root, 'not-there'), 'a path that does not exist is itself');

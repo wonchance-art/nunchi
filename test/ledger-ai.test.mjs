@@ -3,8 +3,7 @@
 // protection, group decisions on AI items, trust by (lens, source), staleness. Synthetic runs, invented content.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -16,9 +15,9 @@ import { aiIdentity } from '../src/ai-identity.mjs';
 import { aiFoldInput, foldFinding } from '../src/ai-fold.mjs';
 import { planHunt, recordHunt } from '../src/hunt.mjs';
 import { loadLenses } from '../src/lenses.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
-const tmp = p => realpathSync(mkdtempSync(join(tmpdir(), p)));
 process.env.XDG_STATE_HOME = tmp('nunchi-ai-xdg-');
 const cli = (cwd, ...a) => new Promise(res => execFile('node', [CLI, ...a], { cwd, encoding: 'utf8', timeout: 120000 }, (err, stdout, stderr) => res({ code: err ? err.code : 0, stdout, stderr })));
 const json = async (cwd, ...a) => { const r = await cli(cwd, ...a, '--json'); assert.equal(r.code, 0, r.stderr); return JSON.parse(r.stdout); };

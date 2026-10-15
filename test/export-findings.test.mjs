@@ -8,7 +8,8 @@ import { writeFileSync, mkdirSync, readFileSync, existsSync, cpSync, statSync } 
 import { join } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { writeRun, withAi, scene, tmp, HOSTILE } from './fixtures/board-project.mjs';
+import { writeRun, withAi, scene, HOSTILE } from './fixtures/board-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 import { sarifProblems, githubProblems } from './fixtures/sarif/validate.mjs';
 import { mdText } from '../src/export-findings.mjs';
 

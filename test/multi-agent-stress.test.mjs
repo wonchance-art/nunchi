@@ -17,7 +17,7 @@ import * as C from '../src/fix/claims.mjs';
 import { readGeneration } from '../src/state.mjs';
 import { stableJson } from '../src/stable.mjs';
 import { AGENTS } from './fixtures/agent-folds.mjs';
-import { tmp } from './fixtures/hunt-run.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CHILD = fileURLToPath(new URL('./fixtures/stress-child.mjs', import.meta.url));
 const child = args => new Promise(res => execFile(process.execPath, [CHILD, ...args.map(String)], { encoding: 'utf8', timeout: 200000, maxBuffer: 16 * 1024 * 1024 },

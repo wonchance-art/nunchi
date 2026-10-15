@@ -1,14 +1,14 @@
 // Lens packs are data (spec §3): strict schema, fixed load order, sha256-pinned external packs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { loadLenses, lensProblems, validateLens, mergeLens, SEVERITIES } from '../src/lenses.mjs';
 import { stableJson } from '../src/stable.mjs';
+import { tmp as tmpDir } from './fixtures/tmp.mjs';
 
-const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-lens-')));
+const tmp = () => tmpDir('nunchi-lens-');
 const write = (dir, name, data) => { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, name), typeof data === 'string' ? data : JSON.stringify(data, null, 2)); };
 const sha256 = s => createHash('sha256').update(s).digest('hex');
 
@@ -136,10 +136,9 @@ test('a bundle cannot define one lens twice; broken JSON is reported with its fi
 });
 
 test('the project has the last word over an external pack it adopted', async () => {
-  const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs');
-  const { tmpdir } = await import('node:os');
+  const { mkdirSync, writeFileSync } = await import('node:fs');
   const { createHash } = await import('node:crypto');
-  const root = mkdtempSync(join(tmpdir(), 'nunchi-order-'));
+  const root = tmpDir('nunchi-order-');
   mkdirSync(join(root, '.nunchi', 'lenses'), { recursive: true }); mkdirSync(join(root, 'vendor'));
   const ext = JSON.stringify({ id: 'L6', extends: 'L6', name: 'from the vendor' });
   writeFileSync(join(root, 'vendor', 'v.json'), ext);

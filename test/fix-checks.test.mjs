@@ -4,13 +4,16 @@
 // fails or its count rises. Synthetic projects in temp folders.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, realpathSync, mkdirSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as X from '../src/fix/run.mjs';
 import { checkProfile } from '../src/checks.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
-const tmp = p => realpathSync(mkdtempSync(join(tmpdir(), p)));
+// On Windows the checks' package managers are handed TEMP and TMP: they get this file's own temporary folder (yarn 1
+// leaves its run folder and its v8-compile-cache there), removed with the file's other folders.
+if (process.platform === 'win32') { const own = tmp('nunchi-checks-temp-'); for (const k of ['TEMP', 'TMP']) process.env[k] = own; }
+
 function project(scripts, extra = {}) {
   const root = tmp('nunchi-checks-');
   writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'checks-fixture', private: true, scripts, ...extra }));
@@ -149,8 +152,10 @@ test('Windows: a .cmd shim in a folder whose path has spaces runs, with its argu
 
 // ---- M3 review: checks that cannot hang, crash quietly or hide a script -------------------------------------------------
 
-test('the timeout bounds the run even when a grandchild keeps the output open; a quick exit is not held by it either', async () => {
-  const hold = "require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)'], { stdio: 'inherit', detached: true }).unref()";
+test('the timeout bounds the run even when a grandchild keeps the output open; a quick exit is not held by it either', async t => {
+  // the grandchild says its pid (grandchild.pid): on Windows nothing ends it before its 20 s, and a process working in
+  // a folder keeps that folder from being removed when this file's process ends, so the test ends it
+  const hold = "const c = require('child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)'], { stdio: 'inherit', detached: true }); require('fs').writeFileSync('grandchild.pid', String(c.pid)); c.unref()";
   const quick = project({ test: `node -e "${hold}"` });
   let t0 = Date.now();
   // a generous timeout (npm alone takes seconds to start on Windows): the run must end well before the grandchild does
@@ -158,6 +163,7 @@ test('the timeout bounds the run even when a grandchild keeps the output open; a
   assert.equal(a.results.test.status, 'pass', a.results.test.output);
   assert.ok(Date.now() - t0 < 14000, `took ${Date.now() - t0} ms`);
   const slow = project({ test: `node -e "${hold}; setTimeout(() => {}, 60000)"` });
+  if (process.platform === 'win32') t.after(() => { for (const root of [quick, slow]) { try { process.kill(Number(readFileSync(join(root, 'grandchild.pid'), 'utf8'))); } catch {} } });
   t0 = Date.now();
   const b = await X.runChecks({ root: slow, profile: checkProfile(slow), timeout: 2000 });
   assert.equal(b.results.test.status, 'timeout');

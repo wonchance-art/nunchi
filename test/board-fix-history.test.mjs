@@ -9,7 +9,8 @@ import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 import * as F from '../src/fix/loop.mjs';
 import * as R from '../src/fix/records.mjs';
 import * as P from '../src/project.mjs';
-import { fixProject, edit, commitWith, tmp } from './fixtures/fix-project.mjs';
+import { fixProject, edit, commitWith } from './fixtures/fix-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 process.env.XDG_STATE_HOME = tmp('nunchi-board-history-xdg-');
 const ctxOf = p => F.openFix({ cwd: p.root, root: p.root, deps: { capture: p.cap.capture, prove: async () => ({ ok: true }) } });

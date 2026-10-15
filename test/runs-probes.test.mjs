@@ -7,7 +7,8 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as P from '../src/project.mjs';
-import { huntProject, answerAll, tmp } from './fixtures/hunt-run.mjs';
+import { huntProject, answerAll } from './fixtures/hunt-run.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 process.env.XDG_STATE_HOME = tmp('nunchi-runs-probes-xdg-');

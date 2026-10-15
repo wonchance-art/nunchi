@@ -1,8 +1,7 @@
 // Hunt planner and answer recorder (spec §4) on a synthetic run folder: no browser needed.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, existsSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -12,11 +11,12 @@ import { planHunt, planHuntWithKey, writeHuntMirror, recordHunt, jpegSize, image
 import { voidCoverage } from '../src/canary.mjs';
 import { stableJson, sha } from '../src/stable.mjs';
 import { keyPath } from '../src/state.mjs';
+import { tmp as tmpDir } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
-const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-hunt-')));
+const tmp = () => tmpDir('nunchi-hunt-');
 // answer keys live in the user's state folder (design §2.2): a private one for these tests, inherited by the CLI
-process.env.XDG_STATE_HOME = mkdtempSync(join(tmpdir(), 'nunchi-hunt-state-'));
+process.env.XDG_STATE_HOME = tmpDir('nunchi-hunt-state-');
 
 // A JPEG header is all the estimate reads: SOI, a baseline SOF0 with the size, EOI.
 function fakeJpeg(width, height) {

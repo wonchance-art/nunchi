@@ -9,7 +9,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { startBoard } from '../src/board/server.mjs';
 import { checkedScene } from '../src/summary.mjs';
-import { huntProject, answerAll, deleteAll, tmp } from './fixtures/hunt-run.mjs';
+import { huntProject, answerAll, deleteAll } from './fixtures/hunt-run.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 process.env.XDG_STATE_HOME = tmp('nunchi-coverage-agents-xdg-');

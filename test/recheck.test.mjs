@@ -3,8 +3,7 @@
 // insufficient = needs you, verdicts folded from the answer key only. Synthetic runs, invented content; no browser.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -13,9 +12,9 @@ import * as S from '../src/stable.mjs';
 import * as St from '../src/state.mjs';
 import * as R from '../src/recheck.mjs';
 import { buildModel } from '../src/export-html.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
-const tmp = p => realpathSync(mkdtempSync(join(tmpdir(), p)));
 process.env.XDG_STATE_HOME = tmp('nunchi-recheck-xdg-');
 const cli = (cwd, ...a) => new Promise(res => execFile('node', [CLI, ...a], { cwd, encoding: 'utf8', timeout: 120000 }, (err, stdout, stderr) => res({ code: err ? err.code : 0, stdout, stderr })));
 const json = async (cwd, ...a) => { const r = await cli(cwd, ...a, '--json'); assert.equal(r.code, 0, r.stderr); return JSON.parse(r.stdout); };

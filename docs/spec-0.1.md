@@ -1830,7 +1830,8 @@ the geometry and the CSS classes.
 **Process (§3.1).** `nunchi open [--no-browser] [--stop] [--label [--labeller <name>]] [--port <n>]` starts
 `src/board/server.mjs` detached and returns at once. The server writes `state/boards/<pid>.json` (pid, port, mode,
 project, control socket: never a key) and listens on a control socket (Unix: `state/boards/<pid>.sock`, or a 0700
-folder of this user in the temp folder when that path is too long; Windows: a named pipe), mode 0600, that answers
+folder of this user in the temp folder when that path is too long, in `/tmp` when the temp folder's own path is too
+long too; Windows: a named pipe), mode 0600, that answers
 `ping`, `open` (the server opens the browser itself with a fresh link) and `stop`, and never returns a link or a
 key. A second `nunchi open` pings this project's records (a record whose board does not answer is removed) and reuses
 a live board of the same mode; the check and the start run under a lock (`state/boards/launch.lock.d`, the state's

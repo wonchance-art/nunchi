@@ -10,7 +10,8 @@ import * as C from '../src/fix/claims.mjs';
 import * as P from '../src/project.mjs';
 import * as L from '../src/ledger.mjs';
 import { readKey } from '../src/state.mjs';
-import { fixProject, edit, commitWith, git, tmp, ROUTES } from './fixtures/fix-project.mjs';
+import { fixProject, edit, commitWith, git, ROUTES } from './fixtures/fix-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 import { proveOk, ctxOf, stateDir, latest, rowOf, trailers, TITLE, attempt, aiProject, verdictsFor, servedProject } from './fixtures/fix-loop-helpers.mjs';
 
@@ -167,7 +168,7 @@ test('git: a revert the repository requires to be signed, and signing fails → 
   const p = await fixProject();
   await attempt(p, { change: ['TINY', 'WRAP'], verify: false });
   const fixCommit = git(p.root, 'rev-parse', 'HEAD');
-  const fail = join(p.root, '..', `failing-gpg-${process.pid}.sh`);
+  const fail = join(tmp('nunchi-signing-'), 'failing-gpg.sh');
   writeFileSync(fail, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
   git(p.root, 'config', 'commit.gpgsign', 'true');
   git(p.root, 'config', 'gpg.format', 'openpgp');
@@ -182,9 +183,9 @@ test('git: a revert the repository requires to be signed, and signing fails → 
 test('git: SSH signing that fails ("failed to write commit object", nothing else) is a signing failure too', { skip: process.platform === 'win32' && 'a failing signing program needs a POSIX shell' }, async () => {
   const p = await fixProject();
   await attempt(p, { change: ['TINY', 'WRAP'], verify: false });
-  const fail = join(p.root, '..', `failing-ssh-${process.pid}.sh`);
+  const signing = tmp('nunchi-signing-'), fail = join(signing, 'failing-ssh.sh');
   writeFileSync(fail, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
-  for (const [k, v] of [['commit.gpgsign', 'true'], ['gpg.format', 'ssh'], ['user.signingkey', join(p.root, '..', 'no-key')], ['gpg.ssh.program', fail]]) git(p.root, 'config', k, v);
+  for (const [k, v] of [['commit.gpgsign', 'true'], ['gpg.format', 'ssh'], ['user.signingkey', join(signing, 'no-key')], ['gpg.ssh.program', fail]]) git(p.root, 'config', k, v);
   const v = await F.verifyFix(ctxOf(p), p.group);
   assert.match(v.lines[0], /your repository requires signed commits and signing failed/);
   assert.deepEqual([latest(p).phase, latest(p).outcome.needsYou], ['needs-you', 'signing']);

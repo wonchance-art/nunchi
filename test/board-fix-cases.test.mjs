@@ -6,7 +6,8 @@ import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import * as F from '../src/fix/loop.mjs';
 import * as P from '../src/project.mjs';
-import { fixProject, edit, commitWith, tmp } from './fixtures/fix-project.mjs';
+import { fixProject, edit, commitWith } from './fixtures/fix-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 import { ctxOf, attempt, board } from './fixtures/board-fix-helpers.mjs';
 
 process.env.XDG_STATE_HOME = tmp('nunchi-board-fix-cases-xdg-');
