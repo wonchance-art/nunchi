@@ -641,7 +641,8 @@ if (cmd === 'setup') {
 } else if (cmd === 'hunt') {
   // AI lenses, engine side (spec §4): the plan and the record are deterministic; the judgement is the skill's.
   const { loadLenses } = await import('./lenses.mjs');
-  const { planHuntWithKey, writeHuntMirror, recordHunt, writeRecord, readAnswers, formatPlan, formatRecord } = await import('./hunt.mjs');
+  const { planHuntWithKey, writeHuntMirror, writeRecord, readAnswers, formatPlan, formatRecord } = await import('./hunt.mjs');
+  const { recordHunts, readAgentRecords, writeAgentRecords, formatAgents } = await import('./hunt-agents.mjs');
   const { writeStable } = await import('./stable.mjs');
   const fail = (msg, code = 1) => { console.error(`nunchi hunt: ${msg}`); process.exit(code); };
   if (!!args.plan === !!args.record) fail('use either --plan or --record <answers.json>');
@@ -683,14 +684,16 @@ if (cmd === 'setup') {
         // a plan made for a run with canaries names scenes by alias: without its key nothing can be mapped back
         const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
         if (!key && (manifest.scenes || []).some(s => s.canary !== undefined)) throw Object.assign(new Error(`the answer key of this plan (hunt-key.json) is missing from ${dirname(keyPath(runDir, 'hunt-key.json'))}: run hunt --plan again`), { code: 'STALE_ANSWERS' });
-        const r = recordHunt({ runDir, plan, key, answers: readAnswers(answersPath), root: resolve(args.root || process.cwd()) });
+        // answers per agent (design §7): each agent's latest record stands beside the others'
+        const r = recordHunts({ runDir, plan, key, answers: readAnswers(answersPath), root: resolve(args.root || process.cwd()), prior: readAgentRecords(runDir) });
+        writeAgentRecords(runDir, r.records);
         writeRecord(runDir, r);
         return r;
       });
       // the hunt into the ledger as (run, "ai"): its claims (not double-checked yet) and the cells it saw, so a hunt
       // that claims nothing counts towards staleness too (design §2.2, §2.4)
       foldAfterRecord(runDir, 'the AI hunt', args.root || process.cwd(), { quiet: true });
-      console.log(args.json ? JSON.stringify({ plan: plan.id, run: runId, summary: result.coverage.summary, findings: result.findings.length, rejected: result.rejected }, null, 2) : formatRecord(result, runDir));
+      console.log(args.json ? JSON.stringify({ plan: plan.id, run: runId, summary: result.coverage.summary, findings: result.findings.length, rejected: result.rejected, agents: result.coverage.agents ?? null }, null, 2) : [formatRecord(result, runDir), formatAgents(result)].filter(Boolean).join('\n'));
     }
   } catch (e) {
     if (['BAD_LENS', 'LENS_HASH_MISMATCH', 'BAD_ARGS', 'BAD_RUN', 'BAD_ANSWERS', 'STALE_ANSWERS', 'CORRUPT', 'LOCKED', 'UNSAFE_PATH'].includes(e.code)) fail(e.message, 2);
