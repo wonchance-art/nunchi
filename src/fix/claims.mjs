@@ -7,8 +7,8 @@
 // - Worktree and branch come from git (the caller passes what `git rev-parse` said), never from arguments; agent and
 //   vendor are what the agent declared, and are shown as "declared".
 // - The capture renews the claim every 5 minutes; every fix command renews it too.
-import { join } from 'node:path';
-import { openSync, writeSync, fsyncSync, closeSync, readdirSync, rmSync, lstatSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { openSync, writeSync, fsyncSync, closeSync, readdirSync, rmSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { withLock, writeAtomic, privateDir, refuseLink, stableJson } from '../stable.mjs';
 import { bumpGeneration } from '../state.mjs';
@@ -28,6 +28,13 @@ export const claimLive = (c, now = Date.now()) => { const at = Date.parse(c?.las
 export const claimMinutes = (c, now = Date.now()) => { const s = Date.parse(c?.startedAt); return Number.isFinite(s) ? Math.max(0, Math.round((now - s) / 60e3)) : null; };
 // A URL's origin as claims compare them.
 export const originOf = url => { try { return new URL(url).origin; } catch { return null; } };
+// Two worktree paths as one folder (M6): compared as real paths (a link, Windows' 8.3 names), and on Windows whatever
+// the slashes or the case (the version control tool says `D:/a/b`, node `D:\a\b`). `platform`, `real`: for tests.
+export function samePath(a, b, { platform = process.platform, real = realpathSync.native } = {}) {
+  if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
+  const norm = p => { let r; try { r = real(p); } catch { r = p; } return platform === 'win32' ? r.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase() : resolve(r); };
+  return norm(a) === norm(b);
+}
 
 export function readClaim(stateDir, group) { return GROUP.test(group) ? read(claimFile(stateDir, group)) : null; }
 // Every claim on record, with its group: { group, claim, live }.
@@ -72,11 +79,11 @@ export function acquireClaim(stateDir, { group, worktree, branch, url, files = [
     const own = all.find(x => x.group === group);
     if (own && own.live && own.claim.token !== mine) return { ok: false, why: 'group', claim: own.claim, group };
     // one fixer per folder: another live claim made from this worktree
-    const here = all.find(x => x.group !== group && x.live && x.claim.worktree === worktree);
+    const here = all.find(x => x.group !== group && x.live && samePath(x.claim.worktree, worktree));
     if (here) return { ok: false, why: 'folder', claim: here.claim, group: here.group };
     // each worktree runs its own app server: a URL another live claim uses is refused
     const o = originOf(url);
-    const sameUrl = o && all.find(x => x.group !== group && x.live && x.claim.worktree !== worktree && originOf(x.claim.url) === o);
+    const sameUrl = o && all.find(x => x.group !== group && x.live && !samePath(x.claim.worktree, worktree) && originOf(x.claim.url) === o);
     if (sameUrl) return { ok: false, why: 'url', claim: sameUrl.claim, group: sameUrl.group };
     // expired claims are taken over (theirs and their markers removed)
     for (const x of all) if (!x.live) dropClaim(stateDir, x.group, x.claim);
@@ -116,6 +123,23 @@ export function renewClaim(stateDir, group, token, now = Date.now()) {
     if (!c || c.token !== token) return false;
     writeAtomic(claimFile(stateDir, group), stableJson({ ...c, lastRenewal: kst(now) }), { mode: 0o600 });
     return true;
+  });
+}
+
+// The address the claim's attempt checks the app at moves to `url` (fix --start or --verify given another --url),
+// unless another live claim uses it: each worktree runs its own app server (design §7). The claim is renewed.
+// → { ok: true, claim } | { ok: false, why: 'url', claim, group } | { ok: false, why: 'gone' } (not this token's).
+export function moveClaimUrl(stateDir, group, token, url, { now = Date.now() } = {}) {
+  if (!GROUP.test(group) || !token) return { ok: false, why: 'gone' };
+  return withLock(lockOf(stateDir), () => {
+    const c = read(claimFile(stateDir, group));
+    if (!c || c.token !== token) return { ok: false, why: 'gone' };
+    const o = originOf(url);
+    const other = o && listClaims(stateDir, now).find(x => x.group !== group && x.live && originOf(x.claim.url) === o);
+    if (other) return { ok: false, why: 'url', claim: other.claim, group: other.group };
+    const claim = { ...c, url: url ?? null, lastRenewal: kst(now) };
+    writeAtomic(claimFile(stateDir, group), stableJson(claim), { mode: 0o600 });
+    return { ok: true, claim };
   });
 }
 

@@ -16,7 +16,8 @@
 import { join, basename, dirname, relative, sep, resolve } from 'node:path';
 import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import * as P from '../project.mjs';
-import { titleOf, latestRunOf, foldFix, unfoldFix, commitFix, byRun, looked, currentTargets, writtenAs, approvalKey, HUMAN_CHANNELS } from '../ledger.mjs';
+import { titleOf, captureRuns, foldFix, unfoldFix, commitFix, byRun, looked, currentTargets, writtenAs, approvalKey, HUMAN_CHANNELS } from '../ledger.mjs';
+import { runsDirOf } from '../worktrees.mjs';
 import { human } from '../board/shared.mjs';
 import { readConfig, workTree } from '../runs.mjs';
 import { baseUrlRefusal } from '../network.mjs';
@@ -26,7 +27,7 @@ import { checkProfile, approvedProfiles, scriptsApprovedPath, checksRequestPath,
 import { writeStable, stableJson, sha } from '../stable.mjs';
 import { readKey, writeKey, keyPath } from '../state.mjs';
 import { fixGit, fixTrailers, TRAILERS } from './git.mjs';
-import { acquireClaim, renewClaim, releaseClaim, readClaim, claimLive, claimMinutes, refusalText, whileRenewing, CLAIM_TTL_MS } from './claims.mjs';
+import { acquireClaim, renewClaim, releaseClaim, readClaim, claimLive, claimMinutes, refusalText, whileRenewing, moveClaimUrl, samePath, originOf, CLAIM_TTL_MS } from './claims.mjs';
 const CLAIM_TTL_MINUTES = Math.round(CLAIM_TTL_MS / 60e3);
 import { allocate, setPhase, update, latestRecord, currentRecord, allRecords, latestRecords, isOpen, writePlan, readPlan, groupDir, kst } from './records.mjs';
 import { randomBytes } from 'node:crypto';
@@ -114,11 +115,26 @@ function attemptsUsed(ctx, group) {
     .filter(([d]) => !counted || counted.has(d)).map(([d, a]) => `${d}:${a}`)).size;
 }
 
-// The last sweep of this worktree: what the probes copy (persons, states, sample paths, the base URL).
+// A run's folder: this worktree's runs folder for its own stream, else the runs folder of the worktree that captured it
+// (M6, worktrees.mjs); this one's when that worktree cannot be found (the files are then missing, said by the reader).
+const runDirOf = (ctx, id, stream = ctx.stream) => join((stream ?? 'main') === ctx.stream ? ctx.runsDir : runsDirOf(ctx.led.st.root, stream ?? 'main') || ctx.runsDir, String(id || ''));
+// The sweep the probes copy (persons, states, sample paths, the base URL): this worktree's latest sweep, else the latest
+// sweep of any worktree (a worktree on a fix branch never sweeps: its captures are probes, design §7), read from the
+// worktree that captured it. `here`: captured in this folder, so its base URL is this folder's app; a sweep of another
+// worktree needs --url (design §7: each worktree runs its own app server). → null when no worktree swept, `{ missing }`
+// when the one that did cannot be found now, else the sweep.
 function lastSweep(ctx) {
-  const id = latestRunOf(ctx.led.state, ctx.stream);
-  if (!id) return null;
-  const dir = join(ctx.runsDir, id);
+  const st = ctx.led.state;
+  const kindOf = (run, s) => (st.folds || []).find(f => f.run === run && f.source === 'rule' && (f.stream ?? 'main') === s)?.kind;
+  const sweepOf = s => captureRuns(st, s).filter(r => kindOf(r, s) === undefined).pop() ?? null;
+  let stream = ctx.stream, id = sweepOf(stream);
+  if (!id) {
+    for (const s of [...new Set((st.folds || []).map(f => f.stream ?? 'main'))].sort()) { const r = sweepOf(s); if (r && (!id || byRun(r, id) > 0)) { id = r; stream = s; } }
+    if (!id) return null;
+  }
+  const here = stream === ctx.stream;
+  const dir = runDirOf(ctx, id, stream);
+  if (!here && !existsSync(join(dir, 'run.json'))) return { missing: true, id, stream };
   const meta = readJson(join(dir, 'run.json'), {}), manifest = readJson(join(dir, 'manifest.json'), {});
   const samplePaths = {}, seenAs = {};
   for (const s of Array.isArray(manifest.scenes) ? manifest.scenes : []) if (s && s.canary === undefined && typeof s.route === 'string' && typeof s.path === 'string' && !samplePaths[s.route]) samplePaths[s.route] = s.path;
@@ -128,7 +144,21 @@ function lastSweep(ctx) {
     if (looked(s)) seenAs[s.route].add(s.person);
   }
   const personsOf = Object.fromEntries(Object.entries(seenAs).map(([r, set]) => [r, [...set].sort()]).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
-  return { id, dir, meta, manifest, samplePaths, personsOf, persons: meta.scope?.persons || ['guest'], states: meta.scope?.states || ['normal'], baseUrl: manifest.baseUrl || null };
+  return { id, dir, stream, here, nunchiDir: dirname(dirname(dir)), meta, manifest, samplePaths, personsOf, persons: meta.scope?.persons || ['guest'], states: meta.scope?.states || ['normal'], baseUrl: manifest.baseUrl || null };
+}
+// The saved login the probes use: this folder's, else the one of the folder that captured the sweep. → a path or null.
+const authFor = (ctx, sweep) => [join(ctx.nunchiDir, 'auth.json'), ...(sweep && !sweep.here ? [join(sweep.nunchiDir, 'auth.json')] : [])].find(f => existsSync(f)) || null;
+// The recordings P0 snapshots: this folder's when it holds every person's, else those of the folder that captured.
+const recordingsFor = (ctx, sweep, persons) => { const own = join(ctx.nunchiDir, 'har'); return sweep.here || persons.every(p => existsSync(join(own, `${p}.json`))) ? own : join(sweep.nunchiDir, 'har'); };
+// The copy for a worktree whose app nunchi does not know (design §7).
+const OWN_SERVER = verb => `Start the app from this folder on a free port (e.g. \`PORT=3001 npm run dev\`), then ${verb} with \`--url http://127.0.0.1:3001\`.`;
+// The attempt checks the app at `url` from now on: refused when another live claim uses it (design §7), else the claim
+// and the record say so. → { rec } or { refusal }.
+function useUrl(ctx, rec, url) {
+  if (!url || !rec.claim?.token || originOf(url) === originOf(rec.url)) return { rec };
+  const m = moveClaimUrl(ctx.stateDir, rec.group, rec.claim.token, url, { now: ctx.deps.now() });
+  if (!m.ok && m.why === 'url') return { refusal: refusalFor(ctx, rec, m) };
+  return { rec: update(ctx.stateDir, rec, { url }, gen(ctx)) };
 }
 
 // Root-cause files, the routes that render them, and every file the group's routes render (design §4.6).
@@ -143,7 +173,7 @@ function causeOf(ctx, rows, sweep) {
   for (const r of rows) {
     const scene = r.examples?.[0];
     if (!scene || !r.lastSeen || !r.selector) continue;
-    const c = readJson(join(ctx.runsDir, r.lastSeen, scene, 'controls.json'), []);
+    const c = readJson(join(runDirOf(ctx, r.lastSeen, r.stream), scene, 'controls.json'), []);
     const hit = Array.isArray(c) ? c.find(x => x && x.selector === r.selector) : null;
     if (hit && typeof hit.name === 'string') names.set(r.fp, hit.name);
   }
@@ -264,7 +294,7 @@ export function planFixes(ctx, { url = null } = {}) {
   let approved = !profile || (!checks.length && !Object.keys(profile.serve || {}).length);
   try { if (profile && !approved) approved = approvedProfiles(scriptsApprovedPath(ctx.stateDir)).has(profile.hash); } catch {}
   if (profile && !approved && items.length) writeChecksRequest(ctx, profile);
-  const base = url || sweep?.baseUrl || null;
+  const base = url || (sweep?.here ? sweep.baseUrl : null) || null;
   writePlan(ctx.stateDir, { groups: items.map(i => i.group), branch }, { now: ctx.deps.now() });
   const lines = [];
   if (!items.length) lines.push('Nothing to fix: no group is decided Fix (decide in the board, or nunchi decide <id> fix).');
@@ -273,7 +303,7 @@ export function planFixes(ctx, { url = null } = {}) {
     items.forEach((i, n) => lines.push(`  ${n + 1}. ${i.severity.padEnd(7)} ${i.title} — ${i.routes.length ? i.routes.slice(0, 3).join(', ') + (i.routes.length > 3 ? ` +${i.routes.length - 3}` : '') : 'the whole app'} · fix in ${i.rootFiles.length ? i.rootFiles.join(', ') : 'the code that renders it'}${i.attemptsUsed ? ` · ${i.attemptsUsed} of ${MAX_ATTEMPTS} attempts used` : ''}${i.needsApproval ? ' · came through git: needs nunchi approve first' : ''}${i.notDoubleChecked ? ' · not double-checked' : ''}${i.routeless ? ' · no screen to re-check: fix by hand' : ''}  (group ${i.group})`));
     lines.push(checks.length ? `Checks nunchi runs before each fix is committed: ${checks.join(', ')}${approved ? ' (approved).' : ' — not approved yet: approve them in the board (a card shows the exact lines) or run `nunchi fix --approve-checks` in your own terminal.'}` : 'No build, typecheck, lint or test script: nunchi relies on re-capture.');
     if (dirty && dirty.length) lines.push(`Your working tree has ${dirty.length} uncommitted change${dirty.length === 1 ? '' : 's'}. Choose once: 1. commit them as "WIP before nunchi fixes" (recommended), 2. stash them, or 3. stop.`);
-    lines.push(base ? `The app must answer at ${base} (or start it with --serve dev|start), with the data the last capture recorded.` : 'Start the app and give its address with --url (never production).');
+    lines.push(base ? `The app must answer at ${base} (or start it with --serve dev|start), with the data the last capture recorded.` : sweep && !sweep.here && !sweep.missing ? OWN_SERVER('start') : 'Start the app and give its address with --url (never production).');
   }
   return out(0, lines, { plan: items, branch, dirty: dirty ? dirty.length : null, checks: { names: checks, approved, hash: profile?.hash ?? null }, url: base });
 }
@@ -304,6 +334,12 @@ async function startFixInner(ctx, id, opts = {}) {
   const said = [...r0.said];
   const rows = ctx.rows.filter(r => r.group === g.group);
   const tf = toFix(rows);
+  // an attempt open in another folder is another agent's fix (design §7): the claim's refusal, never "edit, then check"
+  if (rec && isOpen(rec) && rec.worktree && !samePath(rec.worktree, ctx.git.toplevel())) {
+    const c = readClaim(ctx.stateDir, g.group);
+    const claim = c && c.token === rec.claim?.token ? c : { declaredAgent: rec.agent, branch: rec.branch, worktree: rec.worktree };
+    return refuse([...said, refusalText({ why: 'group', group: g.group, claim }, { me: opts.agent || null, worktree: ctx.git.toplevel(), now: ctx.deps.now() })], { claim: 'group' });
+  }
   // an attempt that is open: resume a start that stopped half way; anything later says where to go on
   if (rec && isOpen(rec)) {
     if (!RESUME_START.has(rec.phase)) {
@@ -357,11 +393,14 @@ async function startFixInner(ctx, id, opts = {}) {
   }
   const sweep = lastSweep(ctx);
   if (!sweep) return refuse('No capture yet: nunchi capture --url <your local server> first.');
+  if (sweep.missing) return refuse(`The last capture (run ${sweep.id}) was made in another folder of this repository, which nunchi cannot find now: capture again (nunchi capture --url <your local server>) on the branch you ship from.`);
   const cause = rec?.scope ? null : causeOf(ctx, tf.fixing, sweep);
   if (!rec && !cause.groupRoutes.length) return refuse(`'${title}' belongs to the whole app, not to a screen nunchi can re-check: fix it by hand, then run a full capture.`);
-  // the address: --url, else the last capture's (this folder's app); a linked worktree runs its own server
-  const url = opts.url || rec?.url || (ctx.stream === 'main' ? sweep.baseUrl : null);
-  if (!url && !opts.serve) return refuse('Start the app from this folder on a free port (e.g. `PORT=3001 npm run dev`), then start with `--url http://127.0.0.1:3001`.');
+  // the address (design §7): --url, else the attempt's, else the last capture's when this folder captured it; a sweep of
+  // another worktree, or an attempt started in another one, needs this folder's own app server
+  const moved = rec && rec.worktree && !samePath(rec.worktree, ctx.git.toplevel());
+  const url = opts.url || (moved ? null : rec?.url) || (sweep.here ? sweep.baseUrl : null);
+  if (!url && !opts.serve) return refuse(OWN_SERVER('start'));
   let allowBaseHosts = [];
   try { allowBaseHosts = readConfig(ctx.nunchiDir).allowHosts; } catch (e) { return out(2, `nunchi: ${e.message}`); }
   if (url) { const no = baseUrlRefusal(url, allowBaseHosts); if (no) return out(2, `nunchi fix: ${no}`); }
@@ -374,7 +413,8 @@ async function startFixInner(ctx, id, opts = {}) {
     try { ok = approvedProfiles(scriptsApprovedPath(ctx.stateDir)).has(profile.hash); } catch (e) { return out(2, `nunchi: ${e.message}`); }
     if (!ok) { writeChecksRequest(ctx, profile); return refuse([...said, `Your check scripts (${[...checkNames, ...(opts.serve ? [opts.serve] : [])].join(', ')}) are not approved yet: approve them in the board (nunchi open shows a card with the exact lines), or run \`nunchi fix --approve-checks\` in your own terminal. nunchi never approves them for you.`], { checksRequested: true }); }
   }
-  const persons = sweep.persons.filter(p => p !== 'signed-in' || existsSync(join(ctx.nunchiDir, 'auth.json')));
+  const auth = authFor(ctx, sweep);
+  const persons = sweep.persons.filter(p => p !== 'signed-in' || auth);
   // ---- the attempt
   if (!rec) {
     const scope = { routes: cause.scopeRoutes, persons, personsOf: Object.fromEntries(cause.scopeRoutes.map(r => [r, sweep.personsOf[r] ?? persons])), viewports: ['d', 'm'], states: sweep.states };
@@ -382,6 +422,7 @@ async function startFixInner(ctx, id, opts = {}) {
       decision: { id: tf.decision.id, at: tf.decision.at ?? null, note: tf.decision.note ?? null }, try: attemptsUsed(ctx, g.group) + 1, base: head, startBranch: ctx.git.branch(), worktree: ctx.git.toplevel(), stream: ctx.stream,
       url: url || null, serve: opts.serve || null, agent: opts.agent || null, vendor: opts.vendor || null, allowHosts: opts.allowHosts || [], title,
       rootFiles: cause.rootFiles, rootFrom: cause.from, allowed: cause.allowed, routes: cause.groupRoutes, scope, samplePaths: sweep.samplePaths, personsOf: sweep.personsOf, sweep: sweep.id,
+      ...(sweep.here ? {} : { sweepDir: sweep.dir, sweepStream: sweep.stream }), auth, harFrom: recordingsFor(ctx, sweep, persons),
       fps: { rule: tf.fixing.filter(r => r.source !== 'ai').map(r => r.fp).sort(), ai: tf.fixing.filter(r => r.source === 'ai').map(r => r.fp).sort() },
     }, gen(ctx));
   }
@@ -409,7 +450,7 @@ async function startFixInner(ctx, id, opts = {}) {
   }
   const harDir = join(groupDir(ctx.stateDir, g.group), `${rec.attempt}-har`);
   if (rec.phase === 'snapshot') {
-    const snap = snapshotRecordings(join(ctx.nunchiDir, 'har'), harDir, rec.scope.persons);
+    const snap = snapshotRecordings(rec.harFrom || join(ctx.nunchiDir, 'har'), harDir, rec.scope.persons);
     if (snap.missing) { closeWith(ctx, rec, 'aborted', { kind: 'aborted', reason: 'no-recording' }); return refuse(`There is no recording of the app's data for ${snap.missing.join(', ')} (.nunchi/har): capture once with --network record, then fix.`); }
     rec = setPhase(ctx.stateDir, rec, 'baseline', { har: { shas: snap.shas } }, gen(ctx));
   }
@@ -419,6 +460,10 @@ async function startFixInner(ctx, id, opts = {}) {
     rec = setPhase(ctx.stateDir, rec, 'p0', { baseline: { pm: base.pm, results: trimResults(base.results), profile: profile?.hash ?? null } }, gen(ctx));
   }
   if (rec.phase === 'p0') {
+    // a resumed start given another --url: refused when another live claim uses it (design §7)
+    const u = useUrl(ctx, rec, opts.url);
+    if (u.refusal) return refuse([...said, u.refusal], { claim: 'url' });
+    rec = u.rec;
     const p = await probe(ctx, rec, 'P0', { url: opts.url || rec.url, serve: opts.serve || rec.serve, scope: rec.scope, harDir, profile });
     rec = currentRecord(ctx.stateDir, rec);
     if (p.error) { closeWith(ctx, rec, 'aborted', { kind: 'aborted', reason: 'p0', line: p.error }); return out(p.code || 1, [`Couldn't capture the screens before the fix: ${p.error}. Start your app, then tell your AI “retry”.`]); }
@@ -442,9 +487,9 @@ function closeWith(ctx, rec, phase, outcome) {
 
 // The brief for the current attempt (design §4.11), from the instances P0 (or the last sweep) shows.
 function briefFor(ctx, g, rows, rec) {
-  const run = rec.p0?.run || rec.sweep;
-  const manifest = readJson(join(ctx.runsDir, run || '', 'manifest.json'), { scenes: [] });
-  const findings = readJson(join(ctx.runsDir, run || '', 'findings.json'), { findings: [] }).findings || [];
+  const runDir = rec.p0?.run ? join(ctx.runsDir, rec.p0.run) : rec.sweepDir || join(ctx.runsDir, rec.sweep || '');
+  const manifest = readJson(join(runDir, 'manifest.json'), { scenes: [] });
+  const findings = readJson(join(runDir, 'findings.json'), { findings: [] }).findings || [];
   const scenes = new Map((manifest.scenes || []).map(s => [s.id, s]));
   const fps = new Set([...(rec.fps?.rule || []), ...(rec.fps?.ai || [])]);
   const inst = findings.filter(f => fps.has(f.fp)).map(f => ({ scene: scenes.get(f.scene) || {}, selector: f.selector, box: f.box, evidence: f.evidence }));
@@ -495,7 +540,7 @@ async function probe(ctx, rec, which, { url, serve, scope, harDir, profile, keep
     try { allowBaseHosts = readConfig(ctx.nunchiDir).allowHosts; } catch {}
     const r = await whileRenewing(ctx.stateDir, rec.group, rec.claim.token, () => captureProbe({
       capture: ctx.deps.capture, root: ctx.root, nunchiDir: ctx.nunchiDir, runsDir: ctx.runsDir, idsFile: ctx.idsFile, stream: ctx.stream, url: base, scope, samplePaths: rec.samplePaths || {}, harDir,
-      storageState: join(ctx.nunchiDir, 'auth.json'), allowHosts: rec.allowHosts || [], allowBaseHosts, browserPath: ctx.deps.browserPath,
+      storageState: rec.auth || join(ctx.nunchiDir, 'auth.json'), allowHosts: rec.allowHosts || [], allowBaseHosts, browserPath: ctx.deps.browserPath,
       fix: { group: rec.group, attempt: rec.attempt, probe: which, har: rec.har?.shas || {} }, canaries: 3, canarySeed: sha(`${rec.group}:${rec.attempt}:canaries`, 16), canaryRoutes: rec.routes,
       onStart: runId => { rec = update(ctx.stateDir, rec, { [which === 'P0' ? 'p0' : 'p1']: { run: runId, partial: true } }); },
     }));
@@ -516,6 +561,8 @@ async function checkFixInner(ctx, id) {
   let { rec, said } = reconcile(ctx, found.g.group);
   if (!rec || !isOpen(rec)) return refuse([...said, `No attempt of '${found.title}' is open: nunchi fix --start ${found.g.group} starts one.`]);
   if (!['started', 'checking', 'checked'].includes(rec.phase)) return refuse([...said, rec.phase === 'committed' ? `The fix is committed already (${short(rec.commit)}): nunchi fix --verify ${found.g.group}.` : `This attempt is ${rec.phase}: nunchi fix --start ${found.g.group} resumes it.`]);
+  // the checks run on the attempt's branch only (another folder may hold another agent's work, design §7)
+  if (rec.branch && ctx.git.branch() !== rec.branch) return refuse([...said, `This attempt is on branch ${rec.branch}, and this folder is ${ctx.git.branch() ? `on ${ctx.git.branch()}` : 'on no branch'}: run nunchi fix --checks ${found.g.group} where ${rec.branch} is checked out.`]);
   renewClaim(ctx.stateDir, rec.group, rec.claim.token, ctx.deps.now());
   const profile = checkProfile(ctx.root);
   const names = profile ? CHECK_SCRIPTS.filter(n => profile.scripts[n] !== undefined) : [];
@@ -561,6 +608,12 @@ export async function verifyFix(ctx, id, opts = {}) {
     if (!c.ok) return refuse(refusalFor(ctx, rec, c));
     rec = setPhase(ctx.stateDir, rec, 'committed', { claim: { token: c.token }, outcome: null, retried: (rec.retried || 0) + 1 }, gen(ctx));
   }
+  // design §7: a worktree other than the one the attempt started in runs its own app server, and a URL another live
+  // claim uses is refused
+  if (!opts.url && !opts.serve && !rec.serve && rec.worktree && !samePath(rec.worktree, ctx.git.toplevel())) return refuse([...said, OWN_SERVER('verify')]);
+  const u = useUrl(ctx, rec, opts.url);
+  if (u.refusal) return refuse([...said, u.refusal], { claim: 'url' });
+  rec = u.rec;
   const filtered = filterRefusal(ctx);
   if (filtered) return refuse([...said, filtered]);
   // the commit check: one commit on the base, the trailer, a clean tree, not the default branch
@@ -611,7 +664,7 @@ export async function verifyFix(ctx, id, opts = {}) {
     if (rec.phase !== 'p1') return out(0, [...said, `'${title}' changed while it was being re-checked (it is ${rec.phase} now): nothing more was done.`], { outcome: rec.phase });
     if (p.noProof) return finish(ctx, rec, { outcome: 'inconclusive', needsYou: 'c', reasons: [{ why: 'no-proof', text: p.noProof }] }, { title, said });
     if (p.error) return finish(ctx, rec, { outcome: 'inconclusive', needsYou: 'c', reasons: [{ why: 'p1', text: p.error }] }, { title, said });
-    rec = update(ctx.stateDir, rec, { p1: { run: p.runId, proof: p.proof, scope: scope1 } }, gen(ctx));
+    rec = update(ctx.stateDir, rec, { p1: { run: p.runId, proof: p.proof, scope: scope1, stream: ctx.stream } }, gen(ctx));
     return await judgeAttempt(ctx, rec, { g, title, said, p, harDir, base: p.base });
   } catch (e) {
     if (e.code !== 'RECORD_CHANGED') throw e;
@@ -621,7 +674,9 @@ export async function verifyFix(ctx, id, opts = {}) {
 
 // P0 against P1 → the verdict (the rule part now; the AI part after the re-check's verdicts).
 async function judgeAttempt(ctx, rec, { g, title, said, p, harDir, base }) {
-  const p0Dir = join(ctx.runsDir, rec.p0.run), p1Dir = p.runDir;
+  // P0 is in the worktree the attempt started in, P1 in this one (design §7: --verify may run in another, with --url)
+  const p0Dir = runDirOf(ctx, rec.p0.run, rec.stream), p1Dir = p.runDir;
+  const dirOf = run => (run === rec.p0.run ? p0Dir : join(ctx.runsDir, run));
   const p0 = probeView(readProbe(p0Dir), controlsReader(p0Dir)), p1 = probeView(readProbe(p1Dir), controlsReader(p1Dir));
   const rows = ctx.rows.filter(r => r.group === g.group);
   const pick = fps => rows.filter(r => fps.includes(r.fp)).map(r => ({ fp: r.fp, rule: r.rule, route: r.route, cells: r.cells || [] }));
@@ -637,7 +692,7 @@ async function judgeAttempt(ctx, rec, { g, title, said, p, harDir, base }) {
   if (second.length && ctx.deps.capture) {
     let allowBaseHosts = []; try { allowBaseHosts = readConfig(ctx.nunchiDir).allowHosts; } catch {}
     const byId = new Map(p1.scenes.map(s => [s.id, s]));
-    again = await recaptureScenes({ capture: ctx.deps.capture, scenes: second.map(id => byId.get(id)).filter(Boolean), url: base || rec.url, samplePaths: rec.samplePaths || {}, harDir, storageState: join(ctx.nunchiDir, 'auth.json'), allowHosts: rec.allowHosts || [], allowBaseHosts, browserPath: ctx.deps.browserPath });
+    again = await recaptureScenes({ capture: ctx.deps.capture, scenes: second.map(id => byId.get(id)).filter(Boolean), url: base || rec.url, samplePaths: rec.samplePaths || {}, harDir, storageState: rec.auth || join(ctx.nunchiDir, 'auth.json'), allowHosts: rec.allowHosts || [], allowBaseHosts, browserPath: ctx.deps.browserPath });
   }
   // the group's boxes on each screen, before and after (they are what the fix changes)
   const p1Controls = controlsReader(p1Dir);
@@ -666,13 +721,13 @@ async function judgeAttempt(ctx, rec, { g, title, said, p, harDir, base }) {
   const cache = new Map();
   const previous = { runId: rec.p0.run, manifest: readProbe(p0Dir).manifest, findings: readProbe(p0Dir).findings, canaries: readJson(join(p0Dir, 'canaries.json'), null) };
   const plan = R.planRecheck({ runId: p.runId, manifest: readProbe(p1Dir).manifest, rows: rows.filter(r => rec.fps.ai.includes(r.fp)), canaries: readJson(join(p1Dir, 'canaries.json'), null), previous, runFindings: readProbe(p1Dir).findings,
-    hasScene: (run, scene) => existsSync(join(ctx.runsDir, run, scene)), sameTree: !!p1Run.tree && workTree(ctx.root).tree === p1Run.tree,
+    hasScene: (run, scene) => existsSync(join(dirOf(run), scene)), sameTree: !!p1Run.tree && workTree(ctx.root).tree === p1Run.tree,
     fileHashOf: f => { const t = readSource(ctx.root, f, cache); return t === null ? null : sha(t, 16); },
-    filesOf: (run, scene) => R.RECHECK_FILES.filter(n => existsSync(join(ctx.runsDir, run, scene, n))), routeSource: route => (hashes[route] ? { hash: hashes[route], files: routeFiles[route] || [] } : null), stream: null });
-  R.writeRecheckMirror(p1Dir, ctx.runsDir, plan.mirror);
+    filesOf: (run, scene) => R.RECHECK_FILES.filter(n => existsSync(join(dirOf(run), scene, n))), routeSource: route => (hashes[route] ? { hash: hashes[route], files: routeFiles[route] || [] } : null), stream: null });
+  R.writeRecheckMirror(p1Dir, dirOf, plan.mirror);
   writeStable(join(p1Dir, 'recheck-packets.json'), plan.packets);
   writeKey(p1Dir, 'recheck-key.json', plan.key);
-  rec = setPhase(ctx.stateDir, rec, 'recheck', { recheck: { run: p.runId, plan: plan.key.plan, controls: plan.key.controls } }, gen(ctx));
+  rec = setPhase(ctx.stateDir, rec, 'recheck', { recheck: { run: p.runId, plan: plan.key.plan, controls: plan.key.controls, stream: ctx.stream } }, gen(ctx));
   if (!plan.packets.packets.length) return recordFixInner(ctx, g.group, []);
   const lines = [...said, `The rule checks of '${title}' are clean; its AI finding${rec.fps.ai.length === 1 ? '' : 's'} need${rec.fps.ai.length === 1 ? 's' : ''} a re-check from a fresh context:`,
     `${plan.packets.packets.length} packets → ${join(p1Dir, 'recheck-packets.json')}`,
@@ -689,7 +744,7 @@ async function recordFixInner(ctx, id, verdicts) {
   let { rec, said } = reconcile(ctx, g.group);
   if (!rec || rec.phase !== 'recheck') return refuse([...said, `No re-check of '${title}' waits for verdicts.`]);
   const R = await import('../recheck.mjs');
-  const p1Dir = join(ctx.runsDir, rec.recheck.run);
+  const p1Dir = runDirOf(ctx, rec.recheck.run, rec.recheck.stream ?? ctx.stream);
   const key = readKey(p1Dir, 'recheck-key.json');
   if (!key || key.plan !== rec.recheck.plan) return refuse(`The re-check's answer key is missing (${dirname(keyPath(p1Dir, 'recheck-key.json'))}): run nunchi fix --verify ${g.group} again.`);
   const packets = readJson(join(p1Dir, 'recheck-packets.json'), null);
@@ -765,7 +820,7 @@ function applyFold(ctx, rec) {
   const p1 = rec.p1?.run;
   const gone = rec.fps.rule || [];
   const rechecks = (rec.recheck?.results || []).filter(x => rec.fps.ai.includes(x.fp));
-  commitFix(ctx.led.st.files.ledger, s => foldFix(s, { run: p1, stream: ctx.stream, key: sha(stableJson({ group: rec.group, attempt: rec.attempt, gone, rechecks }), 16), group: rec.group, gone, rechecks, now: ctx.deps.now() }), { generation: ctx.generation });
+  commitFix(ctx.led.st.files.ledger, s => foldFix(s, { run: p1, stream: rec.p1?.stream ?? ctx.stream, key: sha(stableJson({ group: rec.group, attempt: rec.attempt, gone, rechecks }), 16), group: rec.group, gone, rechecks, now: ctx.deps.now() }), { generation: ctx.generation });
   const done = setPhase(ctx.stateDir, rec, 'fixed', { outcome: { kind: 'fixed', ...(rec.outcome?.kind === 'fixed' ? rec.outcome : {}) } }, gen(ctx));
   if (rec.claim?.token) releaseClaim(ctx.stateDir, rec.group, rec.claim.token, { generation: ctx.generation });
   return done;
@@ -806,7 +861,7 @@ function doRevert(ctx, rec, why, { cancelWord = null, quiet = false, title = rec
 }
 function finishRevert(ctx, rec, revertSha, lines, { cancelWord = null, title = rec.title || 'this finding' } = {}) {
   if (rec.phase === 'undoing') {
-    if (rec.folded) commitFix(ctx.led.st.files.ledger, s => unfoldFix(s, { run: rec.p1.run, stream: ctx.stream }), { generation: ctx.generation });
+    if (rec.folded) commitFix(ctx.led.st.files.ledger, s => unfoldFix(s, { run: rec.p1.run, stream: rec.p1.stream ?? ctx.stream }), { generation: ctx.generation });
     closeWith(ctx, rec, 'undone', { ...(rec.outcome || {}), kind: 'undone', revert: revertSha, line: `Undid the fix of '${title}' (commit ${short(rec.commit)} reverted by ${short(revertSha)}). It is to fix again.` });
     lines.push(`Undid the fix of '${title}' (commit ${short(rec.commit)} reverted by ${short(revertSha)}). It is to fix again.`);
     return;
