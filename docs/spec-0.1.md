@@ -443,6 +443,24 @@ line has none. (6) "No progress for 10 minutes" moved from M5's "more than 10 mi
 owner's words hold at 10:00. (7) `findings` no longer prints "run N is a quick first look … no full check is running":
 the owner's line says it.
 
+*Tested (M5b).* `test/board-m5b.test.mjs`: each line with a fixture that triggers it and one that does not (a first
+look with and without a capture after it; a capture with and without progress; a stall at 9:59.999 and at 10:00 with an
+injected clock, a writer gone, another machine's writer, a folder without a progress file), the verdict while stopped,
+the same words on `/api/summary`, `/api/coverage` and `findings`, the live version changing by the clock alone, and the
+wall's fields; `test/board-m5b-e2e.test.mjs` (Chromium): the chips light at 1440 px and dark at 390 px (4.5:1 or more,
+measured in one evaluation, axe with no violation, no sideways scroll), their accessible names, Enter on a page not
+opened (keys by `code`), forced colours, and a capture that stops reaching an open board's Progress and Coverage by
+itself. `test/quick-cli.test.mjs` checks a real first look's `flow.json` and its line.
+
+*Measured (M5b, 2026-10-15 KST, this development container, shared with other sessions).* On the merged head
+`54ecffa` (M4 merged in): 742 tests on Node 22.22.0 (18:20–18:26), on Node 24.21.0 (18:26–18:34) and on Node 22 with
+bun off `PATH` (18:42–18:50), Chromium included: 741 pass and 1 skipped (Windows only) each time; `npm run
+validate:plugin` passes; `node bench/run.mjs --twice` (18:59–19:04) unchanged: rule recall 34/34, 0 false positives on
+8 clean scenes, determinism identical (1,141 files), fingerprints 100% (52/52), 176.7 s per capture. An attempt at
+18:50–18:56, with the load average near 30 on 4 CPUs, found 22 screens of the replay run unreachable (browser error
+pages), so its evidence differed; the rerun on a quieter machine is the result. Before the merge (18:14–18:19) the bench
+was the same, at 153.4 s per capture.
+
 **Skill.** A first look, then the full check: `capture --quick`, `findings`, `open`, then `capture`; the chat reports
 only what those print (§1, design §6).
 
