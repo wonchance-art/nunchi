@@ -140,12 +140,21 @@ export function pacScript({ appHost, proxyServer, allowHosts = [] }) {
 }`;
 }
 
+// A browser path (--browser-path, NUNCHI_BROWSER) that names no file, said before Playwright is asked: Playwright
+// makes a profile folder and an artifacts folder in the system's temporary folder before it looks for the executable,
+// and leaves both there when it is missing (playwright-core 1.63). → the reason, or null.
+export function missingBrowser(executablePath) {
+  return executablePath && !existsSync(executablePath) ? `no browser at ${executablePath}` : null;
+}
+
 export async function launch({ browserPath, baseUrl, allowHosts = [] } = {}) {
   const executablePath = browserPath || process.env.NUNCHI_BROWSER || undefined;
   const proxyServer = process.env.HTTPS_PROXY || process.env.https_proxy || null;
   const appHost = baseUrl ? new URL(baseUrl).hostname : 'localhost';
   const pac = 'data:application/x-ns-proxy-autoconfig;base64,' + Buffer.from(pacScript({ appHost, proxyServer, allowHosts })).toString('base64');
   try {
+    const missing = missingBrowser(executablePath);
+    if (missing) throw new Error(missing);
     return await chromium.launch({ executablePath, args: [
       `--proxy-pac-url=${pac}`,
       '--font-render-hinting=none', '--disable-gpu', '--hide-scrollbars',

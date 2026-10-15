@@ -8,6 +8,7 @@ import { createServer } from 'node:http';
 import { readFileSync, readdirSync, statSync, writeFileSync, cpSync, existsSync } from 'node:fs';
 import { join, relative, extname } from 'node:path';
 import { capture, launch, isSignInPath } from '../src/capture.mjs';
+import { login } from '../src/login.mjs';
 import { tmp } from './fixtures/tmp.mjs';
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript' };
@@ -130,6 +131,18 @@ test('signed-in scenes without a saved login fail loudly instead of capturing as
     capture({ baseUrl: 'http://127.0.0.1:9', scenes: [{ route: '/', path: '/', person: 'signed-in' }], out: tmp('nunchi-x-'), storageState: '/nope/auth.json' }),
     e => e.code === 'NO_AUTH',
   );
+});
+
+test('a browser path that names no file is refused before Playwright is asked: it would leave its profile and artifacts folders behind', async () => {
+  const missing = join(tmp('nunchi-no-browser-'), 'no-such-browser');
+  // the folder Playwright makes its own in (os.tmpdir() is read at each call)
+  const own = tmp('nunchi-launch-tmp-'), saved = ['TMPDIR', 'TEMP', 'TMP'].map(k => [k, process.env[k]]);
+  for (const [k] of saved) process.env[k] = own;
+  try {
+    await assert.rejects(launch({ browserPath: missing }), e => e.code === 'NO_BROWSER' && e.message.includes(`(no browser at ${missing})`));
+    await assert.rejects(login({ url: 'http://127.0.0.1:9/', out: join(own, 'auth.json'), browserPath: missing, waitForEnter: false }), e => e.code === 'NO_BROWSER' && e.message.includes(`(no browser at ${missing})`));
+  } finally { for (const [k, v] of saved) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+  assert.deepEqual(readdirSync(own), [], 'nothing left in the temporary folder');
 });
 
 test('a sign-in page is recognised by its path, whatever the query or fragment', () => {
