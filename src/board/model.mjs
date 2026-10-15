@@ -364,7 +364,7 @@ export function groupList(model, { status = 'open', lens = null, q = null, group
   };
 }
 
-const sceneOut = s => (!s ? null : {
+export const sceneOut = s => (!s ? null : {
   key: s.key, run: s.run, id: safe(s.id, 200), route: safe(s.route, 200), person: s.person, state: s.state, viewport: s.viewport, h1: safeOrNull(s.h1, 120),
   label: safe(sceneLabelText(s), 80), status: safe(s.status, 40), reason: safeOrNull(s.reason, 120), redirected: s.redirected,
   finalPath: s.finalPath ? safe(redactUrl(s.finalPath), 200) : null, finalOrigin: safeOrNull(s.finalOrigin, 200),

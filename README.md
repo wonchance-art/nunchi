@@ -49,8 +49,10 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
 - **One line per problem, not per screen**: findings are fingerprinted and grouped, so a shared component's
   defect on 17 screens is one row (`nunchi findings`); your decisions (`nunchi decide <id> fix|keep|…`) are small
   files you commit, and what got fixed or came back is computed from the next capture
-- **A live board** (`nunchi open`): the verdict ("Ready to ship?"), every finding with its screenshot, all screens,
-  and one-key decisions with undo, in your browser, updated as captures land. It listens on 127.0.0.1 only, and a
+- **A live board** (`nunchi open`): the verdict ("Ready to ship?"), every finding with its screenshot, all screens
+  (one at a time, both widths side by side, compared with the last full check), what was and wasn't checked
+  (Coverage: every page × visitor/signed in × desktop/phone, each gap with the one sentence to tell your AI), and
+  one-key decisions with undo, in your browser, updated as captures land. It listens on 127.0.0.1 only, and a
   one-time link gives your browser a key held in memory; your AI never sees it. Decisions your AI records from chat
   are shown, but a *keep* or *not a problem* counts only once you confirm it there. In Claude Code the plugin's hook
   also keeps the AI's tools out of nunchi's state, keys and board. The hook matches paths and words, and neither it
@@ -104,7 +106,8 @@ The checks were tuned on this app once; a second, held-out app is what the 0.1 g
 빈 데이터 · 오류 · 느림 · 끊김 상태까지 찍어서 깨지거나 어긋난 곳을 찾고, 결함마다 증거(요소 · 화면 위 위치 · 측정값 ·
 파일:줄)를 붙입니다. AI 코딩 도구로 웹앱을 만들고 테스트는 쓰지 않는 사람을 위해 만듭니다.
 
-**미리보기(0.0.2).** *찾기*, 진행판(`nunchi open`, 내 브라우저에서 결정), 그리고 고치기(`nunchi fix`)까지 됩니다. AI가
+**미리보기(0.0.2).** *찾기*, 진행판(`nunchi open`, 내 브라우저에서 결정하고, 무엇을 확인했고 무엇을 못 했는지와 그때
+AI에게 할 한 문장까지 봅니다), 그리고 고치기(`nunchi fix`)까지 됩니다. AI가
 고친 것은 별도 브랜치에 결함 하나당 커밋 하나로 남고, 다시 찍어서 결함이 사라지고 다른 곳이 깨지지 않았을 때만 고쳐진 것으로
 칩니다(고치기 게이트는 아직 측정 전). 빠른 첫 보기(`nunchi capture --quick`)는 핵심 화면 최대 8개를 먼저 보여
 주고, 결론은 이어지는 전체 검사가 끝난 뒤에 냅니다(그 전까지 진행판은 「Too early to say」).

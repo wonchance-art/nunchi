@@ -1612,7 +1612,8 @@ the focus through a redraw.
 ## 7. Progress board and exports (0.1-c)
 
 Local server (`nunchi open`, built in M2: §7.2) that watches the ledger and redraws live. Views: progress · findings board ·
-finding detail · coverage map · design system · screen wall · states & messages · copy groups.
+finding detail · coverage map · design system · screen wall · states & messages · copy groups (the coverage map and the
+screen wall with Screen detail: M7, §7.5).
 Keyboard: J/K move, F fix, W keep, X false positive, S hold; batch decisions by root cause, kind or lens (H13).
 
 | Metric | Computed from | Helps decide |
@@ -1804,7 +1805,8 @@ lens and plain substring asked, by `kind` | `file` | `screen` | `lens`; AI group
 sections; and every group of the ledger by id, so the page can update rows it shows whatever they match now),
 `GET /api/groups/:id` (instances with their screen, box and whether it can be drawn; screens with evidence
 addresses; evidence details; decisions on the group or its fingerprints with how each was made; code location),
-`GET /api/screens` (the latest run's screens with the export's badges and numbered findings),
+`GET /api/screens` (the latest run's screens with the export's badges and numbered findings; M7 adds `GET /api/coverage`
+and `GET /api/screens/:run/:scene`, §7.5),
 `GET /evidence/…`, `POST /api/decide`, `POST /api/undo`, `POST /api/confirm`, `POST /api/approve-checks`,
 `POST /api/fix-accept {group, attempt}` (the fix loop's [Looks fine, mark fixed], §6.6), `POST /api/fix-undo {group,
 attempt}` (the fix loop's [Undo this fix], `fix --undo`'s safe revert; 409 with `stale`, or `refused` (not-head,
@@ -1931,7 +1933,8 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   buttons sit in one row without their sub-labels and the toast is on one line, still 44 px each: the dock takes 16%
   of a 640 × 360 window, 32% with the toast (32% and 51% before); tested at 640 × 360 and 800 × 420, measured in
   one evaluation.
-- *Views:* only Progress, Findings (and Detail) and Screens; "More views in 0.2" lists the commands that show the rest.
+- *Views:* only Progress, Findings (and Detail) and Screens, and since M7 Coverage and Screen detail (§7.5); "More views in
+  0.2" lists the commands that show the rest.
   It and "Keys (?)" are at the foot of the sidebar, and in the header on a phone (≤ 760 px), 44 px each.
 - *Words:* one table (`shared.mjs`), English. Decision times show as relative or local; files keep KST. The main
   button's "Decide N" is the number the verdict says is to decide when it says one (blocker and high; they come first
@@ -2041,8 +2044,219 @@ beside it; 438 tests on Node 22.22.0 and on Node 24.21.0, Chromium included.
   send any value in that range, so the metric is the person's own record, not a proof.
 
 **Not done in M2:** the fix loop's states and probe runs hidden from `runs` came with M3 (§6.6); Coverage and
-Screens beyond the wall (M7) are later milestones; label pools from the gate harness (G); Korean words (the table is
+Screens beyond the wall came with M7 (§7.5); label pools from the gate harness (G); Korean words (the table is
 ready).
+
+### 7.5 Coverage and Screens (built 2026-10-15 KST, design 0.1-c §3, §12 M7)
+
+Two views of the live board, from the text mock-ups the owner approved on 2026-10-15 KST with every recommendation
+(D1–D5 below). They show only what the engine already writes (the run's `manifest.json`, `run.json`, `flow.json`,
+`coverage.json`, `hunt-plan.json`, `ai-findings.json`, the ledger and the fix records): nothing new is captured or
+judged. Server: `src/board/coverage.mjs`, `src/board/screens.mjs`; page: `src/board/assets/coverage.js`,
+`src/board/assets/screens.js` (modules of the page's script; the wall moved out of `board.js`); their stylesheet
+`src/board/look-views.mjs`, served after the shared one, so the export's bytes do not change; the mock-up's words (its
+§5) in the one strings table (`shared.mjs` `COVERAGE`, `SCREENS`, `MARKS`, the help sections).
+
+**Decisions (owner, 2026-10-15 KST).** D1: the coverage map on desktop, a list below 760 px (a phone, 200% zoom). D2: AI
+cells count only on checked screens ("400 of 440 cells on checked screens"), so a screen that did not load is counted
+once, under Screens checked; Progress's AI line counts the same (it divided by every cell of `coverage.json` before,
+canary copies and screens that never loaded included). D3: the "Tell your AI “…”" sentences that need a skill step ship
+with it (the skill's "What the board's Coverage view tells the user to say"): "review what the AI budget skipped" is
+`hunt --plan --budget <planned + cut>` after the person's yes, "finish the AI review" answers the units not answered or
+incomplete again and records them (these three on the run the AI reviewed: `--run <id>`), "capture <route> too" is
+`capture --routes /<route>`, which the skill says makes a partial run that leaves the page listed as not opened in the
+full check (discover never resolves it). D4: Screens is a viewer: no decision key (F, W, X, S, Z) works there; Enter
+opens the finding, decided in Finding detail, and Esc there comes back to the screen. D5: the 0.2 views come in this
+order: AI trust, States & messages, the trend per run; none is in M7.
+
+**Which run.** Coverage shows the run Progress's verdict rests on: the last full check when there is one, else the
+latest capture. A newer capture is noted in the view's own words, and the full check's gaps stay: a first look (M5,
+§2.6) with "First look: N key screens, rule checks only · the full check isn’t done yet" (or the summary's line while
+the full check after it runs), a partial run (`--routes`, `--changed-since`) with "Run 0005 · Not a full check: only
+the pages asked for. Whole-app checks can’t mark anything fixed.". A link to a screen the run shown does not have
+("Coverage on this screen ▸" from a newer capture) says "This screen isn’t in run 0004." with nothing selected. With no
+full check yet, the latest capture is shown as it is. The wall and Screen detail show the latest capture, compared
+with the last full check.
+
+**Coverage (`#/coverage`, `#/coverage/<run>/<scene>` with a cell's panel open).**
+- *Totals:* Screens checked (captured at their own address: the verdict's count, `summary.mjs` `checkedScene`,
+  imported), AI looked at N of M cells on checked screens (none on a canary copy; M is, per checked screen, the loaded
+  AI lenses whose pack's `scenes` match it, `hunt.mjs` `matches`, so a hunt of some lenses never reads as a full look: a
+  lens it left out is "Not checked: not in this hunt"; Progress's line is this same count, with "AI review: run N (not
+  this run)" when the AI reviewed another run than its panel's), Pages opened (`flow.json` nodes captured, of those plus
+  the routes discover could not resolve, `run.json unresolved`), Whole-app checks ("Ran over the whole app: links,
+  one-off styles, secrets in the bundle", or "Not a full check: <why>. Whole-app checks can’t mark anything fixed."), AI
+  review ("run 0012 · 8 lenses · budget 400,000 tokens (the default)").
+- *What wasn’t checked, and what to do:* one row per gap, in this order: run problems → screens that did not load (by
+  reason; the ones a run problem covers are in its row) → the AI review not run (or run on an older run) → a hunt of
+  some lenses only → AI cells that don't count (one row per missed canary's batch: a lens on a route) → the budget (with
+  "The rest needs about N more tokens.", `estimate.cut` rounded to thousands, only when the plan beside the record is
+  the plan it answers) → not answered, incomplete → pages not opened (needs a sample, could not be resolved) → not a
+  full check (`--routes`, `--changed-since`; the other causes have rows of their own) → states not captured → open
+  findings not looked at since run N (the ledger's `notLookedAt`, each with [Open finding]) → "Usually fine": redirects
+  inside the app, screens that left it. A row: a mark, the count and kind, where (lens, pages), why, the sentence,
+  [Copy] (named with the words to say, "Copy “capture again”"; it copies those words; a route in them is app data, put
+  in backticks without control characters or quotes: "hunt L6 on `/cart` again") and [Show on map] (sets State, Checks
+  and "Gaps only" for that row's cells, moves the focus to the first and says how many pages hold them). No saved login
+  is a muted line with `nunchi login …` to copy, not a gap. A run that could not tell what was fixed, and a
+  `coverage.json` the board cannot use, are warning lines at its top.
+- *Map:* pages in the wall's order (`flow.json`), then those not opened; columns person × width (Visitor·Desktop …) and
+  "Other states" (the page's other screens counted by mark). A cell is a mark and a word: ● looked at fully, ◐ partly,
+  ○ rules only, ✕ not checked (with why: "sent to /login"), · not captured here; the marks are drawn in a symbol font
+  and repeat in colour, never colour alone. Checks: "Rules + every AI lens" (AI lenses that looked, of those that apply:
+  "6 of 7"), "Rule checks" (✓ Checked), or one AI lens (● Looked, ✕ with the reason, · Doesn’t apply here). State
+  "All" counts each person × width cell's screens by mark. The cell's panel (right of the map at 1280 px and wider with
+  one state, below it otherwise): the rule checks, each AI lens in words ("Looked · 1 finding" from `ai-findings.json`,
+  "Doesn’t count: the AI missed a test defect nunchi planted on /cart", "Looked · couldn’t judge 1 question" from the
+  unit's answers), what is open there with [Open this screen], and the cell's sentence. A redirect says it is judged
+  as its page, in that page's row; a "·" cell says nunchi forces empty, error, slow and offline only where the page
+  loads data, and offers no sentence.
+- *By lens:* each lens's rule checks (engine constants: per screen, state pairs, the link graph, the design system,
+  the bundle, parity pairs; a test pins the table against the files that emit rule findings) beside its AI cells on
+  checked screens, with what was not checked and why.
+- *States:* "Loading coverage…", then the view; coming back to it, the last one with "Updating…"; nothing captured; a
+  capture running (banner: the summary's captures whose writer is still there, M5); a first look (above; on the wall
+  too), its line in place of the banner for the full check after it, as Progress says it (both follow the board's
+  version); a first look with no full check before it, shown as it is: no AI cell of another run on its screens, no
+  sentence to run the AI review (it hunts the full check), and the gaps the full check settles (states, pages not
+  opened, the AI review) are not listed; the AI review not run (every checked cell ○, the meter replaced by the
+  sentence); the AI review of an older run (its cells for this run's screens, with "changed since the AI looked" where
+  pixels or text differ); "Everything in this run’s scope was looked at."; "No page has a gap."
+- *Keys and accessibility:* the map is a `role=grid` table (`aria-rowcount`, `aria-colcount`, `aria-readonly`, row
+  headers, `aria-selected` on every cell) with one tab stop: arrows, Home/End, Ctrl+Home/End, J/K to the next or
+  previous cell of a person × width with a gap (anything but ● and ·; never "Other states" or a page not opened), Enter
+  or Space for the panel (its `h3` heading, under the map's `h2`, takes the focus; the lenses come before what is open
+  and what to say), Esc back to the cell. Each cell's accessible name is the whole sentence
+  ("/cart, Signed in, Desktop, Normal: partly. AI 6 of 7. L6 doesn’t count: …"); the marks are hidden from assistive
+  technology. Filters are `seg-b` groups and a native `select`; a change says "Showing 6 pages with gaps" politely. The
+  list is native disclosures, 44 px each, each page's status said in words; a cell opens the same panel under its
+  page; Close returns to the cell. Grid or list goes by the view's own width (below 760 px: a phone, 200% zoom, and a
+  768 px window, whose sidebar takes its part), redrawn when it crosses; column headers break between who and width,
+  never inside a word.
+  The view follows the live update in place (the focus stays on its cell).
+
+**Screens.**
+- *The wall:* counts on each filter's buttons (the screens that value would show under the other filters), Show (All,
+  Open findings, Not checked, Changed since run N: pixels or text differ from the same screen in the last full check
+  before the latest run; hidden without one), search (`/`: a plain substring of the route and the page name), page groups
+  as headings (`flow.json` groups; single pages under "Pages"), "N shown of M", a card line with the AI cells ("AI 6 of
+  7", "Rules only", "AI not checked: budget") and "Changed", "No screen matches these filters." with [Clear filters].
+  One tab stop (roving focus): arrows by position, Home/End, J/K, Space for the quick look (the focus stays on the
+  card), Enter for Screen detail; Width, Who, State and Show are named beside their buttons; on a phone the filters
+  are `select`s. The quick look gains [Open this screen ↵]. J/K
+  walk the wall in the order it shows it (page groups).
+- *Screen detail (`#/screens/<run>/<scene>`, the latest run's screens):* the badge, a coverage line ("Rule checks ✓ · AI
+  2 of 3 lenses (L6 doesn’t count) · Changed since run 0009", so "clean" is never read as "fully looked at") and
+  "Coverage ▸"; Width (Desktop, Phone, Both), State, Who, Whole screen and Compare in one `role=toolbar`; the screenshot
+  (the first view, taller when a box sits lower; 0 for the whole screen) with the findings of the page (route, person,
+  state) numbered by group, so the same defect has the same number on both widths and in the wall's quick look (said
+  under the images when both widths show); markers whose boxes overlap by IoU 0.5 or more, or whose numbers would sit
+  closer than a marker (24 px on screen, measured once the screenshot is laid out and again when its size changes), are
+  one stacked marker; the list ("Rule · Open · Desktop, Phone · also on 3 other screens", "Not outlined: …"), "Fixed
+  here since run N" (items gone after the last full check whose last sightings were on this page), "Same page, N other
+  screens" (a list of links, 44 px each). A screen that was not checked shows no image: "Not checked: sent to /login. It
+  is judged as /login." with [Open /login]. Compare: Off → the last full check ("Unchanged since run N (same pixels and
+  text)" and no slider when the hashes match; "Not captured in run N") → each fix attempt's probes P0 → P1 ("After
+  (attempt 2, undone)"; "The screens of this fix were removed (nunchi gc)"), as the fix loop's slider or side by side;
+  the choice is kept while walking. Keys: J/K (the wall's filtered order, said politely: "Your cart, Signed in · Desktop
+  · Error: 1 high. 37 of 40."), V, B, [ ], 0, C, 1–9 (the finding focused, its box drawn thicker with its number
+  inverted), Enter, Esc (back to the wall, the focus on its card; back from a finding opened here, the focus on its
+  link). After a new run it follows its screen, or says "This screen isn’t in run N." with the focus on that heading.
+
+**API.** `GET /api/coverage` → `{ run, kind, fullCheck, wholeApp, quick { run, screens, text }, newer { run, text },
+scope, health, ai: { run, latest, older, error, last, lenses, names, budget, budgetDefault, estimate }, totals,
+wholeLine, aiLine, gaps[], fine[], muted[], warnings[], routes[{ route, name, opened, why, whyText, cells[{ key, id,
+route, person, viewport, state, checked, why, ai: { run, seen, of, lenses[{ lens, name, status, reason, answers,
+findings, text }] }, open, changed?, say }] }], byLens[], running }`; `/api/summary`'s `ai.coverage` is `{ cells, seen,
+budget, run, aiRun }`, Coverage's count. `GET /api/screens` gains per screen `checked`, `changed`, `ai { seen, of,
+budget }`, `group`, `open`, and `baseline`, `quick` and `groups`. `GET /api/screens/:run/:scene` (the latest run only;
+ids checked; 404 otherwise) → `{ run, key, id, scene, baseline, page, widths, findings[{ group, n, …, viewports, others,
+at }], fixedHere[], compare[{ kind, id, label, per | gone }], coverage, siblings[], judged }`. Strings go out through
+`safe()` as everywhere. The live version also names the `coverage.json` of every run (its size and modification time: a
+coarse file-system clock can leave the time as it was): `canaries --score` rewrites it without a ledger write, so a
+voided batch shows without a generation bump (the mock-up's §9 open point, settled here).
+
+**Board fixes the mock-up found.** Markers of boxes that overlap by IoU 0.5 or more are one stacked marker ("1 2"), so
+① is never hidden under ② (`shared.mjs` `stackMarks`; the wall's quick look and Screen detail; the export is unchanged);
+"Screens checked N of M" links to Coverage; "More views in 0.2" no longer lists the Coverage map; Progress's AI line
+is D2's count, with "Coverage ▸"; Finding detail links to the screen's coverage ("Coverage on this screen ▸").
+
+**Review of PR #35 (2026-10-15 KST).** Coverage shows the run of the verdict and notes a newer one (Which run, above);
+AI cells count every applicable loaded lens; Progress and Coverage count AI cells by one rule; routes in copied
+sentences are data in backticks; redirects are said by their path, without the query; a page sent elsewhere on every
+screen is named by its route; the totals keep every row stacked on a narrow window; the map's layout goes by the
+view's width; forced colours keep the selected cell, the segmented buttons' edges and the markers; the pressed
+segmented button has a 3:1 edge; one numbering for the quick look and Screen detail; markers of a small element
+inside another stack; J/K skip "Other states" and pages not opened; [Show on map] counts the row's pages; the phone
+list's status is read; Esc from a finding comes back to its link; one width caption under compare; the cell panel's
+heading is an `h3` and its lenses come before what to say; the grid is `aria-readonly` with `aria-selected` on every
+cell; the wall names its groups on screen; "N AI cells not checked: the AI’s answer was incomplete"; the live version
+reads every run's `coverage.json` by size and time; `SPEND_ORDER`, `matches` and `checkedScene` are imported from
+`hunt.mjs` and `summary.mjs`; the skill passes `--run <the AI run>` and `/profile/edit` with its slash.
+
+**Choices the mock-ups left open (the smallest consistent one each).** Gap rows that the mock-up shows once are one row
+per kind (per batch for missed canaries, per run for findings not looked at, up to five findings each); "N AI cells not
+checked: the AI’s answer was incomplete"; "L5 and L4 come last" when the budget cut several lenses; "N screens didn’t
+load: <reason>" for the other capture reasons; "N screens left the app (<origin>)" as a "Usually fine" row; the run
+problem rows have no "where"; a lens with a pack the hunt left out says "— not in this hunt", and the AI column says "—"
+when the AI review has not run; "None" for nothing open in a cell's panel; the AI review line says "no token budget" for
+`--budget all`; State "All" counts by mark in each cell and lists every state in the panel; the "Other states" cell is
+read, not opened; J/K are the grid's on desktop (the phone list is native disclosures); Space on a card shows the quick
+look at any width (the panel is where the layout puts it); Screen detail's default image is the first view, taller when
+a box sits lower (no outlined finding is cut off), and compare uses the first views; the AI finding's line in Screen
+detail drops the mock-up's stray "next"; widths are said "Desktop, Phone" or "Phone only" (one wording); the Screens and
+Coverage keys are sections of the existing help dialog; a screen's siblings come with Screen detail's answer, not on
+every card of `/api/screens`; Esc leaves the compare slider first (as any field), then the view; the phone's map legend
+has the desktop's words (one legend; the phone mock-up shortens them to "fully", "partly"), and Screen detail says
+"Previous (K)", "Next (J)" and its whole coverage line at every width (the phone mock-up has "K Prev", "Next J" and "AI
+2 of 3"); the footnote's marks are drawn in the map's symbol font, as the legend's; "capture <route> too" stays the
+sentence for a page discover cannot resolve (the smallest honest option: a sample cannot resolve it, capture skips such
+a route before it reads samples), and the skill says the page stays listed as not opened in the full check; a link to a
+screen of another run says the existing "This screen isn’t in run N."; the pressed segmented button has a 2 px inset
+edge in ink-2 (M2's controls too).
+
+**Tested.** `test/board-m7-words.test.mjs` (the words, the marks, stacked markers, the first view),
+`test/board-coverage.test.mjs` (the API on the synthetic app "Leafy", `test/fixtures/coverage-project.mjs`: totals,
+gaps and their order, cells, the AI review not run, older or unusable, scope gaps, the live version, a quick first
+look with and without the full check running after it, Screens' fields and Screen detail, the rule-check table against
+the engine), `test/board-coverage-e2e.test.mjs` and
+`test/board-screens-e2e.test.mjs` (the keyboard paths above, axe with no violation light at 1280 px, dark at 390 px
+and at 1440 px, and at 200% zoom as 640 × 450 at 2× (the map a list, Screen detail's list under its image), 44 px
+targets, no sideways scroll at 390 px, reduced motion, no decision key in Screens, a screen gone after a new run, a
+first look on both views),
+`test/board-m7-a11y.test.mjs` (what axe does not measure, light and dark: the map's marks as text at 4.5:1 or more,
+a selected cell's too, since axe skips text hidden from assistive technology; at 3:1 or more the focus rings of a
+cell, a phone row, a card, a finding and the toolbar, the selected cell's bar, the meters, the markers and the list's
+numbers; and the focus never falls to the page through filters, Copy, Show on map, live redraws, Clear filters,
+decision keys on the wall and moving between screens), `test/board-m7-review.test.mjs` (the review's fixes in a
+browser: stacked markers of a nested small element at 1440 and 390 px, one numbering, the totals at 200% zoom, list
+or grid by the view's width at 640, 768 and 1024 px with no header word broken, forced colours, J/K, the grid's
+semantics, the panel's order, the wall's group names, 44 px sibling links, one caption under compare, Esc back to the
+finding's link, Progress's line for an older AI run). Every measurement is one evaluation (a live redraw detaches
+handles); keys are read by their place (`e.code`: on a Korean layout J, K, B, V and C still walk the map, the wall
+and Screen detail); the security tests cover the new assets and endpoints.
+
+**Measured (2026-10-15 KST).** At `c6a4bc4` (14:37–15:01): 589 tests on Node 22.22.0, on Node 24.21.0 and on Node 22
+with bun off `PATH`, Chromium included, 588 pass and 1 skipped (Windows only); Pebble `node bench/run.mjs --twice`
+unchanged (rule recall 34/34, 0 false positives on 8 clean scenes, determinism identical with 1,141 files, fingerprints
+100% with 52/52). CI on macOS then failed one test: it changed the Checks select with ArrowDown, which opens the menu
+there instead of changing the value (Linux and Windows change it); the test now chooses the option as the menu does, its
+assertion unchanged. After the merge of M5 and the review's fixes, at `576c61e` (15:52–16:23): 655 tests on Node
+22.22.0, on Node 24.21.0 and on Node 22 with bun off `PATH`, Chromium included, 654 pass and 1 skipped (Windows only);
+the bench unchanged (34/34, 0 false positives, identical with 1,141 files, 52/52, 163 s per capture; a first attempt,
+started while another suite loaded the machine, found the benchmark app unreachable on 40 of 68 screens and stopped, and
+the rerun on a quiet machine is the result). The views were looked at on the "Leafy" fixture with screenshots of an
+invented page put in a temporary copy: Coverage, the wall and Screen detail at 1440 and 390 px, light and dark, and at
+200% zoom (640 × 450 at 2×). That look moved the footnote's marks into the symbol font (◐ drew as a smaller half-shape),
+"Same defect, same number on both widths." under the images, and took the focus ring off the cell panel's heading. CI on
+Windows with Node 20 then timed out `test/board-fix.test.mjs` as a file (240 s): its ten API tests took 230 s while the
+runner ran the newer browser files beside it (141 s on the run before); the file takes the same time on main and here
+(60–70 s locally), so nothing it tests got slower, and it was split in three (`board-fix.test.mjs`,
+`board-fix-cases.test.mjs`, `board-fix-e2e.test.mjs`, helpers in `test/fixtures/board-fix-helpers.mjs`), its twelve
+tests unchanged and the suite still 655 tests.
+
+**Not done in M7:** the 0.2 views (AI trust, States & messages, the trend per run: D5); Korean words (the table is
+ready); stacked markers in the static export (its bytes stay as they are).
 
 ## 8. Release gates (0.1)
 
