@@ -68,6 +68,10 @@ function fullChecks(state, stream, runsDir) {
   });
 }
 
+// A screen is checked when it was captured at its own address: a redirected one showed another page (judged in that
+// page's own scene), so it is not checked — the same for the verdict, the counts, the export and the board's Coverage.
+export const checkedScene = s => s.status === 'captured' && !/^redirected/.test(s.reason || '');
+
 // The time a full check has left (design §6 "about 6 min left"), from its own measured times only: the mean time of the
 // routes it has finished (each route's every person, viewport and forced state), times the routes left, rounded up to
 // whole minutes. Null until a route is done, and once none is left (what remains then is the canaries and the fold).
@@ -133,9 +137,6 @@ export function summary({ state, rows, groups, stream = 'main', runsDir, git = n
   const full = checks[checks.length - 1] ?? null, previous = checks[checks.length - 2] ?? null;
   const fixCommits = git && full ? fixCommitsSince(git, readJsonOr(join(runsDir, full, 'run.json'), {})?.commit) : null;
   const scenes = (Array.isArray(manifest.scenes) ? manifest.scenes : []).filter(s => s && s.canary === undefined);
-  // a screen is checked when it was captured at its own address: a redirected one showed another page (judged in
-  // that page's own scene), so it is not checked — the same for the verdict, the counts and the export
-  const checkedScene = s => s.status === 'captured' && !/^redirected/.test(s.reason || '');
   const notSeen = scenes.filter(s => !checkedScene(s));
   const problems = (Array.isArray(manifest.health?.problems) ? manifest.health.problems : []).map(p => ({ status: String(p.status), scenes: Number(p.scenes) || 0, of: Number(p.of) || 0 }));
 

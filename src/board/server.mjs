@@ -25,8 +25,11 @@ import { join, dirname, resolve, relative, isAbsolute, basename } from 'node:pat
 import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir, userInfo } from 'node:os';
-import { buildBoardModel, groupList, groupDetail, screenWall, safe, readClaims, RUN_ID } from './model.mjs';
+import { buildBoardModel, groupList, groupDetail, safe, readClaims, RUN_ID } from './model.mjs';
+import { coverageView, aiOnChecked } from './coverage.mjs';
+import { wallOut, screenDetail } from './screens.mjs';
 import { BASE_CSS, BOARD_CSS } from './look.mjs';
+import { VIEWS_CSS } from './look-views.mjs';
 import { decidedText, CAP_MS, fixingMinutes } from './shared.mjs';
 import * as P from '../project.mjs';
 import { DECISIONS, protectOf, approvalKey, reasonProblem } from '../ledger.mjs';
@@ -72,7 +75,10 @@ function assets() {
     '/': { body: read('assets/index.html'), type: 'text/html; charset=utf-8' },
     '/assets/board.js': { body: read('assets/board.js'), type: 'text/javascript; charset=utf-8' },
     '/assets/shared.mjs': { body: read('shared.mjs'), type: 'text/javascript; charset=utf-8' },
-    '/assets/board.css': { body: Buffer.from(BASE_CSS + BOARD_CSS), type: 'text/css; charset=utf-8' },
+    // the Coverage and Screens views (M7), modules of the page's script
+    '/assets/coverage.js': { body: read('assets/coverage.js'), type: 'text/javascript; charset=utf-8' },
+    '/assets/screens.js': { body: read('assets/screens.js'), type: 'text/javascript; charset=utf-8' },
+    '/assets/board.css': { body: Buffer.from(BASE_CSS + BOARD_CSS + VIEWS_CSS), type: 'text/css; charset=utf-8' },
     // the browser asks for this on every move within the page; an empty answer, no data
     '/favicon.ico': { body: Buffer.alloc(0), type: 'image/x-icon', status: 204 },
   };
@@ -173,7 +179,16 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   // guards.json, committed and changed by the person's terminal or through git (neither bumps the generation): its mtime
   // and size
   const guardsSig = () => { try { const s = statSync(join(nunchiDir, 'guards.json')); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; } };
-  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${claimsSig()}.${guardsSig()}`;
+  // the AI hunt's records: `canaries --score` rewrites a run's coverage.json without a ledger write (it bumps no
+  // generation), and Coverage must still show the cells it voided (M7). Every run's (Coverage shows the last full
+  // check, which the latest capture need not be), by size and time (a coarse file-system clock can leave the time as
+  // it was: review of PR #35).
+  const coverageSig = () => {
+    const parts = [];
+    for (const id of listRuns(runsDir).complete) { try { const st = statSync(join(runsDir, id, 'coverage.json')); parts.push(`${id}:${st.size}:${st.mtimeMs}`); } catch {} }
+    return parts.length ? sha(parts.join('|'), 12) : '-';
+  };
+  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${claimsSig()}.${coverageSig()}.${guardsSig()}`;
   // claims as they are now (their minutes too) on a cached model
   const freshClaims = m => { const c = readClaims(claimsDir, now()); m.claims = c; for (const g of m.groups) g.fixing = c.get(g.id) || null; return m; };
   let cache = null;
@@ -335,7 +350,17 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     }
     const gm = /^\/api\/groups\/([0-9a-f]{12})$/.exec(path);
     if (get && gm) { const d = groupDetail(model(), gm[1]); return d ? send(res, 200, d) : fail(res, 404, 'no such group'); }
-    if (get && path === '/api/screens') return send(res, 200, screenWall(model()));
+    if (get && path === '/api/screens') return send(res, 200, wallOut(model()));
+    // M7: the Coverage view, and one screen of the latest run (Screens beyond the wall)
+    if (get && path === '/api/coverage') return send(res, 200, coverageView(model()));
+    if (get && path.startsWith('/api/screens/')) {
+      const parts = path.split('/');
+      let run, scene;
+      try { [run, scene] = parts.slice(3).map(decodeURIComponent); } catch { return fail(res, 400, 'bad address'); }
+      if (parts.length !== 5 || !RUN_ID.test(run) || !scene || /[/\\\0]/.test(scene)) return fail(res, 400, 'bad address');
+      const d = screenDetail(model(), run, scene);
+      return d ? send(res, 200, d) : fail(res, 404, 'no such screen in the latest run');
+    }
     if (post && path === '/api/decide') return decide(res, await readJsonBody(req));
     if (post && path === '/api/undo') return undoDecisions(res, await readJsonBody(req));
     if (post && path === '/api/confirm') return confirm(res, await readJsonBody(req));
@@ -410,14 +435,10 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     const requested = existsSync(checksRequestPath(stateDir));
     // captures still being written by a writer that is still there (a killed one's folder is not "running")
     const running = (s.runningRuns || []).filter(x => RUN_ID.test(x));
-    // the AI hunt's coverage of the latest run (coverage.json), with cells the budget cut said in the board's words
+    // the AI hunt's coverage of the latest run, counted on checked screens only (M7 decision D2: a screen that did not
+    // load is counted once, under Screens checked), with the cells the budget cut
     let coverage = null;
-    if (s.run && RUN_ID.test(s.run)) {
-      try {
-        const c = JSON.parse(readFileSync(join(runsDir, s.run, 'coverage.json'), 'utf8'))?.summary;
-        if (c && Number.isFinite(c.cells)) coverage = { cells: c.cells, seen: Number(c.seen) || 0, budget: Number(c.notSeen?.budget) || 0 };
-      } catch {}
-    }
+    try { coverage = aiOnChecked(m); } catch { coverage = null; }
     // the fast first run (design §6): the first look and the full check after it say how far they are, in the agreed
     // words, instead of "Capture running" for that full check (summary.mjs)
     const firstLookRun = s.firstLook?.full?.run ?? null;

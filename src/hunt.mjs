@@ -30,7 +30,7 @@ const STATE_ORDER = ['normal', 'error', 'empty', 'slow', 'offline'];
 // (L5, L4). Measured on the benchmark app (100 scenes): spent screen by screen, the default budget saw every lens on
 // 7 of 13 routes and nothing of the other 6; spent lens by lens, it sees L1 and L9 on every screen. Lenses not
 // listed come after, by number.
-const SPEND_ORDER = ['L1', 'L9', 'L6', 'L2', 'L10', 'L7', 'L5', 'L4'];
+export const SPEND_ORDER = ['L1', 'L9', 'L6', 'L2', 'L10', 'L7', 'L5', 'L4'];
 const PERSON_ORDER = ['guest', 'signed-in'];
 const MAX_SCENES = 3;
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -66,7 +66,7 @@ export function fileTokens(path) {
 }
 
 const lensText = lens => stableJson({ definition: lens.definition, checklist: lens.checklist, examples: lens.examples, severityRubric: lens.severityRubric });
-const matches = (filter, scene) => !filter
+export const matches = (filter, scene) => !filter
   || ((!filter.states || filter.states.includes(scene.state))
   && (!filter.viewports || filter.viewports.includes(scene.viewport))
   && (!filter.persons || filter.persons.includes(scene.person)));

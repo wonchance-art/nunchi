@@ -70,7 +70,7 @@ test('§3.2 token: every route but the page shell needs X-Nunchi-Token; a wrong 
   try {
     const gid = p.findings[1].group;
     const scene = p.scenes[0].id;
-    const routes = ['/api/summary', '/api/groups', `/api/groups/${gid}`, '/api/screens', '/api/generation', '/api/live', `/evidence/0001/${encodeURIComponent(scene)}/full.jpg`];
+    const routes = ['/api/summary', '/api/groups', `/api/groups/${gid}`, '/api/screens', `/api/screens/0001/${encodeURIComponent(scene)}`, '/api/coverage', '/api/generation', '/api/live', `/evidence/0001/${encodeURIComponent(scene)}/full.jpg`];
     for (const path of routes) {
       assert.equal((await raw(b.port, { path })).status, 401, `${path} without a key`);
       assert.equal((await raw(b.port, { path, headers: auth('0'.repeat(64)) })).status, 401, `${path} with a wrong key`);
@@ -90,7 +90,7 @@ test('§3.2 the page shell answers without a key and holds no data of the projec
   const { b, p, token } = await board();
   try {
     const project = JSON.stringify(p.findings) + p.scenes.map(s => s.id).join('');
-    for (const path of ['/', '/assets/board.js', '/assets/shared.mjs', '/assets/board.css']) {
+    for (const path of ['/', '/assets/board.js', '/assets/shared.mjs', '/assets/coverage.js', '/assets/screens.js', '/assets/board.css']) {
       const r = await raw(b.port, { path });
       assert.equal(r.status, 200, path);
       const text = r.body.toString('utf8');
@@ -352,7 +352,7 @@ test('§3.2 untrusted strings: app text, decision notes and secrets reach the pa
   const { b, token } = await board({ project: p });
   try {
     const all = [];
-    for (const path of ['/api/summary', '/api/groups?status=all', '/api/screens']) all.push((await raw(b.port, { path, headers: auth(token) })).body.toString('utf8'));
+    for (const path of ['/api/summary', '/api/groups?status=all', '/api/screens', '/api/coverage', `/api/screens/0002/${encodeURIComponent(p.scenes[2].id)}`]) all.push((await raw(b.port, { path, headers: auth(token) })).body.toString('utf8'));
     const groups = JSON.parse(all[1]).groups;
     for (const id of Object.keys(groups)) all.push((await raw(b.port, { path: `/api/groups/${id}`, headers: auth(token) })).body.toString('utf8'));
     const text = all.join('\n');
@@ -366,14 +366,14 @@ test('§3.2 untrusted strings: app text, decision notes and secrets reach the pa
     assert.deepEqual(d.secret, { where: '/assets/app-4f1c2a9b.js', kind: 'stripe-live-secret-key' });
   } finally { await b.close(); }
   // the page's script builds the DOM from text only: no innerHTML, no markup strings, no eval
-  const js = readFileSync(fileURLToPath(new URL('../src/board/assets/board.js', import.meta.url)), 'utf8') + readFileSync(fileURLToPath(new URL('../src/board/shared.mjs', import.meta.url)), 'utf8');
+  const js = ['assets/board.js', 'assets/coverage.js', 'assets/screens.js', 'shared.mjs'].map(f => readFileSync(fileURLToPath(new URL(`../src/board/${f}`, import.meta.url)), 'utf8')).join('\n');
   for (const bad of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', 'eval(', 'new Function', 'srcdoc', 'DOMParser', 'createContextualFragment', "setAttribute('style'", 'setAttribute("style"']) assert.ok(!js.includes(bad), bad);
 });
 
 test('§3.2 offline: the page shell and its assets load nothing from anywhere else (system fonts, no external URL)', async () => {
   const { b } = await board();
   try {
-    for (const path of ['/', '/assets/board.js', '/assets/shared.mjs', '/assets/board.css']) {
+    for (const path of ['/', '/assets/board.js', '/assets/shared.mjs', '/assets/coverage.js', '/assets/screens.js', '/assets/board.css']) {
       const text = (await raw(b.port, { path })).body.toString('utf8');
       assert.ok(!/https?:\/\//.test(text), `${path} names no URL`);
       assert.ok(!/@import|@font-face|(?<![A-Za-z])url\(\s*["']?(?!blob:|data:)[a-z]/.test(text.replace(/url\("\$\{u\}"\)/g, '')), `${path} loads no stylesheet, font or image`);

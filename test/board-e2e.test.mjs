@@ -199,7 +199,8 @@ test('board e2e: the decision bar and the toast never cover each other or the fo
           // view, and $$eval's handles from before it are detached nodes measuring 0,0
           const { nums, panel } = await page.evaluate(() => {
             const r = e => { const b = e.getBoundingClientRect(); return { left: b.left, top: b.top }; };
-            return { nums: [...document.querySelectorAll('.screen-panel .num')].map(r), panel: r(document.querySelector('.panels')) };
+            // the markers drawn (one stacked into another is not: M7)
+            return { nums: [...document.querySelectorAll('.screen-panel .num')].filter(n => n.getClientRects().length).map(r), panel: r(document.querySelector('.panels')) };
           });
           for (const n of nums) { assert.ok(n.left >= panel.left - 0.5 && n.top >= panel.top - 0.5, `marker at ${n.left},${n.top} inside the panel from ${panel.left},${panel.top}`); checked++; }
         }
