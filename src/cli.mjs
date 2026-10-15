@@ -972,11 +972,12 @@ if (cmd === 'setup') {
   }
   if (!model.pageText && model.counts.pageTextLeftOut) notes.push(`page text left out (${model.counts.pageTextLeftOut} field(s)): --include-page-text adds it`);
   if (args.out) {
-    const { writeAtomic, refuseLink } = await import('./stable.mjs');
+    const { writeAtomic, refuseLink, privateDir } = await import('./stable.mjs');
     const { within } = await import('./export-html.mjs');
     const out = resolve(args.out);
     if (within(join(nunchiDir, 'runs'), out)) usage('write the export outside .nunchi/runs (runs are evidence and are never edited)');
-    try { refuseLink(out); writeAtomic(out, text); } catch (e) { usage(`${out}: ${e.message}`); }
+    // the findings of your app, for you to share: owner-only (0600), in folders made 0700 when nunchi creates them
+    try { refuseLink(out); privateDir(dirname(out)); writeAtomic(out, text, { mode: 0o600 }); } catch (e) { usage(`${out}: ${e.message}`); }
     console.log(`${args.format === 'md' ? 'Markdown' : args.format === 'json' ? 'JSON' : 'SARIF'} → ${out} · ${model.counts.groups} group(s), ${model.counts.items} place(s)`);
     for (const n of notes) console.log(n);
   } else {
@@ -1115,6 +1116,8 @@ if (cmd === 'setup') {
 } else if (cmd === 'export') {
   // A static review page (spec §7): read-only, offline, byte-identical for the same run and ledger.
   if (typeof args.html !== 'string' || !args.html || args.html.startsWith('--')) { console.error('nunchi export: use --html <dir> (writes <dir>/index.html and <dir>/img/), or --format md|json|sarif'); process.exit(1); }
+  const outside = flagsOutside(args, ['html', 'run', 'inline', 'json']);
+  if (outside.length) { console.error(`nunchi export: ${outside.join(', ')}: not a flag of export --html (nunchi export --html <dir> [--run <id>] [--inline] [--json])`); process.exit(1); }
   const { exportHtml } = await import('./export-html.mjs');
   const dir = runDirOf(args, 'export');
   let r;

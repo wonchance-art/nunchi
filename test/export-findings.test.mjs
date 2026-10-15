@@ -4,7 +4,7 @@
 // byte-identical Markdown and JSON across two runs. Synthetic project, invented content only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, readFileSync, existsSync, cpSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, existsSync, cpSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -226,9 +226,11 @@ test('paths are the repository\'s: an app in a subfolder gets its prefix; status
     const r = run(p, 'export', ...args);
     assert.equal(r.status, 1, args.join(' '));
   }
-  const out = join(tmp('nunchi-export-f-out-'), 'findings.sarif');
+  const out = join(tmp('nunchi-export-f-out-'), 'share', 'findings.sarif');
   const w = run(p, 'export', '--format', 'sarif', '--out', out);
   assert.equal(w.status, 0, w.stderr);
+  // owner-only, in a folder made private when nunchi creates it
+  if (process.platform !== 'win32') { assert.equal(statSync(out).mode & 0o777, 0o600); assert.equal(statSync(join(out, '..')).mode & 0o777, 0o700); }
   assert.match(w.stdout, /^SARIF → /);
   assert.deepEqual(sarifProblems(JSON.parse(readFileSync(out, 'utf8'))), []);
   assert.equal(run(p, 'export', '--format', 'md', '--out', join(p.root, '.nunchi', 'runs', '0001', 'x.md')).status, 1, 'never into a run');

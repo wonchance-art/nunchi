@@ -1289,7 +1289,9 @@ puts the images in `index.html` as data URIs instead (one file; pegroom: 8 MB ag
   and a symlinked `index.html` or `img/` are all refused before anything changes. `index.html` is written to a new
   file and renamed into place. A folder inside `.nunchi/runs` or inside the run is refused, checked on the real path
   of its nearest existing parent (so a symlink cannot get round it), case-insensitively on Windows and macOS.
-  A `--html` value starting with `--` is a missing value.
+  A `--html` value starting with `--` is a missing value, and a flag `--html` does not take is refused (exit 1). The
+  page holds screenshots of the app: its files are written owner-only (0600) and the folders it creates 0700 (POSIX;
+  a folder that is there already is left as it is).
 - *Views* (mock-up v3 layout, system fonts): **Progress** (verdict as in design §3.4 where it can be computed
   statically: blocker/high open → "Not yet · …", no AI review → "Probably · rules only", screens not seen → "Yes, for
   what was checked · …"; open groups by severity; new, fixed and came back since the parent run; screens checked; AI
@@ -1839,7 +1841,8 @@ one; where the hook does not run (Codex), `check --base` in CI catches a weakeni
 (brought up to date first) and exports its places (rows) whose status is asked — by default open, came back, to fix
 and later (what still counts for shipping; `--status` takes the ledger's words and the board's `later`,
 `not-a-problem`, `came-back`, or `all`) — grouped as the ledger groups them. To stdout, or `--out <file>` (written
-atomically, never through a link, never inside `.nunchi/runs`); what was left out is said on stderr.
+atomically, never through a link, never inside `.nunchi/runs`, owner-only (0600), in folders made 0700 when nunchi
+creates them); what was left out is said on stderr.
 - *Redaction:* every string goes through the secret scanner at export time — credential URL parts and query values
   (`SECRET_PARAM`: `token`, `*_token`, `token_hash`, `oobCode`, `code`, `apikey` …), then `scrubSecrets` (§7.1; a
   random-looking path segment or query value of 24 characters or more is `url-path-token` / `url-query-token`): a hit
