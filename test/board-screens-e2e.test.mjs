@@ -222,13 +222,21 @@ test('screens a11y: axe finds nothing on the wall and Screen detail (light 1280,
       for (const [hash, ready] of [['#/screens', '#h-screens'], ['#/screens/0004/~.guest.normal.d', '#h-screen'], ['#/screens/0004/cart.signed-in.error.d', '#h-screen']]) {
         await go(page, hash, ready);
         if (hash === '#/screens') { await page.click('.card button'); await page.waitForSelector('#panel-h'); }
-        else { await page.keyboard.press('b'); await page.keyboard.press('c'); await page.waitForTimeout(150); }
+        else {
+          // the screen as it opens (one width, no compare): the image has the width of its column
+          await page.waitForFunction(h => location.hash === h && document.querySelector('.sd-fig .shot'), hash);
+          const shown = await page.evaluate(() => [...document.querySelectorAll('.sd-fig .shot')].map(e => Math.round(e.getBoundingClientRect().width)));
+          assert.ok(shown.length && shown.every(w => w >= 100), `${width}px ${hash}: the screenshot is shown (${shown.join(', ')} px wide)`);
+          await page.keyboard.press('b'); await page.keyboard.press('c'); await page.waitForTimeout(150);
+        }
         assert.deepEqual(await axe(page), [], `${scheme} ${width}px ${hash}`);
         const m = await page.evaluate(() => ({
           small: [...document.querySelectorAll('main button, main select, main input, main a.b, main .sd-f, main .detail-nav a')].filter(e => e.offsetParent !== null)
             .map(e => ({ e: e.outerHTML.slice(0, 70), r: e.getBoundingClientRect() })).filter(x => x.r.height < 43.5 || (x.e.startsWith('<button') && x.r.width < 43.5)).map(x => `${x.e} ${Math.round(x.r.width)}×${Math.round(x.r.height)}`),
           sideways: document.documentElement.scrollWidth > window.innerWidth + 1, selects: [...document.querySelectorAll('.wall-filters select')].map(x => x.id),
+          shots: [...document.querySelectorAll('.sd-fig .shot, .screen-panel .shot')].map(e => Math.round(e.getBoundingClientRect().width)),
         }));
+        assert.ok(m.shots.length && m.shots.every(w => w >= 100), `${width}px ${hash}: every screenshot is shown (${m.shots.join(', ')} px wide)`);
         assert.deepEqual(m.small, [], `${width}px ${hash}: every control 44 px`);
         assert.equal(m.sideways, false, `${width}px ${hash}: no sideways scroll`);
         if (hash === '#/screens') assert.deepEqual(m.selects, width < 760 ? ['wall-vp', 'wall-who', 'wall-state', 'wall-show'] : []);

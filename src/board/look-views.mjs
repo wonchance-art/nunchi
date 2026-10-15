@@ -72,7 +72,8 @@ export const VIEWS_CSS = `
 .cv-lens{width:100%;border-collapse:collapse;font-size:14px}
 .cv-lens th,.cv-lens td{padding:8px;border-top:1px solid var(--line-soft);text-align:left;vertical-align:top;overflow-wrap:anywhere}
 .cv-lens thead th{border-top:0;font-size:12px;color:var(--ink-2)}.cv-lens tbody th{font-weight:500}
-.cv-lens-d>summary{display:flex;align-items:center;min-height:44px;cursor:pointer;font-weight:600}
+.cv-lens-d>summary{display:flex;align-items:center;min-height:44px;cursor:pointer;font-weight:600;list-style:none}.cv-lens-d>summary::-webkit-details-marker{display:none}
+.cv-lens-d>summary::before{content:"▸";color:var(--muted);margin-right:8px}.cv-lens-d[open]>summary::before{content:"▾"}
 .cv-lens-list{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}.cv-lens-list li{display:flex;flex-direction:column;gap:2px}
 @media (max-width:760px){.cv-wide{display:none}.cv-row{grid-template-columns:minmax(0,1fr)}.cv-row .meter{flex-basis:100%;max-width:none}}
 /* Screens: the wall's groups and its quick look */
@@ -101,6 +102,8 @@ export const VIEWS_CSS = `
 .box.box-on{border:4px solid #1B1D21;box-shadow:0 0 0 2px #FFFFFF}
 .box.box-on .num{background:#FFFFFF;color:#1B1D21;box-shadow:0 0 0 2px #1B1D21}
 .num.num-stack{width:auto;min-width:20px;padding:0 6px;border-radius:10px;white-space:nowrap}
-@media (max-width:1100px){.sd-body{flex-direction:column}.sd-side{flex:none;width:100%}}
+@media (max-width:1100px){.sd-body{flex-direction:column;align-items:stretch}.sd-side{flex:none;width:100%}}
+/* the list's numbers look like the markers on the screenshot (ringed), in the dark too */
+@media (prefers-color-scheme:dark){.board .sp-list .numb{box-shadow:0 0 0 2px #FFFFFF}}
 @media (max-width:760px){.sd-figs.sd-both{flex-direction:column}.sd-both>.sd-fig{width:100%}.sd-sbs{grid-template-columns:1fr}.sd-hint{display:none}}
 `;
