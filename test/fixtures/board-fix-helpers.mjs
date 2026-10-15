@@ -20,7 +20,9 @@ export async function attempt(p, change) {
 export async function board(p) {
   const b = await startBoard({ projectDir: p.root });
   const origin = b.origin;
-  const s = await (await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) })).json();
+  // a trade that fails closes the board first (a board left listening keeps this file's process alive to the runner's limit)
+  const s = await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) })
+    .then(r => r.json()).catch(async e => { await b.close(); throw e; });
   // a fresh connection per request: the fix loop runs between calls (fixtures/board-call.mjs)
   const call = (path, body, { token = s.token } = {}) => boardRequest(origin, path, { token, body });
   return { b, call };

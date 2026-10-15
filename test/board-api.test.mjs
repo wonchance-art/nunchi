@@ -22,8 +22,9 @@ const cli = (cwd, ...a) => new Promise(res => execFile('node', [CLI, ...a], { cw
 async function board(p, opts = {}) {
   const b = await startBoard({ projectDir: p.root, ...opts });
   const origin = b.origin;
-  const r = await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) });
-  const s = await r.json();
+  // a trade that fails closes the board first (a board left listening keeps this file's process alive to the runner's limit)
+  const s = await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) })
+    .then(r => r.json()).catch(async e => { await b.close(); throw e; });
   const call = async (path, body) => {
     const res = await fetch(origin + path, body === undefined ? { headers: { 'x-nunchi-token': s.token } }
       : { method: 'POST', headers: { 'x-nunchi-token': s.token, 'content-type': 'application/json', origin }, body: JSON.stringify(body) });
