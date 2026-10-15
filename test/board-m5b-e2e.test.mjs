@@ -10,7 +10,7 @@ import { readFileSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
-import { startBoard } from '../src/board/server.mjs';
+import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 import { leafy } from './fixtures/coverage-project.mjs';
 import { writeRun, scene, tmp } from './fixtures/board-project.mjs';
 import { stableJson, thisMachine } from '../src/stable.mjs';
@@ -24,18 +24,10 @@ before(async () => {
   try { browser = await chromium.launch({ executablePath: process.env.NUNCHI_BROWSER || undefined }); }
   catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
-after(async () => { await browser?.close(); });
+after(async () => { await closeBoards(); await browser?.close(); });
 
-async function open(p, ctx = {}) {
-  const b = await startBoard({ projectDir: p.root });
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, ...ctx });
-  const page = await context.newPage();
-  const errors = [];
-  page.on('pageerror', e => errors.push(String(e)));
-  await page.goto(b.newLink());
-  await page.waitForSelector('#h-progress');
-  return { b, page, errors, close: async () => { await context.close(); await b.close(); } };
-}
+// the board in Chromium (fixtures/board-browser.mjs): a failed open closes what it started and says which step it waited on
+const open = (p, ctx = {}) => openBoard(browser, p, { ctx: { viewport: { width: 1440, height: 900 }, ...ctx } });
 async function axe(page) {
   await page.evaluate(AXE);
   return page.evaluate(async () => (await globalThis.axe.run(document, { resultTypes: ['violations'] })).violations.map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target.join(' ')).slice(0, 3) })));
