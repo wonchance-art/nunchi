@@ -13,7 +13,7 @@
 // - nunchi-<uid>, while empty: the folder a board's control socket goes to when the state folder's path is too long
 //   for a socket (src/board/server.mjs controlPath; macOS's temporary folder is). It is kept for the next board, as
 //   tmux keeps its own; a socket left in it is a board left running, and counts.
-import { mkdtempSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -36,7 +36,11 @@ export function describe(dir, name) {
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const [cmd, ...args] = process.argv.slice(2);
   if (!cmd) { process.stderr.write('usage: node scripts/tmp-leftovers.mjs <command> [args…]\n'); process.exit(2); }
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'nunchi-leftovers-')));
+  // as short as it can be, and not by its real path (macOS: /private/var/…): every path the command builds on it is
+  // longer by what this adds, and a socket's path has a limit (104 bytes on macOS, 108 on Linux). Measured 2026-10-16
+  // KST: a 24-character name under macOS's real path made a board's control socket 113 bytes (listen failed), and on
+  // Linux Chromium 1194 crashes at launch under a TMPDIR of 63 characters (53 is fine).
+  const dir = mkdtempSync(join(tmpdir(), 'nunchi-t-'));
   // Windows: npm is npm.cmd, which only a shell starts (a path, such as node's own, is started as it is)
   const r = spawnSync(cmd, args, { stdio: 'inherit', env: { ...process.env, TMPDIR: dir, TEMP: dir, TMP: dir }, shell: process.platform === 'win32' && !/[\\/]/.test(cmd) });
   const left = leftovers(dir);
