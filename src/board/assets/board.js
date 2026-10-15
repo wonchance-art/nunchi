@@ -2,6 +2,8 @@
 // style. Everything the server sends is data: it reaches the page through textContent only (no markup is ever parsed
 // from it), links are internal routes or an editor link the server built, and geometry goes through CSSOM.
 import * as W from './shared.mjs';
+import * as CV from './coverage.js';
+import * as SC from './screens.js';
 
 const d = document;
 d.documentElement.classList.add('js');
@@ -47,7 +49,10 @@ const S = {
   pending: null,         // a newer list, shown on R
   focus: null, selection: new Set(), anchor: null, openUnchecked: false,
   detail: null, details: new Map(),
-  screens: null, screenSel: null, screenFilter: { vp: null, who: 'all', state: 'normal' },
+  screens: null, screenSel: null, screenFilter: { vp: null, who: 'all', state: 'normal', show: 'all', q: '' }, wallFocus: null, wallReturn: null,
+  // M7: the Coverage view's data and filters, and the Screen detail's choices (kept for the session while walking J/K)
+  cov: { data: null, f: { state: null, checks: 'all', show: 'all' }, sel: null, focus: null, open: new Set(), lensOpen: false },
+  sd: { data: null, both: false, whole: false, cmp: 'off', view: 'slider', at: 50, on: null, tb: null, sibsOpen: false, back: null }, returnTo: null,
   keysOn: store.get('nunchi.keys') !== 'off',
   undo: null, clock: new W.DecisionClock(), images: new Map(), lastNow: 0, stopped: false,
   label: null,
@@ -131,16 +136,45 @@ function image(url) {
 const bg = (el, url) => { image(url).then(u => { el.style.backgroundImage = `url("${u}")`; }, () => { el.classList.add('thumb-none'); }); };
 
 // A screenshot region with its boxes (white + dark, dashed: they read on any screenshot and do not rely on colour).
-function shot(scene, boxes, { crop = false, label, cls = '' } = {}) {
+// Markers of boxes that overlap by IoU 0.5 or more, or whose numbers would sit closer than a marker on screen (a link
+// and the small icon inside it), are one stacked marker ("1 2"), so none hides another (M7; review of PR #35): once
+// the screenshot is laid out, and again when its size changes (a narrower column, zoom). `on`: the finding focused in a
+// list, its box thicker and its number inverted; `first`: the first view (taller when a box sits lower).
+function shot(scene, boxes, { crop = false, first = false, on = null, label, cls = '' } = {}) {
   const img = scene.img;
-  const g = W.shotGeometry(img, boxes, { crop });
+  const g = W.shotGeometry(img, boxes, { crop, first });
   const el = h('div', { class: `shot${cls ? ' ' + cls : ''}`, role: 'img', 'aria-label': label });
   el.style.aspectRatio = `${img.w} / ${g.ch}`;
   el.style.backgroundPosition = `0 ${W.pct(g.posY)}`;
-  for (const m of g.marks) {
-    const b = h('span', { class: 'box' }, m.n ? h('span', { class: 'num' }, String(m.n)) : null);
+  if (on !== null) el.dataset.on = String(on);
+  const items = g.marks.map(m => {
+    const num = m.n ? h('span', { class: 'num' }) : null;
+    const b = h('span', { class: 'box', 'aria-hidden': 'true' }, num);
     b.style.left = W.pct(m.left); b.style.top = W.pct(m.top); b.style.width = W.pct(m.width); b.style.height = W.pct(m.height);
     el.append(b);
+    return { b, num };
+  });
+  const relabel = near => {
+    const marked = el.dataset.on ? Number(el.dataset.on) : null;
+    W.stackMarks(g.marks, { near }).forEach((m, i) => {
+      const { b, num } = items[i];
+      b.setAttribute('data-ns', m.ns.join(' '));
+      b.classList.toggle('box-on', marked !== null && m.ns.includes(marked));
+      if (!num) return;
+      num.textContent = m.label || '';
+      num.style.display = m.label ? '' : 'none';
+      num.classList.toggle('num-stack', m.ns.length > 1);
+    });
+  };
+  relabel(null);
+  if (g.marks.length > 1 && typeof ResizeObserver === 'function') {
+    let size = '';
+    new ResizeObserver(() => {
+      const w = el.clientWidth, ht = el.clientHeight;
+      if (!w || !ht || size === `${w}x${ht}`) return;
+      size = `${w}x${ht}`;
+      relabel({ x: W.MARKER_PX / w, y: W.MARKER_PX / ht });
+    }).observe(el);
   }
   bg(el, img.url);
   return el;
@@ -277,7 +311,9 @@ async function changed(version) {
       if (S.route.view === 'progress') renderProgress();
       if (S.route.view === 'findings' || S.route.view === 'detail') await refreshList();
       if (S.route.view === 'detail' && S.detail) await refreshDetail();
-      if (S.route.view === 'screens') { S.screens = await api('/api/screens'); renderScreens(); }
+      if (S.route.view === 'screens') { S.screens = await api('/api/screens'); SC.renderWall(); }
+      if (S.route.view === 'screen') await SC.refreshDetail();
+      if (S.route.view === 'coverage') { S.cov.data = await api('/api/coverage'); CV.render(); }
     } while (busy.again);
   } catch {} finally { busy = null; }
 }
@@ -303,6 +339,10 @@ function parseRoute() {
   let m;
   if ((m = /^#\/finding\/([0-9a-f]{12})$/.exec(hsh))) return { view: 'detail', id: m[1] };
   if ((m = /^#\/screen\/(.+)$/.exec(hsh))) { try { return { view: 'screens', screen: decodeURIComponent(m[1]) }; } catch { return { view: 'screens' }; } }
+  // M7: one screen (Screen detail), and Coverage with a cell selected
+  if ((m = /^#\/screens\/(\d{4,})\/(.+)$/.exec(hsh))) { try { return { view: 'screen', run: m[1], scene: decodeURIComponent(m[2]) }; } catch { return { view: 'screens' }; } }
+  if ((m = /^#\/coverage\/(\d{4,})\/(.+)$/.exec(hsh))) { try { return { view: 'coverage', run: m[1], scene: decodeURIComponent(m[2]) }; } catch { return { view: 'coverage' }; } }
+  if (hsh === '#/coverage') return { view: 'coverage' };
   if (hsh === '#/findings') return { view: 'findings' };
   if (hsh === '#/screens') return { view: 'screens' };
   if (hsh === '#/progress' || hsh === '' || hsh === '#' || hsh === '#/') return { view: 'progress' };
@@ -316,12 +356,19 @@ async function router() {
   if (!r || S.stopped) return;
   const from = S.route.view;
   S.route = r;
-  setNav(r.view === 'detail' ? 'findings' : r.view);
+  setNav(r.view === 'detail' ? 'findings' : r.view === 'screen' ? 'screens' : r.view);
+  if (r.view !== 'detail' && r.view !== 'screen') S.returnTo = null;
   try {
     if (r.view === 'progress') renderProgress(true);
-    else if (r.view === 'findings') { if (!S.list || from === 'progress' || from === 'screens') await loadList(); renderFindings(true); }
+    else if (r.view === 'findings') { if (!S.list || from === 'progress' || from === 'screens' || from === 'screen' || from === 'coverage') await loadList(); renderFindings(true); }
     else if (r.view === 'detail') await showDetail(r.id);
-    else if (r.view === 'screens') { if (!S.screens || from !== 'screens') S.screens = await api('/api/screens'); S.screenSel = r.screen || S.screenSel; renderScreens(true); }
+    else if (r.view === 'screens') { if (!S.screens) show(h('p', { class: 'loading' }, W.SCREENS.loading)); if (!S.screens || from !== 'screens') S.screens = await api('/api/screens'); S.screenSel = r.screen || S.screenSel; SC.renderWall(true); }
+    else if (r.view === 'screen') { if (!S.screens) show(h('p', { class: 'loading' }, W.SCREENS.loading)); await SC.loadDetail(r, { from }); }
+    else if (r.view === 'coverage') {
+      // a slow load keeps the last coverage shown, saying it is updating; the first one says it is loading
+      if (S.cov.data && from !== 'coverage') { S.cov.updating = true; CV.render(true); } else if (!S.cov.data) show(h('p', { class: 'loading' }, W.COVERAGE.loading));
+      await CV.load(r);
+    }
   } catch (e) { if (e.status !== 401) show(h('p', { class: 'lost' }, `The board could not load this view: ${e.message}`)); }
 }
 const go = hash => { if (location.hash === hash) router(); else location.hash = hash; };
@@ -350,10 +397,13 @@ function renderProgress(focus = false) {
   const meter = h('div', { class: 'meter', 'aria-hidden': 'true' }, h('span'));
   meter.firstChild.style.width = `${sc.total ? Math.round((sc.checked / sc.total) * 100) : 0}%`;
   const WHY = { 'login-expired': 'the saved login no longer worked', 'app-unreachable': 'most screens did not load at all', 'recording-stale': 'most screens asked for data the recording does not have' };
-  const ai = s.ai.ran ? `${W.plural(s.ai.groups, 'group')}, ${s.ai.doubleChecked} double-checked${s.ai.notDoubleChecked ? `, ${s.ai.notDoubleChecked} not double-checked` : ''}${s.ai.coverage ? ` · ${s.ai.coverage.seen}/${s.ai.coverage.cells} cells seen` : ''}${s.ai.suspect ? ' · verification suspect' : ''}${s.ai.tooFewDecoys ? ` · ${W.WORDS['too-few-decoys']}` : ''}` : 'not run (rules and computed checks only)';
+  const ai = s.ai.ran ? `${W.plural(s.ai.groups, 'group')}, ${s.ai.doubleChecked} double-checked${s.ai.notDoubleChecked ? `, ${s.ai.notDoubleChecked} not double-checked` : ''}${s.ai.suspect ? ' · verification suspect' : ''}${s.ai.tooFewDecoys ? ` · ${W.WORDS['too-few-decoys']}` : ''}` : 'not run (rules and computed checks only)';
+  // M7: "Screens checked" answers "what was not checked" (Coverage); AI cells count on checked screens only (D2)
   const health = h('section', { class: 'panel-box', 'aria-labelledby': 'h-health' }, h('h2', { id: 'h-health' }, s.run ? `Run ${s.run}` : 'No run yet'),
-    h('div', { class: 'meter-row' }, h('span', null, 'Screens checked'), h('a', { href: '#/screens' }, `${sc.checked} of ${sc.total}`)), meter,
+    h('div', { class: 'meter-row' }, h('span', null, 'Screens checked'), h('a', { href: '#/coverage' }, `${sc.checked} of ${sc.total}`)), meter,
     h('ul', { class: 'facts' }, h('li', null, `AI review: ${ai}`),
+      // Coverage's own count (one rule for both views); the run the AI reviewed when it is not this panel's run
+      s.ai.coverage ? h('li', null, `${W.COVERAGE.aiLooked} ${W.COVERAGE.ofCells(s.ai.coverage.seen, s.ai.coverage.cells)}${s.ai.coverage.aiRun && s.ai.coverage.aiRun !== s.run ? ` · ${W.COVERAGE.aiOlder(s.ai.coverage.aiRun)}` : ''} · `, h('a', { class: 'link-44', id: 'progress-cov', href: '#/coverage' }, `${W.COVERAGE.title} ▸`)) : null,
       s.health.blind ? h('li', { class: 'warn' }, `This run could not tell what was fixed (${s.health.blind}). Nothing was marked fixed by it.`) : null,
       sc.notSeen ? h('li', null, `${W.plural(sc.notSeen, 'screen')} not seen: ${sc.reasons.join(', ')}`) : null,
       s.ai.coverage?.budget ? h('li', null, `${W.plural(s.ai.coverage.budget, 'cell')} ${W.WORDS['not-seen-budget'].replace(/^Not checked/, 'not checked')}`) : null,
@@ -692,8 +742,9 @@ function dialog(title, ...body) {
 function help() {
   const box = h('input', { type: 'checkbox', id: 'keys-on', checked: S.keysOn });
   box.addEventListener('change', () => { S.keysOn = box.checked; store.set('nunchi.keys', box.checked ? 'on' : 'off'); announce(`Single-key shortcuts ${box.checked ? 'on' : 'off'}`); });
+  const table = rows => h('table', { class: 'keys' }, h('tbody', null, rows.map(([k, v]) => h('tr', null, h('td', null, h('span', { class: 'kbd' }, k)), h('td', null, v)))));
   dialog('Keys', h('label', { class: 'check', for: 'keys-on' }, box, 'Single-key shortcuts (letters, / and ?); arrows, Enter, Space and Esc always work'),
-    h('table', { class: 'keys' }, h('tbody', null, W.KEY_HELP.map(([k, v]) => h('tr', null, h('td', null, h('span', { class: 'kbd' }, k)), h('td', null, v))))));
+    table(W.KEY_HELP), h('h3', { class: 'keys-h' }, 'Screens'), table(W.KEY_HELP_SCREENS), h('h3', { class: 'keys-h' }, W.COVERAGE.title), table(W.KEY_HELP_COVERAGE));
 }
 function moreViews() {
   dialog('More views in 0.2', h('p', { class: 'small' }, 'These views come in 0.2. Until then the same data is one command away in your terminal:'),
@@ -755,7 +806,7 @@ function renderDetail(focus = false) {
       (() => { const b = h('button', { type: 'button', class: 'b', 'aria-label': 'Next screen' }, h('span', { class: 'kbd' }, ']')); b.addEventListener('click', () => { D.sceneIdx++; renderDetail(); }); return b; })()] : null;
     figure = h('div', { class: 'fig' },
       h('div', { class: 'fig-tools' }, toggle, whole, flip, h('span', { class: 'small muted' }, `Seen on ${W.plural(D.scenes.length, 'screen')}${onVp.length > 1 ? ` · ${idx + 1} of ${onVp.length} here · [ / ] to flip` : ''}`)),
-      h('p', { class: 'muted small' }, `${sc.route} · ${sc.label}`),
+      h('p', { class: 'muted small fig-where' }, `${sc.route} · ${sc.label} `, h('a', { class: 'b b-quiet', id: 'detail-cov', href: `#/coverage/${sc.run}/${encodeURIComponent(sc.id)}` }, W.SCREENS.coverageHere)),
       shot(sc, boxes, { crop: !D.whole && boxes.length > 0, label: `Screenshot of ${sc.route}, ${sc.label}${boxes.length ? ', with the element outlined' : ''}`, cls: sc.viewport === 'm' ? 'shot-m' : '' }),
       !boxes.length && not ? h('p', { class: 'muted small' }, `Not outlined: ${not.drawable.why}.`) : null);
   }
@@ -958,59 +1009,14 @@ function compareBox(g) {
     h('div', { class: 'cmp' }, before, after), slider);
 }
 
-// ---- Screens ----------------------------------------------------------------------------------------------------------
+// ---- Screens and Coverage (M7): view modules of their own (screens.js, coverage.js), given the page's helpers ----------
 
-// Thumbnails are fetched when they come near the screen (a wall can have hundreds).
-let thumbs = null;
-function lazy(el, url) {
-  if (!('IntersectionObserver' in window)) return bg(el, url);
-  thumbs ||= new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) { thumbs.unobserve(e.target); bg(e.target, e.target.getAttribute('data-src')); } }, { rootMargin: '600px' });
-  el.setAttribute('data-src', url);
-  thumbs.observe(el);
-}
-function renderScreens(focus = false) {
-  if (S.route.view !== 'screens' || !S.screens) return;
-  thumbs?.disconnect(); thumbs = null;
-  const all = S.screens.scenes;
-  const F = S.screenFilter;
-  const vps = W.VPS.filter(v => all.some(s => s.viewport === v)), whos = W.PERSONS.filter(p => all.some(s => s.person === p)), states = W.STATES.filter(x => all.some(s => s.state === x));
-  if (!F.vp) F.vp = vps.includes('d') ? 'd' : vps[0] || 'all';
-  if (F.state !== 'all' && !states.includes(F.state)) F.state = 'all';
-  const seg = (label, list, words, key) => list.length > 1 ? h('div', { class: 'seg-b', role: 'group', 'aria-label': label }, [...list, 'all'].map(v => {
-    const b = h('button', { type: 'button', 'aria-pressed': F[key] === v ? 'true' : 'false' }, v === 'all' ? 'All' : words[v] || v);
-    b.addEventListener('click', () => { F[key] = v; renderScreens(); });
-    return b;
-  })) : null;
-  const shown = all.filter(s => (F.vp === 'all' || s.viewport === F.vp) && (F.who === 'all' || s.person === F.who) && (F.state === 'all' || s.state === F.state));
-  const sel = S.screenSel ? all.find(s => s.key === S.screenSel) : null;
-  const card = s => {
-    const th = h('span', { class: `thumb thumb-${s.viewport === 'm' ? 'm' : 'd'}`, 'aria-hidden': 'true' });
-    if (s.img) lazy(th, s.img.thumb); else { th.classList.add('thumb-none'); th.textContent = 'No screenshot'; }
-    const b = h('button', { type: 'button', 'aria-pressed': sel?.key === s.key ? 'true' : 'false', 'aria-label': `${s.h1 || s.route}, ${s.label}: ${s.badge}` },
-      h('span', { class: 'thumb-wrap' }, th, h('span', { class: `badge badge-${['blocker', 'high', 'medium', 'low', 'clean', 'dark'].includes(s.kind) ? s.kind : 'low'}` }, s.badge)),
-      h('span', { class: 'card-body' }, h('span', { class: 'card-name' }, s.h1 || s.route), h('span', { class: 'mono muted small' }, s.route), h('span', { class: 'small muted' }, s.label), h('span', { class: `small ${s.kind === 'dark' ? 'warn' : 'muted'}` }, s.note)));
-    b.addEventListener('click', () => { S.screenSel = s.key; history.replaceState(null, '', `/#/screen/${encodeURIComponent(s.key)}`); renderScreens(); $('panel-h')?.focus(); });
-    return h('li', { class: 'card' }, b);
-  };
-  let panel = h('p', { class: 'panels-empty muted' }, 'Select a screen to see it large, with its findings outlined and numbered.');
-  if (sel) {
-    const boxes = sel.findings.filter(f => f.n).map(f => ({ box: f.box, n: f.n }));
-    panel = h('section', { class: 'screen-panel', 'aria-labelledby': 'panel-h' },
-      h('div', { class: 'sp-head' }, h('div', null, h('h2', { id: 'panel-h', tabindex: '-1' }, sel.h1 || sel.route), h('p', { class: 'muted small' }, h('span', { class: 'mono' }, sel.route), ` · ${sel.label}`)),
-        (() => { const c = h('button', { type: 'button', class: 'b b-quiet' }, 'Close'); c.addEventListener('click', () => { S.screenSel = null; history.replaceState(null, '', '/#/screens'); renderScreens(); }); return c; })()),
-      sel.img ? shot(sel, boxes, { label: `Screenshot of ${sel.route}, ${sel.label}${boxes.length ? `, ${W.plural(boxes.length, 'finding')} outlined and numbered` : ''}`, cls: sel.viewport === 'm' ? 'shot-m' : '' }) : h('p', { class: 'pad muted' }, `Not seen: ${sel.reason || sel.status}.`),
-      sel.findings.length ? h('ol', { class: 'sp-list' }, sel.findings.map(f => h('li', null, h('a', { href: `#/finding/${f.group}` },
-        h('span', { class: `numb${f.n ? '' : ' numb-none'}` }, f.n ? String(f.n) : '–'),
-        h('span', { class: 'sp-text' }, h('span', { class: 'sp-what' }, f.headline), h('span', { class: 'small' }, `${W.SEV_LABEL[sevOf(f.severity)]} · ${f.source === 'ai' ? 'AI' : 'Rule'} · ${f.statusText}${f.n ? '' : ` · not outlined: ${f.why}`}`)))))) : sel.img ? h('p', { class: 'pad muted' }, 'Nothing found on this screen.') : null);
-  }
-  const withOpen = all.filter(s => s.findings.some(f => ['open', 'regressed', 'to-fix', 'held', 'stale', 'mixed'].includes(f.status))).length;
-  show(h('section', { id: 'screens', class: 'view', 'aria-labelledby': 'h-screens' }, h('div', { class: 'stack' },
-    h('div', { class: 'head-row' }, h('div', null, h('h1', { id: 'h-screens' }, 'Screens'), h('p', { class: 'muted' }, `${W.plural(new Set(all.map(s => s.route)).size, 'page')}, ${W.plural(all.length, 'screen')} · every one nunchi captured in run ${S.screens.run || '—'}, as it saw it`)),
-      h('div', { class: 'filters' }, seg('Width', vps, W.WIDTH, 'vp'), seg('Who', whos, W.WHO, 'who'), seg('State', states, W.STATE_LABEL, 'state'))),
-    h('p', { class: 'facts-inline' }, h('span', null, h('b', null, String(withOpen)), ' with open findings'), h('span', null, h('b', null, String(all.filter(s => s.badge === 'Clean').length)), ' clean'), h('span', null, h('b', null, String(shown.length)), ' shown')),
-    h('div', { class: 'wall-wrap' }, h('ul', { class: 'wall' }, shown.length ? shown.map(card) : h('li', { class: 'empty-note' }, 'No screen matches these filters.')), h('aside', { class: 'panels', 'aria-label': 'Selected screen' }, panel)))));
-  if (focus) focusHeading();
-}
+// Below 760 px (a phone, or 200% zoom of a laptop) the Coverage map is a list and the Screens filters are selects.
+const NARROW = typeof matchMedia === 'function' ? matchMedia('(max-width: 760px)') : null;
+const narrow = () => !!NARROW?.matches;
+NARROW?.addEventListener?.('change', () => { if (S.route.view === 'coverage') CV.render(); else if (S.route.view === 'screens') SC.renderWall(); else if (S.route.view === 'screen') SC.renderDetail(); });
+const views = { d, $, h, show, api, bg, shot, copyButton, announce, go, focusHeading, sevOf, main, narrow, get S() { return S; } };
+CV.init(views); SC.init(views);
 
 // ---- keys -----------------------------------------------------------------------------------------------------------
 
@@ -1032,8 +1038,12 @@ function onKey(e) {
     if (typing) { e.preventDefault(); const row = S.route.view === "findings" && S.focus ? $("row-" + S.focus) : null; if (row) row.focus(); else { t.blur(); focusHeading(); } return; }
     // the undo toast goes, and Esc does what it does without one (one press, not two)
     if (!TOAST.hidden) hideToast();
+    // M7: Coverage closes the cell's panel (back to the cell); Screen detail goes back to the wall (to its card)
+    if (S.route.view === 'coverage') { if (CV.escape()) e.preventDefault(); return; }
+    if (S.route.view === 'screen') { e.preventDefault(); SC.escape(); return; }
     if (S.selection.size) { S.selection.clear(); return renderFindings(true); }
-    if (S.route.view === 'detail') return go('#/findings');
+    // a finding opened from a screen goes back to that screen
+    if (S.route.view === 'detail') { const back = S.returnTo; S.returnTo = null; return go(back || '#/findings'); }
     return;
   }
   if (typing) return;                                     // keys are off in text fields (design §3.4)
@@ -1046,6 +1056,9 @@ function onKey(e) {
   const stop = () => { e.preventDefault(); e.stopPropagation(); };
   if (k === '?') { stop(); return help(); }
   if (k === '/' && inList) { stop(); return $('search')?.focus(); }
+  // M7: Screens and Screen detail are viewers (D4): their own keys, and no decision key; Coverage's map has its own
+  if (view === 'screens') { if (SC.wallKey(e, k)) stop(); return; }
+  if (view === 'screen') { if (SC.detailKey(e, k)) stop(); return; }
   if (!inList && !inDetail) return;
   if (t instanceof Element && t.closest('[role=toolbar], [role=tablist]') && (k === 'ArrowLeft' || k === 'ArrowRight')) return;
   if (inList && (k === 'j' || k === 'ArrowDown')) { stop(); return moveFocus(1); }
