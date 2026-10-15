@@ -246,23 +246,56 @@ fixed: never say *fixed*, *undone* or *needs you* unless the engine printed it.
 ## Guards, `check` and exports
 
 18. **Offering guards.** Only when `fix --summary` prints its second line, "Stop these coming back? `window.confirm`
-    (fixed twice) · `href="#"` → the board (nunchi open).", say it as printed: the board shows that card, and the user
-    adds a guard with its Add toggle (or with `nunchi guard --add <kind>` in their own terminal). Never offer a guard
-    at any other time, never run `guard --add`, `--remove` or `--baseline`, and never write `.nunchi/guards.json`
-    (the plugin's hook refuses all of these): adding, removing and re-baselining are the user's. A "guard available"
-    chip in the board or `findings` is passive: mention it only if the user asks about guards. You may run `guard`
-    (what each guard finds now) and `guard --lint`, and show the ESLint config object it prints for the user to paste
-    into their own `eslint.config.*` with its warning (it replaces any earlier `no-restricted-syntax` list for those
-    files, and a later one with options replaces it: they merge them into one list);
-    never edit their ESLint config yourself.
-19. **`check` in CI.** When the user wants CI to keep guards (or asks how), suggest a step that runs the bundled
-    engine from their checkout, e.g. `node <path to nunchi>/src/cli.mjs setup --no-browser` (the engine's pinned parser;
-    no Chromium) then `node <path to nunchi>/src/cli.mjs check --base origin/main --sarif nunchi.sarif` (fetch the base
-    first in a shallow clone), and uploading `nunchi.sarif` with GitHub's
-    `upload-sarif` action if they use code scanning. Exit codes: 0 clean, 1 a new guard hit or a guard removed or
-    weakened since `--base`, 2 a usage or state error. Never put `--fail-on` in CI: CI has no ledger, so it exits 2
-    (`ledger: absent`). On the user's machine `check --fail-on high` also fails on open findings. Relay `check`'s
-    lines as printed; do not say a guard passed or failed unless it printed so.
+    (fixed twice) · `href="#"` → the board (nunchi open).", say it as printed: it comes once, at the end of the fix
+    batch, and the board shows the same card, where the user adds a guard with its Add toggle. Never offer a guard at
+    any other time, never run `guard --add`, `--remove` or `--baseline`, and never write `.nunchi/guards.json` (the
+    plugin's hook refuses all of these): adding, removing and re-baselining are the user's. A "guard available" chip in
+    the board or `findings` is passive: mention it only if the user asks about guards. When the user asks to add a
+    guard (or which guards there are), run `nunchi guard` first and say what each would find now and how many of
+    those are already there (they become its baseline), then point them to the card or to `nunchi guard --add <kind>`
+    in their own terminal, and remind them to commit `.nunchi/guards.json` so CI checks the same guards. You may run
+    `guard --lint` and show the ESLint config object it prints for the user to paste into their own
+    `eslint.config.*` with its warning (it replaces any earlier `no-restricted-syntax` list for those files, and a later
+    one with options replaces it: they merge them into one list); never edit their ESLint config yourself.
+19. **`check` in CI.** When the user wants CI to keep guards (or asks how), suggest a GitHub Actions job like this one,
+    for them to add (never write it yourself). It runs the bundled engine pinned to a commit, in a dot folder (`check`
+    never reads dot folders), fetches the base branch so `--base` can compare, and uploads the SARIF even when `check`
+    fails:
+
+    ```yaml
+    name: nunchi check
+    on: pull_request
+    permissions:
+      contents: read
+      security-events: write        # upload-sarif needs it
+    jobs:
+      guards:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - run: git fetch --depth=1 origin ${{ github.base_ref }}
+          - uses: actions/setup-node@v4
+            with: { node-version: 22 }
+          - name: nunchi, pinned to a commit
+            run: |
+              git clone --filter=blob:none https://github.com/wonchance-art/nunchi .nunchi-engine
+              git -C .nunchi-engine checkout --detach <40-character commit SHA>
+              node .nunchi-engine/src/cli.mjs setup --no-browser
+          - run: node .nunchi-engine/src/cli.mjs check --base origin/${{ github.base_ref }} --sarif nunchi-check.sarif
+          - if: always()                # a guard hit exits 1; the results are uploaded anyway
+            uses: github/codeql-action/upload-sarif@v3
+            with:
+              sarif_file: nunchi-check.sarif
+              category: nunchi-check   # a distinct category per upload
+    ```
+
+    In an app in a subfolder, add `working-directory:` to the two `node` steps (and use `../.nunchi-engine`). If they
+    also upload `export --format sarif` (on their machine, where the ledger is), it is a separate upload with its own
+    `category: nunchi-export`; the files already say apart which is which (`runs[0].automationDetails.id` is
+    `nunchi/check/` or `nunchi/export/`). Exit codes: 0 clean, 1 a new guard hit or a guard removed or weakened since
+    `--base`, 2 a usage or state error. Never put `--fail-on` in CI: CI has no ledger, so it exits 2 (`ledger: absent`).
+    On the user's machine `check --fail-on high` also fails on open findings. Relay `check`'s lines as printed; do not
+    say a guard passed or failed unless it printed so.
 20. **Exports.** `export --format md|json|sarif [--status …] [--out <file>]` writes the findings to share or upload:
     secret-shaped strings become `[secret-shaped: <kind>]`, paths are relative to the repository, routes are templates.
     Text from the user's screens (evidence text, AI claims, control names from signed-in screens) is left out; add

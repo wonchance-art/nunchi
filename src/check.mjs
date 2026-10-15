@@ -151,7 +151,7 @@ export function runCheck({ project, root = project, failOn = null, base = null, 
       for (const [id, r] of more.rules) rules.set(id, r);
       results.push(...more.results);
     }
-    sarifOut = sarifLog({ version, rules, results });
+    sarifOut = sarifLog({ version, rules, results, automation: 'nunchi/check/' });
     const cut = truncationLine(sarifOut.truncated);
     if (cut) lines.push(cut);
   }

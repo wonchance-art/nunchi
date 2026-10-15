@@ -70,8 +70,10 @@ const RESULTS_DEPTH = 4, RULES_DEPTH = 6;                        // log › runs
 // `rules`: Map id → { title, severity (the worst of its results), lens, tags, security }. `results`: [{ ruleId,
 // severity, message, path (repo-relative), line, column?, logical: [{ name, kind }], fingerprints: { name: value },
 // suppression?: { status, justification } }] (a result the person dismissed or kept, or one that is fixed: GitHub
-// shows it as closed). → { log, text, kept, of, truncated: null | { kept, of, why } }
-export function sarifLog({ version, rules, results, maxBytes = GITHUB_LIMITS.gzipBytes, keep = GITHUB_LIMITS.resultsKept }) {
+// shows it as closed). `automation`: the run's `automationDetails.id` ("nunchi/check/", "nunchi/export/"), so code
+// scanning keeps the two analyses apart even when an upload names no category.
+// → { log, text, kept, of, truncated: null | { kept, of, why }, bytesAt }
+export function sarifLog({ version, rules, results, automation = null, maxBytes = GITHUB_LIMITS.gzipBytes, keep = GITHUB_LIMITS.resultsKept }) {
   const ordered = [...results].sort((a, b) => sevRank(a.severity) - sevRank(b.severity) || cmp(a.ruleId, b.ruleId) || cmp(a.path, b.path)
     || a.line - b.line || (a.column || 0) - (b.column || 0) || cmp(stableJson(a.fingerprints), stableJson(b.fingerprints)) || cmp(a.message, b.message));
   const of = ordered.length;
@@ -113,6 +115,7 @@ export function sarifLog({ version, rules, results, maxBytes = GITHUB_LIMITS.gzi
       $schema: SARIF_SCHEMA, version: SARIF_VERSION,
       runs: [{
         tool: { driver: { name: 'nunchi', version, informationUri: 'https://github.com/wonchance-art/nunchi', rules: [] } },
+        ...(automation ? { automationDetails: { id: automation } } : {}),
         columnKind: 'utf16CodeUnits',
         originalUriBaseIds: { '%SRCROOT%': { description: { text: 'The root of the repository (paths are relative to it).' } } },
         results: [],

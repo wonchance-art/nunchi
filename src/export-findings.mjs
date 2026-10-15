@@ -229,6 +229,6 @@ export function findingResults(model) {
 }
 export function exportSarif(model, { version }) {
   const { results, rules, unlocated } = findingResults(model);
-  return { ...sarifLog({ version, rules, results }), unlocated };
+  return { ...sarifLog({ version, rules, results, automation: 'nunchi/export/' }), unlocated };
 }
 export const plain = plainText;

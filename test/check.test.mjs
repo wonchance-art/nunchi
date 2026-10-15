@@ -238,6 +238,7 @@ test('--sarif: new hits and weakened guards as results, valid against the vendor
   const log = JSON.parse(readFileSync(out, 'utf8'));
   assert.deepEqual(sarifProblems(log), []);
   assert.deepEqual(githubProblems(log), []);
+  assert.deepEqual(log.runs[0].automationDetails, { id: 'nunchi/check/' }, 'apart from the export\'s analysis');
   const res = log.runs[0].results;
   assert.deepEqual(res.map(x => [x.ruleId, x.locations[0].physicalLocation.artifactLocation.uri, x.locations[0].physicalLocation.region.startLine]).sort(),
     [['nunchi.guard/dead-href', 'app/nav.tsx', 1], ['nunchi.guard/native-dialog', '.nunchi/guards.json', 1]]);

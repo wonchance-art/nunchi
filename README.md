@@ -65,8 +65,9 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
   a login that expired or an app that isn't running is reported once, not as a hundred findings
 - **Guards** that keep a fixed kind of defect from coming back: `window.confirm`/`alert`, `href="#"` and
   `javascript:` links, `{error.message}` in JSX, `{{ }}` left in JSX text, and colour literals outside your measured
-  tokens. Read from your source (parsed, not grepped; tests, comments and `node_modules` never count). After a fix the
-  board offers them on one card ("Stop these coming back?"); you add them, never your AI. They live in
+  tokens. Read from your source (parsed, not grepped; tests, comments and `node_modules` never count). At the end of a
+  batch of fixes the board offers the first four, for the kinds it fixed, on one card ("Stop these coming back?"); the
+  colour guard you add with `nunchi guard --add colour-literal` in your own terminal. You add them, never your AI. They live in
   `.nunchi/guards.json` with a baseline of what was already there, so only new hits fail. `nunchi guard --lint` prints
   the same checks as an ESLint config object to paste (nunchi never writes your config)
 - **`nunchi check`** for CI: no browser, no network. The guards over your source (a new hit fails), `--base

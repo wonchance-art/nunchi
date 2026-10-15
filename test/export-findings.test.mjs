@@ -188,6 +188,7 @@ test('SARIF: valid against the vendored schema; file:line of the finding, else t
   const log = JSON.parse(r.stdout);
   assert.deepEqual(sarifProblems(log), []);
   assert.deepEqual(githubProblems(log), []);
+  assert.deepEqual(log.runs[0].automationDetails, { id: 'nunchi/export/' }, 'apart from check\'s analysis');
   const results = log.runs[0].results;
   const where = id => results.filter(x => x.ruleId === id).map(x => `${x.locations[0].physicalLocation.artifactLocation.uri}:${x.locations[0].physicalLocation.region.startLine}`);
   assert.deepEqual(where('L6.raw-technical-text'), ['app/garden/page.tsx:7']);
