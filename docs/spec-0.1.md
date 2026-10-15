@@ -797,14 +797,16 @@ unreadable one by one). Built in `src/ledger.mjs`:
     released only by its owner. Waiting is fair (2026-10-15 KST): a waiter that has waited 20 ms makes a ticket of
     its own (`<file>.lock.d.wait-<since>-<token>`, an empty file made once, never renamed or rewritten, its order in
     its name), and while live tickets exist only the waiter with the lowest takes the lock, so a process that releases
-    and takes the lock again at once cannot starve the others (measured: 4 processes × 15 holds of 80 ms, longest
-    waits 2.6–3.0 s before, 0.2–0.3 s after). A waiter renews its ticket's time while it waits; one not renewed for
-    1 s, or that cannot be read, does not count; a crash's ticket goes after 30 s or with the hour-old leftovers. A
-    waiter judges the holder stale at most every 100 ms, since on Windows each read of `owner.json` holds up the
-    release. Windows' rules (a file open elsewhere cannot be renamed over or deleted at once; a folder holding an open
-    file cannot be renamed) are emulated on any machine through the lock's `io` (`test/fixtures/windows-io.mjs`):
-    under them a single "next" place renamed over and deleted let a waiter wait up to 15 holds; tickets keep it to
-    about 4. Waiting ends after 5 s with an error. Renames Windows refuses while another process
+    and takes the lock again at once cannot starve the others. Fairness is measured as overtakes (how many
+    acquisitions by others come between a request and its turn; at most N − 1 for N waiters, however fast the
+    machine): 4 processes × 15 holds of 80 ms, at most 45 before, 3 after (2026-10-15 KST). A waiter renews its
+    ticket's time while it waits; one not renewed for 1 s, or that cannot be read, does not count; a crash's ticket
+    goes after 30 s or with the hour-old leftovers. A waiter judges the holder stale at most every 100 ms, since on
+    Windows each read of `owner.json` by another process holds up the release. Windows' rules (a file open in another
+    process cannot be renamed over or deleted at once; a folder holding one cannot be renamed) are emulated on any
+    machine through the lock's `io` (`test/fixtures/windows-io.mjs`); under them tickets keep 3 overtakes (a single
+    "next" place renamed over and deleted, the first fair lock, reached 4). Every waiter gets the lock; waiting ends
+    after 5 s with an error. Renames Windows refuses while another process
     reads in the folder (EPERM, EACCES, EBUSY) are retried with backoff, for the lock, the ledger files, run folders
     and `runs/latest` (last writer wins; a failed `latest` write never fails a capture).
 - **Channels (2026-10-15 KST, design §1, §7.2):** a decision records how it was made (`channel`: board, cli-tty,

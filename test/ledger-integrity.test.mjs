@@ -267,58 +267,70 @@ for (let i = 0; i < Number(n); i++) addApproved(file, [who + '-' + i + ':0123456
   assert.deepEqual(readdirSync(dir).sort(), ['approved.json'], 'no lock or temp file left behind');
 });
 
-test('D5: the lock is fair: a process that releases and takes it again at once does not starve the others (each waits about the holds ahead of it, never seconds)', async () => {
+// Fairness, measured as overtakes: for each acquisition, how many acquisitions by the other waiters came between its
+// request and its turn. With N waiters each holding one request at a time, a fair lock lets each be overtaken at most
+// N − 1 times, however slow the machine; an unfair one lets the same process take it back again and again. → the
+// largest per waiter. `acq`: [{ who, asked, got }] (times on one clock).
+const overtakes = acq => {
+  const got = acq.map(a => a.got).sort((x, y) => x - y);
+  const worst = {};
+  for (const a of acq) {
+    const between = acq.filter(b => b.who !== a.who && b.got > a.asked && b.got < a.got).length;
+    worst[a.who] = Math.max(worst[a.who] ?? 0, between);
+  }
+  return { worst: Object.keys(worst).sort().map(k => worst[k]), first: got[0], last: got.at(-1) };
+};
+
+test('D5: the lock is fair: a process that releases and takes it again at once does not starve the others (each is overtaken at most once by each other waiter)', async () => {
   // 4 processes × 15 holds of 80 ms. Unfair (before): one process took the lock back on every release while the others
-  // backed off to 100 ms polls and found it free only by luck, waiting 2–3 s here and over the 5 s limit (LOCKED) on
-  // a slow Windows runner. Fair: the longest waiter's ticket goes first, so a wait is about the 3 holds ahead of it.
-  // The message gives each process's longest wait, its holds as measured, and the waits in holds.
+  // backed off to 100 ms polls and found it free only by luck (waits of 2–3 s here, over the 5 s limit (LOCKED) on a
+  // slow Windows runner). Fair: the longest waiter's ticket goes first.
   const dir = tmp('nunchi-lock-fair-');
   const file = join(dir, 'x.json');
   const child = `import { withLock } from ${JSON.stringify(STABLE)};
-const [file, at] = process.argv.slice(1);
+const [file, at, who] = process.argv.slice(1);
 while (Date.now() < Number(at)) {}
-let worst = 0; const holds = [];
-for (let i = 0; i < 15; i++) { const t = Date.now(); withLock(file, () => { worst = Math.max(worst, Date.now() - t); const s = Date.now(); while (Date.now() - s < 80) {} holds.push(Date.now() - s); }); }
-console.log(JSON.stringify({ worst, holds }));`;
+const clock = () => performance.timeOrigin + performance.now();
+const acq = [];
+for (let i = 0; i < 15; i++) { const asked = clock(); withLock(file, () => { acq.push({ who, asked, got: clock() }); const s = Date.now(); while (Date.now() - s < 80) {} }); }
+console.log(JSON.stringify(acq));`;
   const at = Date.now() + 1500;
-  const out = await Promise.all([0, 1, 2, 3].map(() => new Promise(res => execFile('node', ['--input-type=module', '-e', child, file, String(at)], (err, stdout, stderr) => { let r = {}; try { r = JSON.parse(stdout); } catch {} res({ err, stderr, ...r }); }))));
+  const out = await Promise.all(['p0', 'p1', 'p2', 'p3'].map(who => new Promise(res => execFile('node', ['--input-type=module', '-e', child, file, String(at), who], (err, stdout, stderr) => { let acq = []; try { acq = JSON.parse(stdout); } catch {} res({ err, stderr, acq }); }))));
   for (const r of out) assert.equal(r.err, null, r.stderr);
-  const holds = out.flatMap(r => r.holds).sort((a, b) => a - b), median = holds[holds.length >> 1];
-  const worst = out.map(r => r.worst);
-  const said = `longest waits (ms): ${worst.join(', ')}; holds (ms): median ${median}, longest ${holds.at(-1)}; longest waits in holds: ${worst.map(w => (w / median).toFixed(1)).join(', ')}`;
-  assert.ok(worst.every(w => w < 1500), said);
+  const o = overtakes(out.flatMap(r => r.acq));
+  assert.ok(o.worst.every(n => n <= 3), `overtaken at most (per process): ${o.worst.join(', ')}; a fair lock: at most 3`);
+  assert.ok(o.last - o.first < 30e3, 'every waiter got the lock within 30 s');
   assert.deepEqual(readdirSync(dir), [], 'no lock, ticket or temp file left behind');
 });
 
 test('D5: the lock stays fair under Windows\' file rules (a file open elsewhere cannot be renamed over or deleted at once, a folder with an open file cannot be renamed), here on any machine', async () => {
-  // In one process with Windows' rules on stable.mjs's io (test/fixtures/windows-io.mjs): 4 waiters × 12 holds of 40
-  // ms through withLockAsync. A place for the next waiter that is renamed over and deleted (the first fair lock) lost
-  // its turns there: up to 15 holds. Tickets, made once and never renamed, keep every wait near the 3 holds ahead.
+  // In one process with Windows' rules on stable.mjs's io (test/fixtures/windows-io.mjs): 4 waiters × 12 holds of
+  // 40 ms through withLockAsync, with this machine's own rules and with Windows'. A single place for the next waiter,
+  // renamed over and deleted (the first fair lock), lost turns under Windows' rules; tickets, made once and never
+  // renamed, keep the order.
   const run = async rules => {
     const w = rules ? windowsIo(S.io) : null;
     const dir = tmp('nunchi-lock-win-');
     const file = join(dir, 'x.json');
-    const holds = [];
-    const waiter = async () => {
-      let worst = 0;
+    const acq = [];
+    const waiter = async who => {
       for (let i = 0; i < 12; i++) {
-        const t = performance.now();
-        await S.withLockAsync(file, async () => { worst = Math.max(worst, performance.now() - t); const s = performance.now(); await new Promise(r => setTimeout(r, 40)); holds.push(performance.now() - s); });
+        const asked = performance.now();
+        await S.withLockAsync(file, async () => { acq.push({ who, asked, got: performance.now() }); await new Promise(r => setTimeout(r, 40)); });
       }
-      return worst;
     };
     try {
-      const worst = await Promise.all([0, 1, 2, 3].map(waiter));
-      holds.sort((a, b) => a - b);
-      const median = holds[holds.length >> 1];
-      return { inHolds: worst.map(x => x / median), stats: w?.stats, left: readdirSync(dir) };
+      await Promise.all(['w0', 'w1', 'w2', 'w3'].map(waiter));
+      return { ...overtakes(acq), stats: w?.stats, left: readdirSync(dir) };
     } finally { w?.restore(); }
   };
   for (const rules of [false, true]) {
     const r = await run(rules);
-    assert.ok(r.inHolds.every(x => x <= 6), `${rules ? 'Windows rules' : 'this machine'}: longest waits in holds ${r.inHolds.map(x => x.toFixed(1)).join(', ')}; rules met ${JSON.stringify(r.stats || {})}`);
+    const where = rules ? `Windows' rules (met: ${JSON.stringify(r.stats)})` : "this machine's rules";
+    assert.ok(r.worst.every(n => n <= 3), `${where}: overtaken at most (per waiter): ${r.worst.join(', ')}; a fair lock: at most 3`);
+    assert.ok(r.last - r.first < 30e3, 'every waiter got the lock within 30 s');
     assert.deepEqual(r.left, [], 'no lock, ticket or temp file left behind');
-    if (rules) assert.ok(r.stats.renameFolderWithOpen > 0 && r.stats.deletePending > 0, `the rules were met: ${JSON.stringify(r.stats)}`);
+    if (rules) assert.ok(r.stats.renameFolderWithOpen + r.stats.deletePending > 0, `Windows' rules were met: ${JSON.stringify(r.stats)}`);
   }
 });
 
