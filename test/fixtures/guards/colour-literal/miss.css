@@ -3,3 +3,5 @@
 .card { color: #1f2937; background: #FFF; border-color: rgb(37 99 235); }
 .card::before { content: "#ff0000"; }
 .note { font-family: "Tomato", Tan, serif; background-image: url(#ff0000); color: var(--brand); }
+:export { brand: #ff0000; accent: red; }
+.tag { @apply p-2 bg-red-500 text-[var(--brand)]; }

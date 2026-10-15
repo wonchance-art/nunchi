@@ -199,6 +199,8 @@ const RAW_TAGS = new Set(['code', 'pre', 'kbd', 'samp', 'style', 'script', 'nosc
 const NOT_SHOWN_TAGS = new Set(['style', 'script', 'noscript']);
 const COLOR_ATTR = new Set(['fill', 'stroke', 'color', 'stopColor', 'stop-color', 'floodColor', 'flood-color', 'lightingColor', 'lighting-color']);
 const CLASS_ATTR = new Set(['className', 'class', 'tw']);
+// An element of the page itself (`<svg>`, `<font>`), not a component (`<Badge>`, `<ui.Box>`)
+const domTag = el => el?.type === 'JSXOpeningElement' && el.name.type === 'JSXIdentifier' && /^[a-z]/.test(el.name.name);
 const GLOBALS = ['window', 'globalThis', 'self'];
 
 // One file's hits for the given guards. `src`: its text; `file`: its path (for the parser's plugins).
@@ -247,11 +249,14 @@ export function scanCode(src, file, guards) {
             if (p.type !== 'ObjectProperty') continue;
             const key = p.key.type === 'Identifier' ? p.key.name : p.key.type === 'StringLiteral' ? p.key.value : '';
             if (/^--/.test(key)) continue;                                 // a custom property defines a token
-            for (const s of stringsUnder(p.value)) colourHits(p, s.text, COLORISH.test(key), `style\0${key}`);
+            // the value as written (a string, a template's parts, either branch): never a theme lookup's argument
+            // (`theme('colors.red')`, `palette['red']`, `getToken('red')`)
+            for (const s of literalTexts(p.value)) colourHits(p, s.text, COLORISH.test(key), `style\0${key}`);
           }
         } else if (CLASS_ATTR.has(name)) {
           for (const s of stringsUnder(v)) for (const c of arbitraryColours(s.text)) if (!colourAllowed(c.text, allowed)) hit('colour-literal', s.node, whatOf(c.text), `class\0${c.token}\0${c.nth}`);
-        } else if (COLOR_ATTR.has(name)) {
+        } else if (COLOR_ATTR.has(name) && (name !== 'color' || domTag(parent))) {
+          // `color` on a component is its theme's prop (`<Box color="red.500">`, `<Button color="primary">`)
           for (const t of texts) colourHits(t.node, t.text, true, `attr\0${name}`);
         }
       }
@@ -277,13 +282,16 @@ export function scanCss(src, guards) {
   const allowed = allowedColours(colour.params);
   const lines = lineStarts(src);
   const hits = [];
+  const push = (at, text, key) => {
+    const line = lineOf(lines, at);
+    hits.push({ kind: 'colour-literal', line, column: at - lines[line - 1] + 1, what: whatOf(text), anchor: anchorOf('colour-literal', key) });
+  };
   for (const d of cssDeclarations(src)) {
     if (d.prop.startsWith('--')) continue;
+    // Tailwind's `@apply bg-[#f00]`: the class list's arbitrary values, as in a className
+    if (d.prop === '@apply') { for (const c of arbitraryColours(d.value)) if (!colourAllowed(c.text, allowed)) push(d.valueStart + c.index, c.text, `class\0${c.token}\0${c.nth}`); continue; }
     coloursIn(d.value, { named: COLORISH.test(d.prop) }).forEach((c, i) => {
-      if (colourAllowed(c.text, allowed)) return;
-      const at = d.valueStart + c.index;
-      const line = lineOf(lines, at);
-      hits.push({ kind: 'colour-literal', line, column: at - lines[line - 1] + 1, what: whatOf(c.text), anchor: anchorOf('colour-literal', `css\0${d.prop}\0${colourKey(c.text)}\0${i}`) });
+      if (!colourAllowed(c.text, allowed)) push(d.valueStart + c.index, c.text, `css\0${d.prop}\0${colourKey(c.text)}\0${i}`);
     });
   }
   return hits;
@@ -297,9 +305,14 @@ export function cssDeclarations(src) {
   const s = src.replace(/\/\*[\s\S]*?(\*\/|$)/g, m => m.replace(/[^\n]/g, ' '));
   const out = [];
   let depth = 0, paren = 0, start = 0;
+  // the blocks open around a place: a CSS module's `:export { brand: #f00 }` (and `:import`) hands values to JS, it
+  // sets no style
+  const blocks = [];
   const flush = end => {
-    if (depth < 1) return;
+    if (depth < 1 || blocks.some(b => b.notStyle)) return;
     const seg = s.slice(start, end);
+    const apply = /^(\s*)@apply\b/.exec(seg);
+    if (apply) { const value = seg.slice(apply[0].length); const lead = value.length - value.trimStart().length; out.push({ prop: '@apply', value: value.trim(), valueStart: start + apply[0].length + lead }); return; }
     const colon = seg.indexOf(':');
     if (colon < 0) return;
     const prop = seg.slice(0, colon).trim();
@@ -314,8 +327,8 @@ export function cssDeclarations(src) {
     if (c === '(') { paren++; continue; }
     if (c === ')') { paren = Math.max(0, paren - 1); continue; }
     if (paren) continue;
-    if (c === '{') { depth++; start = i + 1; }
-    else if (c === '}') { flush(i); depth = Math.max(0, depth - 1); start = i + 1; }
+    if (c === '{') { blocks.push({ notStyle: /^:(export|import)\b/.test(s.slice(start, i).trim()) }); depth++; start = i + 1; }
+    else if (c === '}') { flush(i); blocks.pop(); depth = Math.max(0, depth - 1); start = i + 1; }
     else if (c === ';') { flush(i); start = i + 1; }
   }
   return out;
@@ -357,7 +370,8 @@ export function coloursIn(value, { named = false } = {}) {
         else i = after + 1;                                       // a gradient, color-mix(): its colours are literals too
         continue;
       }
-      if (named && Object.hasOwn(NAMED, word.toLowerCase())) out.push({ text: word, index: i });
+      // a named colour is a whole word of the value: `red.500` and `colors.red` are a theme's keys
+      if (named && Object.hasOwn(NAMED, word.toLowerCase()) && !(i > 0 && /[^\s,(/]/.test(s[i - 1])) && !(after < s.length && /[^\s,)/!]/.test(s[after]))) out.push({ text: word, index: i });
       i = after;
       continue;
     }
@@ -369,14 +383,32 @@ const matchParen = (s, open) => { let d = 0; for (let j = open; j < s.length; j+
 // Tailwind arbitrary values in a class list: `bg-[#1f2937]`, `text-[rgb(0_0_0)]` (`_` is a space there). Each with
 // its class token (lowercased: the anchor, so another class added or moved beside it changes nothing) and its place
 // among the token's colours.
+// The value can sit anywhere in the brackets (`shadow-[0_0_0_1px_#f00]`), behind a type hint (`bg-[color:#f00]`) or
+// in an arbitrary property (`[color:#f00]`); a variant's brackets (`data-[state=open]:`, `[&>*]:`) are not a value.
+// A named colour counts where the utility or the property takes a colour (`text-[red]`, `[background:red]`).
+const COLOUR_UTILITY = /^!?-?(bg|text|border(-[a-z]+)?|ring(-offset)?|shadow|inset-shadow|drop-shadow|fill|stroke|outline|decoration|accent|caret|from|via|to|divide|placeholder)-$/;
 function arbitraryColours(text) {
   const out = [];
-  for (const token of String(text).split(/\s+/).filter(Boolean)) {
+  for (const m of String(text).matchAll(/\S+/g)) {
+    const token = m[0];
+    // the utility: what follows the last variant colon outside brackets
+    let depth = 0, from = 0;
+    for (let i = 0; i < token.length; i++) { const c = token[i]; if (c === '[' || c === '(') depth++; else if ((c === ']' || c === ')') && depth) depth--; else if (c === ':' && !depth) from = i + 1; }
+    const open = token.indexOf('[', from);
+    if (open < 0) continue;
+    let close = -1;
+    depth = 0;
+    for (let i = open; i < token.length; i++) { if (token[i] === '[') depth++; else if (token[i] === ']' && --depth === 0) { close = i; break; } }
+    if (close < 0) continue;
+    const prefix = token.slice(from, open);
+    let inner = token.slice(open + 1, close), at = open + 1, named = COLOUR_UTILITY.test(prefix);
+    const hint = /^([a-z-]+):/.exec(inner);
+    if (hint && (!prefix || /^(color|colour)$/.test(hint[1]))) {
+      if (!prefix) named = COLORISH.test(hint[1]);
+      inner = inner.slice(hint[0].length); at += hint[0].length;
+    } else if (!prefix) continue;                                   // `[&>*]` alone: a variant, not a value
     let nth = 0;
-    for (const m of token.matchAll(/\[(#[0-9a-fA-F]{3,8}|(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\([^\]\s]*\))\]/g)) {
-      const t = m[1].replace(/_/g, ' ');
-      if (literalColour(t)) out.push({ text: t, token: token.toLowerCase(), nth: nth++ });
-    }
+    for (const c of coloursIn(inner.replace(/(?<!\\)_/g, ' '), { named })) out.push({ text: c.text, token: token.toLowerCase(), nth: nth++, index: m.index + at + c.index });
   }
   return out;
 }
