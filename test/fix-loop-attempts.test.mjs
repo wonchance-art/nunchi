@@ -79,9 +79,21 @@ test('branch: verify and undo only on the fix branch; the same commit on another
   await F.verifyFix(ctxOf(p), p.group);
   assert.equal(latest(p).phase, 'fixed');
   git(p.root, 'switch', '-q', '--detach', head);
+  // fix --undo refuses up front (the record untouched); the revert's own check still guards the automatic undo below
   const u = F.undoFix(ctxOf(p), p.group);
-  assert.match(u.lines.at(-1), /^Couldn't undo the fix of 'Tap target smaller than 24px' \(commit [0-9a-f]{7}\): HEAD is detached, not on the fix branch nunchi\/fixes-\d{4}\. Switch back to nunchi\/fixes-\d{4}, then tell your AI “undo it” — it needs you\.$/);
+  assert.match(u.lines.at(-1), /^Not undone: you are on a detached HEAD, not on the fix branch nunchi\/fixes-\d{4}\. Switch back to it \(git switch nunchi\/fixes-\d{4}\), then tell your AI “undo it”\.$/);
+  assert.deepEqual([u.code, u.json.why, u.json.on, latest(p).phase], [1, 'wrong-branch', null, 'fixed']);
   assert.equal(git(p.root, 'rev-parse', 'HEAD'), head, 'nothing reverted');
+  // a fix that broke something, with HEAD detached while P1 ran: the automatic undo stops at the branch → needs you
+  const q = await fixProject();
+  await attempt(q, { change: ['TINY', 'ROOMY CLIP'], verify: false });
+  const qHead = git(q.root, 'rev-parse', 'HEAD');
+  const detach = { capture: async a => { const r = await q.cap.capture(a); if (a.runMeta?.fix?.probe === 'P1') git(q.root, 'switch', '-q', '--detach', qHead); return r; } };
+  const w = await F.verifyFix(ctxOf(q, detach), q.group);
+  assert.match(w.lines.at(-1), /^Couldn't undo the fix of 'Tap target smaller than 24px' \(commit [0-9a-f]{7}\): HEAD is detached, not on the fix branch nunchi\/fixes-\d{4}\. Switch back to nunchi\/fixes-\d{4}, then tell your AI “undo it” — it needs you\.$/);
+  const rec = latest(q);
+  assert.deepEqual([rec.phase, rec.outcome.needsYou, rec.outcome.reason, rec.outcome.branch], ['needs-you', 'wrong-branch', 'wrong-branch', rec.branch], 'the board\'s revert card reads why and the branch');
+  assert.equal(git(q.root, 'rev-parse', 'HEAD'), qHead, 'nothing reverted');
 });
 
 test('filters: a repository whose files go through git filters (Git LFS) is refused up front, with the paths; none → no refusal', async () => {
