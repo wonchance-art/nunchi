@@ -16,7 +16,7 @@
 import { join, basename, dirname, relative, sep, resolve } from 'node:path';
 import { readFileSync, existsSync, realpathSync } from 'node:fs';
 import * as P from '../project.mjs';
-import { titleOf, latestRunOf, foldFix, unfoldFix, commitFix, byRun, looked, currentTargets, writtenAs, approvalKey, HUMAN_CHANNELS } from '../ledger.mjs';
+import { titleOf, latestRunOf, latestSweepOf, foldFix, unfoldFix, commitFix, byRun, looked, currentTargets, writtenAs, approvalKey, HUMAN_CHANNELS } from '../ledger.mjs';
 import { human } from '../board/shared.mjs';
 import { readConfig, workTree } from '../runs.mjs';
 import { baseUrlRefusal } from '../network.mjs';
@@ -116,9 +116,10 @@ function attemptsUsed(ctx, group) {
     .filter(([d]) => !counted || counted.has(d)).map(([d, a]) => `${d}:${a}`)).size;
 }
 
-// The last sweep of this worktree: what the probes copy (persons, states, sample paths, the base URL).
+// The last sweep of this worktree: what the probes copy (persons, states, sample paths, the base URL). A quick first
+// look (design §6) is not one: it saw a few screens in the normal state only.
 function lastSweep(ctx) {
-  const id = latestRunOf(ctx.led.state, ctx.stream);
+  const id = latestSweepOf(ctx.led.state, ctx.stream);
   if (!id) return null;
   const dir = join(ctx.runsDir, id);
   const meta = readJson(join(dir, 'run.json'), {}), manifest = readJson(join(dir, 'manifest.json'), {});
@@ -358,7 +359,7 @@ async function startFixInner(ctx, id, opts = {}) {
     if (dirty.length || ctx.git.inProgress().length) return refuse([...said, `Your working tree has uncommitted changes (${dirty.slice(0, 5).join(', ')}${dirty.length > 5 ? ` +${dirty.length - 5} more` : ''}${ctx.git.inProgress().length ? `; a ${ctx.git.inProgress()[0]} is in progress` : ''}): commit them as "WIP before nunchi fixes", or stash them, before fixing.`], { dirty });
   }
   const sweep = lastSweep(ctx);
-  if (!sweep) return refuse('No capture yet: nunchi capture --url <your local server> first.');
+  if (!sweep) return refuse(latestRunOf(ctx.led.state, ctx.stream) ? 'Only a quick first look so far: the fix loop re-checks against a full check. Run nunchi capture --url <your local server> first.' : 'No capture yet: nunchi capture --url <your local server> first.');
   const cause = rec?.scope ? null : causeOf(ctx, tf.fixing, sweep);
   if (!rec && !cause.groupRoutes.length) return refuse(`'${title}' belongs to the whole app, not to a screen nunchi can re-check: fix it by hand, then run a full capture.`);
   // the address: --url, else the last capture's (this folder's app); a linked worktree runs its own server

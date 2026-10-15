@@ -344,6 +344,16 @@ export function captureRuns(state, stream = 'main') {
 }
 // The latest capture run of a stream (what `findings` and the review page call "this run"), else the latest of any.
 export const latestRunOf = (state, stream = 'main') => captureRuns(state, stream).pop() ?? state.runs[state.runs.length - 1] ?? null;
+// The kind a capture run was folded as (a quick first look, or a sweep).
+export const foldKindOf = (state, run, stream = 'main') => foldOf(state, run, 'rule', stream)?.kind ?? 'sweep';
+// The latest sweep of a stream, a quick first look left out (design 0.1-c §6): what the fix loop's probes copy. Like
+// latestRunOf, a stream with none takes the latest of any stream.
+export function latestSweepOf(state, stream = 'main') {
+  const mine = captureRuns(state, stream).filter(r => foldKindOf(state, r, stream) === 'sweep').pop();
+  if (mine) return mine;
+  const quick = new Set((state.folds || []).filter(f => f.source === 'rule' && f.kind === 'quick').map(f => f.run));
+  return state.runs.filter(r => !quick.has(r)).pop() ?? null;
+}
 
 // A cell is where a finding was seen on its route: person.state.viewport (the end of the scene id). A key is
 // route|cell, what a run looked at.
@@ -425,7 +435,9 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
   if (kind !== 'sweep' && kind !== 'quick') return { ...st, folds: withFold(st.folds, entry) };
   // the watermark is per stream (worktree): another worktree's newer run does not make this one's runs old, and
   // only this stream's newest run may say what is gone (below)
-  const newest = kind === 'sweep' && !captureRuns(st, stream).some(r => byRun(r, id) > 0);
+  // (a quick run is no watermark: a sweep started before a quick run and folded after it still says what is gone — but
+  // never of an item a later run saw, below; review of PR #33)
+  const newest = kind === 'sweep' && !captureRuns(st, stream).some(r => byRun(r, id) > 0 && foldKindOf(st, r, stream) === 'sweep');
   const sets = { ...(st.coverage || {}) };
   const next = { ...st, runs: [...new Set([...st.runs, id])].sort(byRun), folds: withFold(st.folds, entry), items: { ...st.items } };
   const covered = [...new Set(scenes.filter(looked).map(s => keyOf(s.route, `${s.person}.${s.state}.${s.viewport}`)))].sort();
@@ -466,7 +478,8 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
     const old = next.items[fp];
     if (old && isAi(old)) continue;
     const route = p.f.route ?? null;
-    const base = { fp, group: p.f.group, source: 'rule', stream, lens: p.f.lens, rule: p.f.rule, severity: p.f.severity, route, origin,
+    // a quick run's sighting never takes an item over from the worktree that last swept it (review of PR #33)
+    const base = { fp, group: p.f.group, source: 'rule', stream: kind === 'quick' && old ? streamOf(old) : stream, lens: p.f.lens, rule: p.f.rule, severity: p.f.severity, route, origin,
       persons: [...p.persons].sort(), viewports: [...p.viewports].sort(), states: [...p.states].sort(), places: p.scenes.length, examples: p.scenes.slice(0, 5),
       selector: p.f.selector ?? null, evidence: p.f.evidence, inputs: fingerprintOf(p.f).inputs };
     const cellsNow = [...p.cells].sort();
@@ -494,7 +507,7 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
     for (const [fp, item] of Object.entries(next.items)) {
       // only the worktree that last saw an item can say it is gone: worktrees on other branches would otherwise
       // fix and bring back each other's items in turn (until M6 makes other branches' captures probes)
-      if (isAi(item) || seen.has(fp) || streamOf(item) !== stream || !lookedAgain(item, run, sets)) continue;
+      if (isAi(item) || seen.has(fp) || streamOf(item) !== stream || byRun(item.lastSeen || id, id) > 0 || !lookedAgain(item, run, sets)) continue;
       lookedAt.push(fp);
       if (!item.goneAt) gone.push(fp);
     }
@@ -1020,10 +1033,18 @@ export function view(state, decisions, approved = new Set(), { now = Date.now(),
     if (!on.has(k)) on.set(k, []);
     on.get(k).push(d);
   }
-  // "not looked at for 3 runs" counts the runs of the item's own stream (worktree): another worktree's captures do
-  // not look at it (only the stream that last saw an item can fix it)
+  // "not looked at for 3 runs" counts the sweeps of the item's own stream (worktree) after it was last looked at: another
+  // worktree's captures do not look at it (only the stream that last saw an item can fix it), and a quick first look
+  // never could (review of PR #33). `after`: run → the stream's sweeps after it.
   const streams = new Map();
-  const runsOf = s => { if (!streams.has(s)) { const list = captureRuns(state, s); streams.set(s, { list, at: new Map(list.map((r, i) => [r, i])) }); } return streams.get(s); };
+  const runsOf = s => {
+    if (!streams.has(s)) {
+      const list = captureRuns(state, s), after = new Map();
+      for (let i = list.length - 1, n = 0; i >= 0; i--) { after.set(list[i], n); if (foldKindOf(state, list[i], s) === 'sweep') n++; }
+      streams.set(s, { list, after });
+    }
+    return streams.get(s);
+  };
   const rows = [];
   for (const item of Object.values(state.items)) {
     const ai = isAi(item);
@@ -1062,7 +1083,7 @@ export function view(state, decisions, approved = new Set(), { now = Date.now(),
     if (stale && (status === 'open' || status === 'regressed')) status = 'stale';
     const last = item.lookedAt || item.lastSeen;
     const own = runsOf(streamOf(item));
-    const notLookedAt = !item.goneAt && own.at.has(last) && own.list.length - 1 - own.at.get(last) >= NOT_LOOKED_RUNS ? last : null;
+    const notLookedAt = !item.goneAt && own.after.has(last) && own.after.get(last) >= NOT_LOOKED_RUNS ? last : null;
     rows.push({ ...item, source: item.source || 'rule', status, decision: d ? { id: d.id, decision: d.decision, reason: d.reason, by: d.by, at: d.at, verified, ...(how || {}) } : null, note, notLookedAt,
       ...(ai ? { stale, needsYou: item.needsYou ?? null, checked: checkedAi(item) } : {}) });
   }

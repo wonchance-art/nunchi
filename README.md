@@ -36,6 +36,10 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
   once with a test account), deterministically: two runs of the same build give byte-identical evidence
 - **Forced states** on screens that load data: **empty, error, slow, offline**, from a recording of your app's own
   responses (replayed, so screens stay comparable between runs)
+- **A first look** (`nunchi capture --quick`): `/` and the key screens its navigation links to, then one per section
+  (up to 8), with the checks that need no AI, on the board in a minute or two. It marks nothing fixed; the board says
+  "Too early to say" and how far the full check that follows has come, then what the full check added. Screens the
+  first look recorded are replayed by the full check, the rest are recorded and merged in
 - **Checks that need no AI** — layout overflow, clipped text, broken images, page errors and failed requests,
   raw error text shown to users, errors that look like empty lists, missing offline notices, leftover placeholder
   text, `NaN`/`undefined` on screen, accessibility (axe-core, target sizes, placeholder-only labels), native
@@ -77,8 +81,8 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
   replaced by their kind, text from your screens left out unless `--include-page-text`, paths relative to your
   repository and routes as templates
 
-Not yet (0.1): a fast first run. The AI lenses (copy, states, visual judgment) with a separate verifier, the fix
-loop and the guards are built and being measured.
+Being measured (0.1): the AI lenses (copy, states, visual judgment) with a separate verifier, the fix loop, the guards
+with `nunchi check`, and the first look are built; their gates are not measured yet.
 
 ## Benchmark
 
@@ -109,8 +113,10 @@ The checks were tuned on this app once; a second, held-out app is what the 0.1 g
 
 **미리보기(0.0.2).** *찾기*, 진행판(`nunchi open`, 내 브라우저에서 결정), 그리고 고치기(`nunchi fix`)까지 됩니다. AI가
 고친 것은 별도 브랜치에 결함 하나당 커밋 하나로 남고, 다시 찍어서 결함이 사라지고 다른 곳이 깨지지 않았을 때만 고쳐진 것으로
-칩니다(고치기 게이트는 아직 측정 전). 고친 종류가 다시 생기지 않게 막는 방지 규칙(`window.confirm`, `href="#"`, JSX의
-`.message`, `{{ }}`, 토큰 밖 색)은 고친 뒤 진행판 카드에서 사람이 추가하고, CI에서는 `nunchi check`(브라우저 · 네트워크
+칩니다(고치기 게이트는 아직 측정 전). 빠른 첫 보기(`nunchi capture --quick`)는 핵심 화면 최대 8개를 먼저 보여
+주고, 결론은 이어지는 전체 검사가 끝난 뒤에 냅니다(그 전까지 진행판은 「Too early to say」). 고친 종류가 다시 생기지 않게
+막는 방지 규칙(`window.confirm`, `href="#"`, JSX의 `.message`, `{{ }}`, 토큰 밖 색)은 한 묶음의 고치기가 끝나면 진행판
+카드에서 사람이 추가하고(색 규칙은 `nunchi guard --add colour-literal`), CI에서는 `nunchi check`(브라우저 · 네트워크
 없이, `--base`로 방지 규칙을 약하게 한 PR도 잡음)로 돌립니다. `nunchi export --format md|json|sarif`로 결과를 내보낼 수
 있습니다(비밀값은 종류만, 화면 문구는 요청할 때만).
 Claude Code에서 `/plugin marketplace add wonchance-art/nunchi` → `/plugin install nunchi@nunchi` 후, 앱 폴더에서

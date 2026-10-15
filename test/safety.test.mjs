@@ -438,10 +438,12 @@ test('a recording is replaced in one step: a reader never sees half of it, and a
   new Recording({ 'GET app:/a': [{ status: 200, contentType: 'application/json', body: '{"n":1}' }] }).save(path);
   const before = readFileSync(path, 'utf8');
   linkSync(path, join(dir, 'reader.json'));                 // what a capture that opened the old file still reads
-  new Recording({ 'GET app:/a': [{ status: 200, contentType: 'application/json', body: '{"n":2}' }] }).save(path);
+  // (since M5 a save merges with the file under the person's lock: a request already recorded keeps its response)
+  new Recording({ 'GET app:/b': [{ status: 200, contentType: 'application/json', body: '{"n":2}' }] }).save(path);
   assert.equal(readFileSync(join(dir, 'reader.json'), 'utf8'), before, 'the old file was not rewritten under the reader');
-  assert.equal(JSON.parse(Recording.load(path).entries['GET app:/a'][0].body).n, 2);
-  assert.deepEqual(readdirSync(dir).sort(), ['guest.json', 'reader.json'], 'no temporary file left');
+  assert.equal(JSON.parse(Recording.load(path).entries['GET app:/b'][0].body).n, 2);
+  assert.equal(JSON.parse(Recording.load(path).entries['GET app:/a'][0].body).n, 1);
+  assert.deepEqual(readdirSync(dir).sort(), ['guest.json', 'reader.json'], 'no temporary file or lock left');
   writeFileSync(path, before.slice(0, 40));
   assert.throws(() => Recording.load(path), e => e.code === 'BAD_RECORDING' && /--network record/.test(e.message));
 });

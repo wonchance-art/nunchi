@@ -209,7 +209,10 @@ async function captureOne(browser, base, scene, opts) {
     }
     // a miss, read or write, is counted when it is asked for (capture drift; `recording-stale` when most miss)
     // and fails in the page; it never goes live
-    let res = replay ? opts.loader.take(key) : null;
+    // Merge (a screen the recording lacks, M5): what the recording holds answers as in replay; what it lacks goes live
+    // and is added, as recording adds it. Asked when the request is made, so the order is the page's.
+    const merging = opts.mode === 'merge' ? opts.loader.ask(key) : null;
+    let res = replay ? opts.loader.take(key) : merging ? merging.res : null;
     if (!res && replay) drift.push(key);
     if (scene.state === 'slow') await held;
     if (!res && replay) return route.abort('failed').catch(() => {});
@@ -222,6 +225,7 @@ async function captureOne(browser, base, scene, opts) {
         res = { status: fetched.status(), contentType, body: (await fetched.body()).toString('utf8') };
       } catch { return route.abort('failed').catch(() => {}); }
       if (opts.mode === 'record') opts.loader.add(key, res);
+      else if (merging?.add) merging.add(res);
     }
     const out = (scene.state === 'empty' && forceResponse('empty', res)) || res;
     return route.fulfill({ status: out.status, contentType: out.contentType, body: out.body }).catch(() => {});
@@ -425,60 +429,105 @@ export function runHealth(entries, findings) {
 }
 
 // scenes: [{ route, path, person }] → expanded per viewport and per forced state here.
-// network: 'auto' (replay if a recording exists, else record) | 'record' | 'replay' | 'live'.
+// network: 'auto' (a recording that holds the screen is replayed, one that lacks it records it with merge, no recording
+// is made by recording) | 'record' | 'replay' | 'live'. Merge (design 0.1-c §6, M5): a screen the person's recording
+// lacks (route × viewport, `Recording.routes`) is captured with what the recording holds answered from it and what it
+// lacks fetched live and added; screens it holds replay strictly as ever. The recording is saved merged (recordings
+// written before coverage was kept hold every route and are replayed as before). `run.network` says `merge` for a
+// person when a screen of theirs was merged, else `replay`.
 // canaries: how many canary scenes to plant (spec §4 H2); 0 = none (the default for the API; the CLI plants 3).
 // lenses: the loaded lens packs, so a canary is planted only where its lens hunts (default: the built-in packs).
 // allowBaseHosts: hosts the user listed in .nunchi/config.json; any other base URL must be local or private (D10).
 // Fix probes (design §4.4) pass `wholeAppDetectors: false` (no flow, design-system one-offs or secret findings: a probe
 // sees a few routes, never the whole app), `png: true` (first views as PNG too), and `canarySeed` / `canaryRoutes`, so
 // the probes before and after a fix plant the same canaries on the fixed screens (the re-check's controls, §2.4).
-export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], allowBaseHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {}, flow: flowOpts = {}, canaries = 0, lenses = null, wholeAppDetectors = true, png = false, canarySeed: seedGiven = null, canaryRoutes = null }) {
+// A quick run (design §6, M5) passes `persons` (who it captures, known before the scenes are) and `pick`: called once
+// the given scenes are captured, with their manifest entries and links, it returns the scenes to capture next (the
+// key routes chosen from the home page's navigation, quick.mjs); `run.scope.routes` then names every route captured.
+// `onProgress({ routes, done, routeMs })`: after each route × person × viewport (its forced states included), how many
+// routes there are, how many are done (every person and viewport of it), and the measured time of each route done.
+export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], states = ['normal'], network = 'live', recordingDir, allowHosts = [], allowBaseHosts = [], browserPath, clock = DEFAULT_CLOCK, locale = 'en-US', timezone = 'UTC', timeout = 30000, storageState, strictPath = false, runMeta = {}, flow: flowOpts = {}, canaries = 0, lenses = null, wholeAppDetectors = true, png = false, canarySeed: seedGiven = null, canaryRoutes = null, persons: personsGiven = null, pick = null, onProgress = null }) {
   const refusal = baseUrlRefusal(baseUrl, allowBaseHosts);
   if (refusal) throw Object.assign(new Error(refusal), { code: 'URL_NOT_ALLOWED' });
-  if (scenes.some(s => s.person === 'signed-in') && !(storageState && existsSync(storageState))) {
+  const persons = [...new Set([...(personsGiven || []), ...scenes.map(s => s.person || 'guest')])].sort();
+  if (persons.includes('signed-in') && !(storageState && existsSync(storageState))) {
     throw Object.assign(new Error(`signed-in scenes need a saved login state, but ${storageState || '(none)'} does not exist`), { code: 'NO_AUTH' });
   }
   const unknown = states.filter(s => !STATES.includes(s));
   if (unknown.length) throw Object.assign(new Error(`unknown state(s): ${unknown.join(', ')} (known: ${STATES.join(', ')})`), { code: 'BAD_ARGS' });
-  const persons = [...new Set(scenes.map(s => s.person || 'guest'))].sort();
-  const recordings = {}; const modes = {};
+  const recordings = {}; const modes = {}; const merged = new Set();
   for (const person of persons) {
     const path = recordingDir ? join(recordingDir, `${person}.json`) : null;
     const existing = path ? Recording.load(path) : null;
-    modes[person] = network === 'auto' ? (existing ? 'replay' : path ? 'record' : 'live') : network;
+    // auto with a recording: merge, which replays every screen the recording holds and records the ones it lacks
+    modes[person] = network === 'auto' ? (existing ? 'merge' : path ? 'record' : 'live') : network;
     if (modes[person] === 'replay' && !existing) throw Object.assign(new Error(`no recording for "${person}" at ${path}; run once with --network record`), { code: 'NO_RECORDING' });
     if (modes[person] !== 'live' && !path) throw Object.assign(new Error('record/replay needs a recording folder'), { code: 'BAD_ARGS' });
-    recordings[person] = existing || new Recording();
+    // recording starts empty: what it records replaces the file's answers for those requests when it is saved
+    recordings[person] = modes[person] === 'record' ? new Recording({}, existing?.routes === null ? null : {}) : existing || new Recording();
   }
   const ids = new Map();
-  for (const s of scenes) {
-    const id = sceneId(s.route || s.path, s.person || 'guest', 'normal', 'm');
-    if (ids.has(id)) throw Object.assign(new Error(`two scenes map to the same name: ${ids.get(id)} and ${s.path} (one sample per route and person)`), { code: 'BAD_ARGS' });
-    ids.set(id, s.path);
-  }
+  const checkIds = list => {
+    for (const s of list) {
+      const id = sceneId(s.route || s.path, s.person || 'guest', 'normal', 'm');
+      if (ids.has(id)) throw Object.assign(new Error(`two scenes map to the same name: ${ids.get(id)} and ${s.path} (one sample per route and person)`), { code: 'BAD_ARGS' });
+      if (!persons.includes(s.person || 'guest')) throw Object.assign(new Error(`a scene for "${s.person}" in a capture of ${persons.join(', ')}`), { code: 'BAD_ARGS' });
+      ids.set(id, s.path);
+    }
+  };
+  checkIds(scenes);
   const browser = await launch({ browserPath, baseUrl, allowHosts });
   const t0 = Date.now();
   const entries = []; const findings = []; const scriptMap = new Map(); const timing = []; const sceneLinks = new Map(); const rowsByScene = new Map(); const controlsByScene = new Map();
+  const recorded = new Map();                                   // normal screens captured while recording or merging
+  const touched = [];                                           // per scene: what it added to the recording, and used
   const run = async (s, vp, state) => {
     const person = s.person || 'guest';
-    const scene = { ...s, vp, person, state, id: sceneId(s.route || s.path, person, state, vp) };
-    // forced states replay the recording (they rewrite the same data) unless the person is captured live
-    const mode = state === 'normal' ? modes[person] : derivedMode(modes[person]);
+    const route = s.route || s.path;
+    const scene = { ...s, vp, person, state, id: sceneId(route, person, state, vp) };
+    // forced states replay the recording (they rewrite the same data) unless the person is captured live; with merge,
+    // a normal screen the recording holds replays and one it lacks is merged (its forced states then replay what it added)
+    let mode = state === 'normal' ? modes[person] : derivedMode(modes[person]);
+    if (mode === 'merge') mode = recordings[person].covers(route, vp) ? 'replay' : 'merge';
+    if (mode === 'merge') merged.add(person);
+    if (state === 'normal' && (mode === 'record' || mode === 'merge')) recorded.set(scene.id, { person, route, vp, mode });
+    const loader = recordings[person].loader();
+    touched.push({ person, normal: sceneId(route, person, 'normal', vp), loader });
     const t = Date.now();
-    const r = await captureOne(browser, baseUrl, scene, { out, clock, locale, timezone, timeout, storageState: person === 'signed-in' ? storageState : undefined, strictPath, allowHosts, mode, loader: recordings[person].loader(), png });
+    const r = await captureOne(browser, baseUrl, scene, { out, clock, locale, timezone, timeout, storageState: person === 'signed-in' ? storageState : undefined, strictPath, allowHosts, mode, loader, png });
     timing.push({ scene: scene.id, ms: Date.now() - t });
     entries.push(r.entry); findings.push(...r.findings); sceneLinks.set(r.entry.id, r.links); rowsByScene.set(r.entry.id, r.styles); if (r.controls) controlsByScene.set(r.entry.id, r.controls);
     for (const sc of r.scripts) if (!scriptMap.has(sc.path)) scriptMap.set(sc.path, sc.body);
     return r.entry;
   };
-  try {
-    for (const s of scenes) for (const vp of viewports) {
+  // progress by route: a route is done when every person and viewport of it is (its forced states included)
+  const left = new Map(), spent = new Map(), routeMs = [];
+  const progress = () => { if (onProgress) { try { onProgress({ routes: left.size, done: routeMs.length, routeMs: routeMs.slice() }); } catch {} } };
+  const captureAll = async list => {
+    for (const s of list) { const r = s.route || s.path; left.set(r, (left.get(r) || 0) + viewports.length); }
+    progress();
+    for (const s of list) for (const vp of viewports) {
+      const t = Date.now();
       const normal = await run(s, vp, 'normal');
       // Forced states only where the page actually reads data; otherwise they would be copies of normal.
       if (normal.dataRequests > 0) for (const state of states.filter(x => x !== 'normal')) await run(s, vp, state);
+      const r = s.route || s.path;
+      spent.set(r, (spent.get(r) || 0) + Date.now() - t);
+      left.set(r, left.get(r) - 1);
+      if (!left.get(r)) routeMs.push(spent.get(r));
+      progress();
+    }
+  };
+  let scope = scenes;
+  try {
+    await captureAll(scenes);
+    if (pick) {
+      const more = await pick({ entries: entries.slice(), links: sceneLinks });
+      checkIds(more);
+      scope = [...scenes, ...more];
+      await captureAll(more);
     }
   } finally { await browser.close(); }
-  for (const person of persons) if (modes[person] === 'record') recordings[person].save(join(recordingDir, `${person}.json`));
   findings.push(...stateFindings(entries));
   const health = runHealth(entries, findings);
   if (health.status === 'login-expired' || health.problems.some(p => p.status === 'login-expired')) {
@@ -487,9 +536,38 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
     for (const e of entries) if (lost.has(e.id)) { e.status = 'not-seen'; e.reason = 'login-expired'; e.findings = 0; }
     for (let i = findings.length - 1; i >= 0; i--) if (lost.has(findings[i].scene)) findings.splice(i, 1);
   }
+  // What each recording now holds: the normal screens captured while recording or merging. A screen that failed — not
+  // captured (no page, left the app), a server error page (5xx), or a sign-in page because the login expired — is not
+  // held, and what it added to the recording is taken back (unless a screen that worked was answered from it, which
+  // its next replay needs): it is recorded again next time, never replayed from a bad answer (review of PR #33).
+  const held = new Set(), mergedRoutes = {};
+  for (const e of entries) {
+    const r = recorded.get(e.id);
+    if (!r) continue;
+    const ok = e.status === 'captured' && !(e.httpStatus >= 500);
+    if (ok) { held.add(e.id); recordings[r.person].recorded(r.route, r.vp); }
+    if (r.mode === 'merge') ((mergedRoutes[r.person] ||= { recorded: new Set(), failed: new Set() })[ok ? 'recorded' : 'failed']).add(r.route);
+  }
+  for (const person of persons) {
+    const failed = t => recorded.has(t.normal) && !held.has(t.normal);
+    const mine = touched.filter(t => t.person === person);
+    const keep = new Set(mine.filter(t => !failed(t)).flatMap(t => [...t.loader.added, ...t.loader.used]));
+    recordings[person].forget(new Set(mine.filter(failed).flatMap(t => [...t.loader.added]).filter(k => !keep.has(k))));
+  }
+  const unsaved = {};
+  for (const person of persons) {
+    if (modes[person] !== 'record' && !merged.has(person)) continue;
+    const s = recordings[person].save(join(recordingDir, `${person}.json`), { replace: modes[person] === 'record' });
+    if (!s.saved) unsaved[person] = s.side;
+  }
+  // how this run got each person's data: `merge` only when a screen of theirs was merged; one that held them all replayed
+  for (const person of persons) if (modes[person] === 'merge' && !merged.has(person)) modes[person] = 'replay';
+  // which screens were merged, per person: recorded, or failed (recorded again next time)
+  const mergedInfo = Object.fromEntries(Object.entries(mergedRoutes).sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([p, m]) => [p, { recorded: [...m.recorded].sort(), failed: [...m.failed].filter(r => !m.recorded.has(r)).sort() }]));
   // L3: the link graph. Routes come from discover when the CLI has them (complete); otherwise only the
   // captured routes are known and links elsewhere are not judged.
-  const flowRoutes = flowOpts.routes || [...new Set(scenes.map(s => s.route || s.path))].sort();
+  const flowRoutes = flowOpts.routes || [...new Set(scope.map(s => s.route || s.path))].sort();
   const { flow, findings: flowFindings } = buildFlow({ entries, sceneLinks, routes: flowRoutes, complete: !!flowOpts.routes, wholeApp: flowOpts.wholeApp ?? !!flowOpts.routes, code: flowOpts.code || [] });
   // an app that did not load shows no links: the flow cannot be judged, nothing is "unreachable"
   if (wholeAppDetectors && !health.problems.some(p => p.status === 'app-unreachable')) findings.push(...flowFindings);
@@ -505,12 +583,12 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   // never in findings.json, flow, the design system or run health.
   let canaryEntries = []; let canaryFile = null;
   if (canaries > 0) {
-    const seed = seedGiven || canarySeed({ routes: [...new Set(scenes.map(s => s.route || s.path))], persons, viewports, states });
+    const seed = seedGiven || canarySeed({ routes: [...new Set(scope.map(s => s.route || s.path))], persons, viewports, states });
     const eligible = canaryRoutes ? entries.filter(e => canaryRoutes.includes(e.route)) : entries;
     const cb = await launch({ browserPath, baseUrl, allowHosts });
     try {
       const r = await plantCanaries({ entries: eligible, count: canaries, seed, again: !!canaryRoutes, lenses: lenses || loadLenses({ root: BUILTIN_DIR }).lenses, tryScene: async (base, kinds, id) => {
-        const s = scenes.find(x => (x.route || x.path) === base.route && (x.person || 'guest') === base.person);
+        const s = scope.find(x => (x.route || x.path) === base.route && (x.person || 'guest') === base.person);
         const scene = { ...s, vp: base.viewport, person: base.person, state: base.state, id };
         const mode = derivedMode(modes[base.person]);
         const c = await captureOne(cb, baseUrl, scene, { out, clock, locale, timezone, timeout, storageState: base.person === 'signed-in' ? storageState : undefined, strictPath, allowHosts, mode, loader: recordings[base.person].loader(), canaryKinds: kinds });
@@ -525,7 +603,9 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   // ── end canaries ──
   const manifest = { schema: 1, health, baseUrl, viewports: viewports.map(v => ({ id: v, ...VIEWPORTS[v] })), clock: new Date(clock).toISOString(), states, scenes: canaryEntries.length ? [...entries, ...canaryEntries] : entries };
   // How this run got its data (record vs replay) is run metadata, not evidence: kept beside timing.
-  const runInfo = { ...runMeta, network: modes, health };
+  // a run that picked its screens (quick) names the routes it captured
+  const runInfo = { ...runMeta, ...(pick ? { scope: { ...(runMeta.scope || {}), routes: [...new Set(scope.map(s => s.route || s.path))].sort() } } : {}), network: modes,
+    ...(Object.keys(mergedInfo).length ? { merged: mergedInfo } : {}), ...(Object.keys(unsaved).length ? { recordingUnsaved: unsaved } : {}), health };
   writeStable(join(out, 'manifest.json'), manifest);
   // fingerprint (one defect wherever it shows) and group (the same defect across routes): spec §5
   const ledgerFindings = annotate(findings);

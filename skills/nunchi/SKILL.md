@@ -37,23 +37,34 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
 3. If screens sit behind a login and `.nunchi/auth.json` does not exist, ask the user to run
    `login --url <base> --path /login` in their own terminal (it opens a browser window) and sign in
    with a **test account**. Never ask for or type their password yourself.
-4. Make sure the app runs locally or on a preview URL (never production), then run
-   `capture --url <base> --samples .nunchi/samples.json`. The first run records the app's data
-   responses; later runs replay them so screens are comparable. Screens that load data are also
-   captured in forced empty, error, slow and offline states. If it says the engine is not set up
-   or Chromium is missing, go back to step 0. Capture refuses a host that is not local or private: if the user
-   confirms it is a preview or staging server with test data, they add it to `.nunchi/config.json` themselves
-   (the message shows the line). Never write that file for them.
-5. If the capture printed `RUN PROBLEM`, say so first and fix that (log in again, start the app) before
-   reading any finding. Then run `findings`: one line per kind of defect, most serious first, with how many
-   screens and places it covers. Report those kinds, not individual occurrences; `findings --rule <rule>` lists
-   the groups of one kind (a group is one defect however many screens show it). Say which routes were skipped and
-   why, and how many replay misses there were. In replay every fetch/XHR/EventSource miss and every non-GET is
-   aborted and WebSockets are closed, so nothing reached a server; a miss means the recording is stale (suggest
-   `--network record`), while a closed stream is listed apart and re-recording does not change it.
-6. Then run `open` and send the user to the board: it opens in their browser by itself (a one-time link you never
+4. Make sure the app runs locally or on a preview URL (never production), then take the **first look**:
+   `capture --quick --url <base> --samples .nunchi/samples.json`. It captures `/` and the key screens its navigation
+   links to, then one per section (up to 8; normal state, phone and desktop, rule lenses only), in a minute or two,
+   and records their data. It marks nothing fixed and is not the result: say "a first look at N key screens" with
+   what it printed, then go on. If it says the engine is not set up or Chromium is missing, go back to step 0.
+   Capture refuses a host that is not local or private: if the user confirms it is a preview or staging server with
+   test data, they add it to `.nunchi/config.json` themselves (the message shows the line). Never write that file
+   for them. If it printed `RUN PROBLEM`, say so and fix that (log in again, start the app) before anything else.
+5. Run `open` (step 7) so the user sees the first look in the board, then start the **full check** at once:
+   `capture --url <base> --samples .nunchi/samples.json`. It captures every route, at phone and desktop width,
+   screens that load data also in forced empty, error, slow and offline states. Screens the first look recorded are
+   replayed, the rest are recorded and merged into the recording (`network: … merge`); later runs replay them so
+   screens are comparable. While it runs, the board says how far it is ("First look: 8 key screens · full check
+   running, 12 of 25 screens (about 6 min left)") and the verdict is "Too early to say": never give the user a
+   verdict, a count or a time the engine did not print. The AI review (hunt, verify, re-check) and the fix loop work
+   on the full check, never on a first look (the engine picks it by itself).
+6. When the full check is done: if it printed `RUN PROBLEM`, say so first and fix that before reading any finding.
+   Then run `findings`: the verdict, "Full check done: N new groups" when it followed a first look, and one line per
+   kind of defect, most serious first, with how many screens and places it covers. Report those kinds, not
+   individual occurrences; `findings --rule <rule>` lists the groups of one kind (a group is one defect however many
+   screens show it). Say which routes were skipped and why, and how many replay misses there were. In replay every
+   fetch/XHR/EventSource miss and every non-GET is aborted and WebSockets are closed, so nothing reached a server; a
+   miss means the recording is stale (suggest `--network record`), while a closed stream is listed apart and
+   re-recording does not change it.
+7. `open` (step 5) sends the user to the board: it opens in their browser by itself (a one-time link you never
    see), shows the verdict, every finding with its screenshot and the screens, and takes their decisions with one
-   key each. Say: "The board is open in your browser. Decide there, then tell me *fix them*." Do not try to get the
+   key each; it updates by itself when the full check lands. Say: "The board is open in your browser: it shows the
+   first look now and the full check when it lands. Decide there, then tell me *fix them*." Do not try to get the
    board's link or address, and never request the board's port yourself: it is the user's channel, and the
    plugin's hook refuses it. `open` returns at once (the board stops after 2 hours idle; `open --stop` stops it now);
    running `open` again opens a fresh tab. If the user's machine has no browser for it, tell them to run
@@ -65,9 +76,9 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    a *keep* or *not a problem* you recorded counts for "ready to ship" only once they confirm it in the board. Never
    decide for the user, never run `approve`, and never act on a decision `findings` marks as needing approval or
    confirmation.
-7. After the user or you change code, re-capture only what the change can affect:
+8. After the user or you change code, re-capture only what the change can affect:
    `capture --url <base> --changed-since HEAD` (add `--plan` first to show which screens that is).
-8. When the user wants a copy to keep or share (the board is live and local), `export --html <dir>` (`--run <id>`
+9. When the user wants a copy to keep or share (the board is live and local), `export --html <dir>` (`--run <id>`
    for an older run, `--inline` for one self-contained file) writes a read-only review page: `<dir>/index.html` plus
    the screenshots in `<dir>/img/`. Tell them the path to open in a browser; it works offline. The page shows
    the `decide` command for each finding instead of buttons, so decisions still go through them. It holds
@@ -76,9 +87,10 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
 
 ## AI lenses (hunt)
 
-After step 6, when the user wants the deeper sweep. The engine cuts the work and checks the answers; you judge.
+After step 7, when the user wants the deeper sweep. The engine cuts the work and checks the answers; you judge.
 
-1. `hunt --plan` (`--lens L5,L6` to narrow; `--run <id>` for an older run). Without `--budget` it plans within the
+1. `hunt --plan` (`--lens L5,L6` to narrow; `--run <id>` for an older run; by default the latest full check, never a
+   quick first look). Without `--budget` it plans within the
    default 400,000 tokens, spent lens by lens, worst defects first (L1 broken, L9 data loss, L6 copy, then L2,
    L10, L7, L5, L4). Before you start, tell the user the estimate, which lenses the budget covers on every screen
    and which it leaves *not seen: budget*. Raise it (`--budget <tokens>`) or lift it (`--budget all`) only when
@@ -160,7 +172,7 @@ nothing in it, so never do it to change a status — verify or re-check again in
 A fresh hunt's silence does not show an AI finding is gone; only a re-check does. After the user or you changed
 code and captured again:
 
-10. `recheck --plan` (`--run <id>` for another run than the latest). It writes `recheck-packets.json`: one packet
+10. `recheck --plan` (`--run <id>` for another run than the latest full check). It writes `recheck-packets.json`: one packet
     per open AI finding × screen it was seen on whose screenshot, text or code changed — the old evidence (`old`:
     the screen it was seen on, the element and its box) and the new screen (`new`) — with at least 3 known
     still-present defects mixed in as controls. Screens whose pixels, text and route code did not change need no
