@@ -68,8 +68,9 @@ Unit: the seed. Sample: every seed of both answer keys (no draw). The primary po
 **n ≥ 80** by construction (≥ 56 required by design §9.1).
 
 1. Register (this file, hashes filled), commit, push. Nothing below starts before that commit.
-2. Per app, the operator runs `node bench/run.mjs --app <app folder> --twice`: rule recall, clean-scene rule findings,
-   determinism and fingerprint stability (replay).
+2. Per app, the operator copies the app folder (the registered one is never installed or built) and runs `node
+   bench/run.mjs --app <copy> --twice`: rule recall, clean-scene rule findings, determinism and fingerprint stability
+   (replay).
 3. Per app, three AI runs `r = 1, 2, 3`, each on its own capture with 3 canary copies (run 1 on step 2's first capture,
    runs 2 and 3 on new captures replaying its recording):
    `hunt --plan --budget all --salt <salt-r>`, packets with `--order <order-r>` and the unit sample from `sample`,

@@ -61,7 +61,8 @@ shows verdicts), then the decision-time study on one field app.
    seed.
 3. Commit ("register <gate>") and push. That commit is the registration; its time (KST) is the registration time.
 4. `node scripts/prereg-hash.mjs --check docs/prereg-<gate>.md [--key …]` before the first step and after the last;
-   both outputs go into the results. Exit 1 (something changed) stops the measurement.
+   both outputs go into the results. Exit 1 (something changed) stops the measurement. A folder key (an app) is never
+   installed or built in place: the operator works on a copy, so the registered folder stays clean for `--check`.
 
 A person can check a repository set without the script: on a clean checkout, `git ls-files -z -- <paths> | xargs -0
 sha256sum | sha256sum` prints the set's hash.
