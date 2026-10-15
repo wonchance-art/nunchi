@@ -250,11 +250,12 @@ const loadLedger = (nunchiDir, { root } = {}) => ledgerGuard(() => P.loadLedger(
 const runLock = (runDir, fn) => withLock(join(runDir, 'run-files'), fn, { timeoutMs: 15000 });
 // Folding a run's AI findings or re-check verdicts after they were recorded: a ledger that cannot be brought up to
 // date only warns (the verdicts are in the run; the next ledger command folds them).
-// `quiet`: a run that may not fold is not said (the hunt: an --out folder is hunted and verified before it would be).
+// `quiet`: a folder without a run id is not said (the hunt: an --out folder is hunted and verified before it would be);
+// a run of another kind always is (design §7: a fix probe, on a fix branch, never folds as a sweep, M6).
 function foldAfterRecord(runDir, what, root, { quiet = false } = {}) {
   const who = runIdentity(runDir);
   const nunchiDir = resolve('.nunchi');
-  if (who.why) { if (!quiet) console.error(`nunchi: ${what} not folded into the ledger: ${who.why}`); return false; }
+  if (who.why) { if (!quiet || who.kind) console.error(`nunchi: ${what} not folded into the ledger: ${who.why}`); return false; }
   if (resolve(dirname(runDir)) !== join(nunchiDir, 'runs')) { if (!quiet) console.error(`nunchi: ${what} not folded into the ledger: run ${who.id} is not in this project's .nunchi/runs`); return false; }
   try {
     const st = openState(nunchiDir);

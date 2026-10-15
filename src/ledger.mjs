@@ -493,7 +493,8 @@ export function foldRun(state, { id, scope = {}, wholeApp = false, health = { pr
     const lookedAt = [], gone = [];
     for (const [fp, item] of Object.entries(next.items)) {
       // only the worktree that last saw an item can say it is gone: worktrees on other branches would otherwise
-      // fix and bring back each other's items in turn (until M6 makes other branches' captures probes)
+      // fix and bring back each other's items in turn. M6 kept it so: only nunchi's fix branches are probes (design §7,
+      // the tracked branch is any other), so a worktree on another branch is a stream of its own
       if (isAi(item) || seen.has(fp) || streamOf(item) !== stream || !lookedAgain(item, run, sets)) continue;
       lookedAt.push(fp);
       if (!item.goneAt) gone.push(fp);
