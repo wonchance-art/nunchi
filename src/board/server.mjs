@@ -170,7 +170,10 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   // clock: claims bump no generation) changes the version
   const claimsDir = join(stateDir, 'claims');
   const claimsSig = () => { const c = readClaims(claimsDir, now()); return c.size ? sha([...c].map(([g, x]) => `${g}:${x.agent}`).join('|'), 12) : '-'; };
-  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${claimsSig()}`;
+  // guards.json, committed and changed by the person's terminal or through git (neither bumps the generation): its mtime
+  // and size
+  const guardsSig = () => { try { const s = statSync(join(nunchiDir, 'guards.json')); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; } };
+  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${claimsSig()}.${guardsSig()}`;
   // claims as they are now (their minutes too) on a cached model
   const freshClaims = m => { const c = readClaims(claimsDir, now()); m.claims = c; for (const g of m.groups) g.fixing = c.get(g.id) || null; return m; };
   let cache = null;
@@ -426,7 +429,8 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
       ai: { ...s.ai, coverage }, now: nowLines,
       checks: profile ? { requested, approved, profile: { hash: profile.hash, scripts: Object.fromEntries(Object.entries(profile.scripts).map(([k, v]) => [safe(k, 40), safe(v, 400)])), serve: Object.fromEntries(Object.entries(profile.serve || {}).map(([k, v]) => [safe(k, 40), safe(v, 400)])), others: Object.keys(profile.others || {}).length, files: Object.fromEntries(Object.entries(profile.files).map(([k, v]) => [safe(k, 120), v ? safe(v, 64) : null])), packageManager: profile.packageManager ? safe(profile.packageManager, 80) : null } } : null,
       // design §5: one card at the end of a fix batch, in its words; the rows a person toggles (Add)
-      guards: m.guardOffer?.rows.length ? { title: OFFER_TITLE, rows: m.guardOffer.rows.map(r => ({ kind: r.kind, text: safe(rowText(r), 200), added: r.added })) } : null,
+      // `unreadable`: guards.json cannot be read, so the rows show without their toggles
+      guards: m.guardOffer?.rows.length ? { title: OFFER_TITLE, unreadable: !!m.guardsUnreadable, rows: m.guardOffer.rows.map(r => ({ kind: r.kind, text: safe(rowText(r), 200), added: r.added })) } : null,
       counts: { groups: m.groups.length, screens: m.latestEv?.scenes.length || 0 },
       treeChanged: !!(runTree && now && now !== runTree),
       warnings: [...warnings].map(w => safe(w, 400)),
@@ -522,7 +526,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     catch (e) { if (['CORRUPT', 'UNSAFE_PATH', 'LOCKED', 'BAD_ARGS'].includes(e.code)) return fail(res, 409, e.message, { stale: true }); throw e; }
     try { bumpGeneration(genFile); } catch {}
     cache = null;
-    return r.ok ? send(res, 200, { ok: true, added: body.add }) : fail(res, r.status || 409, r.error, { stale: true });
+    return r.ok ? send(res, 200, { ok: true, added: body.add, baselined: body.add ? r.baselined || 0 : 0 }) : fail(res, r.status || 409, r.error, { stale: true });
   }
 
   async function fixAccept(res, body) {

@@ -1270,11 +1270,12 @@ Keyboard: J/K move, F fix, W keep, X false positive, S hold; batch decisions by 
 | coverage | seen cells ÷ all cells, not-seen by reason, stale cells | where are the blind spots |
 | design-system size | distinct colors / type sizes / radii / button shapes, first run → now | is it converging |
 | AI trust | lens precision, resolution rate, canary hit rate, decoy pass rate | how far to trust the AI |
-| guarded kinds | ledger | can this mistake come back |
+| guarded kinds | `.nunchi/guards.json` (the built-in kinds added and their baseline) and the fix loop's verified fixes | can this mistake come back |
 | what the AI is doing now | ledger `fixing` + re-capture queue | wait or look elsewhere |
 
-Exports: SARIF, Markdown, JSON (§7.4, M4). `nunchi check` (§7.3, M4): no capture; runs guard rules and ledger state for CI,
-exit code only. First run (H11): key routes × rule lenses within ~2 minutes; the deep sweep continues and
+Exports: SARIF, Markdown, JSON (§7.4, M4). `nunchi check` (§7.3, M4): no capture; runs the guards of `.nunchi/guards.json`
+over the source (and, on a machine with a ledger, `--fail-on`) for CI: an exit code, the lines that say why, and SARIF
+on request. First run (H11): key routes × rule lenses within ~2 minutes; the deep sweep continues and
 fills the board live.
 
 ### 7.1 `nunchi export --html` (built 2026-10-14 KST)
@@ -1453,13 +1454,17 @@ addresses; evidence details; decisions on the group or its fingerprints with how
 `POST /api/fix-accept {group, attempt}` (the fix loop's [Looks fine, mark fixed], §6.6), `POST /api/fix-undo {group,
 attempt}` (the fix loop's [Undo this fix], `fix --undo`'s safe revert; 409 with `stale`, or `refused` (not-head,
 wrong-branch, dirty, occupied, filtered) with `paths`, `branch` and `on`, §6.6), `GET /api/live`, and
-`GET /api/generation` (the polling fallback). Added to the design's table: `POST /api/session`, `/api/screens`,
-`/api/generation`, `/api/undo`, `/api/fix-accept`, `/api/fix-undo`. In label mode only `/api/label/pool`, `/api/label/item/:id`, `POST /api/label`, the evidence and
+`GET /api/generation` (the polling fallback), and `POST /api/guard {kind, add}` (the guard card's Add toggle, §7.3:
+→ `{ok, added, baselined}`, how many hits there now became the baseline of what it added; 409 with `stale` when the
+kind is no longer offered or guards.json cannot be read). Added to the design's table: `POST /api/session`,
+`/api/screens`, `/api/generation`, `/api/undo`, `/api/fix-accept`, `/api/fix-undo`, `/api/guard`. In label mode only `/api/label/pool`, `/api/label/item/:id`, `POST /api/label`, the evidence and
 the live endpoints answer (the others 404, so nothing unblinds).
 - *Live updates:* the server watches the state folder (not recursively, 200 ms debounce) and polls every 3 s; what it
   compares is the generation **plus a signature of `.nunchi/decisions`** (names and times of its folders), because a
   decision that arrives through git bumps no generation, **plus the live claims** (group and agent of each claim
-  not expired by the reader's clock), because a claim bumps none either and expires without a write; a cached model
+  not expired by the reader's clock), because a claim bumps none either and expires without a write, **plus the
+  mtime and size of `.nunchi/guards.json`**, which the person's terminal (`nunchi guard --add`) and git change without
+  a generation; a cached model
   takes the claims as they are on each request (their minutes too). A change sends `event: generation` with the new version on
   every open stream (a `fetch` stream read with `ReadableStream`, SSE framing, a ping every 15 s); the page then
   reloads the summary and, in place, the list and detail it shows. A stream that fails or ends falls back to polling
@@ -1769,14 +1774,16 @@ the tree is the same after it, and that no `.nunchi` or state folder appears).
 - Exit codes: 0 clean; 1 a new guard hit, a weakened guard, or findings at or above `--fail-on`; 2 a usage or state
   error (an unknown option value or argument, a malformed or linked guards file, an unknown ref, a ledger that cannot
   be read, no git for `--base`).
-- `--sarif <file>`: §7.4's SARIF with one result per new hit (`nunchi.guard/<kind>`, level `error`, the file and
+- `--sarif <file>`: §7.4's SARIF (`runs[0].automationDetails.id` `nunchi/check/`, the export's is `nunchi/export/`,
+  so code scanning keeps the two analyses apart) with one result per new hit (`nunchi.guard/<kind>`, level `error`, the file and
   line:column; `partialFingerprints` `nunchi/guard/v1` (kind and anchor) and `nunchi/fp/v1` (kind, file, anchor and
   occurrence)), one per weakening (at `.nunchi/guards.json` line 1, or the file whose baseline grew, line 1), and,
   with a ledger and `--fail-on`, one per place of the groups that stand in the way. Paths are the repository's.
 
-**Offering guards** (design §5). Only after a *verified* fix — the fix loop's latest attempt of a group is `fixed`
-(§6.5, the engine's probes), in the batch of the last fix plan (`state/fix-plan.json`) — of a kind that has a built-in
-guard: `native-dialog` (the rule `native-dialog`), `dead-href` (`dead-href`), `raw-message` (`raw-error-text` and the
+**Offering guards** (design §5). Only at the end of a fix batch — every group of the last fix plan
+(`state/fix-plan.json`) has an attempt since the plan and none is still running (so not while the batch goes on, on
+the board or in `fix --summary`) — and only after a *verified* fix — the fix loop's latest attempt of a group of the
+batch is `fixed` (§6.5, the engine's probes) — of a kind that has a built-in guard: `native-dialog` (the rule `native-dialog`), `dead-href` (`dead-href`), `raw-message` (`raw-error-text` and the
 AI item `L6.raw-technical-text`), `mustache-text` (`missing-value` of kind `unreplaced {{…}}`). The colour guard has
 no finding kind yet (its "move to token" findings are T2, design §6a): it is added with `nunchi guard --add
 colour-literal`. A kind guards.json covers already is not offered. The offer takes what was fixed: a fixed `confirm`
@@ -1784,10 +1791,15 @@ offers `window.confirm` (`calls: ["confirm"]`), a fixed `href="#"` offers `href=
 - *The card* (the board's Progress view, under the verdict): the design's words, "Stop these coming back?" as its
   heading, then one row per kind — "`window.confirm` (fixed twice)", "`href="#"`" (code as code; "(fixed twice)" when
   the fix loop has fixed two groups of the kind, "(fixed N times)" for more, nothing for one) — each with an **Add**
-  toggle (`aria-pressed`, described by its row, 44 px). Pressing it adds the guard (`POST /api/guard {kind, add}`, the
-  board's key only; the hits there now become the baseline of what it adds); pressing it again takes back exactly
-  what this card added (`state/guard-card.json`), never a guard the person had before. The card stays, rows pressed,
-  until the next fix plan.
+  toggle (`aria-pressed`, 44 px; its name is "Add" and its row, `aria-labelledby`, pressed or not; pressed it shows
+  "✓ Added", and in forced colours it takes `Highlight`, so the state is seen without colour too). Pressing it adds the
+  guard (`POST /api/guard {kind, add}`, the board's key only; the hits there now become the baseline of what it adds);
+  pressing it again takes back exactly what this card added (`state/guard-card.json`), never a guard the person had
+  before. The polite live region says a neutral "Added" or "Taken back" (the sentences it will say wait for the owner). The card stays, rows pressed, until the next fix plan. When guards.json cannot be read (a merge
+  conflict, a hand edit), the summary says `unreadable: true`: the rows show what was fixed with no toggle, no chip is
+  shown (what the file covers is not known), the warning names the file once by its repository path
+  (`web/.nunchi/guards.json is not valid JSON …`), and a toggle that had the focus leaves it on the card's heading.
+  (A note on the card saying so waits for the owner's words.)
 - *The chat:* `fix --summary` adds the same words as a second line, pointing at the board: "Stop these coming back?
   `window.confirm` (fixed twice) · `href="#"` → the board (nunchi open)." (`--json`: `guards`). Rows already added are
   not said.
@@ -1795,8 +1807,9 @@ offers `window.confirm` (`calls: ["confirm"]`), a fixed `href="#"` offers `href=
   `--baseline` in their own terminal (stdin and stdout TTYs and a typed 4-character code, as `fix --approve-checks`;
   otherwise "Your AI cannot", exit 1). Never `cli-agent`.
 - *"guard available"*: a kind with five or more open places (open, came back, to fix, later) that a guard would cover
-  and none does shows only a passive chip on its section in Findings (`/api/groups` `guard: "available"`) and in
-  `findings` (`guard: "guard available"`). Nothing to press.
+  and none does shows only a passive chip, in Findings grouped by kind, beside the kind's section title (`/api/groups`
+  `guard: "available"` on the `kind` sections only), and in `findings` (`guard: "guard available"`). Nothing to press.
+  With a guards.json that cannot be read, no chip.
 
 **`nunchi guard`** lists the five kinds, whether each is in guards.json, what each finds now and how many of those are
 new (colour: *unavailable* without `tokens.json`); the agent may run it and propose. **`nunchi guard --lint`** prints
@@ -1939,7 +1952,8 @@ axe (light 1280 px, dark 390 px), the deny hook's new rules. `npm test`: 617 tes
 skipped, on Node 22.22.0 and Node 24.21.0, Chromium included, with bun on PATH and without it.
 
 **Not done in M4:** a board view of the guards and their hits (only the card and the chip are in the design's
-words; a mock-up is in the PR); `--run` for md/json/sarif (they export the ledger, which is what CI and sharing need);
+words; a mock-up is in the PR), the card's feedback sentences and its note when guards.json cannot be read (all three
+wait for the owner); `--run` for md/json/sarif (they export the ledger, which is what CI and sharing need);
 re-baselining from the board; SARIF from `check` for the ledger without `--fail-on`.
 
 ## 8. Release gates (0.1)

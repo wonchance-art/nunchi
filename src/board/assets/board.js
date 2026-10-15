@@ -19,7 +19,8 @@ function show(...nodes) {
   const was = d.activeElement, inside = was instanceof Element && was !== main() && main().contains(was);
   main().replaceChildren(...nodes);
   if (inside && !main().contains(d.activeElement)) {
-    const again = (was.id && $(was.id)) || (was.classList.contains('row') && S.focus && $(`row-${S.focus}`));
+    // (a control that is gone names where its focus goes: `data-fallback`, e.g. the guard card's heading)
+    const again = (was.id && $(was.id)) || (was.classList.contains('row') && S.focus && $(`row-${S.focus}`)) || (was.dataset?.fallback && $(was.dataset.fallback));
     if (again && /^H[1-6]$/.test(again.tagName)) again.setAttribute('tabindex', '-1');      // a heading the focus was on
     if (again) again.focus({ preventScroll: true }); else focusHeading();
   }
@@ -373,16 +374,27 @@ function renderProgress(focus = false) {
 // words ("Stop these coming back? `window.confirm` (fixed twice) · `href="#"`"), with an Add toggle per row. Backticks
 // mark code; every piece is set as text.
 const codeParts = text => String(text).split('`').map((p, i) => (i % 2 ? h('code', null, p) : p)).filter(p => p !== '');
+// A toggle's name is always "Add" and its row ("Add `window.confirm` (fixed twice)"), pressed or not; pressed, it shows
+// "✓ Added", so the state is seen in forced colours too. When guards.json cannot be read (`unreadable`), the rows show
+// what was fixed, with no toggle. The live region says a neutral "Added" or "Taken back".
 function guardsPanel(c) {
   const row = r => {
-    const label = `guard-l-${r.kind}`, id = `guard-b-${r.kind}`;
-    const btn = h('button', { type: 'button', class: 'b', id, 'aria-pressed': r.added ? 'true' : 'false', 'aria-describedby': label }, 'Add');
+    const label = `guard-l-${r.kind}`, add = `guard-a-${r.kind}`, id = `guard-b-${r.kind}`;
+    const what = h('span', { class: 'what', id: label }, ...codeParts(r.text));
+    if (c.unreadable) return h('li', null, what);
+    const btn = h('button', { type: 'button', class: 'b', id, 'aria-pressed': r.added ? 'true' : 'false', 'aria-labelledby': `${add} ${label}`, 'data-fallback': 'h-guards' },
+      h('span', { id: add, hidden: true }, 'Add'), r.added ? h('span', { 'aria-hidden': 'true' }, '✓ Added') : h('span', { 'aria-hidden': 'true' }, 'Add'));
     btn.addEventListener('click', async () => {
       btn.disabled = true;
-      try { await api('/api/guard', { method: 'POST', body: { kind: r.kind, add: !r.added } }); await refreshSummary(); renderProgress(); d.getElementById(id)?.focus(); }
-      catch (e) { btn.disabled = false; announce(e.message); }
+      try {
+        await api('/api/guard', { method: 'POST', body: { kind: r.kind, add: !r.added } });
+        announce(r.added ? 'Taken back' : 'Added');
+        await refreshSummary(); renderProgress();
+        const again = d.getElementById(id);
+        if (again) again.focus(); else { const hd = d.getElementById('h-guards'); if (hd) { hd.setAttribute('tabindex', '-1'); hd.focus(); } }
+      } catch (e) { btn.disabled = false; announce(e.message); }
     });
-    return h('li', null, h('span', { class: 'what', id: label }, ...codeParts(r.text)), btn);
+    return h('li', null, what, btn);
   };
   return h('section', { class: 'panel-box', 'aria-labelledby': 'h-guards' }, h('h2', { id: 'h-guards' }, c.title),
     h('ul', { class: 'confirm-list guard-list' }, c.rows.map(row)));

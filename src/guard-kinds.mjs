@@ -144,16 +144,19 @@ export function parseGuards(text, file = 'guards.json') {
   try { doc = JSON.parse(text); } catch (e) { throw fail('CORRUPT', `${file} is not valid JSON (${String(e.message).split('\n')[0]}). Fix it by hand or remove it.`); }
   return validateGuards(doc, file);
 }
-// → the document, or null when there is no guards file. A link, a folder or an unreadable file is an error.
-export function readGuards(path) {
+// → the document, or null when there is no guards file. A link, a folder or an unreadable file is an error. `name`: the
+// file as messages say it (the repository's path, `web/.nunchi/guards.json`), the path itself by default.
+export function readGuards(path, name = path) {
   let st;
-  try { st = lstatSync(path); } catch (e) { if (e.code === 'ENOENT') return null; throw fail('CORRUPT', `${path} cannot be read (${e.code})`); }
-  if (st.isSymbolicLink()) throw fail('UNSAFE_PATH', `${path} is a symbolic link; nunchi reads its guards from a plain file`);
-  if (!st.isFile()) throw fail('CORRUPT', `${path} is not a file`);
+  try { st = lstatSync(path); } catch (e) { if (e.code === 'ENOENT') return null; throw fail('CORRUPT', `${name} cannot be read (${e.code})`); }
+  if (st.isSymbolicLink()) throw fail('UNSAFE_PATH', `${name} is a symbolic link; nunchi reads its guards from a plain file`);
+  if (!st.isFile()) throw fail('CORRUPT', `${name} is not a file`);
   let text;
-  try { text = readFileSync(path, 'utf8'); } catch (e) { throw fail('CORRUPT', `${path} cannot be read (${e.code})`); }
-  return parseGuards(text, path);
+  try { text = readFileSync(path, 'utf8'); } catch (e) { throw fail('CORRUPT', `${name} cannot be read (${e.code})`); }
+  return parseGuards(text, name);
 }
+// guards.json as the repository names it: the app's place in it (git's prefix, '' at the top or without git)
+export const guardsName = prefix => `${prefix || ''}.nunchi/guards.json`;
 // Written stable (sorted keys and lists) and atomically, never through a link. A committed file: its mode stays the
 // file's own (not private).
 export function writeGuards(path, doc) {

@@ -156,7 +156,7 @@ test('the board: the card in the summary, the toggle through the key only, the c
     const s = await (await fetch(`${origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) })).json();
     const call = (path, body, token = s.token) => boardRequest(origin, path, { token, body });
     let sum = (await call('/api/summary')).json;
-    assert.deepEqual(sum.guards, { title: 'Stop these coming back?', rows: [{ kind: 'native-dialog', text: '`window.confirm`', added: false }] });
+    assert.deepEqual(sum.guards, { title: 'Stop these coming back?', unreadable: false, rows: [{ kind: 'native-dialog', text: '`window.confirm`', added: false }] });
     const list = (await call('/api/groups?status=open&group=kind')).json;
     assert.equal(list.sections.find(x => x.key === 'dead-href').guard, 'available');
     assert.equal(list.sections.find(x => x.key === 'native-dialog')?.guard, undefined);
@@ -165,6 +165,7 @@ test('the board: the card in the summary, the toggle through the key only, the c
     assert.equal((await call('/api/guard', { kind: 'native-dialog', add: 'yes' })).status, 400);
     const r = await call('/api/guard', { kind: 'native-dialog', add: true });
     assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.deepEqual(r.json, { ok: true, added: true, baselined: 0 }, 'how many hits there now became its baseline');
     assert.ok(existsSync(join(p.nunchi, 'guards.json')));
     sum = (await call('/api/summary')).json;
     assert.equal(sum.guards.rows[0].added, true);
@@ -247,9 +248,9 @@ const CARD = () => {
   return {
     head: document.getElementById('h-guards').textContent, labelled: c.getAttribute('aria-labelledby'),
     rows: [...c.querySelectorAll('li')].map(li => {
-      const b = li.querySelector('button'), r = b.getBoundingClientRect();
+      const b = li.querySelector('button'), r = b?.getBoundingClientRect();
       return { text: li.querySelector('.what').textContent, code: [...li.querySelectorAll('code')].map(x => x.textContent),
-        button: { text: b.textContent, pressed: b.getAttribute('aria-pressed'), described: b.getAttribute('aria-describedby'), h: Math.round(r.height), w: Math.round(r.width) } };
+        button: b ? { text: b.innerText, pressed: b.getAttribute('aria-pressed'), labelledby: b.getAttribute('aria-labelledby'), h: Math.round(r.height), w: Math.round(r.width) } : null };
     }),
     focus: document.activeElement?.id || null, wide: document.documentElement.scrollWidth <= innerWidth,
   };
@@ -276,14 +277,18 @@ test('board e2e: the card on Progress in the design\'s words, the Add toggle pre
       const m = await pg.evaluate(CARD);
       assert.equal(m.head, 'Stop these coming back?');
       assert.equal(m.labelled, 'h-guards');
-      assert.deepEqual(m.rows.map(r => [r.text, r.code, r.button.text, r.button.pressed]), [['window.confirm (fixed twice)', ['window.confirm'], 'Add', scheme === 'light' ? 'false' : 'true']]);
-      assert.ok(m.rows.every(r => r.button.h >= 44 && r.button.w >= 44 && r.button.described === 'guard-l-native-dialog'), JSON.stringify(m.rows));
+      assert.deepEqual(m.rows.map(r => [r.text, r.code, r.button.text, r.button.pressed]), [['window.confirm (fixed twice)', ['window.confirm'], scheme === 'light' ? 'Add' : '✓ Added', scheme === 'light' ? 'false' : 'true']]);
+      assert.ok(m.rows.every(r => r.button.h >= 44 && r.button.w >= 44 && r.button.labelledby === 'guard-a-native-dialog guard-l-native-dialog'), JSON.stringify(m.rows));
+      // its name is "Add" and its row, pressed or not
+      assert.equal(await pg.getByRole('button', { name: 'Add window.confirm (fixed twice)', exact: true, pressed: scheme !== 'light' }).count(), 1);
       assert.ok(m.wide, 'no sideways scroll');
       assert.deepEqual(await axeRun(pg), []);
       if (scheme === 'light') {
         await pg.click('#guard-b-native-dialog');
         await pg.waitForFunction(() => document.getElementById('guard-b-native-dialog')?.getAttribute('aria-pressed') === 'true');
         assert.equal((await pg.evaluate(CARD)).focus, 'guard-b-native-dialog', 'the focus stays on the toggle');
+        assert.equal((await pg.evaluate(CARD)).rows[0].button.text, '✓ Added');
+        await pg.waitForFunction(() => document.getElementById('announce')?.textContent === 'Added');
         assert.deepEqual(G.readGuards(join(p.nunchi, 'guards.json')).guards, [{ kind: 'native-dialog', params: { calls: ['confirm'] } }]);
         assert.deepEqual(await axeRun(pg), [], 'pressed');
         // the passive chip on the kind's section
@@ -296,5 +301,78 @@ test('board e2e: the card on Progress in the design\'s words, the Add toggle pre
       assert.deepEqual(errors, []);
       await context.close();
     }
+  } finally { await b.close(); }
+});
+
+test('the offer waits for the end of the batch, on the board and in fix --summary', () => {
+  const p = project();
+  const [c1, c2] = p.by('native-dialog'), [d1] = p.by('dead-href');
+  plan(p, [c1, c2, d1]);
+  attempt(p, c1, 'fixed');
+  assert.equal(O.guardOffer({ stateDir: p.stateDir, rows: p.rows, doc: null }), null, 'two groups not started yet');
+  const running = R.allocate(p.stateDir, c2, { title: c2 }, { now: T0 + 70e3 });
+  assert.equal(O.guardOffer({ stateDir: p.stateDir, rows: p.rows, doc: null }), null, 'one being fixed');
+  assert.equal(F.summaryFix(F.openFix({ cwd: p.root })).lines.length, 1, 'no offer in the chat mid-batch');
+  R.setPhase(p.stateDir, R.setPhase(p.stateDir, running, 'folding', {}, { now: T0 + 80e3 }), 'fixed', {}, { now: T0 + 81e3 });
+  attempt(p, d1, 'reverted', T0 + 90e3);
+  assert.deepEqual(O.guardOffer({ stateDir: p.stateDir, rows: p.rows, doc: null }).rows.map(r => r.kind), ['native-dialog']);
+  assert.match(F.summaryFix(F.openFix({ cwd: p.root })).lines[1], /^Stop these coming back\? `window.confirm` \(fixed twice\)/);
+});
+
+test('the board: a guards.json that cannot be read keeps the rows without toggles and hides the chip; a terminal add is seen live', async () => {
+  const p = project({ moreDeadLinks: 4 });
+  const [c1] = p.by('native-dialog');
+  plan(p, [c1]);
+  attempt(p, c1, 'fixed');
+  const b = await startBoard({ projectDir: p.root });
+  try {
+    const s = await (await fetch(`${b.origin}/api/session`, { method: 'POST', headers: { 'content-type': 'application/json', origin: b.origin }, body: JSON.stringify({ code: b.newLink().split('#t=')[1] }) })).json();
+    const call = (path, body) => boardRequest(b.origin, path, { token: s.token, body });
+    // the person adds the guard in their own terminal: the generation does not move, the board sees it anyway
+    const v0 = (await call('/api/generation')).json.version;
+    O.changeGuards({ nunchiDir: p.nunchi, stateDir: p.stateDir, change: d => G.addGuard(d, { project: p.root, kind: 'native-dialog', params: { calls: ['confirm'] } }) });
+    assert.notEqual((await call('/api/generation')).json.version, v0);
+    assert.equal((await call('/api/summary')).json.guards, null, 'guarded now: nothing to offer');
+    // a file that cannot be read (a merge conflict, a hand edit)
+    writeFileSync(join(p.nunchi, 'guards.json'), '<<<<<<< ours\n{}\n');
+    const sum = (await call('/api/summary')).json;
+    assert.deepEqual(sum.guards, { title: 'Stop these coming back?', unreadable: true, rows: [{ kind: 'native-dialog', text: '`window.confirm`', added: false }] });
+    assert.equal(sum.warnings.filter(w => w.includes('guards.json')).length, 1);
+    assert.match(sum.warnings.find(w => w.includes('guards.json')), /^\.nunchi\/guards\.json is not valid JSON/, 'its path once, as the repository names it');
+    const list = (await call('/api/groups?status=open&group=kind')).json;
+    assert.ok(list.sections.every(x => x.guard === undefined), 'no chip: what the file covers is not known');
+    assert.equal((await call('/api/guard', { kind: 'native-dialog', add: true })).status, 409);
+    const f = spawnSync(process.execPath, [CLI, 'findings', '--json'], { cwd: p.root, encoding: 'utf8' });
+    assert.equal(JSON.parse(f.stdout).kinds.find(k => k.rule === 'dead-href').guard, undefined);
+    assert.equal(f.stderr.split('\n').filter(l => l.includes('guards.json')).length, 1);
+    assert.match(f.stderr, /nunchi: \.nunchi\/guards\.json is not valid JSON/);
+  } finally { await b.close(); }
+});
+
+test('board e2e: a toggle in focus whose file turns unreadable leaves the focus on the card; the pressed state shows in forced colours', { timeout: 120000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = project();
+  const [c1, c2] = p.by('native-dialog'), [d1] = p.by('dead-href');
+  plan(p, [c1, c2, d1]);
+  for (const g of [c1, c2, d1]) attempt(p, g, 'fixed');
+  const b = await startBoard({ projectDir: p.root });
+  try {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, forcedColors: 'active' });
+    const pg = await context.newPage();
+    await pg.goto(b.newLink());
+    await pg.waitForSelector('#guard-b-native-dialog');
+    await pg.click('#guard-b-native-dialog');
+    await pg.waitForFunction(() => document.getElementById('guard-b-native-dialog')?.getAttribute('aria-pressed') === 'true');
+    const look = await pg.evaluate(() => ['native-dialog', 'dead-href'].map(k => { const b = document.getElementById(`guard-b-${k}`), c = getComputedStyle(b); return { text: b.innerText, bg: c.backgroundColor, color: c.color }; }));
+    assert.equal(look[0].text, '✓ Added');
+    assert.equal(look[1].text, 'Add');
+    assert.notEqual(look[0].bg, look[1].bg, 'pressed and not pressed look different in forced colours');
+    await pg.focus('#guard-b-dead-href');
+    writeFileSync(join(p.nunchi, 'guards.json'), '{"schema":1,"guards":[],"baseline":[],"regex":".*"}\n');
+    await pg.waitForFunction(() => !document.getElementById('guard-b-dead-href'), null, { timeout: 15000 });
+    assert.equal(await pg.evaluate(() => document.activeElement?.id), 'h-guards', 'the focus stays on the card');
+    assert.deepEqual(await pg.evaluate(() => [...document.querySelectorAll('.guard-list li')].map(li => [li.textContent, !!li.querySelector('button')])), [['window.confirm (fixed twice)', false], ['href="#"', false]]);
+    assert.deepEqual(await axeRun(pg), []);
+    await context.close();
   } finally { await b.close(); }
 });

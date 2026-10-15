@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { KINDS, guardKindOf, paramsFromRows, labelOf, widening, readGuards, writeGuards, guardsPath, emptyGuards, OPEN_INSTANCES, paramsProblem } from './guard-kinds.mjs';
 import { stableJson, withLock, writeStable } from './stable.mjs';
-import { readPlan, latestRecords } from './fix/records.mjs';
+import { readPlan, latestRecords, isOpen } from './fix/records.mjs';
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
@@ -40,15 +40,18 @@ export const OFFER_TITLE = 'Stop these coming back?';
 export const rowText = r => `${r.label}${fixedWords(r.fixed)}`;
 export const offerLine = rows => `${OFFER_TITLE} ${rows.map(rowText).join(' · ')}`;
 
-// The guards to offer at the end of the last fix batch (state/fix-plan.json): only after a verified fix (the latest
-// attempt of a group of the batch is `fixed`) of a kind with a built-in guard, and only what guards.json does not cover
+// The guards to offer at the end of the last fix batch (state/fix-plan.json): only once the batch is over (every group
+// of the plan has an attempt since the plan, and none is still running), only after a verified fix (the latest attempt
+// of a group of the batch is `fixed`) of a kind with a built-in guard, and only what guards.json does not cover
 // already, or what this card added. `rows`: the ledger's rows (view()). → { plan, rows: [{ kind, params, label, fixed,
 // added }] } or null.
+export const batchOver = (plan, latest) => plan.groups.every(g => { const rec = latest.get(g); return !!rec && !isOpen(rec) && (rec.phases?.[0]?.at || '') >= plan.at; });
 export function guardOffer({ stateDir, rows, doc }) {
   const plan = readPlan(stateDir);
-  if (!plan || typeof plan.at !== 'string') return null;
+  if (!plan || typeof plan.at !== 'string' || !Array.isArray(plan.groups)) return null;
   let latest;
   try { latest = latestRecords(stateDir); } catch { return null; }
+  if (!batchOver(plan, latest)) return null;
   const rowsOf = new Map();
   for (const r of rows) { if (!rowsOf.has(r.group)) rowsOf.set(r.group, []); rowsOf.get(r.group).push(r); }
   const card = readCard(stateDir);

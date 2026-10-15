@@ -532,10 +532,11 @@ if (cmd === 'setup') {
     // design §5: a kind with ≥ 5 open places and a built-in guard nobody added: "guard available" (passive)
     {
       const { guardAvailable, AVAILABLE } = await import('./guard-offer.mjs');
-      const { readGuards, guardsPath } = await import('./guard-kinds.mjs');
-      let gdoc = null;
-      try { gdoc = readGuards(guardsPath(nunchiDir)); } catch (e) { warn(`.nunchi/guards.json: ${e.message}`); }
-      const avail = guardAvailable(rows, gdoc);
+      const { readGuards, guardsPath, guardsName } = await import('./guard-kinds.mjs');
+      let gdoc = null, unreadable = false;
+      try { gdoc = readGuards(guardsPath(nunchiDir), guardsName(st.root.prefix)); } catch (e) { unreadable = true; warn(e.message); }
+      // a guards file that cannot be read: what it covers is not known, so no kind is said to have a guard available
+      const avail = unreadable ? new Set() : guardAvailable(rows, gdoc);
       for (const k of kinds) if (avail.has(k.rule)) k.guard = AVAILABLE;
     }
     // this worktree's latest run (another worktree's newer run is not what this one sees, §7)

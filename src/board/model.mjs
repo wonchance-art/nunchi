@@ -20,7 +20,7 @@ import { SEV, STATUS_LABEL, PERSONS, VPS, STATES, human, plural, drawable, scene
 import { claimLive, claimMinutes } from '../fix/claims.mjs';
 import { fixNeedsOf } from '../summary.mjs';
 import { latestRecords, allRecords, isOpen } from '../fix/records.mjs';
-import { readGuards, guardsPath } from '../guard-kinds.mjs';
+import { readGuards, guardsPath, guardsName } from '../guard-kinds.mjs';
 import { guardAvailable, guardOffer } from '../guard-offer.mjs';
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
@@ -245,12 +245,13 @@ export function buildBoardModel({ nunchiDir, projectDir, warn = () => {} }) {
   out.forEach((g, i) => { g.order = i; });
   const byId = new Map(out.map(g => [g.id, g]));
   // guards (design §5): the card at the end of a fix batch, and the passive "guard available" chip on a kind with ≥ 5
-  // open places no guard covers. A guards file that cannot be read offers nothing and says why.
-  let guardsDoc = null;
-  try { guardsDoc = readGuards(guardsPath(nunchiDir)); } catch (e) { warn(`.nunchi/guards.json: ${e.message}`); }
+  // open places no guard covers. A guards file that cannot be read is said once (its repository path) and flagged: the
+  // card shows what was fixed without its toggles, and no chip is shown (what the file covers is not known).
+  let guardsDoc = null, guardsUnreadable = false;
+  try { guardsDoc = readGuards(guardsPath(nunchiDir), guardsName(st.root.prefix)); } catch (e) { guardsUnreadable = true; warn(e.message); }
   const guardOfferNow = (() => { try { return guardOffer({ stateDir: st.root.dir, rows, doc: guardsDoc }); } catch { return null; } })();
-  const guardRules = guardAvailable(rows, guardsDoc);
-  return { generation, led, rows, groups: out, byId, summary: sum, latest, latestEv, evidenceOf, projectDir, nunchiDir, claims, stateDir: st.root.dir, guardOffer: guardOfferNow, guardRules };
+  const guardRules = guardsUnreadable ? new Set() : guardAvailable(rows, guardsDoc);
+  return { generation, led, rows, groups: out, byId, summary: sum, latest, latestEv, evidenceOf, projectDir, nunchiDir, claims, stateDir: st.root.dir, guardOffer: guardOfferNow, guardRules, guardsUnreadable };
 }
 
 // A fix record as the board shows it (design §3.4): which attempt, its phase, the *needs you* kind — (a) the fix also
