@@ -1,0 +1,4 @@
+/* Synthetic fixture (nunchi guard colour-literal): every line marked HIT holds a colour outside the tokens. */
+.card { color: #ff0000; } /* HIT colour-literal */
+.card:hover { border: 1px solid hsl(0 100% 50%); } /* HIT colour-literal */
+.note { background: url("data:image/png;base64,AAAA") gold; } /* HIT colour-literal */

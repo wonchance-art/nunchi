@@ -1,0 +1,5 @@
+/* Synthetic fixture (nunchi guard colour-literal): near misses. .a { color: #ff0000 } in a comment */
+:root { --brand: #ff0000; --text: oklch(0.2 0.02 260); }
+.card { color: #1f2937; background: #FFF; border-color: rgb(37 99 235); }
+.card::before { content: "#ff0000"; }
+.note { font-family: "Tomato", Tan, serif; background-image: url(#ff0000); color: var(--brand); }
