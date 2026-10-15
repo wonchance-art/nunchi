@@ -133,12 +133,17 @@ function openInBrowser(url) {
 }
 
 // Where the control socket lives (design §3.1: a local socket, mode 0600, through which a second `nunchi open` asks
-// this server to open the browser with a fresh link). It never hands out a link or a token.
-export function controlPath(stateDir, pid, platform = process.platform) {
+// this server to open the browser with a fresh link). It never hands out a link or a token. A socket's path has a
+// limit (104 bytes on macOS, 108 on Linux; past it listen fails, or older Node cuts the name short and the socket is
+// not where the record says): the state folder when its path fits, else a 0700 folder of this user in the temp folder,
+// else in /tmp when the temp folder's own path is too long too (a TMPDIR set deep).
+export function controlPath(stateDir, pid, platform = process.platform, tmp = tmpdir()) {
   if (platform === 'win32') return `\\\\.\\pipe\\nunchi-board-${sha(`${stateDir}|${pid}`, 16)}`;
   const inState = join(stateDir, 'boards', `${pid}.sock`);
   if (Buffer.byteLength(inState) < 100) return inState;
-  return join(tmpdir(), `nunchi-${(() => { try { return userInfo().uid; } catch { return 'u'; } })()}`, `${sha(`${stateDir}|${pid}`, 16)}.sock`);
+  const mine = [`nunchi-${(() => { try { return userInfo().uid; } catch { return 'u'; } })()}`, `${sha(`${stateDir}|${pid}`, 16)}.sock`];
+  const inTmp = join(tmp, ...mine);
+  return Buffer.byteLength(inTmp) < 100 ? inTmp : join('/tmp', ...mine);
 }
 
 const json = v => Buffer.from(JSON.stringify(v));
