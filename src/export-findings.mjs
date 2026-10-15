@@ -193,8 +193,18 @@ export function exportMarkdown(model) {
 
 // ---- SARIF ----------------------------------------------------------------------------------------------------------
 
+// A place that is fixed, or that a decision dismissed or kept, is a suppressed result (kind `external`: the decision
+// lives in nunchi's ledger, not in the source), so code scanning shows it closed instead of opening an alert. A
+// decision no person made or confirmed is `underReview`, as it does not clear "Ready to ship" either.
+const decided = (it, d) => ({ status: it.decision?.human === false ? 'underReview' : 'accepted',
+  justification: `${decidedText(it.decision?.decision ?? d, it.decision?.reason ?? null)}${it.decision?.human === false ? ', not confirmed by a person' : ''} (nunchi decide).` });
+const SUPPRESSED = {
+  fixed: it => ({ status: 'accepted', justification: `Fixed${it.fixedIn ? `: gone on re-capture in run ${it.fixedIn}` : ''} (nunchi).` }),
+  dismissed: it => decided(it, 'false-positive'),
+  kept: it => decided(it, 'keep'),
+};
 // One result per place (a ledger row): its group and fingerprint as partialFingerprints, the route and element as
-// logical locations. → { results, rules, unlocated }
+// logical locations, a suppression when it is fixed, dismissed or kept. → { results, rules, unlocated }
 export function findingResults(model) {
   const rules = new Map(), results = [];
   let unlocated = 0;
@@ -211,6 +221,7 @@ export function findingResults(model) {
         path: it.location.path, line: it.location.line,
         logical: [...(it.route !== null ? [{ name: it.route, kind: 'resource' }] : []), ...(it.element ? [{ name: it.element, kind: 'element' }] : [])],
         fingerprints: { 'nunchi/fp/v1': it.fp, 'nunchi/group/v1': g.group },
+        ...(SUPPRESSED[it.status] ? { suppression: SUPPRESSED[it.status](it) } : {}),
       });
     }
   }

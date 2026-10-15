@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { validate, SCHEMA, sarifProblems } from './fixtures/sarif/validate.mjs';
+import { validate, SCHEMA, sarifProblems, URI_RE, URI_REFERENCE_RE } from './fixtures/sarif/validate.mjs';
 import { sarifLog, uriOf, plainText, LEVEL, SECURITY_SEVERITY, GITHUB_LIMITS, truncationLine, SARIF_SCHEMA } from '../src/sarif.mjs';
 import { redactText } from '../src/network.mjs';
 
@@ -113,4 +113,42 @@ test('text and URIs: control and format characters flattened, clipped by code po
   redactText('a'.repeat(200000));
   assert.ok(Number(process.hrtime.bigint() - t0) / 1e6 < 1000, 'linear');
   assert.equal(redactText('see https://ana:pw@x.invalid/ and xhttps://u:p@y.invalid/'), 'see https://x.invalid/ and xhttps://y.invalid/');
+});
+
+test('truncation: both reasons named; the size worked out once per result is the size written; the most that fit', () => {
+  const list = Array.from({ length: 5003 }, (_, i) => result(i, { message: `${'Finding on /plants/[id]. '.repeat(8)}${i}` }));
+  const r = sarifLog({ version: '1', rules, results: list, maxBytes: 600000 });
+  assert.ok(r.kept > 0 && r.kept < 5000);
+  assert.equal(r.truncated.why, 'GitHub keeps 5,000 results per run; and the file would be over 0.57 MB');
+  assert.equal(r.log.runs[0].properties.truncated.why, r.truncated.why);
+  assert.equal(Buffer.byteLength(r.text), r.bytesAt(r.kept), 'worked out, not measured again');
+  assert.ok(Buffer.byteLength(r.text) <= 600000 && r.bytesAt(r.kept + 1) > 600000, 'the most that fit');
+  for (const max of [3000, 12000, 50000, 200000, Infinity]) {
+    const x = sarifLog({ version: '1', rules, results: list.slice(0, 300), maxBytes: max });
+    assert.equal(Buffer.byteLength(x.text), x.bytesAt(x.kept), `exact at ${max}`);
+    assert.ok(x.kept === 300 || x.bytesAt(x.kept + 1) > max);
+    assert.deepEqual(sarifProblems(x.log), []);
+  }
+  assert.equal(sarifLog({ version: '1', rules, results: list.slice(0, 5001) }).truncated.why, 'GitHub keeps 5,000 results per run');
+});
+
+test('the whole log is scrubbed, every key and string; suppressions for what a person dismissed or kept, or what is fixed', () => {
+  const key = 'sk_' + 'live_' + 'FixtureOnly0000000000000009';
+  const r = sarifLog({ version: `1-${key}`, rules: new Map([['rule-0', { title: 'Zero', tags: [`t-${key}`] }]]),
+    results: [result(0, { ruleId: 'rule-0', logical: [{ name: '/x', kind: `k-${key}` }], fingerprints: { [`fp-${key}`]: 'x' }, suppression: { status: 'accepted', justification: `Kept ${key}` } })] });
+  assert.ok(!r.text.includes(key));
+  const x = r.log.runs[0].results[0];
+  assert.deepEqual(x.suppressions, [{ kind: 'external', status: 'accepted', justification: 'Kept [secret-shaped: stripe-live-secret-key]' }]);
+  assert.deepEqual(sarifProblems(r.log), []);
+  assert.equal(sarifLog({ version: '1', rules, results: [result(0)] }).log.runs[0].results[0].suppressions, undefined);
+});
+
+test('the validator reads uri and uri-reference by RFC 3986', () => {
+  for (const u of ['app/page.tsx', 'app/%5Bid%5D/page%201.tsx', '', '/abs', 'x?q=1#f']) assert.ok(URI_REFERENCE_RE.test(u), u);
+  for (const u of ['app/[id]/page.tsx', 'a b', '%zz', 'a\\b']) assert.ok(!URI_REFERENCE_RE.test(u), u);
+  assert.ok(URI_RE.test(SARIF_SCHEMA) && URI_RE.test('http://[::1]:80/x'));
+  assert.ok(!URI_RE.test('app/page.tsx'), 'a URI has a scheme');
+  const bad = sarifLog({ version: '1', rules, results: [result(0)] }).log;
+  bad.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri = 'app/[id]/page.tsx';
+  assert.notDeepEqual(sarifProblems(bad), []);
 });

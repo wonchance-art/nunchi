@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { writeRun, withAi, scene, tmp, HOSTILE } from './fixtures/board-project.mjs';
-import { sarifProblems } from './fixtures/sarif/validate.mjs';
+import { sarifProblems, githubProblems } from './fixtures/sarif/validate.mjs';
 import { mdText } from '../src/export-findings.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -187,6 +187,7 @@ test('SARIF: valid against the vendored schema; file:line of the finding, else t
   assert.equal(r.status, 0, r.stderr);
   const log = JSON.parse(r.stdout);
   assert.deepEqual(sarifProblems(log), []);
+  assert.deepEqual(githubProblems(log), []);
   const results = log.runs[0].results;
   const where = id => results.filter(x => x.ruleId === id).map(x => `${x.locations[0].physicalLocation.artifactLocation.uri}:${x.locations[0].physicalLocation.region.startLine}`);
   assert.deepEqual(where('L6.raw-technical-text'), ['app/garden/page.tsx:7']);
@@ -211,6 +212,30 @@ test('SARIF: valid against the vendored schema; file:line of the finding, else t
   assert.deepEqual(garden.locations[0].logicalLocations, [{ name: '/garden', kind: 'resource' }, { name: 'main p.err', kind: 'element' }]);
   assert.match(garden.message.text, /^Raw error message shown to users on \/garden \(element main p\.err\)\./);
   assert.ok(!r.stdout.includes('127.0.0.1') && !r.stdout.includes(p.root), 'route templates, no URLs or absolute paths');
+});
+
+test('SARIF of every status: what GitHub needs; fixed, dismissed and kept places are suppressed, a decision no person made under review', () => {
+  const p = project();
+  assert.equal(run(p, 'decide', groupOf(p, 'dead-href'), 'false-positive', '--reason', 'not-a-problem', '--from-chat').status, 0);
+  assert.equal(run(p, 'decide', groupOf(p, 'target-size-min'), 'keep', '--reason', 'intended', '--from-chat').status, 0);
+  const r = run(p, 'export', '--format', 'sarif', '--status', 'all', '--include-page-text');
+  assert.equal(r.status, 0, r.stderr);
+  const log = JSON.parse(r.stdout);
+  assert.deepEqual(sarifProblems(log), []);
+  assert.deepEqual(githubProblems(log), []);
+  const by = id => log.runs[0].results.filter(x => x.ruleId === id);
+  assert.deepEqual(by('dead-href').map(x => x.suppressions), [[{ kind: 'external', status: 'underReview', justification: 'Not a problem (nothing wrong here), not confirmed by a person (nunchi decide).' }]]);
+  assert.equal(by('target-size-min')[0].suppressions[0].kind, 'external');
+  assert.equal(by('raw-error-text')[0].suppressions, undefined, 'an open place is not suppressed');
+});
+
+test('with --include-page-text too: route templates, never a screen id, a URL of the app or an absolute path', () => {
+  const p = project();
+  for (const fmt of ['json', 'md', 'sarif']) {
+    const out = run(p, 'export', '--format', fmt, '--include-page-text', '--status', 'all').stdout;
+    for (const s of Object.values(p.scenes)) assert.ok(!out.includes(s.id) && !out.includes(mdText(s.id)), `${fmt}: screen id ${s.id}`);
+    assert.ok(!out.includes(p.root) && !/127\.0\.0\.1|localhost:\d/.test(out), `${fmt}: no absolute path or app URL`);
+  }
 });
 
 test('paths are the repository\'s: an app in a subfolder gets its prefix; statuses and usage', () => {

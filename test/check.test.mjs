@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { tmp, writeRun, scene } from './fixtures/board-project.mjs';
-import { sarifProblems } from './fixtures/sarif/validate.mjs';
+import { sarifProblems, githubProblems } from './fixtures/sarif/validate.mjs';
 import * as G from '../src/guards.mjs';
 import { guardsAt, fetchHint } from '../src/check.mjs';
 
@@ -79,6 +79,7 @@ test('a hit in the baseline passes; a new hit fails with file:line:column; the o
   assert.match(strict.stdout, /^exit 1: 1 baselined hit gone \(--strict: the baseline can be tightened\)$/m);
   const log = JSON.parse(readFileSync(out, 'utf8'));
   assert.deepEqual(sarifProblems(log), []);
+  assert.deepEqual(githubProblems(log), []);
   assert.deepEqual(log.runs[0].results.map(x => [x.ruleId, x.locations[0].physicalLocation.artifactLocation.uri]), [['nunchi.guard/native-dialog', '.nunchi/guards.json']]);
 });
 
@@ -236,6 +237,7 @@ test('--sarif: new hits and weakened guards as results, valid against the vendor
   assert.match(r.stdout, /^SARIF → .*check\.sarif \(2 results\)$/m);
   const log = JSON.parse(readFileSync(out, 'utf8'));
   assert.deepEqual(sarifProblems(log), []);
+  assert.deepEqual(githubProblems(log), []);
   const res = log.runs[0].results;
   assert.deepEqual(res.map(x => [x.ruleId, x.locations[0].physicalLocation.artifactLocation.uri, x.locations[0].physicalLocation.region.startLine]).sort(),
     [['nunchi.guard/dead-href', 'app/nav.tsx', 1], ['nunchi.guard/native-dialog', '.nunchi/guards.json', 1]]);

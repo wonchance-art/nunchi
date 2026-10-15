@@ -1893,15 +1893,27 @@ creates them); what was left out is said on stderr.
   repository. A result needs a location to be shown; only `partialFingerprints.primaryLocationLineHash` is GitHub's
   own (the upload action adds it), the rest are kept for tools. nunchi writes one run, one location per result and at
   most 10 tags per rule, keeps the 5,000 results GitHub would keep — worst first, then by rule, path and line, the same
-  every time — and keeps the uncompressed file at or under 10 MB (the most results that fit, found by halving), so the
-  compressed one is too. When it cuts, the run's `properties.truncated` says `{kept, of, why, limits}` and the command
-  says "SARIF truncated: 5,000 of 6,120 results kept, worst first (GitHub keeps 5,000 results per run; <docs URL>)".
+  every time — and keeps the uncompressed file at or under 10 MB (the most results that fit, found by halving over the
+  sizes of the results and rules, worked out once each as the file writes them; the log is built once, and a test
+  checks the size worked out is the size written), so the compressed one is too. When it cuts, the run's
+  `properties.truncated` says `{kept, of, why, limits}`, `why` naming both reasons when both cut ("GitHub keeps 5,000
+  results per run; and the file would be over 10 MB"), and the command says "SARIF truncated: 5,000 of 6,120 results
+  kept, worst first (GitHub keeps 5,000 results per run; <docs URL>)".
+- *Suppressions:* a place that is fixed, or that a decision dismissed or kept (`--status fixed,not-a-problem,kept` or
+  `all`), carries `suppressions: [{kind: "external", status, justification}]` (the decision lives in nunchi's ledger,
+  not in the source), so code scanning shows it closed instead of opening an alert: `accepted`, or `underReview` for a
+  decision no person made or confirmed (it does not clear "Ready to ship" either). The log is built of pieces (the run
+  around the results and rules, each result, each rule), each scrubbed whole, keys included, so every key and string of
+  the log passes the scanner whoever built it (a tag, a fingerprint's name, the version).
 - *Checks:* the SARIF 2.1.0 schema is vendored as a test fixture (`test/fixtures/sarif/sarif-schema-2.1.0.json`, from
   oasis-tcs/sarif-spec `sarif-2.1/schema/sarif-schema-2.1.0.json`, whose id is the OASIS errata01 schema; sha256
   `c3b4bb2d6093897483348925aaa73af03b3e3f4bd4ca38cef26dcb4212a2682e`, pinned by a test) and checked without network by
   a minimal validator written for the draft-04 keywords it uses (`test/fixtures/sarif/validate.mjs`: `$ref`, type,
   enum, anyOf, oneOf, properties, required, additionalProperties, items, minItems, uniqueItems, minimum, maximum,
-  pattern, format; an unknown keyword fails the run), with tests that it rejects broken logs. No dependency was added.
+  pattern, format: `uri` and `uri-reference` by RFC 3986's grammar; an unknown keyword fails the run), with tests that
+  it rejects broken logs, and by what GitHub needs beyond the schema (`githubProblems`: one run of at most 5,000
+  results, every `ruleId` among the rules, a non-empty relative `uri` under `%SRCROOT%`, at most 10 tags a rule) for
+  both `export --format sarif` and `check --sarif`. No dependency was added.
   Markdown and JSON (and SARIF) exports are byte-identical across two runs (test).
 
 **Deviations from design §5, and why.**
