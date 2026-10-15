@@ -213,11 +213,11 @@ test('screens e2e: Screen detail — numbered by group on both widths, one stack
   } finally { await s.close(); }
 });
 
-test('screens a11y: axe finds nothing on the wall and Screen detail (light 1280, dark 390), 44 px targets, no sideways scroll; filters are selects on a phone', { timeout: 120000 }, async t => {
+test('screens a11y: axe finds nothing on the wall and Screen detail (light 1280, dark 390, dark 1440, 200% zoom as 640 × 450 at 2×), 44 px targets, no sideways scroll; filters are selects on a phone; the list under the image below 1100 px', { timeout: 180000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = leafy();
-  for (const [scheme, width] of [['light', 1280], ['dark', 390]]) {
-    const s = await open(p, { colorScheme: scheme, viewport: { width, height: 844 }, reducedMotion: 'reduce' });
+  for (const [scheme, width, height, deviceScaleFactor] of [['light', 1280, 844, 1], ['dark', 390, 844, 1], ['dark', 1440, 900, 1], ['light', 640, 450, 2]]) {
+    const s = await open(p, { colorScheme: scheme, viewport: { width, height }, deviceScaleFactor, reducedMotion: 'reduce' });
     const { page } = s;
     try {
       for (const [hash, ready] of [['#/screens', '#h-screens'], ['#/screens/0004/~.guest.normal.d', '#h-screen'], ['#/screens/0004/cart.signed-in.error.d', '#h-screen']]) {
@@ -236,7 +236,9 @@ test('screens a11y: axe finds nothing on the wall and Screen detail (light 1280,
             .map(e => ({ e: e.outerHTML.slice(0, 70), r: e.getBoundingClientRect() })).filter(x => x.r.height < 43.5 || (x.e.startsWith('<button') && x.r.width < 43.5)).map(x => `${x.e} ${Math.round(x.r.width)}×${Math.round(x.r.height)}`),
           sideways: document.documentElement.scrollWidth > window.innerWidth + 1, selects: [...document.querySelectorAll('.wall-filters select')].map(x => x.id),
           shots: [...document.querySelectorAll('.sd-fig .shot, .screen-panel .shot')].map(e => Math.round(e.getBoundingClientRect().width)),
+          under: (() => { const f = document.querySelector('.sd-main'), l = document.querySelector('.sd-side'); return f && l ? l.getBoundingClientRect().top >= f.getBoundingClientRect().bottom - 1 : null; })(),
         }));
+        if (hash !== '#/screens') assert.equal(m.under, width < 1100, `${width}px ${hash}: the findings list ${width < 1100 ? 'under' : 'beside'} the image`);
         assert.ok(m.shots.length && m.shots.every(w => w >= 100), `${width}px ${hash}: every screenshot is shown (${m.shots.join(', ')} px wide)`);
         assert.deepEqual(m.small, [], `${width}px ${hash}: every control 44 px`);
         assert.equal(m.sideways, false, `${width}px ${hash}: no sideways scroll`);

@@ -157,10 +157,10 @@ test('coverage e2e: the grid\'s keys — arrows, Home/End, Ctrl+Home/End, J/K to
   } finally { await s.close(); }
 });
 
-test('coverage a11y: axe finds nothing (light 1280, dark 390), 44 px targets, no sideways scroll; the list below 760 px (a phone, 200% zoom) with the panel under its page', { timeout: 120000 }, async t => {
+test('coverage a11y: axe finds nothing (light 1280, dark 390, dark 1440, 200% zoom as 640 × 450 at 2×), 44 px targets, no sideways scroll; the list below 760 px (a phone, 200% zoom) with the panel under its page', { timeout: 150000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = leafy();
-  for (const [scheme, width, height, deviceScaleFactor] of [['light', 1280, 900, 1], ['dark', 390, 844, 1], ['light', 640, 450, 2]]) {
+  for (const [scheme, width, height, deviceScaleFactor] of [['light', 1280, 900, 1], ['dark', 390, 844, 1], ['dark', 1440, 900, 1], ['light', 640, 450, 2]]) {
     const s = await open(p, { colorScheme: scheme, viewport: { width, height }, deviceScaleFactor, reducedMotion: 'reduce' });
     const { page } = s;
     try {
