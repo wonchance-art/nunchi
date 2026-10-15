@@ -66,7 +66,11 @@ export function renderWall(focus = false) {
     })));
   };
   const showList = ['open', 'not', ...(base ? ['changed'] : [])];
-  const search = h('input', { id: 'screen-search', type: 'search', value: F.q || '', placeholder: T.searchHint, autocomplete: 'off', spellcheck: 'false' });
+  // a redraw while someone types in the search (a live update: M5b redraws as a capture goes) keeps what they typed and
+  // where, though the wall applies it only 250 ms after the last key (M5b review)
+  const was = X.$('screen-search'), typing = !!was && X.d.activeElement === was;
+  const caret = typing ? [was.selectionStart, was.selectionEnd] : null;
+  const search = h('input', { id: 'screen-search', type: 'search', value: typing ? was.value : F.q || '', placeholder: T.searchHint, autocomplete: 'off', spellcheck: 'false' });
   let timer = null;
   search.addEventListener('input', () => {
     clearTimeout(timer);
@@ -137,6 +141,7 @@ export function renderWall(focus = false) {
       h('span', null, h('b', null, String(notChecked)), ' not checked'), h('span', { id: 'wall-shown' }, T.shown(shown.length, all.length))),
     h('div', { class: 'wall-wrap' }, h('div', { class: 'wall-groups' }, groups.length ? groups.map(({ g, list }, i) => h('section', { class: 'wall-group', 'aria-labelledby': `wall-g-${i}` }, h('h2', { id: `wall-g-${i}`, class: 'wall-g-h' }, g.title), h('ul', { class: 'wall' }, list.map(card))))
       : h('div', { class: 'empty-note' }, h('p', null, T.noMatch), h('p', null, clear))), h('aside', { class: 'panels', 'aria-label': 'Selected screen' }, panel)))));
+  if (caret) { const s = X.$('screen-search'); if (s) { s.focus(); try { s.setSelectionRange(caret[0], caret[1]); } catch {} } }
   if (focus) {
     const back = S.wallReturn && X.$(cardId(S.wallReturn));
     S.wallReturn = null;

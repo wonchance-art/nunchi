@@ -94,10 +94,11 @@ export function wallOut(model) {
   const ev = model.latestEv;
   const base = baselineOf(model);
   const now = rawOf(ev), then = base ? rawOf(model.evidenceOf(base)) : null;
-  // a first look (M5b): its screens say "First look", and the pages it did not open are on the wall as "Not checked yet"
+  // a first look (M5b): its screens say "First look", and, while no full check has been made, the pages it did not open
+  // are on the wall as "Not checked yet" (after a full check they were checked: the last full check says how, M5b review)
   const firstLook = isQuick(model);
   const flow = flowOf(model);
-  const others = firstLook ? notYet(model, flow) : [];
+  const others = firstLook && !model.summary.fullCheck ? notYet(model, flow) : [];
   const groupOf = groupsOf(model, flow, others.map(o => o.page));
   const scenes = w.scenes.map((s, i) => {
     const e = ev.scenes[i];

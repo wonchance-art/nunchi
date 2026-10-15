@@ -243,6 +243,9 @@ export function summary({ state, rows, groups, stream = 'main', runsDir, git = n
   const handoff = !toDecide && toFix ? { toFix, text: `All decided. ${toFix} to fix. Go back to your AI chat and say “fix them”.`, say: 'fix them' } : null;
   return {
     run: latest, kind: meta.kind ?? 'sweep', fullCheck: full, previousFullCheck: previous, running, runningRuns: live.map(x => x.run), captures: lines, firstLook, fullCheckDone,
+    // the Now lines, in one order for the board and `findings` (M5b review): the full check done, the first look, the
+    // captures running or stopped
+    now: [fullCheckDone?.text, firstLook?.text, ...lines.map(c => c.text)].filter(Boolean),
     verdict, bySeverity, byStatus, standing, toDecide, decideNow, toFix, fixNeedsYou, handoff, since, confirm,
     health: { problems, blind: (latest && state.blind?.[latest]) || null, scenes: { total: scenes.length, checked: scenes.length - notSeen.length, notSeen: notSeen.length, reasons: [...new Set(notSeen.map(s => String(s.reason || s.status)))].sort() } },
     ai: { ran: aiRan, groups: new Set(ai.map(r => r.group)).size, doubleChecked: new Set(ai.filter(r => r.checked).map(r => r.group)).size,

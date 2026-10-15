@@ -5,7 +5,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, utimesSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { hostname } from 'node:os';
 import { execFile, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { rankQuick, quickChoice, QUICK_MAX } from '../src/quick.mjs';
@@ -16,7 +15,7 @@ import * as R from '../src/runs.mjs';
 import { STALE_MS } from '../src/runs.mjs';
 import { withLock } from '../src/stable.mjs';
 import * as F from '../src/fix/loop.mjs';
-import { stableJson } from '../src/stable.mjs';
+import { stableJson, thisMachine } from '../src/stable.mjs';
 import { startBoard } from '../src/board/server.mjs';
 import { writeRun, scene, tmp } from './fixtures/board-project.mjs';
 import { fixProject } from './fixtures/fix-project.mjs';
@@ -342,7 +341,7 @@ test('board: "First look: N key screens · full check running, i of n screens (a
 test('board: a capture whose writer is gone, or that wrote nothing for 10 minutes, is not "running" (review of PR #33); it is "stopped" (M5b)', async () => {
   const p = firstLookProject();
   const dead = spawnSync(process.execPath, ['-e', '0']).pid;                              // a process that has ended
-  const full = { schema: 1, kind: 'sweep', wholeApp: true, routes: 25, done: 12, routeMs: Array(12).fill(27000), host: hostname() };
+  const full = { schema: 1, kind: 'sweep', wholeApp: true, routes: 25, done: 12, routeMs: Array(12).fill(27000), ...thisMachine() };
   p.progress({ ...full, pid: process.pid });
   assert.equal((await boardSummary(p)).verdict.text, 'Too early to say · full check running', 'its writer runs');
   p.progress({ ...full, pid: dead });

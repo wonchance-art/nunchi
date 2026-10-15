@@ -189,8 +189,9 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     return parts.length ? sha(parts.join('|'), 12) : '-';
   };
   // the captures being written or stopped, and how far (M5b): a capture writes no generation until it is folded, and one
-  // that stops writes nothing at all (it turns stopped by the reader's clock), so its words change the version
-  const capturesSig = () => { const c = captureStates(runsDir); return c.length ? sha(c.map(x => `${x.run}:${x.state}:${x.why}:${x.progress ? `${x.progress.kind}:${x.progress.done}/${x.progress.routes}:${x.progress.routeMs.length}` : '-'}`).join('|'), 12) : '-'; };
+  // that stops writes nothing at all (it turns stopped by the reader's clock), so what the summary's words come from (each
+  // folder's state, why and progress) is part of the version
+  const capturesSig = () => { const c = captureStates(runsDir); return c.length ? sha(JSON.stringify(c), 12) : '-'; };
   const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${claimsSig()}.${coverageSig()}.${guardsSig()}.${capturesSig()}`;
   // claims as they are now (their minutes too) on a cached model
   const freshClaims = m => { const c = readClaims(claimsDir, now()); m.claims = c; for (const g of m.groups) g.fixing = c.get(g.id) || null; return m; };
@@ -440,10 +441,9 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     // load is counted once, under Screens checked), with the cells the budget cut
     let coverage = null;
     try { coverage = aiOnChecked(m); } catch { coverage = null; }
-    // the fast first run (design §6): the first look and the full check after it say how far they are, in the agreed
-    // words; any other capture running or stopped says so (M5b): the summary's lines (summary.mjs)
-    const nowLines = [...(s.fullCheckDone ? [s.fullCheckDone.text] : []), ...(s.firstLook?.text ? [s.firstLook.text] : []),
-      ...(s.captures || []).map(c => c.text), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)} · ${fixingMinutes(c.minutes)}`)];
+    // the summary's Now lines (summary.mjs: the full check done, the first look, the captures running or stopped, M5b),
+    // then the fixes being made
+    const nowLines = [...(s.now || []), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)} · ${fixingMinutes(c.minutes)}`)];
     return {
       version: version(), mode, project: safe(basename(project), 80), run: s.run, kind: s.kind, commit: s.commit ? safe(String(s.commit).slice(0, 7), 7) : null, dirty: s.dirty,
       verdict: s.verdict, bySeverity: s.bySeverity, byStatus: s.byStatus, toDecide: s.toDecide, decideNow: s.decideNow, toFix: s.toFix, fixNeedsYou: s.fixNeedsYou || 0, handoff: s.handoff, since: s.since, running: s.running,

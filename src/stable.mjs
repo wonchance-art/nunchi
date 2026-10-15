@@ -178,6 +178,9 @@ const RM = { recursive: true, force: true, maxRetries: 10, retryDelay: 20 };
 // A rename onto a lock that exists: ENOTEMPTY or EEXIST; Windows says EPERM, EACCES or EBUSY.
 const taken = e => e.code === 'ENOTEMPTY' || e.code === 'EEXIST' || (!io.posix && BUSY.has(e.code));
 const sameMachine = o => !!o && o.host === hostname() && o.boot === bootId() && o.ns === pidNs();
+// This machine as a process check can see it (M5b review): the host name, the boot (Linux) and the pid namespace (a
+// container with host networking has the host's name but its own pids), as the lock compares its owner above.
+export const thisMachine = () => ({ host: hostname(), boot: bootId(), ns: pidNs() });
 
 // Windows: libuv's UV_FS_O_EXLOCK opens a file with sharing mode 0 (no other open succeeds while it is open).
 const EXLOCK = 0x10000000;

@@ -45,8 +45,9 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    Capture refuses a host that is not local or private: if the user confirms it is a preview or staging server with
    test data, they add it to `.nunchi/config.json` themselves (the message shows the line). Never write that file
    for them. If it printed `RUN PROBLEM`, say so and fix that (log in again, start the app) before anything else.
-5. Run `open` (step 7) so the user sees the first look in the board, then start the **full check** at once:
-   `capture --url <base> --samples .nunchi/samples.json`. It captures every route, at phone and desktop width,
+5. Start the **full check** at once, in the background (it takes minutes; run it as a background command where your
+   tool can): `capture --url <base> --samples .nunchi/samples.json`; then run `open` (step 7), so the user sees the
+   first look in the board with how far the full check is. It captures every route, at phone and desktop width,
    screens that load data also in forced empty, error, slow and offline states. Screens the first look recorded are
    replayed, the rest are recorded and merged into the recording (`network: … merge`); later runs replay them so
    screens are comparable. While it runs, the board says how far it is ("First look: 8 key screens · full check

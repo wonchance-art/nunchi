@@ -3,11 +3,11 @@
 // previous run intact. Ids are sequential numbers (deterministic, no clock). `latest` names the newest
 // complete run and is replaced atomically.
 import { readdirSync, mkdirSync, readFileSync, existsSync, rmSync, statSync, lstatSync, appendFileSync, mkdtempSync } from 'node:fs';
-import { tmpdir, hostname } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { writeAtomic, retryBusy, io, privateDir, setMode, refuseLink, withLock, stableJson } from './stable.mjs';
+import { writeAtomic, retryBusy, io, privateDir, setMode, refuseLink, withLock, stableJson, thisMachine } from './stable.mjs';
 
 // Windows refuses renames, removals and new folders for a moment while another capture or reader is busy in the
 // same folder (EPERM, EACCES, EBUSY): those are retried with backoff (retryBusy).
@@ -54,7 +54,8 @@ export function latestSweep(dir) {
 // a file over 64 KB is not read, and every field is checked.
 export const PROGRESS_FILE = 'progress.json';
 // A capture that was killed (no exit handler ran) leaves its `.partial` folder: it is not "running" once its writer is
-// gone (a progress file names its pid and host; on this host a pid that no longer runs is gone) or it made no progress
+// gone (a progress file names its pid and machine — host, boot and pid namespace, M5b review: a container with host
+// networking shares the host name, not the pids; on this machine a pid that no longer runs is gone) or it made no progress
 // for STALE_MS (review of PR #33). A folder without a progress file (a fix probe, a capture of an older nunchi) counts
 // by the folder's own time.
 // *No progress* (M5b): its last progress is the progress file's modification time (the CLI rewrites it after each route ×
@@ -70,8 +71,8 @@ export function pidAlive(pid) {
 // 'no-progress' (none for STALE_MS) or 'ended' (sooner: its writer, on this host, no longer runs). A folder without a
 // progress file is running by its own time and is never called stopped: a fix probe's attempt says when it was
 // interrupted (§6.3). A link, a folder, a progress file over 64 KB or one that does not parse is not read.
-// `now`, `alive` and `host` are the clock, the process check and this machine's name (a test's own).
-export function captureStates(dir, { now = Date.now(), alive = pidAlive, host = hostname() } = {}) {
+// `now`, `alive` and `machine` are the clock, the process check and this machine (thisMachine; a test's own).
+export function captureStates(dir, { now = Date.now(), alive = pidAlive, machine = thisMachine() } = {}) {
   const out = [];
   for (const p of listRuns(dir).partial) {
     const run = PARTIAL.exec(p)[1];
@@ -85,7 +86,8 @@ export function captureStates(dir, { now = Date.now(), alive = pidAlive, host = 
       if (!st.isFile() || st.size > 64 * 1024) continue;
       const doc = JSON.parse(readFileSync(f, 'utf8'));
       const quiet = now - st.mtimeMs >= STALE_MS;
-      const gone = Number.isInteger(doc?.pid) && doc.pid > 0 && doc.host === host && !alive(doc.pid);
+      const here = doc?.host === machine.host && (doc.boot ?? null) === (machine.boot ?? null) && (doc.ns ?? null) === (machine.ns ?? null);
+      const gone = Number.isInteger(doc?.pid) && doc.pid > 0 && here && !alive(doc.pid);
       const state = quiet || gone ? 'stopped' : 'running', why = quiet ? 'no-progress' : gone ? 'ended' : null;
       const count = n => (Number.isInteger(n) && n >= 0 ? n : null);
       const routes = count(doc?.routes), done = count(doc?.done);
@@ -109,22 +111,26 @@ export const runningCaptures = (dir, opts) => captureStates(dir, opts).filter(c 
 // each keeps its own runs, so the next id is taken after every id any worktree used, under the counter's lock, and
 // run ids stay one sequence the ledger can order. A counter that cannot be read counts as 0 (the runs folder still
 // gives the floor); folds are keyed by worktree too, so a collision is never mistaken for a folded run.
-export function startRun(dir, { ids = null } = {}) {
+// `progress` (M5b review): a capture's first progress file (PROGRESS_FILE), written as soon as its folder is made, so a
+// board never takes it for a folder without one (a fix probe's) and never sees it run without saying how far; one
+// that cannot be written only leaves the board without the line.
+export function startRun(dir, { ids = null, progress = null } = {}) {
   privateDir(dir);
   setMode(dir, 0o700);
   const highest = () => {
     const { complete, partial } = listRuns(dir);
     return Math.max(0, ...complete.map(Number), ...partial.map(p => Number(PARTIAL.exec(p)[1])));
   };
-  if (!ids) return reserve(dir, highest());
-  return withLock(ids, () => {
+  const first = r => { if (progress) { try { writeAtomic(join(r.path, PROGRESS_FILE), stableJson(progress), { mode: 0o600 }); } catch {} } return r; };
+  if (!ids) return first(reserve(dir, highest()));
+  return first(withLock(ids, () => {
     let used = 0;
     try { const doc = JSON.parse(readFileSync(ids, 'utf8')); if (Number.isInteger(doc?.last) && doc.last > 0) used = doc.last; } catch {}
     const r = reserve(dir, Math.max(used, highest()));
     refuseLink(ids);
     writeAtomic(ids, stableJson({ schema: 1, note: 'the last run id any worktree of this repository used', last: Number(r.id) }), { mode: 0o600 });
     return r;
-  });
+  }));
 }
 function reserve(dir, after) {
   let n = after;
@@ -142,8 +148,12 @@ function reserve(dir, after) {
 // `latest` is a pointer for convenience: replaced atomically, and when several captures finish at once the last
 // write wins; a write that still fails is not fatal (latestRun falls back to the newest complete run).
 // `latest: false` (fix probes) leaves the pointer where it is.
+// The progress file goes here, just before the rename (M5b review), so a capture says how far it is until it is complete
+// (its source map and inventory included) and one killed at the end is still a capture that stopped; it never reaches
+// the evidence.
 export function finishRun(dir, id, { latest = true } = {}) {
   const final = join(dir, id);
+  rmSync(join(dir, `${id}.partial`, PROGRESS_FILE), { force: true, maxRetries: 10, retryDelay: 20 });
   retryBusy(() => io.rename(join(dir, `${id}.partial`), final));
   if (latest) { try { writeAtomic(join(dir, 'latest'), id + '\n', { mode: 0o600 }); } catch {} }
   return final;

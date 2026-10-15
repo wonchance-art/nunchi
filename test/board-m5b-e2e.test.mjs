@@ -8,11 +8,12 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
-import { hostname } from 'node:os';
 import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
 import { startBoard } from '../src/board/server.mjs';
 import { leafy } from './fixtures/coverage-project.mjs';
+import { writeRun, scene, tmp } from './fixtures/board-project.mjs';
+import { stableJson, thisMachine } from '../src/stable.mjs';
 
 const require = createRequire(import.meta.url);
 const AXE = readFileSync(require.resolve('axe-core/axe.min.js'), 'utf8');
@@ -55,7 +56,7 @@ const chips = page => page.evaluate(() => {
 
 test('m5b e2e: the wall during a first look — "First look" and "Not checked yet" as text chips, 4.5:1 light and dark, named, an edge in forced colours, axe clean; a page not opened has nothing to open', { timeout: 120000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
-  const p = leafy({ quick: true, probes: false });
+  const p = leafy({ quick: true, probes: false, runs: 0, ai: 'none' });
   for (const [scheme, width] of [['light', 1440], ['dark', 390]]) {
     const s = await open(p, { colorScheme: scheme, viewport: { width, height: 900 } });
     const { page } = s;
@@ -71,13 +72,13 @@ test('m5b e2e: the wall during a first look — "First look" and "Not checked ye
       assert.equal(c.sideways, false);
       assert.deepEqual(await axe(page), [], `${scheme} at ${width} px`);
       // Enter on a page the first look did not open: what it is, and the first look's line; nothing to open
-      await page.focus('[data-key="0005/not-yet.guest.d:/checkout"]');
+      await page.focus('[data-key="0001/not-yet.guest.d:/checkout"]');
       await page.keyboard.press('Enter');
       await page.waitForSelector('.sp-notyet');
       const panel = await page.evaluate(() => ({ h: document.getElementById('panel-h').textContent, chip: document.querySelector('.sp-notyet .tag-notyet')?.textContent, text: document.querySelector('.sp-notyet .small')?.textContent,
         open: !!document.getElementById('sp-open'), hash: location.hash }));
       assert.deepEqual(panel, { h: '/checkout', chip: 'Not checked yet', text: 'First look: 3 key screens · the full check has not started — tell your AI “full check”', open: false,
-        hash: `#/screen/${encodeURIComponent('0005/not-yet.guest.d:/checkout')}` });
+        hash: `#/screen/${encodeURIComponent('0001/not-yet.guest.d:/checkout')}` });
       assert.deepEqual(s.errors, []);
     } finally { await s.close(); }
   }
@@ -96,7 +97,7 @@ test('m5b e2e: a capture that stops reaches the open board by itself — Progres
   const p = leafy({ probes: false });
   const dir = join(p.nunchi, 'runs', '0005.partial');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'progress.json'), JSON.stringify({ schema: 1, kind: 'sweep', wholeApp: true, routes: 25, done: 12, routeMs: Array(12).fill(27000), pid: process.pid, host: hostname() }));
+  writeFileSync(join(dir, 'progress.json'), JSON.stringify({ schema: 1, kind: 'sweep', wholeApp: true, routes: 25, done: 12, routeMs: Array(12).fill(27000), pid: process.pid, ...thisMachine() }));
   const s = await open(p);
   const { page } = s;
   try {
@@ -114,6 +115,68 @@ test('m5b e2e: a capture that stops reaches the open board by itself — Progres
     await page.waitForSelector('#h-progress');
     assert.deepEqual(await page.evaluate(() => [document.getElementById('h-progress').textContent, [...document.querySelectorAll('.now li')].map(l => l.textContent)]),
       ['Not yet · 1 high: 1 to decide', [stopped]], 'the verdict goes by the complete runs, as without the stopped capture');
+    assert.deepEqual(s.errors, []);
+  } finally { await s.close(); }
+});
+
+// ---- the review of PR #36 (2026-10-15 KST) ----------------------------------------------------------------------------
+
+const progress = (dir, done, at = Date.now()) => {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'progress.json'), JSON.stringify({ schema: 1, kind: 'sweep', wholeApp: true, routes: 25, done, routeMs: Array(done).fill(27000), pid: process.pid, ...thisMachine() }));
+  utimesSync(join(dir, 'progress.json'), new Date(at), new Date(at));
+};
+
+test('m5b e2e (review): a capture that stops is announced, though "Full check done" is the first Now line and the change comes inside the 10 s', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const root = tmp('nunchi-m5b-say-');
+  const scenes = [scene('/', 'guest', 'normal', 'd'), scene('/pricing', 'guest', 'normal', 'd')];
+  writeRun(root, '0001', { scenes });
+  const { run } = writeRun(root, '0002', { scenes, parent: '0001', wholeApp: false });
+  writeFileSync(join(run, 'run.json'), stableJson({ ...JSON.parse(readFileSync(join(run, 'run.json'), 'utf8')), kind: 'quick' }));
+  writeRun(root, '0003', { scenes, parent: '0002' });
+  const dir = join(root, '.nunchi', 'runs', '0004.partial');
+  progress(dir, 3);
+  const s = await open({ root });
+  const { page } = s;
+  try {
+    await page.evaluate(() => { window.__said = []; new MutationObserver(() => { const x = document.getElementById('announce').textContent; if (x) window.__said.push(x); }).observe(document.getElementById('announce'), { childList: true, characterData: true, subtree: true }); });
+    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.now li')].map(l => l.textContent)),
+      ['Full check done: 0 new groups', 'Capture running · run 0004 · 3 of 25 screens (about 10 min left)']);
+    // no progress for 10 minutes, a moment after the page said its first line
+    progress(dir, 3, Date.now() - 10 * 60e3 - 1000);
+    const stopped = 'Capture stopped · run 0004 (no progress for 10 min) — tell your AI “capture again”';
+    await page.waitForFunction(t => window.__said.some(x => x.includes(t)), stopped, { timeout: 25000 });
+    assert.deepEqual(s.errors, []);
+  } finally { await s.close(); }
+});
+
+test('m5b e2e (review): a live redraw while someone types in the wall\'s search keeps what they typed', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = leafy({ probes: false });
+  const dir = join(p.nunchi, 'runs', '0005.partial');
+  progress(dir, 1);
+  const s = await open(p);
+  const { page } = s;
+  try {
+    await page.evaluate(() => { location.hash = '#/screens'; });
+    await page.waitForSelector('#h-screens');
+    await page.evaluate(() => { window.__redraws = 0; new MutationObserver(() => { window.__redraws++; }).observe(document.querySelector('main'), { childList: true }); });
+    await page.focus('#screen-search');
+    // a key every 120 ms (inside the search's 250 ms), a route of the capture done after the first: type on until the
+    // wall has been redrawn, and a few keys more
+    let typed = '', after = 0;
+    for (let i = 0; i < 90 && after < 4; i++) {
+      const ch = 'garden'[i % 6];
+      await page.keyboard.type(ch);
+      typed += ch;
+      if (i === 0) progress(dir, 2);
+      if (await page.evaluate(() => window.__redraws > 0)) after++;
+      await new Promise(r => setTimeout(r, 120));
+    }
+    assert.equal(after, 4, 'the wall was redrawn while typing');
+    await page.waitForTimeout(700);
+    assert.deepEqual(await page.evaluate(() => [document.getElementById('screen-search').value, document.activeElement?.id]), [typed, 'screen-search']);
     assert.deepEqual(s.errors, []);
   } finally { await s.close(); }
 });

@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { launch } from '../src/capture.mjs';
 import { quickApp, quickServer, SAMPLES, ROUTES } from './fixtures/quick-app.mjs';
 import { tmp } from './fixtures/board-project.mjs';
+import { thisMachine } from '../src/stable.mjs';
 
 process.env.XDG_STATE_HOME = tmp('nunchi-quick-cli-xdg-');
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -43,6 +44,10 @@ test('a capture that fails, or is stopped, takes its unfinished run folder with 
   const exited = new Promise(res => child.on('exit', (code, signal) => res(code ?? signal)));
   for (let i = 0; i < 400 && !partial().some(p => existsSync(join(runs, p, 'progress.json'))); i++) await new Promise(r => setTimeout(r, 50));
   assert.equal(partial().length, 1, 'it is running');
+  // its progress file names it and its writer: the pid and this machine (host, boot, pid namespace: M5b review)
+  const doc = read(join(runs, partial()[0], 'progress.json'));
+  const { host, boot, ns } = thisMachine();
+  assert.deepEqual([doc.kind, doc.wholeApp, doc.routes, doc.pid, doc.host, doc.boot, doc.ns], ['sweep', true, ROUTES.length, child.pid, host, boot, ns]);
   child.kill('SIGINT');
   assert.equal(await exited, 130, stderr);
   assert.match(stderr, /stopped \(SIGINT\); run 0001 was not completed and is removed/);

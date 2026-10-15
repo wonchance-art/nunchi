@@ -56,7 +56,7 @@ const S = {
   cov: { data: null, f: { state: null, checks: 'all', show: 'all' }, sel: null, focus: null, open: new Set(), lensOpen: false },
   sd: { data: null, both: false, whole: false, cmp: 'off', view: 'slider', at: 50, on: null, tb: null, sibsOpen: false, back: null }, returnTo: null,
   keysOn: store.get('nunchi.keys') !== 'off',
-  undo: null, clock: new W.DecisionClock(), images: new Map(), lastNow: 0, stopped: false,
+  undo: null, clock: new W.DecisionClock(), images: new Map(), nowSay: new W.NowAnnouncer(), nowTimer: null, stopped: false,
   label: null,
 };
 
@@ -328,10 +328,16 @@ async function refreshSummary() {
   const active = Object.values(s.bySeverity).reduce((a, b) => a + b, 0);
   $('nav-findings').textContent = String(active);
   $('nav-screens').textContent = String(s.counts.screens);
-  // the Now line, announced at most every 10 s (design §3.4)
-  const line = s.now[0] || null;
-  if (line && line !== S.nowLine && Date.now() - S.lastNow > 10000) { S.lastNow = Date.now(); announce(line); }
-  S.nowLine = line;
+  sayNow();
+}
+// The Now lines, announced at most every 10 s (design §3.4): what changed, the first changed line first, and a change
+// inside the 10 s said once they have passed, never dropped (M5b review: shared.mjs NowAnnouncer)
+function sayNow() {
+  clearTimeout(S.nowTimer);
+  S.nowTimer = null;
+  const r = S.nowSay.update(S.summary?.now || [], Date.now());
+  if (r.say) announce(r.say);
+  if (r.wait !== null) S.nowTimer = setTimeout(sayNow, r.wait);
 }
 
 // ---- routes -------------------------------------------------------------------------------------------------------

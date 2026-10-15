@@ -6,20 +6,19 @@
 // alone. Invented content only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync, utimesSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, utimesSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { hostname } from 'node:os';
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as R from '../src/runs.mjs';
 import * as P from '../src/project.mjs';
 import { summary } from '../src/summary.mjs';
-import { COVERAGE } from '../src/board/shared.mjs';
+import { COVERAGE, NowAnnouncer, NOW_EVERY_MS } from '../src/board/shared.mjs';
 import { startBoard } from '../src/board/server.mjs';
 import { writeRun, scene, tmp } from './fixtures/board-project.mjs';
 import { leafy } from './fixtures/coverage-project.mjs';
 import { boardRequest } from './fixtures/board-call.mjs';
-import { stableJson } from '../src/stable.mjs';
+import { stableJson, thisMachine } from '../src/stable.mjs';
 
 process.env.XDG_STATE_HOME = tmp('nunchi-m5b-xdg-');
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -53,7 +52,7 @@ function partial(p, id, doc, at = Date.now()) {
   utimesSync(dir, new Date(at), new Date(at));
   return dir;
 }
-const SWEEP = { schema: 1, kind: 'sweep', wholeApp: true, routes: 25, done: 12, routeMs: Array(12).fill(27000), pid: process.pid, host: hostname() };
+const SWEEP = { schema: 1, kind: 'sweep', wholeApp: true, routes: 25, done: 12, routeMs: Array(12).fill(27000), pid: process.pid, ...thisMachine() };
 // the summary as the board and `findings` compute it, with the clock and the process check given
 function sumAt(p, now, alive = () => true) {
   const led = P.loadLedger(p.nunchi, { root: p.root });
@@ -70,7 +69,7 @@ async function board(p) {
 test('no progress, precisely: the progress file\'s time (or the folder\'s, without one); 9:59 is running, 10:00 is stopped; a writer gone on this host stops it sooner', () => {
   const p = project();
   partial(p, '0002', SWEEP, T);
-  const at = (ms, alive) => R.captureStates(p.runs, { now: T + ms, alive, host: hostname() }).map(c => [c.run, c.state, c.why]);
+  const at = (ms, alive) => R.captureStates(p.runs, { now: T + ms, alive }).map(c => [c.run, c.state, c.why]);
   assert.deepEqual(at(10 * MIN - 1, () => true), [['0002', 'running', null]], '9:59.999');
   assert.deepEqual(at(10 * MIN, () => true), [['0002', 'stopped', 'no-progress']], '10:00');
   assert.equal(R.STALE_MS, 10 * MIN);
@@ -174,8 +173,9 @@ test('the same words on the board\'s Now lines, Coverage and `findings`; a captu
   } finally { await b.close(); }
 });
 
-test('the wall during a first look: "First look" on its key screens, "Not checked yet" on the pages it did not open; none without a first look', async () => {
-  const p = leafy({ quick: true, probes: false });
+test('the wall during a first look: "First look" on its key screens; before any full check, "Not checked yet" on the pages it did not open; none after a full check or without a first look', async () => {
+  // a first look and nothing before it
+  const p = leafy({ quick: true, probes: false, runs: 0, ai: 'none' });
   let { b, call } = await board(p);
   try {
     const w = await call('/api/screens');
@@ -186,21 +186,21 @@ test('the wall during a first look: "First look" on its key screens, "Not checke
     // (this fixture's flow orders only the pages it opened: the others by name)
     assert.deepEqual([...new Set(notYet.map(s => s.route))], ['/checkout', '/garden/[plot]', '/help', '/login']);
     assert.deepEqual([notYet.length, notYet.slice(0, 4).map(s => `${s.person} ${s.viewport}`)], [16, ['guest d', 'guest m', 'signed-in d', 'signed-in m']]);
-    assert.deepEqual(notYet[0], { key: '0005/not-yet.guest.d:/checkout', run: '0005', id: 'not-yet.guest.d:/checkout', route: '/checkout', person: 'guest', state: 'normal', viewport: 'd',
+    assert.deepEqual(notYet[0], { key: '0001/not-yet.guest.d:/checkout', run: '0001', id: 'not-yet.guest.d:/checkout', route: '/checkout', person: 'guest', state: 'normal', viewport: 'd',
       h1: null, label: 'Visitor · Desktop · Normal', status: 'not-captured', reason: null, redirected: false, finalPath: null, finalOrigin: null, img: null, badge: 'Not checked yet', kind: 'notyet',
       note: '', findings: [], look: 'not-yet', checked: false, changed: null, ai: null, group: '/', open: 0 });
     assert.equal(notYet.find(s => s.route === '/garden/[plot]').group, '/garden', 'in its section');
     assert.deepEqual(w.groups.map(g => g.id), ['/', '/garden']);
   } finally { await b.close(); }
   // a page that needs a sample address is skipped by the full check too: not "not checked yet"
-  const meta = join(p.nunchi, 'runs', '0005', 'run.json');
+  const meta = join(p.nunchi, 'runs', '0001', 'run.json');
   writeFileSync(meta, stableJson({ ...JSON.parse(readFileSync(meta, 'utf8')), skipped: [{ route: '/garden/[plot]', reason: 'needs-sample' }] }));
   ({ b, call } = await board(p));
   try {
     assert.deepEqual([...new Set((await call('/api/screens')).scenes.filter(s => s.look === 'not-yet').map(s => s.route))], ['/checkout', '/help', '/login']);
   } finally { await b.close(); }
   // a first look written before M5b (its flow names only its own pages): its screens only
-  const flow = join(p.nunchi, 'runs', '0005', 'flow.json');
+  const flow = join(p.nunchi, 'runs', '0001', 'flow.json');
   const doc = JSON.parse(readFileSync(flow, 'utf8'));
   writeFileSync(flow, stableJson({ ...doc, nodes: doc.nodes.filter(n => n.captured) }));
   ({ b, call } = await board(p));
@@ -208,10 +208,114 @@ test('the wall during a first look: "First look" on its key screens, "Not checke
     const w = await call('/api/screens');
     assert.deepEqual([w.scenes.length, w.scenes.every(s => s.look === 'first')], [12, true]);
   } finally { await b.close(); }
+  // a first look after full checks (M5b review): the pages it did not open were checked by the last full check, which
+  // Coverage shows with their findings; the wall says "First look" on its own screens and adds nothing
+  const after = leafy({ quick: true, probes: false });
+  ({ b, call } = await board(after));
+  try {
+    const w = await call('/api/screens');
+    assert.deepEqual([w.run, w.baseline, w.scenes.length, w.scenes.every(s => s.look === 'first')], ['0005', '0004', 12, true]);
+  } finally { await b.close(); }
   // no first look: no such word
   const q = leafy({ probes: false });
   ({ b, call } = await board(q));
   try {
     assert.ok((await call('/api/screens')).scenes.every(s => !('look' in s)));
+  } finally { await b.close(); }
+});
+
+// ---- the review of PR #36 (2026-10-15 KST) ----------------------------------------------------------------------------
+
+test('review: the same machine is the same host, boot and pid namespace — a writer of another container with the host\'s name is not asked', () => {
+  const p = project();
+  const machine = thisMachine();
+  partial(p, '0002', { ...SWEEP, pid: 999999 }, T);
+  const at = doc => { partial(p, '0002', doc, T); return R.captureStates(p.runs, { now: T + MIN, alive: () => false, machine }).map(c => [c.state, c.why]); };
+  assert.deepEqual(at({ ...SWEEP }), [['stopped', 'ended']], 'this machine: its writer is gone');
+  assert.deepEqual(at({ ...SWEEP, boot: 'another-boot' }), [['running', null]], 'another boot: its file\'s time decides');
+  assert.deepEqual(at({ ...SWEEP, ns: 'pid:[1]' }), [['running', null]], 'another pid namespace (a container with host networking)');
+  const { boot, ns, ...hostOnly } = SWEEP;
+  assert.deepEqual(at(hostOnly).map(x => x[0]), [machine.boot === null && machine.ns === null ? 'stopped' : 'running'], 'a file that names the host only (an older nunchi)');
+});
+
+test('review: a capture\'s progress file is there from the moment its folder is made, and goes only as the run is completed', () => {
+  const dir = join(project().runs);
+  const doc = { schema: 1, kind: 'sweep', wholeApp: true, skipped: [], routes: 3, done: 0, routeMs: [], pid: process.pid, ...thisMachine() };
+  const r = R.startRun(dir, { progress: doc });
+  assert.deepEqual(JSON.parse(readFileSync(join(r.path, R.PROGRESS_FILE), 'utf8')), doc);
+  assert.deepEqual(R.captureStates(dir).map(c => [c.run, c.state, c.progress?.done]), [[r.id, 'running', 0]]);
+  // the end phase (source map, inventory) still says how far it is; finishRun takes the file away, then renames
+  writeFileSync(join(r.path, 'source-map.json'), '{}');
+  assert.ok(existsSync(join(r.path, R.PROGRESS_FILE)));
+  const final = R.finishRun(dir, r.id);
+  assert.deepEqual([existsSync(join(final, R.PROGRESS_FILE)), existsSync(join(final, 'source-map.json'))], [false, true]);
+  // a fix probe makes its folder without one, as before
+  const q = R.startRun(dir);
+  assert.equal(existsSync(join(q.path, R.PROGRESS_FILE)), false);
+});
+
+test('review: the Now lines are announced at most every 10 s — what changed first, never only the first line, and a change inside the 10 s said once they pass', () => {
+  const FCD = 'Full check done: 2 new groups', run = n => `Capture running · run 0004 · ${n} of 25 screens (about 6 min left)`, STOP = STOPPED('0004');
+  const a = new NowAnnouncer();
+  assert.deepEqual(a.update([FCD], 0), { say: FCD, wait: null }, 'on load: the first line');
+  assert.deepEqual(a.update([FCD], 4000), { say: null, wait: null }, 'nothing changed');
+  // a capture starts: its line is said though it is not the first
+  assert.deepEqual(a.update([FCD, run(3)], 12000), { say: run(3), wait: null });
+  // a route, then the capture stops 1 s later: nothing is said inside the 10 s, then the lines as they are by then
+  assert.deepEqual(a.update([FCD, run(4)], 15000), { say: null, wait: 7000 });
+  assert.deepEqual(a.update([FCD, STOP], 16000), { say: null, wait: 6000 });
+  assert.deepEqual(a.update([FCD, STOP], 12000 + NOW_EVERY_MS), { say: STOP, wait: null }, 'the stop is said, never dropped');
+  assert.deepEqual(a.update([FCD, STOP], 60000), { say: null, wait: null }, 'and once');
+  // several new lines at once: all of them, in the board's order
+  assert.deepEqual(a.update(['First look: 2 key screens · the full check has not started — tell your AI “full check”', STOP, 'A is fixing B · 1 min'], 70000),
+    { say: 'First look: 2 key screens · the full check has not started — tell your AI “full check”. A is fixing B · 1 min', wait: null });
+  // nothing on the board at first: the first lines that come are said
+  const b = new NowAnnouncer();
+  assert.deepEqual(b.update([], 0), { say: null, wait: null });
+  assert.deepEqual(b.update([FCD, run(1)], 20000), { say: `${FCD}. ${run(1)}`, wait: null });
+});
+
+test('review: one order of the Now lines for the board and `findings` (the full check done, the first look, the captures)', async () => {
+  const p = project({ quick: true });
+  writeRun(p.root, '0003', { scenes: [scene('/', 'guest', 'normal', 'd'), scene('/pricing', 'guest', 'normal', 'd')], parent: '0002' });
+  partial(p, '0004', SWEEP);
+  const { b, call } = await board(p);
+  try {
+    const now = (await call('/api/summary')).now;
+    assert.deepEqual(now, ['Full check done: 0 new groups', RUNNING('0004')]);
+    const out = (await cli(p.root, 'findings')).stdout;
+    assert.ok(out.includes(`\n${now.join('\n')}\n`), out);
+  } finally { await b.close(); }
+});
+
+test('review: the live version changes with how far a capture is, and with why it stopped; Coverage says the newest capture', async () => {
+  const p = leafy({ probes: false });
+  const dir = join(p.nunchi, 'runs', '0005.partial');
+  const prog = (doc, at = Date.now()) => { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'progress.json'), JSON.stringify(doc)); utimesSync(join(dir, 'progress.json'), new Date(at), new Date(at)); };
+  prog({ ...SWEEP, done: 1, routeMs: [27000] });
+  const { b, call } = await board(p);
+  try {
+    const version = async () => (await call('/api/generation')).version;
+    await call('/api/summary');                                   // the first model folds the runs (a generation of its own)
+    const v1 = await version();
+    assert.equal(await version(), v1, 'steady while nothing changes');
+    prog({ ...SWEEP, done: 2, routeMs: [27000, 27000] });
+    const v2 = await version();
+    assert.notEqual(v2, v1, 'a route done (still running)');
+    // its writer gone (this machine): stopped, "its process ended"; then 10 minutes without progress: the reason changes
+    const dead = spawnSync(process.execPath, ['-e', '0']).pid;
+    prog({ ...SWEEP, done: 2, routeMs: [27000, 27000], pid: dead });
+    assert.equal((await call('/api/summary')).now[0], 'Capture stopped · run 0005 (its process ended) — tell your AI “capture again”');
+    const v3 = await version();
+    assert.equal(await version(), v3);
+    prog({ ...SWEEP, done: 2, routeMs: [27000, 27000], pid: dead }, Date.now() - 10 * MIN - 1000);
+    assert.notEqual(await version(), v3, 'still stopped, another reason');
+    assert.equal((await call('/api/summary')).now[0], STOPPED('0005'));
+    // two captures running: Coverage says the newest, as Progress lists both
+    rmSync(dir, { recursive: true });
+    partial({ runs: join(p.nunchi, 'runs') }, '0005', { ...SWEEP, done: 1, routeMs: [27000] });
+    partial({ runs: join(p.nunchi, 'runs') }, '0006', SWEEP);
+    const c = await call('/api/coverage');
+    assert.deepEqual([c.capture?.run, c.running], ['0006', ['0005', '0006']]);
   } finally { await b.close(); }
 });
