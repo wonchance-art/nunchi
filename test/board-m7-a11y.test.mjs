@@ -115,6 +115,40 @@ test('M7 a11y: contrast in light and dark — the map\'s marks as text (4.5:1), 
   }
 });
 
+test('M7 keys by their place on the keyboard (e.code): on a Korean layout J, K, B, V and C walk the map, the wall and Screen detail', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = leafy({ probes: false });
+  const s = await open(p);
+  const { page } = s;
+  // what a Korean (2-set) layout sends: the letter it types in `key`, the place in `code`
+  const key = (code, k) => page.evaluate(([code, k]) => { (document.activeElement || document.body).dispatchEvent(new KeyboardEvent('keydown', { key: k, code, bubbles: true, cancelable: true })); }, [code, k]);
+  try {
+    await go(page, '#/coverage', '#h-map');
+    await page.focus('#cv-0-0');
+    await key('KeyJ', 'ㅓ');
+    assert.equal(await focused(page), 'cv-1-0', 'ㅓ (J): the next cell with a gap');
+    await key('KeyK', 'ㅏ');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'cv-1-0', 'ㅏ (K): no gap before it, the focus stays');
+    await go(page, '#/screens', '#h-screens');
+    await key('KeyJ', 'ㅓ');
+    const second = await focused(page);
+    await key('KeyK', 'ㅏ');
+    const first = await focused(page);
+    assert.match(second, /^card-/);
+    assert.ok(first !== second && /^card-/.test(first), 'ㅓ and ㅏ walk the cards');
+    await go(page, '#/screens/0004/~.guest.normal.d', '#h-screen');
+    await key('KeyB', 'ㅠ');
+    await page.waitForSelector('.sd-figs.sd-both');
+    await key('KeyB', 'ㅠ');
+    await page.waitForFunction(() => !document.querySelector('.sd-figs.sd-both'));
+    await key('KeyC', 'ㅊ');
+    await page.waitForFunction(() => document.getElementById('sd-cmp-run')?.getAttribute('aria-pressed') === 'true');
+    await key('KeyV', 'ㅍ');
+    await page.waitForFunction(() => location.hash === '#/screens/0004/~.guest.normal.m');
+    assert.deepEqual(s.errors, []);
+  } finally { await s.close(); }
+});
+
 test('M7 a11y: the focus never falls to the page — filters, Copy, Show on map and a live redraw in Coverage; filters, a redraw, Clear filters, decision keys and moving between screens in Screens', { timeout: 120000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = leafy({ probes: false });
