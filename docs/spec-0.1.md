@@ -794,7 +794,12 @@ unreadable one by one). Built in `src/ledger.mjs`:
     pid alone, so a reused pid makes takers wait and end in LOCKED, never take a live lock); one on another
     machine, after 30 s without a touch. One taker at a time removes a
     stale lock, after checking again that it still holds the owner judged stale; a lock is never given back and is
-    released only by its owner. Waiting ends after 5 s with an error. Renames Windows refuses while another process
+    released only by its owner. Waiting is fair (2026-10-15 KST): a waiter that has waited 20 ms names itself next
+    (`<file>.lock.d.next`, written whole and renamed into place; one that has waited longer takes the place), and
+    while a live next is named only it takes the lock, so a process that releases and takes the lock again at once
+    cannot starve the others (measured: 4 processes × 15 holds of 80 ms, longest waits 2.6–3.0 s before, 0.2–0.3 s
+    after); the place is renewed while its waiter waits and is free after 1 s without renewal or once its process
+    has ended. Waiting ends after 5 s with an error. Renames Windows refuses while another process
     reads in the folder (EPERM, EACCES, EBUSY) are retried with backoff, for the lock, the ledger files, run folders
     and `runs/latest` (last writer wins; a failed `latest` write never fails a capture).
 - **Channels (2026-10-15 KST, design §1, §7.2):** a decision records how it was made (`channel`: board, cli-tty,

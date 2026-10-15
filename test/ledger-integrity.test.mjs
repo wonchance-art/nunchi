@@ -266,6 +266,26 @@ for (let i = 0; i < Number(n); i++) addApproved(file, [who + '-' + i + ':0123456
   assert.deepEqual(readdirSync(dir).sort(), ['approved.json'], 'no lock or temp file left behind');
 });
 
+test('D5: the lock is fair: a process that releases and takes it again at once does not starve the others (each waits about the holds ahead of it, never seconds)', async () => {
+  // 4 processes × 15 holds of 80 ms. Unfair (before): one process took the lock back on every release while the others
+  // backed off to 100 ms polls and found it free only by luck, waiting 2–3 s here and over the 5 s limit (LOCKED) on
+  // a slow Windows runner. Fair: the longest waiter is named next, so a wait is about the 3 holds ahead of it.
+  const dir = tmp('nunchi-lock-fair-');
+  const file = join(dir, 'x.json');
+  const child = `import { withLock } from ${JSON.stringify(STABLE)};
+const [file, at] = process.argv.slice(1);
+while (Date.now() < Number(at)) {}
+let worst = 0;
+for (let i = 0; i < 15; i++) { const t = Date.now(); withLock(file, () => { worst = Math.max(worst, Date.now() - t); const s = Date.now(); while (Date.now() - s < 80) {} }); }
+console.log(worst);`;
+  const at = Date.now() + 1500;
+  const out = await Promise.all([0, 1, 2, 3].map(() => new Promise(res => execFile('node', ['--input-type=module', '-e', child, file, String(at)], (err, stdout, stderr) => res({ err, worst: Number(stdout.trim()), stderr })))));
+  for (const r of out) assert.equal(r.err, null, r.stderr);
+  const worst = out.map(r => r.worst);
+  assert.ok(worst.every(w => w < 1500), `the longest waits (ms): ${worst.join(', ')}`);
+  assert.deepEqual(readdirSync(dir), [], 'no lock, place or temp file left behind');
+});
+
 test('D5: the lock: a dead holder is taken over, a live one is waited for and then refused, an untouched one goes stale', async () => {
   const dir = tmp('nunchi-lock-');
   const file = join(dir, 'approved.json');

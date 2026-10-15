@@ -145,6 +145,11 @@ export function sweepLeftovers(dir, { olderThanMs = 3600e3, now = Date.now() } =
 // - released only while it still holds our token.
 // - Windows refuses to rename the lock folder while another process reads owner.json in it: those renames, and
 //   the reads, are retried (retryBusy), so a release is never lost to a reader.
+// - fair: a waiter is not starved by processes that release and take the lock again at once. A waiter that has waited
+//   NEXT_AFTER_MS names itself next (`<file>.lock.d.next`, written whole and renamed into place; a waiter that has
+//   waited longer takes the place over), and while a live next is named only it may take the lock. It renews its
+//   place while it waits; a place not renewed for NEXT_STALE_MS, or whose process has ended on this machine, is free.
+//   The place goes when its waiter takes the lock or gives up.
 // Held only around read–change–write of a small file, and by `nunchi open` while it starts a board (withLockAsync,
 // which waits without blocking), never across capture or network I/O. Acquisition backs
 // off for `timeoutMs`, then fails with code LOCKED, also when a stale lock cannot be removed.
@@ -228,6 +233,33 @@ function release(dir, token) {
   rmSync(gone, RM);
 }
 
+// The waiter that takes the lock next (fairness): `<file>.lock.d.next` holds {token, since, pid, host, boot, ns}.
+const NEXT_AFTER_MS = 20, NEXT_STALE_MS = 1000, NEXT_RENEW_MS = 200;
+const nextPath = dir => `${dir}.next`;
+function readNext(dir) {
+  const p = nextPath(dir);
+  let text, renewed;
+  try { text = readFileSync(p, 'utf8'); renewed = statSync(p).mtimeMs; } catch { return null; }
+  let o; try { o = JSON.parse(text); } catch { return null; }
+  return o && typeof o.token === 'string' && Number.isFinite(o.since) ? { ...o, renewed } : null;
+}
+const nextStale = nx => Date.now() - nx.renewed > NEXT_STALE_MS || (sameMachine(nx) && !alive(nx.pid));
+// removed only while it still names `token` (a waiter that waited longer may have taken the place since)
+function dropNext(dir, token) { if (readNext(dir)?.token !== token) return; try { unlinkSync(nextPath(dir)); } catch {} }
+function claimNext(l) {
+  const tmp = `${nextPath(l.dir)}-${l.token}`;
+  try {
+    writeFileSync(tmp, JSON.stringify({ token: l.token, since: l.t0, pid: process.pid, host: hostname(), boot: bootId(), ns: pidNs() }));
+    io.rename(tmp, nextPath(l.dir));
+    l.renewed = Date.now();
+  } catch { try { unlinkSync(tmp); } catch {} }
+}
+function renewNext(l) {
+  if (Date.now() - (l.renewed || 0) < NEXT_RENEW_MS) return;
+  const t = new Date();
+  try { utimesSync(nextPath(l.dir), t, t); l.renewed = Date.now(); } catch {}
+}
+
 // The steps of taking a lock, shared by the blocking and the awaiting way to wait for it.
 function prepareLock(path) {
   const dir = `${path}.lock.d`;
@@ -241,12 +273,22 @@ function prepareLock(path) {
   writeFileSync(join(ready, 'owner.json'), JSON.stringify({ token, pid: process.pid, host: hostname(), boot: bootId(), ns: pidNs(), start: procStart(process.pid), alive: held ? basename(aliveFile) : null, at: Date.now() }));
   return { path, dir, token, ready, held, t0: Date.now() };
 }
-// One try: → true when the lock is ours; false to wait and try again; throws LOCKED after `timeoutMs`.
+// One try: → true when the lock is ours; false to wait and try again; throws LOCKED after `timeoutMs`. `l.next`: this
+// waiter is the one named next (it then tries again soon).
 function tryLock(l, { timeoutMs, staleMs }) {
   for (;;) {
-    try { io.rename(l.ready, l.dir); return true; } catch (e) { if (!taken(e)) throw e; }
+    let nx = readNext(l.dir);
+    if (nx && nx.token !== l.token && nextStale(nx)) { dropNext(l.dir, nx.token); nx = null; }
+    l.next = nx?.token === l.token;
+    // while another live waiter is named next, only it takes the lock
+    if (!nx || l.next) {
+      try { io.rename(l.ready, l.dir); if (l.next) dropNext(l.dir, l.token); l.next = false; return true; } catch (e) { if (!taken(e)) throw e; }
+    }
     const stale = staleOwner(l.dir, staleMs);
     if (stale && reap(l.dir, stale, staleMs)) continue;
+    if (l.next) renewNext(l);
+    // the longest waiter is next: one that has waited longer than the named one takes its place
+    else if (Date.now() - l.t0 >= NEXT_AFTER_MS && (!nx || l.t0 < nx.since || (l.t0 === nx.since && l.token < nx.token))) claimNext(l);
     if (Date.now() - l.t0 > timeoutMs) {
       const o = readOwner(l.dir);
       const who = o ? ` (pid ${o.pid} on ${o.host}${sameMachine(o) ? `, ${alive(o.pid) ? 'running' : 'exited'}` : ''})` : '';
@@ -255,7 +297,10 @@ function tryLock(l, { timeoutMs, staleMs }) {
     return false;
   }
 }
-const abandon = l => { rmSync(l.ready, RM); l.held?.release(); };
+const abandon = l => { dropNext(l.dir, l.token); rmSync(l.ready, RM); l.held?.release(); };
+// the next wait: soon for the waiter named next; else backing off to 25 ms (a waiter must see the lock free between
+// two holders often enough to name itself next)
+const nextWait = (l, wait) => (l.next ? 2 : Math.min(wait * 2, 25));
 // a long holder touches the lock between steps, so a holder on another machine does not judge it stale
 function heldLock(l) {
   return {
@@ -266,7 +311,7 @@ function heldLock(l) {
 
 export function withLock(path, fn, { timeoutMs = 5000, staleMs = 30000 } = {}) {
   const l = prepareLock(path);
-  try { for (let wait = 5; !tryLock(l, { timeoutMs, staleMs }); wait = Math.min(wait * 2, 100)) sleep(wait); }
+  try { for (let wait = 5; !tryLock(l, { timeoutMs, staleMs }); wait = nextWait(l, wait)) sleep(wait); }
   catch (e) { abandon(l); throw e; }
   const h = heldLock(l);
   try { return fn({ touch: h.touch }); } finally { h.release(); }
@@ -274,7 +319,7 @@ export function withLock(path, fn, { timeoutMs = 5000, staleMs = 30000 } = {}) {
 // The same lock, waited for without blocking (for a holder that awaits: `nunchi open` starting a board).
 export async function withLockAsync(path, fn, { timeoutMs = 5000, staleMs = 30000 } = {}) {
   const l = prepareLock(path);
-  try { for (let wait = 5; !tryLock(l, { timeoutMs, staleMs }); wait = Math.min(wait * 2, 100)) await new Promise(r => setTimeout(r, wait)); }
+  try { for (let wait = 5; !tryLock(l, { timeoutMs, staleMs }); wait = nextWait(l, wait)) await new Promise(r => setTimeout(r, wait)); }
   catch (e) { abandon(l); throw e; }
   const h = heldLock(l);
   try { return await fn({ touch: h.touch }); } finally { h.release(); }
