@@ -153,7 +153,12 @@ test('coverage: scope gaps — a page that needs a sample, states not captured, 
   const p = leafy({ probes: false });
   editJson(runFile(p, '0004', 'run.json'), m => { m.wholeApp = false; m.scope.states = ['normal', 'error']; m.scope.persons = ['guest']; m.unresolved = []; });
   editJson(runFile(p, '0004', 'flow.json'), f => { f.nodes.push({ route: '/shop/[item]', captured: false, reachedBy: null }); });
-  editJson(runFile(p, '0004', 'manifest.json'), m => { m.health = { status: 'recording-stale', problems: [{ status: 'recording-stale', scenes: 30, of: 40 }] }; });
+  editJson(runFile(p, '0004', 'manifest.json'), m => {
+    m.health = { status: 'recording-stale', problems: [{ status: 'recording-stale', scenes: 30, of: 40 }] };
+    Object.assign(m.scenes.find(x => x.id === 'checkout.signed-in.slow.d'), { status: 'capture-failed', reason: 'redirected-off-origin', finalOrigin: 'https://pay.example.test', top: null, full: null, textHash: null });
+  });
+  // a hunt of one lens only
+  editJson(runFile(p, '0004', 'hunt-plan.json'), plan => { plan.lenses = [{ id: 'L6' }]; });
   const { b, call } = await board(p);
   try {
     const c = (await call('/api/coverage')).json;
@@ -167,6 +172,9 @@ test('coverage: scope gaps — a page that needs a sample, states not captured, 
     assert.deepEqual(c.muted.map(m => [m.line, m.copy]), [['Signed-in screens: not captured (no saved login)', 'nunchi login --url <your app> --path /login']]);
     assert.ok(c.routes.some(r => r.route === '/shop/[item]' && r.why === 'needs-sample' && r.whyText === 'Not opened: needs a sample address'));
     assert.equal(c.fullCheck, false);
+    assert.deepEqual([by('lens-subset').line, by('lens-subset').say], ['This hunt covered L6 only', 'run the AI review with every lens']);
+    assert.deepEqual(c.fine.map(g => g.line), ['4 screens were sent to another page, so they are judged as that page', '1 screen left the app (https://pay.example.test)'], 'usually fine');
+    assert.equal(c.routes.flatMap(r => r.cells).find(x => x.id === 'checkout.signed-in.slow.d').why, 'Not checked: left the app (https://pay.example.test)');
   } finally { await b.close(); }
 });
 

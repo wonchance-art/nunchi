@@ -337,8 +337,8 @@ async function router() {
     if (r.view === 'progress') renderProgress(true);
     else if (r.view === 'findings') { if (!S.list || from === 'progress' || from === 'screens' || from === 'screen' || from === 'coverage') await loadList(); renderFindings(true); }
     else if (r.view === 'detail') await showDetail(r.id);
-    else if (r.view === 'screens') { if (!S.screens || from !== 'screens') S.screens = await api('/api/screens'); S.screenSel = r.screen || S.screenSel; SC.renderWall(true); }
-    else if (r.view === 'screen') await SC.loadDetail(r, { from });
+    else if (r.view === 'screens') { if (!S.screens) show(h('p', { class: 'loading' }, W.SCREENS.loading)); if (!S.screens || from !== 'screens') S.screens = await api('/api/screens'); S.screenSel = r.screen || S.screenSel; SC.renderWall(true); }
+    else if (r.view === 'screen') { if (!S.screens) show(h('p', { class: 'loading' }, W.SCREENS.loading)); await SC.loadDetail(r, { from }); }
     else if (r.view === 'coverage') {
       // a slow load keeps the last coverage shown, saying it is updating; the first one says it is loading
       if (S.cov.data && from !== 'coverage') { S.cov.updating = true; CV.render(true); } else if (!S.cov.data) show(h('p', { class: 'loading' }, W.COVERAGE.loading));
