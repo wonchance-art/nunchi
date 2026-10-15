@@ -5,7 +5,7 @@ import { resolve, join, relative, isAbsolute, dirname } from 'node:path';
 import { readFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
 import { discover } from './discover.mjs';
 import { buildSourceMap, affectedRoutes, sourceHashes } from './sourcemap.mjs';
-import { startRun, finishRun, gcRuns, latestRun, workTree, ensureGitignore, ensurePrivate, readConfig, gitRunner, DIFF_SAFE } from './runs.mjs';
+import { startRun, finishRun, gcRuns, latestRun, latestSweep, PROGRESS_FILE, workTree, ensureGitignore, ensurePrivate, readConfig, gitRunner, DIFF_SAFE } from './runs.mjs';
 import { baseUrlRefusal } from './network.mjs';
 import { codeNavigations } from './flow.mjs';
 import { readDecisions, approvalKey, buildDecision, view, DECISIONS, NOT_LOOKED_RUNS, STALE_HUNTS, latestRunOf } from './ledger.mjs';
@@ -34,8 +34,11 @@ Usage:
     --viewports <m,d>     m = 390x844, d = 1280x800                  default: m,d
     --browser-path <exe>  Chromium/Chrome executable (or NUNCHI_BROWSER)
     --auth <state.json>   saved login (from nunchi login) for signed-in scenes     default: .nunchi/auth.json if present
+    --quick               a first look: / and the key screens its navigation links to, then one per section
+                          (up to 8), normal state, rule lenses only; marks nothing fixed. The full check follows
     --network <mode>      auto | record | replay | live                default: auto
-                          auto replays .nunchi/har/<person>.json when it exists, otherwise records it
+                          auto replays .nunchi/har/<person>.json when it exists, otherwise records it; screens
+                          the recording lacks are recorded and merged into it (shown as "merge")
     --states <list>       normal,empty,error,slow,offline              default: all five
                           forced states run only on screens that load data
     --allow-host <list>   extra backend hosts the app calls from the browser (Supabase, Firebase,
@@ -68,8 +71,8 @@ Usage:
                                             and how long decisions in the board took (singles and batches apart)
   nunchi runs [--all] [--json]              List captured runs (newest last) and which is latest; --all also lists
                                             the fix loop's probe runs (hidden otherwise)
-  nunchi gc [--keep 5]                      Delete old runs, keep the newest N and the latest (fix probes go first;
-                                            an open fix attempt's probes stay)
+  nunchi gc [--keep 5]                      Delete old runs, keep the newest N and the latest (fix probes, and quick runs
+                                            a full check came after, go first; an open fix attempt's probes stay)
   nunchi fix --plan [--url <base>] [--json] The fix plan: groups decided Fix, their root-cause files, the branch, the
                                             checks nunchi will run and whether you approved them
   nunchi fix --start <group> [--url <base>] [--serve dev|start] [--agent <name>] [--vendor <name>] [--json]
@@ -153,6 +156,7 @@ function parse(argv) {
     const a = argv[i];
     if (a === '--json') args.json = true;
     else if (a === '--plan') args.plan = true;
+    else if (a === '--quick') args.quick = true;
     else if (a === '--score') args.score = true;
     else if (a === '--check') args.check = true;
     else if (a === '--no-browser') args.noBrowser = true;
@@ -219,11 +223,13 @@ async function engine(path) {
     process.exit(2);
   }
 }
-// The run a command reads: --run <id> (or a folder written with capture --out), else the latest run.
+// The run a command reads: --run <id> (or a folder written with capture --out), else the latest run that is not a
+// quick first look (design §6: the hunt, the verifier and what builds on them work on a capture of the app).
+const noFullRun = dir => (latestRun(dir) ? `no full check yet: run ${latestRun(dir)} is a quick first look (rule lenses only, nothing marked fixed); nunchi capture --url <your local server> runs the full check` : 'no runs yet: nunchi capture --url <your local server>');
 function runDirOf(args, cmdName) {
   const dir = resolve('.nunchi/runs');
-  const p = args.run ? (/^\d{4,}$/.test(args.run) ? join(dir, args.run) : resolve(args.run)) : (latestRun(dir) ? join(dir, latestRun(dir)) : null);
-  if (!p || !existsSync(join(p, 'manifest.json'))) { console.error(`nunchi ${cmdName}: ${args.run ? `no run at ${p}` : 'no runs yet: nunchi capture --url <your local server>'}`); process.exit(1); }
+  const p = args.run ? (/^\d{4,}$/.test(args.run) ? join(dir, args.run) : resolve(args.run)) : (latestSweep(dir) ? join(dir, latestSweep(dir)) : null);
+  if (!p || !existsSync(join(p, 'manifest.json'))) { console.error(`nunchi ${cmdName}: ${args.run ? `no run at ${p}` : noFullRun(dir)}`); process.exit(1); }
   return p;
 }
 const readJson = p => JSON.parse(readFileSync(p, 'utf8'));
@@ -322,6 +328,9 @@ if (cmd === 'setup') {
 } else if (cmd === 'capture') {
   const { capture } = await engine('./capture.mjs');
   if (!args.url && !args.plan) { console.error('nunchi capture: --url is required (your local or preview server, never production)'); process.exit(1); }
+  // a quick run chooses its own screens and states, and plants nothing
+  const quickClash = ['routes', 'changedSince', 'states', 'canaries'].filter(k => args[k] !== undefined).map(k => '--' + k.replace(/[A-Z]/g, c => '-' + c.toLowerCase()));
+  if (args.quick && quickClash.length) { console.error(`nunchi capture: --quick chooses the key screens itself (normal state, no canaries): leave out ${quickClash.join(', ')}`); process.exit(1); }
   const root = resolve(args.root || process.cwd());
   const samples = args.samples ? JSON.parse(readFileSync(resolve(args.samples), 'utf8')) : {};
   const skipped = [];
@@ -349,6 +358,15 @@ if (cmd === 'setup') {
   }
   const persons = auth ? ['guest', 'signed-in'] : ['guest'];
   const all = scenes.flatMap(s => persons.map(person => ({ ...s, person })));
+  // --quick (design §6, M5): a first look at the key screens (quick.mjs), normal state, rule lenses only; the full check
+  // follows. Its scope is chosen from the home page's navigation once `/` is captured, so --plan shows the rule.
+  const quickRoutes = [...new Set(scenes.map(s => s.route))].sort();
+  if (args.quick && args.plan) {
+    const { rankQuick, QUICK_MAX } = await import('./quick.mjs');
+    console.log(JSON.stringify({ quick: true, max: QUICK_MAX, first: quickRoutes.includes('/') ? ['/'] : [], navigation: 'the routes the screens of / link to from their <nav> and <header>, chosen once / is captured',
+      withoutNavigation: rankQuick({ routes: quickRoutes, known: discover(root).routes.map(r => r.path) }).routes, persons, skipped }, null, 2));
+    process.exit(0);
+  }
   if (args.plan) { console.log(JSON.stringify({ scenes: all, skipped }, null, 2)); process.exit(0); }
   const nunchiDir = resolve('.nunchi');
   const runsDir = join(nunchiDir, 'runs');
@@ -362,6 +380,12 @@ if (cmd === 'setup') {
   // the state store: shared by every worktree in a repository (its run-id counter keeps run ids one sequence)
   const st = stateOf(nunchiDir);
   try { ensurePrivate(nunchiDir, st.root.shared ? ['har/', 'runs/'] : undefined); if (st.root.shared) ensureStateDir(st.root); } catch (e) { console.error('nunchi: ' + e.message); process.exit(2); }
+  // a capture on a fix branch is the fix loop's probe (below): a first look belongs on the branch the findings are on
+  if (args.quick) {
+    let b = '';
+    try { b = gitRunner(root)(['symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8' }).trim(); } catch {}
+    if (/^nunchi\/fix/.test(b)) { console.error(`nunchi capture: --quick is a first look on your own branch; ${b} is a fix branch (nunchi fix --verify judges a fix)`); process.exit(1); }
+  }
   const run = args.out ? null : startRun(runsDir, { ids: st.root.shared ? st.files.runIds : null });
   const out = run ? run.path : resolve(args.out);
   const viewports = (args.viewports || 'm,d').split(',');
@@ -375,7 +399,7 @@ if (cmd === 'setup') {
     try { lenses = (await import('./lenses.mjs')).loadLenses({ root: process.cwd() }).lenses; }
     catch (e) { console.error(`nunchi capture: lens packs not loaded (${String(e.message).split('\n')[0]}); canaries follow the built-in packs`); }
   }
-  const states = (args.states || 'normal,empty,error,slow,offline').split(',').map(x => x.trim());
+  const states = args.quick ? ['normal'] : (args.states || 'normal,empty,error,slow,offline').split(',').map(x => x.trim());
   // design §7: only runs on the tracked branch fold as sweeps; a capture on a nunchi/fix… branch is a fix probe
   // (kept apart, folded by nobody), so a fix not yet judged never reads as fixed, and never cancels its own attempt
   let fixBranch = null;
@@ -383,17 +407,35 @@ if (cmd === 'setup') {
   const runMeta = {
     // kind (design §2.1): a full capture is a sweep; only a sweep folds as one. worktree: whose runs these are
     // (runs stay per worktree, the ledger is shared, §7).
-    schema: 1, id: run?.id ?? null, parent: run?.parent ?? null, kind: fixBranch ? 'fix-probe' : 'sweep', ...(fixBranch ? { fixBranch } : {}), worktree: st.root.stream, ...workTree(root),
+    // A quick run (design §6) is `quick`: folded presence-only, its whole-app detectors off.
+    schema: 1, id: run?.id ?? null, parent: run?.parent ?? null, kind: fixBranch ? 'fix-probe' : args.quick ? 'quick' : 'sweep', ...(fixBranch ? { fixBranch } : {}), worktree: st.root.stream, ...workTree(root),
     scope: { routes: [...new Set(all.map(s => s.route))].sort(), persons, viewports, states, changedSince: args.changedSince || null },
     // every route the source has, none skipped for this run only (a dynamic route without a sample), so
     // whole-app detectors (secrets, the link graph, one-offs) judged the whole app. Paths discover cannot
     // resolve are skipped by every run: they never make a run partial, and are listed here so they stay visible.
-    wholeApp: !args.routes && !args.changedSince && !skipped.some(s => s.reason === 'needs-sample'),
+    wholeApp: !args.quick && !args.routes && !args.changedSince && !skipped.some(s => s.reason === 'needs-sample'),
     unresolved: skipped.filter(s => s.reason !== 'needs-sample' && s.reason !== 'unchanged').map(s => s.route).sort(),
   };
+  // A quick run captures `/` first, then the key screens chosen from its navigation (quick.mjs); which ones and why go
+  // into run.json (`quick`).
+  let quick = null;
+  if (args.quick) {
+    const { rankQuick } = await import('./quick.mjs');
+    const known = discover(root).routes.map(r => r.path);
+    quick = {
+      scenes: all.filter(s => s.route === '/'),
+      pick: async ({ entries, links }) => {
+        const home = entries.filter(e => e.route === '/' && e.state === 'normal').map(e => ({ id: e.id, person: e.person, viewport: e.viewport, status: e.status, links: links.get(e.id) || [] }));
+        const chosen = rankQuick({ routes: quickRoutes, known, home });
+        runMeta.quick = chosen;
+        const at = new Map(chosen.routes.map((r, i) => [r, i]));
+        return all.filter(s => s.route !== '/' && at.has(s.route)).sort((a, b) => at.get(a.route) - at.get(b.route) || persons.indexOf(a.person) - persons.indexOf(b.person));
+      },
+    };
+  }
   // L3 knows every route of the app when they come from the source, and the navigations the source names.
   let flow = {};
-  if (!args.routes) {
+  if (!args.routes && !args.quick) {
     const routes = discover(root).routes;
     flow = { routes: routes.filter(r => !r.needsResolution).map(r => r.path).sort(), wholeApp: !args.changedSince, code: codeNavigations(root, buildSourceMap(root, routes)) };
   }
@@ -404,16 +446,26 @@ if (cmd === 'setup') {
       if (dated.length && dated.every(c => c.expires * 1000 < Date.now())) console.error('warning: every cookie in the saved login has expired; run `nunchi login` again or signed-in screens will show the sign-in page');
     } catch {}
   }
+  // How far the capture is, for the board (design §6: "full check running, 12 of 25 screens (about 6 min left)"):
+  // progress.json in the run folder while it is being written (removed before the run is complete; measured times
+  // live there and in timing.json only, never in the evidence).
+  const { writeStable } = await import('./stable.mjs');
+  const progressFile = run ? join(run.path, PROGRESS_FILE) : null;
+  // (a progress file that cannot be written only leaves the board without the line: it never fails a capture)
+  const onProgress = progressFile ? p => { try { writeStable(progressFile, { schema: 1, kind: runMeta.kind, wholeApp: runMeta.wholeApp, routes: p.routes, done: p.done, routeMs: p.routeMs }); } catch {} } : null;
+  if (onProgress) onProgress({ routes: new Set((quick ? quick.scenes : all).map(s => s.route)).size, done: 0, routeMs: [] });
   try {
     const r = await capture({
-      baseUrl: args.url, scenes: all, out, viewports, browserPath: args.browserPath, storageState: auth,
+      baseUrl: args.url, scenes: quick ? quick.scenes : all, out, viewports, browserPath: args.browserPath, storageState: auth,
       network: args.network || 'auto', recordingDir: resolve('.nunchi/har'), states, runMeta, flow,
       allowHosts: (args.allowHost || '').split(',').map(x => x.trim()).filter(Boolean), allowBaseHosts, canaries, lenses,
+      persons, pick: quick?.pick ?? null, wholeAppDetectors: !args.quick, onProgress,
     });
+    if (progressFile) rmSync(progressFile, { force: true });
     const by = { blocker: 0, high: 0, medium: 0, low: 0 };
     for (const f of r.findings) by[f.severity]++;
-    if (!args.routes) {
-      const { writeStable } = await import('./stable.mjs');
+    // the source map, source hashes and inventory serve the AI hunt and the re-check, which never run on a quick run
+    if (!args.routes && !args.quick) {
       const routes = discover(root).routes;
       const map = buildSourceMap(root, routes);
       writeStable(join(out, 'source-map.json'), map);
@@ -438,15 +490,22 @@ if (cmd === 'setup') {
     }
     const misses = r.manifest.scenes.reduce((n, x) => n + (x.replayMisses || 0), 0);
     const canaryCount = r.canaries ? r.canaries.planted.length : 0;
-    const summary = { out: final, run: run?.id ?? null, health: r.manifest.health, scenes: r.manifest.scenes.length - canaryCount, canaries: canaryCount, network: r.run.network, replayMisses: misses, skipped, findings: by, seconds: Math.round(r.totalMs / 100) / 10 };
+    const summary = { out: final, run: run?.id ?? null, kind: runMeta.kind, health: r.manifest.health, scenes: r.manifest.scenes.length - canaryCount, canaries: canaryCount, network: r.run.network, replayMisses: misses, skipped, findings: by, seconds: Math.round(r.totalMs / 100) / 10,
+      ...(runMeta.quick ? { quick: runMeta.quick } : {}) };
     if (args.json) console.log(JSON.stringify(summary, null, 2));
     else {
       console.log(`captured ${summary.scenes} scenes${canaryCount ? ` (+ ${canaryCount} canary copies)` : ''} in ${summary.seconds}s → ${final}${run ? ` (run ${run.id})` : ''}`);
+      if (runMeta.quick) {
+        const { quickChoice } = await import('./quick.mjs');
+        console.log(`first look: ${runMeta.quick.routes.length} key screen${runMeta.quick.routes.length === 1 ? '' : 's'}, normal state, rule lenses only: ${quickChoice(runMeta.quick) || 'none (no route could be opened)'}`);
+        console.log(`It marks nothing fixed. The full check is next: nunchi capture --url ${args.url}${args.root ? ` --root ${args.root}` : ''}${args.samples ? ` --samples ${args.samples}` : ''} (it records the screens the first look did not).`);
+      }
       if (fixBranch) console.log(`This ran on the fix branch ${fixBranch}: it is kept apart as a fix probe (nunchi runs --all lists it) and does not change the findings. nunchi fix --verify judges a fix; capture on your main branch for a sweep.`);
       const why = { 'login-expired': 'the saved login no longer works: signed-in screens showed the sign-in page and were not judged. Run `nunchi login` again.', 'app-unreachable': 'most screens did not load at all. Is the app running at --url?', 'recording-stale': 'most screens asked for data the recording does not have. Re-record with --network record.' };
       for (const p of r.manifest.health.problems) console.log(`RUN PROBLEM ${p.status} (${p.scenes}/${p.of} screens): ${why[p.status]}`);
       console.log(`rule findings: blocker ${by.blocker} · high ${by.high} · medium ${by.medium} · low ${by.low}`);
       console.log(`network: ${Object.entries(r.run.network).map(([p, m]) => `${p} ${m}`).join(' · ')}`);
+      if (Object.values(r.run.network).includes('merge')) console.log('merge: the recording lacked some of these screens; they were recorded and added to it, and the screens it held were replayed (nothing they asked for was sent)');
       if (misses) console.log(`replay misses: ${misses} request(s) were not in the recording and were not sent (replay never goes live); re-record with --network record`);
       for (const s of skipped) console.log(`  skipped ${s.route} (${s.reason})`);
     }
@@ -469,7 +528,8 @@ if (cmd === 'setup') {
   const led = loadLedger(nunchiDir);
   const { state, decisions, approved, st } = led;
   const { rows, groups: gs } = P.ledgerView(led);
-  if (!Object.keys(state.items).length && cmd !== 'approve') { console.error('nunchi: nothing captured yet (run nunchi capture first)'); process.exit(1); }
+  // a run that found nothing (a quick first look of a tidy app) is not "nothing captured": findings says so
+  if (!Object.keys(state.items).length && cmd !== 'approve' && !(cmd === 'findings' && state.runs.length)) { console.error('nunchi: nothing captured yet (run nunchi capture first)'); process.exit(1); }
   // how a decision made here is recorded (design §1): `cli-tty` when stdin and stdout are this person's terminal and
   // they type the code shown; otherwise `cli-agent` (the agent recording what the user said in chat; --from-chat says
   // so without asking). A dismissal recorded by the agent counts for "Ready to ship" only once confirmed in the board.
@@ -524,6 +584,10 @@ if (cmd === 'setup') {
       const b = sum.byStatus;
       console.log(`run ${latest} · ${rows.length} unique defects in ${gs.length} groups · groups open ${b.open} · to fix ${b['to-fix']} · later ${b.held} · fixed ${b.fixed} · kept ${b.kept} · not a problem ${b.dismissed}`);
       console.log(`ready to ship? ${sum.verdict.text}`);
+      // the fast first run (design §6): the board's words
+      if (sum.firstLook?.text) console.log(sum.firstLook.text);
+      else if (sum.firstLook) console.log(`run ${sum.firstLook.run} is a quick first look (${sum.firstLook.screens} key screen${sum.firstLook.screens === 1 ? '' : 's'}): it marks nothing fixed, and no full check is running`);
+      if (sum.fullCheckDone) console.log(sum.fullCheckDone.text);
       const blindWhy = { 'app-unreachable': 'the app did not load', 'recording-stale': 'the recording no longer had the data', 'one-page': 'most screens showed one and the same page (another app or an error page at that address?)' };
       if (blind) console.log(`run ${latest} marked nothing fixed: ${blindWhy[blind] || blind}`);
       const stale = rows.filter(r => r.notLookedAt).length;
@@ -633,7 +697,7 @@ if (cmd === 'setup') {
       let m = null;
       try { m = JSON.parse(readFileSync(join(dir, id, 'run.json'), 'utf8')); } catch {}
       if (!m) { console.log(`${id}${id === r.latest ? ' (latest)' : ''}  run.json cannot be read (torn or removed): fix or remove this run`); continue; }
-      console.log(`${id}${id === r.latest ? ' (latest)' : ''}  ${m.commit ? m.commit.slice(0, 7) : 'no git'}${m.dirty ? ' + edits' : ''}  health ${m.health?.status ?? '?'}  ${m.scope?.routes?.length ?? '?'} routes${m.kind === 'fix-probe' ? `  fix probe ${m.fix?.probe ?? ''} of group ${m.fix?.group ?? '?'}` : ''}`);
+      console.log(`${id}${id === r.latest ? ' (latest)' : ''}  ${m.commit ? m.commit.slice(0, 7) : 'no git'}${m.dirty ? ' + edits' : ''}  health ${m.health?.status ?? '?'}  ${m.scope?.routes?.length ?? '?'} routes${m.kind === 'fix-probe' ? `  fix probe ${m.fix?.probe ?? ''} of group ${m.fix?.group ?? '?'}` : m.kind === 'quick' ? '  quick (a first look)' : ''}`);
     }
     for (const p of r.partial) console.log(`${p}  (incomplete: still running, or interrupted; removed by nunchi gc after an hour)`);
     if (!r.complete.length && !r.partial.length) console.log('no runs yet: nunchi capture --url <your local server>');
@@ -649,12 +713,16 @@ if (cmd === 'setup') {
   let runDir, runId = null;
   if (args.run && !/^\d{4,}$/.test(args.run)) runDir = resolve(args.run);          // a run folder or an --out folder
   else {
-    runId = args.run || latestRun(runsDir);
-    if (!runId) fail('no runs yet: nunchi capture --url <your local server>');
+    runId = args.run || latestSweep(runsDir);
+    if (!runId) fail(noFullRun(runsDir));
     runDir = join(runsDir, runId);
   }
   if (!existsSync(join(runDir, 'manifest.json'))) fail(`${runDir} is not a complete capture run (no manifest.json)`);
   if (!runId) { try { runId = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8')).id ?? null; } catch {} }
+  // a quick run is a first look with rule lenses only (design §6): the AI lenses hunt a full check
+  let kindHere = null;
+  try { kindHere = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8')).kind ?? null; } catch {}
+  if (kindHere === 'quick') fail(`run ${runId ?? runDir} is a quick first look (rule lenses only): the AI lenses hunt a full check (nunchi capture --url <your local server>)`);
   const planPath = join(runDir, 'hunt-plan.json');
   try {
     if (args.plan) {
@@ -798,7 +866,7 @@ if (cmd === 'setup') {
   // judgement is the skill's (a fresh context).
   const R = await import('./recheck.mjs');
   const { writeStable, stableJson, sha } = await import('./stable.mjs');
-  const { listRuns } = await import('./runs.mjs');
+  const { listRuns, runKind } = await import('./runs.mjs');
   const { byRun } = await import('./ledger.mjs');
   const { sceneDir } = await import('./hunt.mjs');
   const { readSource } = await import('./ai-identity.mjs');
@@ -837,7 +905,8 @@ if (cmd === 'setup') {
     const canaries = existsSync(join(dir, 'canaries.json')) ? readJson(join(dir, 'canaries.json')) : null;
     // the run before this one, for the controls: rule findings present then and now, its canary copies against this
     // run's (screens that changed between the two)
-    const prevId = listRuns(runsDir).complete.filter(id => byRun(id, who.id) < 0).sort(byRun).pop() ?? null;
+    // (a quick first look before it is not: it saw a few screens, in the normal state only, and planted no canaries)
+    const prevId = listRuns(runsDir).complete.filter(id => byRun(id, who.id) < 0 && runKind(runsDir, id) !== 'quick').sort(byRun).pop() ?? null;
     let previous = null;
     if (prevId) {
       try {

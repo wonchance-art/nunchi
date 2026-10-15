@@ -2,7 +2,7 @@
 // `.nunchi/runs/<id>` only when complete, so a reader never sees half a run and a crash leaves the
 // previous run intact. Ids are sequential numbers (deterministic, no clock). `latest` names the newest
 // complete run and is replaced atomically.
-import { readdirSync, mkdirSync, readFileSync, existsSync, rmSync, statSync, appendFileSync, mkdtempSync } from 'node:fs';
+import { readdirSync, mkdirSync, readFileSync, existsSync, rmSync, statSync, lstatSync, appendFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -38,6 +38,39 @@ export function latestRun(dir) {
   const { complete } = listRuns(dir);
   const runs = complete.filter(r => runKind(dir, r) !== 'fix-probe');
   return runs.length ? runs[runs.length - 1] : null;
+}
+// The latest run that is not a quick first look (design 0.1-c §6: hunt, verify and what builds on them default to it):
+// `latest` when it names a sweep, else the newest complete sweep. Null when there is none (only quick runs so far).
+export function latestSweep(dir) {
+  const id = latestRun(dir);
+  if (id && runKind(dir, id) === 'sweep') return id;
+  const runs = listRuns(dir).complete.filter(r => runKind(dir, r) === 'sweep');
+  return runs.length ? runs[runs.length - 1] : null;
+}
+
+// How far a capture that is still being written has come (design §6): `<id>.partial/progress.json`, written by the CLI
+// after each route × person × viewport and removed before the run is complete. Read as data from a folder the user's
+// own captures write: a link, a folder or a file over 64 KB is not read, and every field is checked.
+// → [{ run, kind, wholeApp, routes, done, routeMs }] for the runs being written, oldest first.
+export const PROGRESS_FILE = 'progress.json';
+export function readProgress(dir) {
+  const out = [];
+  for (const p of listRuns(dir).partial) {
+    const run = PARTIAL.exec(p)[1];
+    try {
+      if (!lstatSync(join(dir, p)).isDirectory()) continue;                     // a link is not followed
+      const f = join(dir, p, PROGRESS_FILE);
+      const st = lstatSync(f);
+      if (!st.isFile() || st.size > 64 * 1024) continue;
+      const doc = JSON.parse(readFileSync(f, 'utf8'));
+      const count = n => (Number.isInteger(n) && n >= 0 ? n : null);
+      const routes = count(doc?.routes), done = count(doc?.done);
+      if (routes === null || done === null || done > routes || typeof doc.kind !== 'string') continue;
+      const routeMs = Array.isArray(doc.routeMs) ? doc.routeMs.filter(x => Number.isFinite(x) && x >= 0).slice(0, done) : [];
+      out.push({ run, kind: doc.kind, wholeApp: doc.wholeApp === true, routes, done, routeMs });
+    } catch {}
+  }
+  return out;
 }
 
 // Reserves the next id. mkdir without `recursive` fails if the folder exists, so two captures started
@@ -94,12 +127,18 @@ export function finishRun(dir, id, { latest = true } = {}) {
 // not folded is never removed. `pinned` (design §8.1): runs an open item still names (its last sighting, the
 // evidence a re-check compares with) are kept too.
 // Fix probes are removed first (design §3.4): they never count towards `keep`, and only a probe an open attempt
-// pins (`pinned`) stays.
+// pins (`pinned`) stays. So are quick runs a sweep came after (design §6): the first look was replaced by a check of
+// the app, and a run an open item still names (what only the quick run saw) is pinned; a quick run with no sweep after
+// it counts like any other run.
 export function gcRuns(dir, { keep = 5, staleMs = 3600e3, now = Date.now(), folded = null, pinned = null } = {}) {
   const { complete, partial } = listRuns(dir);
   const latest = latestRun(dir);
-  const probe = new Set(complete.filter(id => runKind(dir, id) === 'fix-probe'));
-  const keepSet = new Set(complete.filter(id => !probe.has(id)).slice(-keep));
+  const kinds = new Map(complete.map(id => [id, runKind(dir, id)]));
+  const sweeps = complete.filter(id => kinds.get(id) === 'sweep');
+  const lastSweep = sweeps[sweeps.length - 1] ?? null;
+  const probe = new Set(complete.filter(id => kinds.get(id) === 'fix-probe'));
+  const replaced = new Set(complete.filter(id => kinds.get(id) === 'quick' && lastSweep !== null && Number(id) < Number(lastSweep)));
+  const keepSet = new Set(complete.filter(id => !probe.has(id) && !replaced.has(id)).slice(-keep));
   if (latest) keepSet.add(latest);
   if (folded) for (const id of complete) if (!folded.has(id) && !probe.has(id)) keepSet.add(id);
   if (pinned) for (const id of complete) if (pinned.has(id)) keepSet.add(id);

@@ -342,6 +342,16 @@ export function captureRuns(state, stream = 'main') {
 }
 // The latest capture run of a stream (what `findings` and the review page call "this run"), else the latest of any.
 export const latestRunOf = (state, stream = 'main') => captureRuns(state, stream).pop() ?? state.runs[state.runs.length - 1] ?? null;
+// The kind a capture run was folded as (a quick first look, or a sweep).
+export const foldKindOf = (state, run, stream = 'main') => foldOf(state, run, 'rule', stream)?.kind ?? 'sweep';
+// The latest sweep of a stream, a quick first look left out (design 0.1-c §6): what the fix loop's probes copy. Like
+// latestRunOf, a stream with none takes the latest of any stream.
+export function latestSweepOf(state, stream = 'main') {
+  const mine = captureRuns(state, stream).filter(r => foldKindOf(state, r, stream) === 'sweep').pop();
+  if (mine) return mine;
+  const quick = new Set((state.folds || []).filter(f => f.source === 'rule' && f.kind === 'quick').map(f => f.run));
+  return state.runs.filter(r => !quick.has(r)).pop() ?? null;
+}
 
 // A cell is where a finding was seen on its route: person.state.viewport (the end of the scene id). A key is
 // route|cell, what a run looked at.
