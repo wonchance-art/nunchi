@@ -1,6 +1,7 @@
 // What the board's Progress view says, computed once for the board (`/api/summary`) and `nunchi findings --json`
 // (`summary`), so the two never disagree (design 0.1-c §3.3, §3.4). Deterministic: the same ledger and run folders
-// give the same summary; no clock.
+// give the same summary; the clock and the process table are read only to tell whether a capture is still running
+// (runs.mjs runningCaptures, passed in as `live`).
 //
 // The verdict formula (design §3.4). "Ready to ship? Yes" only when all of these hold:
 // - no blocker or high group is open, to fix, held, needs you, or not double-checked, and none is kept or called
@@ -10,8 +11,8 @@
 // Otherwise the verdict names what stands in the way.
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { listRuns } from './runs.mjs';
-import { captureRuns, latestRunOf, byRun, titleOf } from './ledger.mjs';
+import { runningCaptures } from './runs.mjs';
+import { captureRuns, latestRunOf, byRun, titleOf, foldKindOf } from './ledger.mjs';
 import { SEV, plural, human } from './board/shared.mjs';
 
 const readJsonOr = (p, fallback) => { try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return fallback; } };
@@ -67,13 +68,67 @@ function fullChecks(state, stream, runsDir) {
   });
 }
 
+// The time a full check has left (design §6 "about 6 min left"), from its own measured times only: the mean time of the
+// routes it has finished (each route's every person, viewport and forced state), times the routes left, rounded up to
+// whole minutes. Null until a route is done, and once none is left (what remains then is the canaries and the fold).
+export function minutesLeft({ routes, done, routeMs }) {
+  const left = routes - done;
+  if (!Array.isArray(routeMs) || !routeMs.length || left <= 0) return null;
+  const mean = routeMs.reduce((a, b) => a + b, 0) / routeMs.length;
+  return Math.max(1, Math.ceil((mean * left) / 60000));
+}
+
+// The fast first run on the board (design §6, the agreed words):
+// - while the latest capture of this worktree is a quick first look and a sweep is being captured after it: "First
+//   look: 8 key screens · full check running, 12 of 25 screens (about 6 min left)";
+// - once that sweep lands, until the next capture does: "Full check done: 16 new groups" (groups whose first sighting
+//   is that sweep: the first look did not show them).
+// A sweep that is not of the whole app (a dynamic route without a sample, --changed-since, --routes) says why, in the
+// words capture prints for it (review of PR #33): "· skipped /posts/[id] (needs-sample)", or "· only the routes given
+// (--routes)". "Screens" here are routes (the design's own count: 8 key screens, a 25-route app).
+const PARTIAL_REASONS = new Set(['needs-sample', 'unchanged']);
+export function partialWhy({ wholeApp, routesGiven = false, skipped = [] }) {
+  if (wholeApp) return '';
+  if (routesGiven) return ' · only the routes given (--routes)';
+  const why = (Array.isArray(skipped) ? skipped : []).filter(s => s && PARTIAL_REASONS.has(s.reason)).map(s => `${s.route} (${s.reason})`);
+  if (!why.length) return '';
+  return ` · skipped ${why.slice(0, 3).join(', ')}${why.length > 3 ? ` and ${why.length - 3} more` : ''}`;
+}
+function firstRun(state, stream, runsDir, rows, live) {
+  const runs = captureRuns(state, stream);
+  const latest = runs[runs.length - 1] ?? null;
+  const kind = id => foldKindOf(state, id, stream);
+  if (latest && kind(latest) === 'quick') {
+    const screens = readJsonOr(join(runsDir, latest, 'run.json'), {})?.scope?.routes;
+    const n = Array.isArray(screens) ? screens.length : 0;
+    const now = live.filter(x => x.progress?.kind === 'sweep' && byRun(x.run, latest) > 0).pop() ?? null;
+    if (!now) return { firstLook: { run: latest, screens: n, full: null, text: null }, fullCheckDone: null };
+    const full = now.progress, min = minutesLeft(full);
+    return { firstLook: { run: latest, screens: n, full: { run: now.run, done: full.done, routes: full.routes, minutesLeft: min, wholeApp: full.wholeApp },
+      text: `First look: ${plural(n, 'key screen')} · full check running, ${full.done} of ${full.routes} screens${min ? ` (about ${min} min left)` : ''}${partialWhy(full)}` }, fullCheckDone: null };
+  }
+  const previous = runs[runs.length - 2] ?? null;
+  if (latest && previous && kind(latest) === 'sweep' && kind(previous) === 'quick') {
+    const meta = readJsonOr(join(runsDir, latest, 'run.json'), {});
+    const first = new Map();
+    for (const r of rows) if (typeof r.firstSeen === 'string' && (!first.has(r.group) || byRun(r.firstSeen, first.get(r.group)) < 0)) first.set(r.group, r.firstSeen);
+    const n = [...first.values()].filter(id => id === latest).length;
+    const why = partialWhy({ wholeApp: meta?.wholeApp === true, routesGiven: meta?.routesGiven === true, skipped: meta?.skipped });
+    return { firstLook: null, fullCheckDone: { run: latest, after: previous, newGroups: n, wholeApp: meta?.wholeApp === true, text: `Full check done: ${plural(n, 'new group')}${why}` } };
+  }
+  return { firstLook: null, fullCheckDone: null };
+}
+
 // `git`: the hardened git runner of the project (runs.mjs gitRunner), to count commits with a `Nunchi-Fix:` trailer
-// after the last full check's commit; null when there is no git. `running`: a capture folder still being written.
-export function summary({ state, rows, groups, stream = 'main', runsDir, git = null, fixNeeds = new Set() }) {
+// after the last full check's commit; null when there is no git. `running`: a capture folder still being written, by a
+// writer that is still there (runs.mjs runningCaptures: the one reading of the clock and of processes here; `live`
+// replaces it in a test).
+export function summary({ state, rows, groups, stream = 'main', runsDir, git = null, fixNeeds = new Set(), live = runningCaptures(runsDir) }) {
   const latest = latestRunOf(state, stream);
+  const { firstLook, fullCheckDone } = firstRun(state, stream, runsDir, rows, live);
   const meta = latest ? readJsonOr(join(runsDir, latest, 'run.json'), {}) : {};
   const manifest = latest ? readJsonOr(join(runsDir, latest, 'manifest.json'), {}) : {};
-  const running = listRuns(runsDir).partial.length > 0;
+  const running = live.length > 0;
   const checks = fullChecks(state, stream, runsDir);
   const full = checks[checks.length - 1] ?? null, previous = checks[checks.length - 2] ?? null;
   const fixCommits = git && full ? fixCommitsSince(git, readJsonOr(join(runsDir, full, 'run.json'), {})?.commit) : null;
@@ -106,7 +161,10 @@ export function summary({ state, rows, groups, stream = 'main', runsDir, git = n
   const aiRan = (state.folds || []).some(f => f.source === 'ai' && (f.stream ?? 'main') === stream && (f.run === full || f.run === latest));
   const ai = rows.filter(r => r.source === 'ai' && !r.goneAt);
   let verdict;
-  if (running) verdict = { answer: 'too-early', text: 'Too early to say · a capture is running' };
+  // a quick first look is no verdict (design §6): too early to say until the full check lands
+  if (firstLook?.full) verdict = { answer: 'too-early', text: 'Too early to say · full check running' };
+  else if (running) verdict = { answer: 'too-early', text: 'Too early to say · a capture is running' };
+  else if (firstLook) verdict = { answer: 'too-early', text: 'Too early to say' };
   else if (!latest) verdict = { answer: 'too-early', text: 'Too early to say · nothing captured yet' };
   else if (problems.some(p => p.status === 'app-unreachable' || p.status === 'login-expired')) verdict = { answer: 'too-early', text: 'Too early to say · this run had a problem' };
   else if (seriousTotal) {
@@ -155,7 +213,7 @@ export function summary({ state, rows, groups, stream = 'main', runsDir, git = n
   const decideNow = seriousTotal && serious.decide ? serious.decide : toDecide;
   const handoff = !toDecide && toFix ? { toFix, text: `All decided. ${toFix} to fix. Go back to your AI chat and say “fix them”.`, say: 'fix them' } : null;
   return {
-    run: latest, kind: meta.kind ?? 'sweep', fullCheck: full, previousFullCheck: previous, running,
+    run: latest, kind: meta.kind ?? 'sweep', fullCheck: full, previousFullCheck: previous, running, runningRuns: live.map(x => x.run), firstLook, fullCheckDone,
     verdict, bySeverity, byStatus, standing, toDecide, decideNow, toFix, fixNeedsYou, handoff, since, confirm,
     health: { problems, blind: (latest && state.blind?.[latest]) || null, scenes: { total: scenes.length, checked: scenes.length - notSeen.length, notSeen: notSeen.length, reasons: [...new Set(notSeen.map(s => String(s.reason || s.status)))].sort() } },
     ai: { ran: aiRan, groups: new Set(ai.map(r => r.group)).size, doubleChecked: new Set(ai.filter(r => r.checked).map(r => r.group)).size,

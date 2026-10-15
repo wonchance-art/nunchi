@@ -39,6 +39,11 @@ test('emptyJson: lists emptied, counts zeroed, envelopes kept', () => {
 test('redactJson: token fields replaced at any depth', () => {
   assert.deepEqual(redactJson({ access_token: 'eyJ…', user: { id: 1, refresh_token: 'r' }, list: [{ api_key: 'k' }] }),
     { access_token: '[redacted]', user: { id: 1, refresh_token: '[redacted]' }, list: [{ api_key: '[redacted]' }] });
+  // review of PR #33: token, jwt, authorization, session and any *_token; an object under such a key is walked, and a
+  // key that only contains the word is kept
+  assert.deepEqual(redactJson({ token: 't', jwt: 'j', Authorization: 'Bearer x', session: 's', csrf_token: 'c', upload_Token: 'u', session_info: { session: 'z', expires: 3 }, tokens: 2, tokenizer: 'wordpiece', session2: 'kept' }),
+    { token: '[redacted]', jwt: '[redacted]', Authorization: '[redacted]', session: '[redacted]', csrf_token: '[redacted]', upload_Token: '[redacted]', session_info: { session: '[redacted]', expires: 3 }, tokens: 2, tokenizer: 'wordpiece', session2: 'kept' });
+  assert.deepEqual(redactJson({ session: { user: 'mina', access_token: 'a' } }), { session: { user: 'mina', access_token: '[redacted]' } });
 });
 
 test('forceResponse: error is a 500 with a server message; empty rewrites JSON only', () => {
