@@ -214,7 +214,7 @@ test('deny hook: the agent cannot write guards.json or add, remove or re-baselin
     ['Bash', { command: 'cp /tmp/weaker.json .nunchi/' }],
     ['Bash', { command: 'git checkout origin/main -- .nunchi' }],
     ['Bash', { command: 'git restore --source=HEAD~1 .nunchi/' }],
-    ['Bash', { command: `cp /tmp/weaker.json ${join(root, '.nunchi')}` }],
+    ['Bash', { command: `cp /tmp/weaker.json ${join(root, '.nunchi').replace(/\\/g, '/')}` }],
     // in any letter case (a case-insensitive disk opens the same file)
     ['Write', { file_path: join(root, '.nunchi', 'Guards.json'), content: '{}' }],
     ['Bash', { command: 'echo {} > .NUNCHI/GUARDS.JSON' }],
