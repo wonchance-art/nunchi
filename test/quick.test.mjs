@@ -3,15 +3,18 @@
 // fix loop, and the board's words ("First look: …", "Too early to say", "Full check done: …"). Invented content only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, utimesSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { execFile } from 'node:child_process';
+import { hostname } from 'node:os';
+import { execFile, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { rankQuick, quickChoice, QUICK_MAX } from '../src/quick.mjs';
 import { Recording } from '../src/network.mjs';
 import { minutesLeft } from '../src/summary.mjs';
 import * as L from '../src/ledger.mjs';
 import * as R from '../src/runs.mjs';
+import { STALE_MS } from '../src/runs.mjs';
+import { withLock } from '../src/stable.mjs';
 import * as F from '../src/fix/loop.mjs';
 import { stableJson } from '../src/stable.mjs';
 import { startBoard } from '../src/board/server.mjs';
@@ -124,6 +127,22 @@ test('merge: a request the recording holds is answered from it (as replay would)
   assert.equal(JSON.parse(again.ask('GET app:/api/new').res.body).n, 2, 'the next page load replays what was added');
   rec.loader().ask('GET app:/api/tok').add(res(4, { access_token: 'tok-secret' }));
   assert.equal(JSON.parse(rec.entries['GET app:/api/tok'][0].body).access_token, '[redacted]', 'tokens are scrubbed as when recording');
+});
+
+test('save: a lock that stays busy never loses the run — what it recorded is written beside the file, and said (review of PR #33)', () => {
+  const dir = tmp('nunchi-quick-busy-');
+  const path = join(dir, 'guest.json');
+  new Recording({ 'GET app:/a': [res(1)] }).save(path);
+  const before = readFileSync(path, 'utf8');
+  const mine = new Recording({ 'GET app:/b': [res(2)] }, { '/b': ['m'] });
+  let r;
+  withLock(path, () => { r = mine.save(path, { timeoutMs: 100 }); });                 // another capture holds it
+  assert.equal(r.saved, false);
+  assert.equal(r.side, `${path}.unsaved-${process.pid}`);
+  assert.equal(readFileSync(path, 'utf8'), before, 'the recording is untouched');
+  assert.deepEqual(Recording.load(r.side).routes, { '/b': ['m'] });
+  assert.deepEqual(mine.save(path), { saved: true }, 'free again: saved');
+  assert.deepEqual(readdirSync(dir).filter(n => n.endsWith('.lock.d')), []);
 });
 
 test('merge on save: under the person\'s lock, merged with the file as it is then; what was recorded keeps its answers; the same bytes either way', () => {

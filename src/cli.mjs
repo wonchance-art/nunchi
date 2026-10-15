@@ -491,7 +491,7 @@ if (cmd === 'setup') {
     const misses = r.manifest.scenes.reduce((n, x) => n + (x.replayMisses || 0), 0);
     const canaryCount = r.canaries ? r.canaries.planted.length : 0;
     const summary = { out: final, run: run?.id ?? null, kind: runMeta.kind, health: r.manifest.health, scenes: r.manifest.scenes.length - canaryCount, canaries: canaryCount, network: r.run.network, replayMisses: misses, skipped, findings: by, seconds: Math.round(r.totalMs / 100) / 10,
-      ...(runMeta.quick ? { quick: runMeta.quick } : {}) };
+      ...(runMeta.quick ? { quick: runMeta.quick } : {}), ...(r.run.merged ? { merged: r.run.merged } : {}), ...(r.run.recordingUnsaved ? { recordingUnsaved: r.run.recordingUnsaved } : {}) };
     if (args.json) console.log(JSON.stringify(summary, null, 2));
     else {
       console.log(`captured ${summary.scenes} scenes${canaryCount ? ` (+ ${canaryCount} canary copies)` : ''} in ${summary.seconds}s → ${final}${run ? ` (run ${run.id})` : ''}`);
@@ -505,7 +505,13 @@ if (cmd === 'setup') {
       for (const p of r.manifest.health.problems) console.log(`RUN PROBLEM ${p.status} (${p.scenes}/${p.of} screens): ${why[p.status]}`);
       console.log(`rule findings: blocker ${by.blocker} · high ${by.high} · medium ${by.medium} · low ${by.low}`);
       console.log(`network: ${Object.entries(r.run.network).map(([p, m]) => `${p} ${m}`).join(' · ')}`);
-      if (Object.values(r.run.network).includes('merge')) console.log('merge: the recording lacked some of these screens; they were recorded and added to it, and the screens it held were replayed (nothing they asked for was sent)');
+      // which screens were merged (review of PR #33): the replayed screens' data came from the recording only; pages,
+      // scripts and styles load from the app in every mode
+      for (const [p, m] of Object.entries(r.run.merged || {})) {
+        if (m.recorded.length) console.log(`merge (${p}): recorded ${m.recorded.join(', ')} (the recording lacked ${m.recorded.length === 1 ? 'it' : 'them'}: ${m.recorded.length === 1 ? 'its' : 'their'} data requests went to the app once and were added); the screens it held replayed their data from it`);
+        if (m.failed.length) console.log(`merge (${p}): not recorded ${m.failed.join(', ')} (the screen failed: nothing it was answered is kept, and it is recorded again next time)`);
+      }
+      for (const [p, side] of Object.entries(r.run.recordingUnsaved || {})) console.error(`warning: the recording of ${p} was busy (another capture was saving it), so what this run recorded is in ${side}; the next capture records those screens again`);
       if (misses) console.log(`replay misses: ${misses} request(s) were not in the recording and were not sent (replay never goes live); re-record with --network record`);
       for (const s of skipped) console.log(`  skipped ${s.route} (${s.reason})`);
     }

@@ -126,8 +126,9 @@ export function requestKey(method, url, body, appOrigin) {
 }
 
 // Tokens never land in a recording. Replay does not match on auth headers, so redacted
-// values still replay fine.
-const SECRET_FIELDS = /^(access_token|refresh_token|provider_token|provider_refresh_token|id_token|session_token|api_key|apikey|secret|client_secret|password)$/i;
+// values still replay fine. String values only: `token`, `jwt`, `authorization`, `session` and any `*_token` (since the
+// review of PR #33; `access_token`, `refresh_token`, `id_token`… included), keys, secrets and passwords.
+const SECRET_FIELDS = /^(token|jwt|authorization|session|[a-z0-9_]*_token|api_key|apikey|secret|client_secret|password)$/i;
 export function redactJson(value) {
   if (Array.isArray(value)) return value.map(redactJson);
   if (value && typeof value === 'object') {
@@ -177,7 +178,7 @@ export function forceResponse(state, res) {
 const isMap = x => !!x && typeof x === 'object' && !Array.isArray(x);
 const sameList = (a, b) => a.length === b.length && a.every((x, i) => stableJson(x) === stableJson(b[i]));
 export class Recording {
-  constructor(entries = {}, routes = {}) { this.entries = entries; this.routes = routes; }
+  constructor(entries = {}, routes = {}) { this.entries = entries; this.routes = routes; this.before = new Map(); }
   // A recording that does not parse is an error with a way out, never a crash or an empty recording.
   static load(path) {
     if (!existsSync(path)) return null;
@@ -200,47 +201,77 @@ export class Recording {
   // Two recordings of one person as one (`base`: the one on disk; `mine`: this capture's). A request the base holds
   // keeps its responses — what a screen already recorded was answered stays what it is answered, so strict replay holds
   // for it — unless mine holds the same responses and more after them (a recording run that saw more of one page
-  // load); a request only mine holds is added. Screens held: both (one that covers every route makes the result cover
-  // every route). The same two recordings always give the same bytes: keys are written sorted (stableJson).
-  static merge(base, mine) {
+  // load); a request only mine holds is added. `replace` (`--network record`, review of PR #33): what mine recorded
+  // replaces the base's answers for those requests, so recording again is the way out of a stale or bad answer.
+  // Screens held: both (one that covers every route makes the result cover every route). The same two recordings
+  // always give the same bytes: keys are written sorted (stableJson).
+  static merge(base, mine, { replace = false } = {}) {
     const entries = { ...base.entries };
     for (const [k, list] of Object.entries(mine.entries)) {
       const was = entries[k];
-      if (!Array.isArray(was) || !was.length) entries[k] = list;
+      if (!list.length) continue;
+      if (replace || !Array.isArray(was) || !was.length) entries[k] = list;
       else if (list.length > was.length && sameList(was, list.slice(0, was.length))) entries[k] = list;
     }
     const routes = base.routes === null || mine.routes === null ? null : {};
     if (routes) for (const r of [base.routes, mine.routes]) for (const [route, vps] of Object.entries(r || {})) routes[route] = [...new Set([...(routes[route] || []), ...vps])].sort();
     return new Recording(entries, routes);
   }
+  // Takes back what this capture added for these requests (the screens that added them failed, review of PR #33): a
+  // request it added is removed, one it extended is cut back to what it held before.
+  forget(keys) {
+    for (const k of keys) {
+      if (!this.before.has(k)) continue;
+      const n = this.before.get(k);
+      if (n === 0) delete this.entries[k]; else this.entries[k].length = n;
+      this.before.delete(k);
+    }
+  }
   // Saved under the person's lock and merged with what is on disk then (another capture may have saved since this
   // one loaded it), written in one step and owner-only (it holds the app's API responses): a capture reading it, or
   // one that crashes while saving, never sees half a recording, and two captures saving at once lose nothing.
-  // A file that no longer parses is replaced, as before.
-  save(path) {
+  // A file that no longer parses is replaced, as before. A lock that stays busy (another capture saving for longer than
+  // `timeoutMs`, twice) never loses the run: what this capture recorded is written beside it,
+  // `<person>.json.unsaved-<pid>`, and said (→ { saved: false, side }); else → { saved: true }.
+  save(path, { replace = false, timeoutMs = 5000 } = {}) {
     privateDir(dirname(path));                       // the lock is made in the folder: it is owner-only first (D12)
-    withLock(path, () => {
+    const write = () => {
       let disk = null;
       try { disk = Recording.load(path); } catch (e) { if (e.code !== 'BAD_RECORDING') throw e; }
-      writeStable(path, (disk ? Recording.merge(disk, this) : this).doc());
-    });
+      writeStable(path, (disk ? Recording.merge(disk, this, { replace }) : this).doc());
+    };
+    for (const wait of [timeoutMs, timeoutMs * 4]) {
+      try { withLock(path, write, { timeoutMs: wait }); return { saved: true }; }
+      catch (e) { if (e.code !== 'LOCKED') throw e; }
+    }
+    const side = `${path}.unsaved-${process.pid}`;
+    writeStable(side, this.doc());
+    return { saved: false, side };
   }
+  // One page load's view of the recording. `added`: the requests it added responses for; `used`: those it was
+  // answered from the recording.
   loader() {
     const counters = new Map();
     const next = key => { const i = counters.get(key) || 0; counters.set(key, i + 1); return i; };
+    const added = new Set(), used = new Set();  // (this.before: request → how many responses it held before this capture added any)
     const addAt = (key, i, res) => {
-      const list = (this.entries[key] ||= []);
+      const list = this.entries[key] || [];
       if (list.length === i) {
         const body = isJson(res.contentType) ? (() => { try { return JSON.stringify(redactJson(JSON.parse(res.body))); } catch { return res.body; } })() : res.body;
+        if (!this.before.has(key)) this.before.set(key, list.length);
         list.push({ status: res.status, contentType: res.contentType, body });
+        this.entries[key] = list;
+        added.add(key);
       }
     };
     const fresh = new Set();                    // requests this page load found missing from the recording (merge)
     return {
+      added, used,
       add: (key, res) => addAt(key, next(key), res),
       take: key => {
         const list = this.entries[key];
         if (!list || !list.length) return null;
+        used.add(key);
         return list[Math.min(next(key), list.length - 1)];
       },
       // Merge (a screen the recording lacks): a request the recording holds is answered from it, as replay answers it,
@@ -249,7 +280,7 @@ export class Recording {
       ask: key => {
         const i = next(key);
         const list = this.entries[key];
-        if (!fresh.has(key) && list && list.length) return { res: list[Math.min(i, list.length - 1)] };
+        if (!fresh.has(key) && list && list.length) { used.add(key); return { res: list[Math.min(i, list.length - 1)] }; }
         fresh.add(key);
         return { res: null, add: res => addAt(key, i, res) };
       },

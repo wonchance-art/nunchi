@@ -463,7 +463,8 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
     modes[person] = network === 'auto' ? (existing ? 'merge' : path ? 'record' : 'live') : network;
     if (modes[person] === 'replay' && !existing) throw Object.assign(new Error(`no recording for "${person}" at ${path}; run once with --network record`), { code: 'NO_RECORDING' });
     if (modes[person] !== 'live' && !path) throw Object.assign(new Error('record/replay needs a recording folder'), { code: 'BAD_ARGS' });
-    recordings[person] = existing || new Recording();
+    // recording starts empty: what it records replaces the file's answers for those requests when it is saved
+    recordings[person] = modes[person] === 'record' ? new Recording({}, existing?.routes === null ? null : {}) : existing || new Recording();
   }
   const ids = new Map();
   const checkIds = list => {
@@ -479,6 +480,7 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   const t0 = Date.now();
   const entries = []; const findings = []; const scriptMap = new Map(); const timing = []; const sceneLinks = new Map(); const rowsByScene = new Map(); const controlsByScene = new Map();
   const recorded = new Map();                                   // normal screens captured while recording or merging
+  const touched = [];                                           // per scene: what it added to the recording, and used
   const run = async (s, vp, state) => {
     const person = s.person || 'guest';
     const route = s.route || s.path;
@@ -488,9 +490,11 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
     let mode = state === 'normal' ? modes[person] : derivedMode(modes[person]);
     if (mode === 'merge') mode = recordings[person].covers(route, vp) ? 'replay' : 'merge';
     if (mode === 'merge') merged.add(person);
-    if (state === 'normal' && (mode === 'record' || mode === 'merge')) recorded.set(scene.id, { person, route, vp });
+    if (state === 'normal' && (mode === 'record' || mode === 'merge')) recorded.set(scene.id, { person, route, vp, mode });
+    const loader = recordings[person].loader();
+    touched.push({ person, normal: sceneId(route, person, 'normal', vp), loader });
     const t = Date.now();
-    const r = await captureOne(browser, baseUrl, scene, { out, clock, locale, timezone, timeout, storageState: person === 'signed-in' ? storageState : undefined, strictPath, allowHosts, mode, loader: recordings[person].loader(), png });
+    const r = await captureOne(browser, baseUrl, scene, { out, clock, locale, timezone, timeout, storageState: person === 'signed-in' ? storageState : undefined, strictPath, allowHosts, mode, loader, png });
     timing.push({ scene: scene.id, ms: Date.now() - t });
     entries.push(r.entry); findings.push(...r.findings); sceneLinks.set(r.entry.id, r.links); rowsByScene.set(r.entry.id, r.styles); if (r.controls) controlsByScene.set(r.entry.id, r.controls);
     for (const sc of r.scripts) if (!scriptMap.has(sc.path)) scriptMap.set(sc.path, sc.body);
@@ -532,15 +536,35 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
     for (const e of entries) if (lost.has(e.id)) { e.status = 'not-seen'; e.reason = 'login-expired'; e.findings = 0; }
     for (let i = findings.length - 1; i >= 0; i--) if (lost.has(findings[i].scene)) findings.splice(i, 1);
   }
-  // What each recording now holds: the normal screens captured while recording or merging (one that did not load, or
-  // showed a sign-in page because the login expired, is recorded again next time). Saved merged with the file on disk.
+  // What each recording now holds: the normal screens captured while recording or merging. A screen that failed — not
+  // captured (no page, left the app), a server error page (5xx), or a sign-in page because the login expired — is not
+  // held, and what it added to the recording is taken back (unless a screen that worked was answered from it, which
+  // its next replay needs): it is recorded again next time, never replayed from a bad answer (review of PR #33).
+  const held = new Set(), mergedRoutes = {};
   for (const e of entries) {
     const r = recorded.get(e.id);
-    if (r && e.status === 'captured') recordings[r.person].recorded(r.route, r.vp);
+    if (!r) continue;
+    const ok = e.status === 'captured' && !(e.httpStatus >= 500);
+    if (ok) { held.add(e.id); recordings[r.person].recorded(r.route, r.vp); }
+    if (r.mode === 'merge') ((mergedRoutes[r.person] ||= { recorded: new Set(), failed: new Set() })[ok ? 'recorded' : 'failed']).add(r.route);
   }
-  for (const person of persons) if (modes[person] === 'record' || merged.has(person)) recordings[person].save(join(recordingDir, `${person}.json`));
+  for (const person of persons) {
+    const failed = t => recorded.has(t.normal) && !held.has(t.normal);
+    const mine = touched.filter(t => t.person === person);
+    const keep = new Set(mine.filter(t => !failed(t)).flatMap(t => [...t.loader.added, ...t.loader.used]));
+    recordings[person].forget(new Set(mine.filter(failed).flatMap(t => [...t.loader.added]).filter(k => !keep.has(k))));
+  }
+  const unsaved = {};
+  for (const person of persons) {
+    if (modes[person] !== 'record' && !merged.has(person)) continue;
+    const s = recordings[person].save(join(recordingDir, `${person}.json`), { replace: modes[person] === 'record' });
+    if (!s.saved) unsaved[person] = s.side;
+  }
   // how this run got each person's data: `merge` only when a screen of theirs was merged; one that held them all replayed
   for (const person of persons) if (modes[person] === 'merge' && !merged.has(person)) modes[person] = 'replay';
+  // which screens were merged, per person: recorded, or failed (recorded again next time)
+  const mergedInfo = Object.fromEntries(Object.entries(mergedRoutes).sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([p, m]) => [p, { recorded: [...m.recorded].sort(), failed: [...m.failed].filter(r => !m.recorded.has(r)).sort() }]));
   // L3: the link graph. Routes come from discover when the CLI has them (complete); otherwise only the
   // captured routes are known and links elsewhere are not judged.
   const flowRoutes = flowOpts.routes || [...new Set(scope.map(s => s.route || s.path))].sort();
@@ -580,7 +604,8 @@ export async function capture({ baseUrl, scenes, out, viewports = ['m', 'd'], st
   const manifest = { schema: 1, health, baseUrl, viewports: viewports.map(v => ({ id: v, ...VIEWPORTS[v] })), clock: new Date(clock).toISOString(), states, scenes: canaryEntries.length ? [...entries, ...canaryEntries] : entries };
   // How this run got its data (record vs replay) is run metadata, not evidence: kept beside timing.
   // a run that picked its screens (quick) names the routes it captured
-  const runInfo = { ...runMeta, ...(pick ? { scope: { ...(runMeta.scope || {}), routes: [...new Set(scope.map(s => s.route || s.path))].sort() } } : {}), network: modes, health };
+  const runInfo = { ...runMeta, ...(pick ? { scope: { ...(runMeta.scope || {}), routes: [...new Set(scope.map(s => s.route || s.path))].sort() } } : {}), network: modes,
+    ...(Object.keys(mergedInfo).length ? { merged: mergedInfo } : {}), ...(Object.keys(unsaved).length ? { recordingUnsaved: unsaved } : {}), health };
   writeStable(join(out, 'manifest.json'), manifest);
   // fingerprint (one defect wherever it shows) and group (the same defect across routes): spec §5
   const ledgerFindings = annotate(findings);
