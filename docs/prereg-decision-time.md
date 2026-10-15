@@ -3,6 +3,9 @@
 Status: **draft, not registered** (2026-10-15 KST). Registered when the hash table below is filled and committed,
 before the first participant's session. Common rules: [prereg-README.md](prereg-README.md).
 
+The technical choices T1–T11 of [prereg-README.md](prereg-README.md) apply here as defaults unless the owner overrides
+them before registration; the owner decisions D1–D10 are recorded there (2026-10-15 KST).
+
 Covers design 0.1-c §9.6 and §3.5 and spec §8 "Decision time: median ≤ 10 s per human decision". The board measures
 the time (spec §7.2 *Decision time*: from showing a group to its first decision key, paused while the tab is hidden
 and after 30 s idle, capped at 120 s, kept in `state/metrics.json`, never sent).
@@ -27,13 +30,14 @@ study-app=<folder> --key gold=<file>`; never typed by hand.
 
 ## 2. Before registration
 
-Owner decisions ([prereg-README.md](prereg-README.md)): **D5** (≥ 5 participants, or the gate becomes "reported, not
-gated" for 0.1), **D4** (the participants and the gold judge).
+Decided 2026-10-15 KST ([prereg-README.md](prereg-README.md)): **D5** gated if the owner names ≥ 5 non-builder
+participants by the field round; otherwise "reported, not gated" for 0.1 (§8). Still open: **D4** the owner names the
+participants and reviewer A (the second gold judge).
 
-To build (in the engine or scorer set):
-1. **Study mode** for the board: a fixed list order per participant (from `orders`), batch keys off, one study copy
+To build (README builds B14 and B15, in the engine or scorer set):
+1. **Study mode** for the board (B14): a fixed list order per participant (from `orders`), batch keys off, one study copy
    per participant so each has its own `metrics.json`. Today the list order is the board's own (severity first).
-2. **`bench/decision-study.mjs`**: prepares the study copies from one sweep of the study app and the gold file, then
+2. **`bench/decision-study.mjs`** (B15): prepares the study copies from one sweep of the study app and the gold file, then
    joins each participant's `metrics.json` with their decision files and the gold file, and prints §4–§5.
 
 ## 3. Sample and procedure
@@ -90,13 +94,14 @@ Both are point estimates, as the design states them. Worked numbers: 80/100 agre
 
 | Role | Who | Does |
 |---|---|---|
-| Owner | the owner | D4, D5; one gold judge; does the task apart |
-| Gold judge | a person who did not build nunchi and is not a participant | the second judge of class and gold |
+| Owner | the owner | names the participants and reviewer A (D4); one gold judge; does the task apart |
+| Gold judge | reviewer A, a person who did not build nunchi and not a participant | the second judge of class and gold (≈ 1 h) |
 | Participants | ≥ 5 people who did not build nunchi | decide the 30 groups |
 | Moderator | a person (the owner may moderate) | reads the briefing, notes interruptions, never helps decide |
 | Operator | an agent session or a person | builds the study copies, runs the scorer |
 
 ## 8. Amendments
 
-The common policy holds. If D5 makes the measure "reported, not gated", §4's rules are reported as targets and the
+The common policy holds. If fewer than 5 participants are named by the field round (D5), the measure is "reported,
+not gated": §4's rules are reported as targets and the
 spec §8 row says so.

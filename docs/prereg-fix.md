@@ -3,6 +3,9 @@
 Status: **draft, not registered** (2026-10-15 KST). Registered when the hash table below is filled and committed,
 before the base sweep of §3. Common rules: [prereg-README.md](prereg-README.md).
 
+The technical choices T1–T11 of [prereg-README.md](prereg-README.md) apply here as defaults unless the owner overrides
+them before registration; the owner decisions D1–D10 are recorded there (2026-10-15 KST).
+
 Covers design 0.1-c §9.4 (trials, functional checks, reporting, field sample, detector sensitivity, re-check
 validation), spec §8 "Fix loop" (≥ 90% of seeded defects marked *fix* gone on re-capture, 0 caused regressions) and
 the list in spec §9.5. `bench/fix-gate.mjs` (M3) is the harness; a harness run is not this gate.
@@ -30,27 +33,29 @@ fix-sets=<folder>`; never typed by hand.
 
 ## 2. Before registration
 
-Owner decisions ([prereg-README.md](prereg-README.md)): **D6** (the engine runs the repo's checks after a person
-approves the check profile), **D7** (the app: pegroom now), **D8** (who builds the sets), **D4** (the diff reviewer).
+Decided 2026-10-15 KST ([prereg-README.md](prereg-README.md)): **D6** yes, the engine runs the repo's checks after a
+person approves the check profile; **D7** pegroom, now; **D8** the sets are built by a different vendor's model session
+that never read the fix judge, and reviewer A spot-checks 10 of their items. Still open: **D4** the owner names
+reviewer A (spot check, diff review).
 
-To build (spec §9.5, plus what this protocol adds; each in the scorer set):
-1. **Functional checks** in `bench/fix-gate.mjs`: declarative, run with the bundled browser after a trial ends, on the
+To build (spec §9.5, plus what this protocol adds; README builds B9–B13, each in the scorer set):
+1. **Functional checks** (B9) in `bench/fix-gate.mjs`: declarative, run with the bundled browser after a trial ends, on the
    final code: the route answers and renders; a control is visible with its role and name; an image has a natural
    size; an element's box fits its container; a link's target answers 200.
-2. **Sets with expectations**: `planted`, `clean` and `blind` files in the recorded-fix format plus `expect`; the
+2. **Sets with expectations** (B10): `planted`, `clean` and `blind` files in the recorded-fix format plus `expect`; the
    harness tallies *detected* and *false alarm* per §5.
-3. **Fixer mode**: per trial the harness prepares a fresh copy whose state is seeded from one base sweep (so AI items
+3. **Fixer mode** (B11): per trial the harness prepares a fresh copy whose state is seeded from one base sweep (so AI items
    need one hunt and verification, not one per trial), with the seed's group decided Fix, and waits for a fresh fixer
    session; it then reads the engine's record. Today it applies recorded edits instead.
-4. **A person approves the check profile** in the board, as a user does; the harness stops approving it as the
+4. **A person approves the check profile** (B12) in the board, as a user does; the harness stops approving it as the
    operator. When the approval record does not bind the folder, one approval per app is copied into each trial and
    said in the report; otherwise one per trial.
-5. **`bench/recheck-gate.mjs`**: builds §6's cases into re-check plans (`recheck --plan`, the product path, with its
+5. **`bench/recheck-gate.mjs`** (B13): builds §6's cases into re-check plans (`recheck --plan`, the product path, with its
    controls) and scores the answers from a key kept outside the project.
 
 ## 3. Sample and procedure (Part A: the seeded trials — the gate)
 
-**App:** pegroom (D7). The fix loop was never run or tuned on it; its recall results are seen (spec §9.4), which
+**App:** pegroom (D7, decided). The fix loop was never run or tuned on it; its recall results are seen (spec §9.4), which
 does not touch this gate. Pebble is excluded: the recorded edits and two engine fixes were tuned there (spec §9.5).
 
 1. Register, commit, push.
@@ -95,7 +100,8 @@ AI items.
 
 ## 5. Part B: detector sensitivity
 
-Built by the set builder (D8): not the fixer, and someone who has not read `src/fix/judge.mjs`, spec §6.5, design §4.5
+Built by the set builder (D8: a different vendor's model session; reviewer A spot-checks 10 items for realism before
+the first trial): not the fixer, and someone who has not read `src/fix/judge.mjs`, spec §6.5, design §4.5
 or this file's thresholds. They work from a brief kept in `@fix-sets` (what is in and out of scope, in the words
 below) and a written taxonomy of regressions (a control moved, hidden or renamed, a link broken, an overflow, a lost
 image, a contrast drop, a shifted layout). Every item is a recorded fix of a pegroom seed (the edit that removes the
@@ -148,11 +154,11 @@ the agent reports them.
 
 | Role | Who | Does |
 |---|---|---|
-| Owner | the owner | D4, D6, D7, D8; decides Fix and approves the check profile in the board |
+| Owner | the owner | names reviewer A (D4); decides Fix and approves the check profile in the board |
 | Fixer | a fresh agent session per trial, through the skill | fixes; never reads `@fix-sets` |
-| Set builder | not the fixer: a person, or a different vendor's model session that never read the judge (D8) | builds `@fix-sets` and its taxonomy |
+| Set builder | not the fixer: a different vendor's model session that never read the judge (D8) | builds `@fix-sets` and its taxonomy; reviewer A spot-checks 10 items (≈ 1 h) |
 | Re-checkers | fresh agent contexts | answer re-check packets |
-| Diff reviewer | a person who did not build nunchi | reviews 10 diffs blind to outcome |
+| Diff reviewer | reviewer A, a person who did not build nunchi | reviews 10 diffs blind to outcome (≈ 1 h) |
 | Operator | an agent session or a person | runs the harness; never edits a fix |
 
 ## 10. Amendments

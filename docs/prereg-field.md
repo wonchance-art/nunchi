@@ -3,6 +3,9 @@
 Status: **draft, not registered** (2026-10-15 KST). Registered when the hash table below is filled and committed,
 before the search of §3 is run. Common rules: [prereg-README.md](prereg-README.md).
 
+The technical choices T1–T11 of [prereg-README.md](prereg-README.md) apply here as defaults unless the owner overrides
+them before registration; the owner decisions D1–D10 are recorded there (2026-10-15 KST).
+
 Covers design 0.1-c §9.8 and §9.9 (stop/pivot) and spec §8 "Field test: 3 public vibe-coded apps: ≥ 5 findings per
 app that a human judges 'didn't know, worth fixing'" and "Stop / pivot (H16)". Round 1 (spec §9.2) was a preview with
 rule and computed lenses only; its three apps are seen. Round 2 is the gate. Round 3 runs only after a fix-and-rerun
@@ -28,10 +31,11 @@ by hand.
 
 ## 2. Before registration
 
-Owner decisions ([prereg-README.md](prereg-README.md)): **D4** (the second judge and the manual-pass reviewer),
-**D9** (round 3 on fresh apps), **D10** (upstream issues, the secondary measure).
+Decided 2026-10-15 KST ([prereg-README.md](prereg-README.md)): **D9** round 3 on three fresh apps, chosen by §3's
+rule; **D10** the owner files the counted findings upstream by hand (§6). Still open: **D4** the owner names reviewer A
+(the second judge) and reviewer B (the manual passes).
 
-To build: `bench/field-tally.mjs`, a tally of the judges' sheets (one JSON per app: each group, each judge's answers to
+To build (README build B16): `bench/field-tally.mjs`, a tally of the judges' sheets (one JSON per app: each group, each judge's answers to
 §4's questions) into §4's counts. Counting by hand is not allowed.
 
 ## 3. App selection (registered now, run once)
@@ -85,7 +89,9 @@ with (d) yes that would otherwise count are **counted apart** (reported, not in 
 
 - Counted findings per lens and per app; the counted-apart (axe/Lighthouse) findings; the judges' agreement on (a)–(d).
 - The manual pass's defects that nunchi missed (a recall hint on real apps, not a recall measure).
-- Upstream acknowledgement within 14 days (D10): of the counted findings filed, how many a maintainer acknowledged.
+- Upstream acknowledgement within 14 days (D10): after the round's count is final, the owner files the counted findings
+  by hand from their own account, at most 5 per repository, in neutral wording; reported: how many a maintainer
+  acknowledged within 14 days.
 - Rule precision on these apps: in [prereg-precision.md](prereg-precision.md) §6.
 - Sweep time and tokens per app.
 
@@ -98,9 +104,9 @@ with (d) yes that would otherwise count are **counted apart** (reported, not in 
 
 | Role | Who | Does |
 |---|---|---|
-| Owner | the owner | D4, D9, D10; first judge; files upstream issues if D10 says so |
-| Second judge | a person who did not build nunchi | judges apart from the owner |
-| Manual-pass reviewer | a person who did not build nunchi and is neither judge | 15 minutes per app before any output |
+| Owner | the owner | names reviewers A and B (D4); first judge; files the upstream issues by hand (D10) |
+| Second judge | reviewer A, a person who did not build nunchi | judges apart from the owner, after labelling (≈ 2 h per app) |
+| Manual-pass reviewer | reviewer B, a person who did not build nunchi and is neither judge | 15 minutes per app before any output |
 | Operator | an agent session or a person | runs the search, the eligibility checks and the sweeps |
 
 ## 9. Amendments

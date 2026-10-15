@@ -4,6 +4,9 @@ Status: **draft, not registered** (2026-10-15 KST). It becomes registered when t
 `scripts/prereg-hash.mjs --fill` and committed, before either app is built or captured. Common rules (sides,
 amendments, roles, registration steps): [prereg-README.md](prereg-README.md).
 
+The technical choices T1–T11 of [prereg-README.md](prereg-README.md) apply here as defaults unless the owner overrides
+them before registration; the owner decisions D1–D10 are recorded there (2026-10-15 KST).
+
 Covers design 0.1-c §9.1 (AI recall), §9.3 (clean scenes), §9.9 (held-out apps, live stability) and these rows of
 spec §8: recall of rule lenses, recall of AI lenses, false positives on clean scenes, determinism, fingerprint
 stability, held-out benchmark. Pegroom (spec §9.4) was held-out app 1; it is seen now. Pebble is the development set:
@@ -30,27 +33,28 @@ author until §3's last step; `@key-2` and `@key-3` are their answer keys, kept 
 
 ## 2. Before registration
 
-Owner decisions ([prereg-README.md](prereg-README.md)): **D1** (two new apps, who writes them, the token budget) and
-**D2** (Codex access before step 4, so the Codex comparison runs on the same frozen engine,
-[prereg-codex.md](prereg-codex.md)). People: **D4** (the second labeller and the adjudicator).
+Decided 2026-10-15 KST ([prereg-README.md](prereg-README.md)): **D1** two new invented apps and their keys, written by
+a different vendor's model session that never tuned a lens (about 15M hunting tokens per app for 3 runs); **D2** Codex
+access before the apps are captured, so the Codex comparison runs on the same frozen engine
+([prereg-codex.md](prereg-codex.md)). Still open: **D4** the owner names reviewer A (second labeller, adjudicator).
 
-To build (each lands in the scorer or engine set above, so it is hashed):
-1. **Plan salt.** `hunt --plan --salt <n>`: the salt enters the reference scene's hash (`pickReference`), so each run
+To build (README builds B1–B5; each lands in the scorer or engine set above, so it is hashed):
+1. **Plan salt** (B1). `hunt --plan --salt <n>`: the salt enters the reference scene's hash (`pickReference`), so each run
    compares a scene with another reference. Salt 0 keeps today's plans byte for byte (a contract test).
-2. **Packets** (`bench/ai-gate.mjs --packets`): units from a seeded random sample of the plan with at least 3 non-seed
+2. **Packets** (B2, `bench/ai-gate.mjs --packets`): units from a seeded random sample of the plan with at least 3 non-seed
    units per seed unit, interleaved in a seeded order, plus the clean units and canary copies; `--order <seed>`. The
    hunter brief is unchanged.
-3. **Location scorer** (`bench/score.mjs`): a hunter claim hits a seed only at the seed's location: the same element
+3. **Location scorer** (B3, `bench/score.mjs`): a hunter claim hits a seed only at the seed's location: the same element
    (selector equal after normalisation, or an ancestor or descendant of it, or a box overlapping at least half of the
    smaller one, as a canary hit) or a `file:line` inside the seed's line range; lens and route must match, and the
    checklist item when the seed names one. Claims that match a seed's lens and route but not its location are listed
    for blind adjudication (§6).
-4. **Run tally** (`bench/ai-gate.mjs --score`): per seed, found in how many of the 3 runs; the primary and secondary
+4. **Run tally** (B4, `bench/ai-gate.mjs --score`): per seed, found in how many of the 3 runs; the primary and secondary
    statistics of §4–§5 through `scripts/prereg-stats.mjs`.
-5. **Answer-key schema**: each AI seed carries its location (`at`: selector or `aria=` node, box, or `file` and
+5. **Answer-key schema** (B5): each AI seed carries its location (`at`: selector or `aria=` node, box, or `file` and
    `lines`), its checklist item when it has one, and `offChecklist: true` when no checklist item covers it.
 
-Supplied by the seed author (§7), per app:
+Supplied by the seed author (D1, §7), per app:
 - an invented app (no real product's content, copy or screens) on a stack nunchi supports (spec §2.5: Next.js app or
   pages router, React Router, TanStack Router); the two apps use two different stacks, and at most one shares a stack
   with Pebble (Next.js app router) or pegroom (React Router);
@@ -137,12 +141,12 @@ the gate; it decides how a lens ships.
 
 | Role | Who | Does |
 |---|---|---|
-| Owner | the owner | decisions D1, D2, D4; approves the registration; first labeller |
-| Seed author and key custodian | a different vendor's model session, or a person, that never tuned a lens | writes both apps, the taxonomy and the keys; keeps them outside the repository until step 8; gives the keys for scoring |
+| Owner | the owner | names reviewer A (D4); approves the registration; first labeller |
+| Seed author and key custodian | a different vendor's model session that never tuned a lens (D1) | writes both apps, the taxonomy and the keys; keeps them outside the repository until step 8; gives the keys for scoring |
 | Operator | an agent session or a person that never opens the apps' source or the keys | runs steps 2–7 |
 | Hunters, verifiers | fresh agent contexts, one per packet | read their packet's files only |
-| Labellers | the owner and the second labeller (a person who did not build nunchi) | label the AI claims on clean scenes (rubric of [prereg-precision.md](prereg-precision.md)) |
-| Adjudicator | a person who did not build nunchi and is not the seed author | decides §6's cases blind to runs and agents |
+| Labellers | the owner and reviewer A (a person who did not build nunchi) | label the AI claims on clean scenes (rubric of [prereg-precision.md](prereg-precision.md)) |
+| Adjudicator | reviewer A (a person who did not build nunchi, not the seed author) | decides §6's cases blind to runs and agents |
 
 ## 8. Amendments
 

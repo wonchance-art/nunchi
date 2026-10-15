@@ -4,6 +4,9 @@ Status: **draft, not registered** (2026-10-15 KST). Registered with the held-out
 ([prereg-heldout.md](prereg-heldout.md)), at the same engine, before either held-out app is captured. Common rules:
 [prereg-README.md](prereg-README.md).
 
+The technical choices T1–T11 of [prereg-README.md](prereg-README.md) apply here as defaults unless the owner overrides
+them before registration; the owner decisions D1–D10 are recorded there (2026-10-15 KST).
+
 Covers design 0.1-c §9.7 (A)–(D) and spec §8 "Compatibility: same benchmark results from Claude Code and Codex CLI".
 The design names the two agents; neither is a model name.
 
@@ -28,13 +31,14 @@ registered in [prereg-heldout.md](prereg-heldout.md): both agents get the same p
 
 ## 2. Before registration
 
-Owner decision ([prereg-README.md](prereg-README.md)): **D2**: Codex CLI access (an installed, signed-in Codex CLI the
-operator may run), available before the held-out apps are captured. If it comes later, the held-out apps are seen by
-then and (C) is reported as not blind.
+Decided 2026-10-15 KST ([prereg-README.md](prereg-README.md)): **D2** yes, before the held-out capture. The owner
+provides an installed, signed-in Codex CLI the operator may run, before step 3 of the held-out procedure. If it arrives
+later anyway, the held-out apps are seen by then and (C) is reported as not blind.
 
-To build: `bench/codex-gate.mjs`: hands each held-out packet to a fresh Codex CLI session (one per packet, packet
-files only, the same hunter brief), collects the answers in the `bench/ai-gate.mjs --score` layout, and runs (A)'s
-byte comparison. It never calls a model on its own; the operator starts the sessions.
+To build (README build B6, with B1–B4 shared with the held-out gate): `bench/codex-gate.mjs` hands each held-out
+packet to a fresh Codex CLI session (one per packet, packet files only, the same hunter brief), collects the answers in
+the `bench/ai-gate.mjs --score` layout, and runs (A)'s byte comparison. It never calls a model on its own; the
+operator starts the sessions.
 
 ## 3. Procedure and pass rules
 
@@ -84,7 +88,7 @@ partly counts as answered with its cells not seen. A seed excluded from the held
 
 | Role | Who | Does |
 |---|---|---|
-| Owner | the owner | D2: Codex access |
+| Owner | the owner | provides Codex CLI access before the held-out capture (D2) |
 | Operator | a person, or an agent session with Codex CLI access, that never opens the apps' source or the keys | runs the Codex sessions and the comparison |
 | Hunters | fresh Codex CLI sessions, one per packet | read their packet's files only |
 | Seed author and key custodian | as in the held-out pre-registration | gives the keys for scoring |
