@@ -790,7 +790,7 @@ if (cmd === 'setup') {
     if (args.json) console.log(JSON.stringify({ ...r.verify, folded }, null, 2));
     else {
       const c = r.verify.claims, d = r.verify.decoys;
-      console.log(`verified by ${r.verify.verifier.label}${r.verify.verifier.vendor ? ` (${r.verify.verifier.vendor})` : ''}: confirmed ${c.confirmed} · rejected ${c.rejected} · insufficient ${c.insufficient}${c.unanswered ? ` · unanswered ${c.unanswered}` : ''}`);
+      console.log(`verified by ${r.verify.verifier.label}${r.verify.verifier.vendor ? ` (${r.verify.verifier.vendor}, as declared)` : ''}${r.verify.verifier.sameVendor ? `, a same-model check for the ${r.verify.verifier.sameVendor} claim(s) its own vendor hunted` : ''}: confirmed ${c.confirmed} · rejected ${c.rejected} · insufficient ${c.insufficient}${c.unanswered ? ` · unanswered ${c.unanswered}` : ''}`);
       console.log(`decoys passed through: ${d.passedThrough}/${d.answered}${d.answered < d.total ? ` (${d.total - d.answered} unanswered)` : ''}`);
       if (r.verify.suspect) console.log(`SUSPECT: ${r.verify.suspectReason}. This run's verifications are marked suspect; verify again in a fresh context (verify --plan --again).`);
       else if (r.verify.outcome === 'too-few-decoys') console.log(`NOT DOUBLE-CHECKED: ${r.verify.tooFewDecoys}. The verdicts are recorded, but they count as no double-check: \`findings\` keeps these AI findings with those not double-checked. A run that captures more screens offers more decoys.`);

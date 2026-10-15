@@ -5,12 +5,19 @@
 import { sha, stableJson } from './stable.mjs';
 import { ariaRoleName } from './ai-identity.mjs';
 import { WORDS } from './board/shared.mjs';
+import { agentList, sameName } from './agents.mjs';
 
 export const DECOY_SHARE = 0.2;              // share of packets that are decoys
 export const SUSPECT_PASS_THROUGH = 0.1;     // decoy pass-through above this → the run's verifications are suspect
 export const VERDICTS = ['confirmed', 'rejected', 'insufficient'];
 export const SEVERITIES = ['blocker', 'high', 'medium', 'low'];
 export const SAME_MODEL = 'same-model check';
+export const CROSS_VENDOR = 'cross-vendor';
+// Who checked a claim (design §7, H7): `cross-vendor` when the verifier's declared vendor (`--vendor`) differs from the
+// vendor of every agent that claimed it, else a same-model check. A claim whose hunters declared no vendor (answers
+// written before M6, or by an agent that did not say) takes `--vendor` as it always did: the person opted into another
+// vendor's model (spec §4). Declared, never checked, and never an approval: 0.1 auto-approves nothing.
+export const verifierOf = (f, vendor) => (vendor && !agentList(f?.agents).some(a => sameName(a.vendor, vendor)) ? CROSS_VENDOR : SAME_MODEL);
 // the outcome of a run with fewer decoys than its claims called for: not suspect, and not double-checked either
 export const TOO_FEW_DECOYS = WORDS['too-few-decoys'];
 
@@ -180,7 +187,6 @@ export function recordVerdicts({ findings, key, verdicts, vendor = null }) {
   }
   if (problems.length) return { problems };
 
-  const verifier = vendor ? { label: 'cross-vendor', vendor } : { label: SAME_MODEL };
   const out = findings.map(f => ({ ...f }));
   const counts = { confirmed: 0, rejected: 0, insufficient: 0, unanswered: 0 };
   const decoys = { total: 0, answered: 0, passedThrough: 0, rate: null };
@@ -202,10 +208,14 @@ export function recordVerdicts({ findings, key, verdicts, vendor = null }) {
     out[k.finding] = {
       ...f, status: v.verdict,
       ...(v.verdict === 'confirmed' ? { severity: corrected } : {}),
-      verification: { packet: id, verdict: v.verdict, severity: corrected, claimedSeverity: f.verification?.claimedSeverity ?? f.severity, reason: v.reason.trim(), verifier: verifier.label, ...(vendor ? { vendor } : {}) },
+      verification: { packet: id, verdict: v.verdict, severity: corrected, claimedSeverity: f.verification?.claimedSeverity ?? f.severity, reason: v.reason.trim(), verifier: verifierOf(f, vendor), ...(vendor ? { vendor } : {}) },
     };
     touched.push(k.finding);
   }
+  // the run's verifier: cross-vendor unless every claim it judged was hunted by its own vendor; the claims of its own
+  // vendor said apart (each finding carries its own label)
+  const same = vendor ? touched.filter(i => out[i].verification.verifier === SAME_MODEL).length : 0;
+  const verifier = !vendor ? { label: SAME_MODEL } : touched.length && same === touched.length ? { label: SAME_MODEL, vendor } : { label: CROSS_VENDOR, vendor, ...(same ? { sameVendor: same } : {}) };
   decoys.rate = decoys.total ? decoys.passedThrough / decoys.total : null;
   // suspect (design §2.2): no decoy answered, or pass-through (confirmed or unanswered) above the threshold. A run whose
   // screens offered fewer decoys than the claims called for is not suspect: its verifier was not caught, but it could
