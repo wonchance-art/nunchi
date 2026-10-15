@@ -1251,7 +1251,10 @@ the item stays open, to decide (0.1 never auto-approves).
 - `hunt --plan [--agent <name>] [--vendor <name>]` starts a hunt record (`state/hunts/<id>.json`, one per worktree, run
   and declared agent: the agent and vendor as declared, run, plan, lenses, planned units, units this agent answered,
   units any agent answered, `startedAt`, `lastActivity`; no app text), and every `hunt --record` moves its agents'
-  records on. A state that cannot be written is said; the hunt goes on.
+  records on. A plan made without `--agent` is the hunt of the agent whose answers then name it (same worktree, run
+  and plan, nothing answered under no name, and the undeclared agent holding no answers of the run): one record under
+  that name, started when the plan was made, never a "Your AI" line beside it (M6 review). A state that cannot be
+  written is said; the hunt goes on.
 - The Now line lists captures, claims and the running hunts, in the design's words: "Codex · AI review L6 · 12/40
   units · 3 min": the lenses of this agent's part so far (else the plan's; more than three as the first three and
   "+N"), "Your AI" for an agent that did not say (or whose recorded name is no name), "just started" under a minute. A

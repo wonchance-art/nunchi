@@ -786,7 +786,7 @@ if (cmd === 'setup') {
         if (key) writeKey(runDir, 'hunt-key.json', key); else removeKey(runDir, 'hunt-key.json');
         writeHuntMirror(runDir, key);
       });
-      activity(st => { let records = []; try { records = readAgentRecords(runDir); } catch {} noteHunt(st.root.dir, { agent: me.name, vendor: myVendor.name, stream: st.root.stream, run: runId, plan: plan.id, ...huntProgress(plan, records, me.name), generation: st.files.generation }); });
+      activity(st => { let records = []; try { records = readAgentRecords(runDir); } catch {} noteHunt(st.root.dir, { agent: me.name, vendor: myVendor.name, stream: st.root.stream, run: runId, plan: plan.id, ...huntProgress(plan, records, me.name), generation: st.files.generation, adopt: !records.some(x => !x.agent) }); });
       console.log(args.json ? JSON.stringify(plan, null, 2) : formatPlan(plan, planPath));
     } else {
       if (!existsSync(planPath)) fail(`no hunt-plan.json in ${runDir}: run hunt --plan first`);
@@ -810,7 +810,9 @@ if (cmd === 'setup') {
       // the hunt into the ledger as (run, "ai"): its claims (not double-checked yet) and the cells it saw, so a hunt
       // that claims nothing counts towards staleness too (design §2.2, §2.4)
       foldAfterRecord(runDir, 'the AI hunt', args.root || process.cwd(), { quiet: true });
-      activity(st => { for (const a of result.agents) noteHunt(st.root.dir, { agent: a.agent, vendor: a.vendor, stream: st.root.stream, run: runId, plan: plan.id, ...huntProgress(plan, result.records, a.agent), generation: st.files.generation }); });
+      // a plan made without a name becomes the hunt of the agent whose answers name it, while the undeclared agent holds none
+      const adopt = !result.records.some(x => !x.agent);
+      activity(st => { for (const a of result.agents) noteHunt(st.root.dir, { agent: a.agent, vendor: a.vendor, stream: st.root.stream, run: runId, plan: plan.id, ...huntProgress(plan, result.records, a.agent), generation: st.files.generation, adopt }); });
       console.log(args.json ? JSON.stringify({ plan: plan.id, run: runId, summary: result.coverage.summary, findings: result.findings.length, rejected: result.rejected, agents: result.coverage.agents ?? null }, null, 2) : [formatRecord(result, runDir), formatAgents(result)].filter(Boolean).join('\n'));
     }
   } catch (e) {

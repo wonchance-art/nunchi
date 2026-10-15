@@ -34,6 +34,38 @@ test('activity: a hunt in progress, its words, and its end: every planned unit a
   assert.deepEqual(Act.listHunts(sd, T + 40 * 60e3).map(x => x.hunt.run), ['0009']);
 });
 
+test('activity: a plan made without a name is the hunt of the agent whose answers name it: one line, started when the plan was made (M6 review)', () => {
+  const sd = tmp('nunchi-activity-adopt-');
+  Act.noteHunt(sd, hunt({ agent: null, vendor: null, answered: 0, complete: 0, now: T - 5 * 60e3 }));
+  // Codex's answers name it: the plan's record becomes Codex's
+  Act.noteHunt(sd, hunt({ now: T, adopt: true }));
+  assert.deepEqual(Act.listHunts(sd, T).filter(x => x.running).map(x => Act.huntLine(x.hunt, T)), ['Codex · AI review L6 · 12/40 units · 5 min']);
+  // not taken over: when the caller does not know the undeclared agent holds no answers, another plan, or one with answers
+  const keep = (over, unnamed = {}) => {
+    const d = tmp('nunchi-activity-keep-');
+    Act.noteHunt(d, hunt({ agent: null, vendor: null, answered: 0, complete: 0, now: T - 5 * 60e3, ...unnamed }));
+    Act.noteHunt(d, hunt({ now: T, ...over }));
+    return Act.listHunts(d, T).map(x => x.hunt.declaredAgent).sort();
+  };
+  assert.deepEqual(keep({}), ['Codex', null]);
+  assert.deepEqual(keep({ adopt: true, plan: 'p2' }), ['Codex', null]);
+  assert.deepEqual(keep({ adopt: true }, { answered: 3 }), ['Codex', null]);
+});
+
+test('cli: hunt --plan without --agent, then answers that name the agent: one Now line, under that name', () => {
+  const p = huntProject();
+  const run = (...a) => execFileSync('node', [CLI, 'hunt', ...a], { cwd: p.cwd, encoding: 'utf8' });
+  const plan = JSON.parse(run('--plan', '--lens', 'L9', '--json'));
+  const sd = P.stateOf(join(p.cwd, '.nunchi')).root.dir;
+  const planned = plan.units.filter(u => u.status === 'planned');
+  const lines = () => Act.listHunts(sd).filter(x => x.running).map(x => Act.huntLine(x.hunt).replace(/ · [^·]+$/, ''));
+  assert.deepEqual(lines(), [`Your AI · AI review L9 · 0/${planned.length} units`]);
+  writeFileSync(join(p.cwd, 'a.json'), JSON.stringify({ plan: plan.id, agent: 'Codex', vendor: 'OpenAI', units: [answerAll(planned[0], 'none'), ...planned.slice(1).map(u => answerSome(u, 'none'))] }));
+  run('--record', 'a.json');
+  if (planned.length > 1) assert.deepEqual(lines(), [`Codex · AI review L9 · 1/${planned.length} units`], 'never a "Your AI" line beside it');
+  assert.equal(Act.listHunts(sd).length, 1);
+});
+
 test('activity: progress from the run\'s records: planned units only, this agent\'s part and everyone\'s', () => {
   const plan = { units: [{ id: 'u1', lens: 'L6', status: 'planned' }, { id: 'u2', lens: 'L9', status: 'planned' }, { id: 'u3', lens: 'L1', status: 'planned' }, { id: 'u4', lens: 'L1', status: 'not-seen' }] };
   const rec = (agent, units) => ({ agent, cells: units.map(unit => ({ unit, status: 'seen' })) });

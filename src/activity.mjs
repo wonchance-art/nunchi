@@ -60,18 +60,26 @@ export function huntProgress(plan, records = [], agent = null) {
 
 // Records (or moves on) the hunt of `agent` on `run`; the other agents' records of the same run and plan learn how
 // many units any agent answered. → the record written. `generation`: bumped after the write (the board looks again).
-export function noteHunt(stateDir, { agent = null, vendor = null, stream = 'main', run, plan, lenses = [], units = 0, answered = 0, complete = 0, now = Date.now(), generation = null }) {
+// `adopt` (the caller knows the undeclared agent holds no answers of this run): a named agent takes over the record a
+// plan made without a name, same worktree, run and plan, nothing answered under it, so the hunt that plan started is one
+// line under the name its answers gave, started when the plan was made (M6 review: never a "Your AI" line beside it).
+export function noteHunt(stateDir, { agent = null, vendor = null, stream = 'main', run, plan, lenses = [], units = 0, answered = 0, complete = 0, now = Date.now(), generation = null, adopt = false }) {
   privateDir(huntsDir(stateDir));
   const rec = withLock(lockOf(stateDir), () => {
     for (const x of listHunts(stateDir, now)) if (!x.live) rmSync(join(huntsDir(stateDir), `${x.id}.json`), { force: true });
     const id = huntId({ stream, run, agent });
     const file = join(huntsDir(stateDir), `${id}.json`);
     const old = read(file);
-    const startedAt = old && old.run === run && huntLive(old, now) && typeof old.startedAt === 'string' ? old.startedAt : kst(now);
+    const unnamedId = huntId({ stream, run, agent: null });
+    const unnamed = agent && adopt && unnamedId !== id ? read(join(huntsDir(stateDir), `${unnamedId}.json`)) : null;
+    const adopted = unnamed && unnamed.stream === stream && unnamed.run === run && unnamed.plan === plan && !declaredName(unnamed.declaredAgent).name && count(unnamed.answered) === 0 && huntLive(unnamed, now) ? unnamed : null;
+    const starts = [old && old.run === run && huntLive(old, now) ? old.startedAt : null, adopted?.startedAt].filter(s => typeof s === 'string' && Number.isFinite(Date.parse(s)));
+    const startedAt = starts.length ? starts.sort((a, b) => Date.parse(a) - Date.parse(b))[0] : kst(now);
     const h = { schema: 1, note: 'an AI hunt in progress (design §7): live while lastActivity + 30 minutes is ahead of the reader\'s clock', declaredAgent: agent, declaredVendor: vendor,
       stream, run, plan, lenses: lenses.filter(l => LENS.test(l)), units: count(units), answered: count(answered), complete: count(complete), startedAt, lastActivity: kst(now) };
     refuseLink(file);
     writeAtomic(file, stableJson(h), { mode: 0o600 });
+    if (adopted) rmSync(join(huntsDir(stateDir), `${unnamedId}.json`), { force: true });
     for (const x of listHunts(stateDir, now)) {
       if (x.id === id || x.hunt.stream !== stream || x.hunt.run !== run || x.hunt.plan !== plan || x.hunt.complete === h.complete) continue;
       const p = join(huntsDir(stateDir), `${x.id}.json`);
