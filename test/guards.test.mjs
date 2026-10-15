@@ -55,7 +55,7 @@ test('a guard runs only for its own kind and parameters', () => {
   put(p, 'app/a.tsx', fixture('native-dialog', 'hit.tsx'));
   put(p, 'app/b.tsx', fixture('dead-href', 'hit.tsx'));
   const only = G.scanGuards({ project: p, guards: [{ kind: 'native-dialog', params: { calls: ['alert'] } }, { kind: 'dead-href', params: { values: ['javascript:'] } }] });
-  assert.deepEqual(only.hits.map(h => `${h.kind}:${h.what}`), ['native-dialog:alert', 'native-dialog:alert', 'dead-href:javascript:', 'dead-href:javascript:']);
+  assert.deepEqual(only.hits.map(h => `${h.kind}:${h.what}`), [...Array(3).fill('native-dialog:alert'), ...Array(5).fill('dead-href:javascript:')]);
   assert.deepEqual(G.scanGuards({ project: p, guards: [] }), { hits: [], files: 0, large: [], unparsed: [], odd: [] });
 });
 
@@ -70,7 +70,7 @@ test('tests, fixtures, config files, node_modules, dot folders and symbolic link
   try { symlinkSync(join(p, 'outside'), join(p, 'app', 'linked'), 'dir'); symlinkSync(join(p, 'outside', 'linked.tsx'), join(p, 'app', 'one.tsx')); } catch {}
   const r = G.scanGuards({ project: p, root: join(p, 'app'), guards: guardsOf(['native-dialog']) });
   assert.deepEqual([...new Set(r.hits.map(h => h.file))], ['app/test/page.tsx']);
-  assert.equal(r.hits.length, 6);
+  assert.equal(r.hits.length, 8);
 });
 
 test('files over 1 MB are skipped and counted; a file that does not parse is listed, never a hit', () => {
@@ -84,6 +84,36 @@ test('files over 1 MB are skipped and counted; a file that does not parse is lis
   assert.ok(!/alert/.test(JSON.stringify(r.unparsed)), 'no source text in the reason');
   assert.deepEqual(r.hits.map(h => h.file), ['app/ok.tsx']);
   assert.equal(r.files, 2);
+});
+
+test('an href is read as a browser reads it: C0 controls and spaces around stripped, tabs and line breaks dropped, nothing else', () => {
+  // the URL standard: leading and trailing C0 control or space, then every tab and newline
+  for (const v of ['#', ' # ', '\u0000#\u001f', '\t#\n']) assert.equal(G.hrefValue(v), '#', JSON.stringify(v));
+  for (const v of ['javascript:void(0)', '\u0001javascript:void(0)', ' \u001fJavaScript:x', 'java\tscript:x', 'java\r\nscript:x']) assert.equal(G.hrefValue(v), 'javascript:', JSON.stringify(v));
+  // a no-break space (or a byte-order mark) is kept: "\u00a0#" is a path, "\u00a0javascript:" is not a scheme
+  for (const v of ['\u00a0#', '#\u00a0', '\ufeffjavascript:x', '\u00a0javascript:x', '#top', '/javascript-guide']) assert.equal(G.hrefValue(v), null, JSON.stringify(v));
+});
+
+// The baseline the guards gave over these fixtures as M4 merged them (413bb6a; each kind's hit files at app/<kind>/),
+// pinned in anchors-m4.json: a guard changed since must not move an anchor, or every baselined hit of an app that took
+// nunchi's next version would come back as new in `check`.
+test('a changed guard moves no anchor: every hit the M4 baseline held is still held, and only lines added since are new', () => {
+  const p = tmp();
+  const added = [];
+  for (const kind of G.KINDS) for (const f of ['hit.tsx', 'hit.css']) {
+    let text;
+    try { text = fixture(kind, f); } catch { continue; }
+    put(p, `app/${kind}/${f}`, text);
+    text.split('\n').forEach((l, i) => { if (l.includes(`HIT ${kind} (follow-up`)) added.push(`app/${kind}/${f}:${i + 1}`); });
+  }
+  const { hits } = G.scanGuards({ project: p, guards: guardsOf(G.KINDS) });
+  const before = JSON.parse(readFileSync(join(FIX, 'anchors-m4.json'), 'utf8'));
+  assert.equal(before.reduce((n, e) => n + e.count, 0), 44);
+  const { fresh, known, gone } = G.compareBaseline(hits, before);
+  assert.deepEqual(gone, [], 'no baselined hit is gone (its anchor moved)');
+  assert.equal(known.length, 44);
+  assert.deepEqual(fresh.map(h => `${h.file}:${h.line}`).sort(), added.sort(), 'the new hits are the lines added since, and nothing else');
+  assert.equal(added.length, 6);
 });
 
 test('a scan is deterministic: the same tree gives the same hits, in file order', () => {
@@ -313,9 +343,17 @@ test('the lint proposal: core rules only, one separate object scoped to files, t
   assert.match(r.text, /This object replaces any earlier no-restricted-syntax list for these\n\/\/ files; a later object that sets no-restricted-syntax with options replaces this one\. Merge them into one list\./);
   assert.match(r.text, /never writes your config/);
   // what the guards catch that a first selector missed: href={`#`}, e['message']; a code sample's {{ }} is left alone
-  assert.ok(r.text.includes("TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked='#']"));
+  assert.ok(r.text.includes('TemplateLiteral[expressions.length=0] > TemplateElement[value.cooked=/^[\\u0000- ]*#[\\u0000- ]*$/]'));
   assert.ok(r.text.includes("[property.value='message']"));
   assert.ok(r.text.includes(':not(JSXElement[openingElement.name.name=/^(code|pre|kbd|samp|style|script|noscript)$/] *)'));
+  // what the guards catch since the follow-ups (checked with ESLint 9.39.1, spec §7.3): a tagged template, an href with
+  // control characters or spaces around (the characters themselves are in the selector: printed escaped), a message
+  // kept whole by .toString(), a placeholder in a text attribute
+  assert.ok(r.text.includes('"TaggedTemplateExpression[tag.name=/^(alert|confirm|prompt)$/]"'));
+  assert.ok(r.text.includes('TaggedTemplateExpression[tag.object.name=/^(window|globalThis|self)$/]'));
+  assert.ok(r.text.includes("[value.value=/^[\\u0000- ]*j[\\t\\n\\r]*a[\\t\\n\\r]*v"));
+  assert.ok(r.text.includes(":matches([callee.property.name='toString'], [callee.property.name='trim'])"));
+  assert.ok(r.text.includes('JSXAttribute[name.name=/^(alt|title|placeholder|label|aria-label|aria-description|aria-placeholder|aria-roledescription|aria-valuetext)$/][value.value=/\\\\{\\\\{|\\\\}\\\\}/]'));
   // only an error's message, never a form library's (the guard's own names)
   assert.ok(r.text.includes('Identifier[name=/^([eE]|[eE]rr|[eE]rror|[eE]x|[eE]xception|[cC]ause)$|Error$/]'));
   assert.ok(r.text.includes(':not(:has(Identifier[name=/^(errors|formState|fieldState)$/]))'));

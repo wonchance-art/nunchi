@@ -1,0 +1,268 @@
+[
+  {
+    "anchor": "445f817086b8de84",
+    "count": 1,
+    "file": "app/native-dialog/hit.tsx",
+    "kind": "native-dialog",
+    "what": "alert"
+  },
+  {
+    "anchor": "475ff8b565c26f24",
+    "count": 1,
+    "file": "app/native-dialog/hit.tsx",
+    "kind": "native-dialog",
+    "what": "confirm"
+  },
+  {
+    "anchor": "5382f68a77d5d178",
+    "count": 1,
+    "file": "app/native-dialog/hit.tsx",
+    "kind": "native-dialog",
+    "what": "prompt"
+  },
+  {
+    "anchor": "7cf770e38c9333da",
+    "count": 1,
+    "file": "app/native-dialog/hit.tsx",
+    "kind": "native-dialog",
+    "what": "confirm"
+  },
+  {
+    "anchor": "db87844df72218b0",
+    "count": 1,
+    "file": "app/native-dialog/hit.tsx",
+    "kind": "native-dialog",
+    "what": "confirm"
+  },
+  {
+    "anchor": "e156c7ff43643a61",
+    "count": 1,
+    "file": "app/native-dialog/hit.tsx",
+    "kind": "native-dialog",
+    "what": "alert"
+  },
+  {
+    "anchor": "3bfef63ffef1428b",
+    "count": 1,
+    "file": "app/dead-href/hit.tsx",
+    "kind": "dead-href",
+    "what": "#"
+  },
+  {
+    "anchor": "4b4332e5a0e0e6c1",
+    "count": 1,
+    "file": "app/dead-href/hit.tsx",
+    "kind": "dead-href",
+    "what": "javascript:"
+  },
+  {
+    "anchor": "5e8b01721617e324",
+    "count": 1,
+    "file": "app/dead-href/hit.tsx",
+    "kind": "dead-href",
+    "what": "javascript:"
+  },
+  {
+    "anchor": "7af69fb339d97bd7",
+    "count": 1,
+    "file": "app/dead-href/hit.tsx",
+    "kind": "dead-href",
+    "what": "#"
+  },
+  {
+    "anchor": "990bf8c2cce741fb",
+    "count": 1,
+    "file": "app/dead-href/hit.tsx",
+    "kind": "dead-href",
+    "what": "#"
+  },
+  {
+    "anchor": "ed309ac6f88bcd8c",
+    "count": 1,
+    "file": "app/dead-href/hit.tsx",
+    "kind": "dead-href",
+    "what": "#"
+  },
+  {
+    "anchor": "259bad587b7650d8",
+    "count": 6,
+    "file": "app/raw-message/hit.tsx",
+    "kind": "raw-message",
+    "what": "message"
+  },
+  {
+    "anchor": "7d140fd8559f2768",
+    "count": 1,
+    "file": "app/raw-message/hit.tsx",
+    "kind": "raw-message",
+    "what": "message"
+  },
+  {
+    "anchor": "8d14835bcd6953e7",
+    "count": 1,
+    "file": "app/raw-message/hit.tsx",
+    "kind": "raw-message",
+    "what": "message"
+  },
+  {
+    "anchor": "b45a9bb6f6389d2d",
+    "count": 2,
+    "file": "app/raw-message/hit.tsx",
+    "kind": "raw-message",
+    "what": "message"
+  },
+  {
+    "anchor": "c0e02374a6b6fb14",
+    "count": 1,
+    "file": "app/raw-message/hit.tsx",
+    "kind": "raw-message",
+    "what": "message"
+  },
+  {
+    "anchor": "d27f8a9df276355d",
+    "count": 1,
+    "file": "app/raw-message/hit.tsx",
+    "kind": "raw-message",
+    "what": "message"
+  },
+  {
+    "anchor": "deb9dfaff0b549d9",
+    "count": 1,
+    "file": "app/raw-message/hit.tsx",
+    "kind": "raw-message",
+    "what": "message"
+  },
+  {
+    "anchor": "0c9392c7cd742903",
+    "count": 1,
+    "file": "app/mustache-text/hit.tsx",
+    "kind": "mustache-text",
+    "what": "{{"
+  },
+  {
+    "anchor": "6fcdc22b6208b9da",
+    "count": 1,
+    "file": "app/mustache-text/hit.tsx",
+    "kind": "mustache-text",
+    "what": "{{"
+  },
+  {
+    "anchor": "7c495223470a851d",
+    "count": 1,
+    "file": "app/mustache-text/hit.tsx",
+    "kind": "mustache-text",
+    "what": "{{"
+  },
+  {
+    "anchor": "bb3900c19d4f186b",
+    "count": 1,
+    "file": "app/mustache-text/hit.tsx",
+    "kind": "mustache-text",
+    "what": "{{"
+  },
+  {
+    "anchor": "bd8fda65243e3a10",
+    "count": 1,
+    "file": "app/mustache-text/hit.tsx",
+    "kind": "mustache-text",
+    "what": "{{"
+  },
+  {
+    "anchor": "13ad2af49162006b",
+    "count": 1,
+    "file": "app/colour-literal/hit.css",
+    "kind": "colour-literal",
+    "what": "#aa0000"
+  },
+  {
+    "anchor": "32c8dae2e2dc97dd",
+    "count": 1,
+    "file": "app/colour-literal/hit.css",
+    "kind": "colour-literal",
+    "what": "gold"
+  },
+  {
+    "anchor": "6194817ea2ad3532",
+    "count": 1,
+    "file": "app/colour-literal/hit.css",
+    "kind": "colour-literal",
+    "what": "#ff0000"
+  },
+  {
+    "anchor": "bca5ba5352e619cc",
+    "count": 1,
+    "file": "app/colour-literal/hit.css",
+    "kind": "colour-literal",
+    "what": "hsl(0 100% 50%)"
+  },
+  {
+    "anchor": "3179b6687e23368a",
+    "count": 1,
+    "file": "app/colour-literal/hit.tsx",
+    "kind": "colour-literal",
+    "what": "rgb(0 0 0 / 0.5)"
+  },
+  {
+    "anchor": "6708cbc347123bd2",
+    "count": 1,
+    "file": "app/colour-literal/hit.tsx",
+    "kind": "colour-literal",
+    "what": "#ff0000"
+  },
+  {
+    "anchor": "8759f0c2cee9f88a",
+    "count": 1,
+    "file": "app/colour-literal/hit.tsx",
+    "kind": "colour-literal",
+    "what": "#00ff00"
+  },
+  {
+    "anchor": "8bb1b6b0fe811104",
+    "count": 1,
+    "file": "app/colour-literal/hit.tsx",
+    "kind": "colour-literal",
+    "what": "#abcdef"
+  },
+  {
+    "anchor": "90a6992212e88c07",
+    "count": 1,
+    "file": "app/colour-literal/hit.tsx",
+    "kind": "colour-literal",
+    "what": "#0000aa"
+  },
+  {
+    "anchor": "bc196923597ef1bc",
+    "count": 1,
+    "file": "app/colour-literal/hit.tsx",
+    "kind": "colour-literal",
+    "what": "tomato"
+  },
+  {
+    "anchor": "d03885583e69208f",
+    "count": 1,
+    "file": "app/colour-literal/hit.tsx",
+    "kind": "colour-literal",
+    "what": "#123456"
+  },
+  {
+    "anchor": "d79f2806b5940d74",
+    "count": 1,
+    "file": "app/colour-literal/hit.tsx",
+    "kind": "colour-literal",
+    "what": "red"
+  },
+  {
+    "anchor": "e195db1a0ae0a103",
+    "count": 1,
+    "file": "app/colour-literal/hit.tsx",
+    "kind": "colour-literal",
+    "what": "#aa0000"
+  },
+  {
+    "anchor": "f3c98dace97394ba",
+    "count": 1,
+    "file": "app/colour-literal/hit.tsx",
+    "kind": "colour-literal",
+    "what": "#00aa00"
+  }
+]
