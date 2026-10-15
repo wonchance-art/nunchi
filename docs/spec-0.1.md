@@ -959,14 +959,33 @@ unreadable one by one). Built in `src/ledger.mjs`:
     pid alone, so a reused pid makes takers wait and end in LOCKED, never take a live lock); one on another
     machine, after 30 s without a touch. One taker at a time removes a
     stale lock, after checking again that it still holds the owner judged stale; a lock is never given back and is
-    released only by its owner. Waiting is fair (2026-10-15 KST): a waiter that has waited 20 ms makes a ticket of
-    its own (`<file>.lock.d.wait-<since>-<token>`, an empty file made once, never renamed or rewritten, its order in
-    its name), and while live tickets exist only the waiter with the lowest takes the lock, so a process that releases
-    and takes the lock again at once cannot starve the others. Fairness is measured as overtakes (how many
-    acquisitions by others come between a request and its turn; at most N − 1 for N waiters, however fast the
-    machine): 4 processes × 15 holds of 80 ms, at most 45 before, 3 after (2026-10-15 KST). A waiter renews its
-    ticket's time while it waits; one not renewed for 1 s, or that cannot be read, does not count; a crash's ticket
-    goes after 30 s or with the hour-old leftovers. A waiter judges the holder stale at most every 100 ms, since on
+    released only by its owner. Waiting is fair (2026-10-15 KST): a waiter that finds the lock taken makes a ticket
+    of its own at once (`<file>.lock.d.wait-<since>-<token>`, an empty file made once, never renamed or rewritten,
+    its order in its name; a free lock is taken without one), and while live tickets exist only the waiter with the
+    lowest takes the lock, so a process that releases and takes the lock again at once cannot starve the others.
+    Fairness is measured as overtakes: how many acquisitions by others come between the moment a request is in line
+    (its ticket made) and its turn; at most N − 1 for N waiters, however busy the machine: 4 processes × 15 holds of
+    80 ms, at most 45 before, 3 after (2026-10-15 KST). A waiter renews its ticket's time while it waits; one not
+    renewed for 1 s, or that cannot be read, does not count, so a waiter that has not run for a second (stopped, or
+    set aside that long by the machine) is passed until it runs again, and is then first again: judged by its process
+    instead, one stopped waiter would hold up every other until each failed with LOCKED. A crash's ticket goes after
+    30 s or with the hour-old leftovers.
+    *Under load (follow-ups, 2026-10-15 KST):* the fair-lock test once counted 4 overtakes on a machine busy with
+    three other test suites, while the lock served every ticket in order. Two causes: (1) the test started counting
+    before the process called the lock. The process that has just held the lock for 80 ms of CPU is the one the machine
+    sets aside next, right after it reads the clock (up to 490 ms seen), so a process that asked after it but reached the
+    lock first was rightly first. The test now counts from the ticket, which each process sees made and renewed
+    through the lock's `io`. (2) A waiter made its ticket only after it had waited 20 ms (three sleeps), so one woken
+    late had no place in line yet and later requests passed it; it now makes it at its first try.
+    *Measured (2026-10-15 KST, 4-core Linux, the test's 4 processes):* with 40 busy processes on their core, counted
+    from asking: 4 overtakes in 3 of 12 runs, each of them (1) (the passed process set aside 113–161 ms between the
+    clock and the lock); with (2) fixed alone, still in 2 of 12. Counted from the ticket: at most 3 in all 24. A request
+    set aside 250 ms right after asking (10% of requests): over 3 from asking in 10 of 10 runs (worst 6), at most 3
+    from the ticket. Sleeps woken 300 ms late (10%): from the first try, over 3 in 2 of 10 runs before (2) (first try
+    to ticket: median 37 ms, up to 335 ms), none after (median 0.2 ms, at most 20 ms). A waiter stopped for 1.3 s is
+    passed 6–9 times while it does not run, at most 3 times from the renewal that ends the gap.
+    `test/ledger-integrity.test.mjs` replays (1) and (2) step by step, and the stopped waiter.
+    A waiter judges the holder stale at most every 100 ms, since on
     Windows each read of `owner.json` by another process holds up the release. Windows' rules (a file open in another
     process cannot be renamed over or deleted at once; a folder holding one cannot be renamed) are emulated on any
     machine through the lock's `io` (`test/fixtures/windows-io.mjs`); under them tickets keep 3 overtakes (a single
