@@ -45,7 +45,8 @@ function project({ git = true } = {}) {
   const { findings: ann } = writeRun(root, '0001', { scenes: Object.values(s), findings });
   const p = { root, nunchi: join(root, '.nunchi'), findings: ann, scenes: s };
   withAi(p, [{ lens: 'L6', rule: 'L6.raw-technical-text', scene: s.garden, selector: 'main p.err', claim: `Shows "${HOSTILE}" and ${STRIPE} ${MD_LINK}`, file: 'app/garden/page.tsx', line: 7, status: 'confirmed', severity: 'high' },
-    { lens: 'L5', rule: 'L5.same-action-different-verb', scene: s.home, selector: 'nav a', claim: 'Two verbs', file: `app/k-${GHP}/nav.tsx`, line: 3, status: 'confirmed', severity: 'low' }]);
+    { lens: 'L5', rule: 'L5.same-action-different-verb', scene: s.home, selector: 'nav a', claim: 'Two verbs', file: `app/k-${GHP}/nav.tsx`, line: 3, status: 'confirmed', severity: 'low' },
+    { lens: 'L6', rule: 'L6.vague-error', scene: s.home, selector: 'main p', claim: 'Vague', file: 'https://evil.invalid/x.tsx', line: 9, status: 'confirmed', severity: 'low' }]);
   return p;
 }
 const run = (p, ...args) => spawnSync(process.execPath, [CLI, ...args], { cwd: p.root, encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
@@ -177,6 +178,7 @@ test('Markdown: special characters escaped, no raw HTML, no link or image from d
   assert.ok(!/(^|[^\\])&#/.test(md), 'no entity from data');
   assert.equal(mdText('<img src=x onerror=alert(1)> [a](b) `c` *d* _e_ http://x.invalid a@b.invalid'), '\\<img src\\=x onerror\\=alert\\(1\\)\\> \\[a\\]\\(b\\) \\`c\\` \\*d\\* \\_e\\_ http\\://x\\.invalid a\\@b\\.invalid');
   assert.equal(mdText('line one\nline two‮evil'), 'line one line two evil');
+  assert.equal(mdText('zero\u200bwidth \u200djoiner \u2060wj \u00adshy \u061cALM x\ud800'), 'zero width joiner wj shy ALM x\ufffd');
 });
 
 test('SARIF: valid against the vendored schema; file:line of the finding, else the route\'s page file, else the app; levels; L9 only has security-severity', () => {
@@ -192,6 +194,8 @@ test('SARIF: valid against the vendored schema; file:line of the finding, else t
   assert.deepEqual(where('target-size-min'), ['app/account/page.tsx:1']);
   assert.deepEqual(where('secret-in-client-bundle'), ['package.json:1']);
   assert.deepEqual(where('horizontal-overflow'), ['package.json:1'], 'a route with no page file');
+  assert.deepEqual(where('L6.vague-error'), ['app/page.tsx:1'], 'a finding\'s file that is a URL is no location');
+  for (const x of results) assert.ok(!/^[a-z][a-z0-9+.-]*:/i.test(x.locations[0].physicalLocation.artifactLocation.uri), 'no scheme');
   for (const x of results) {
     assert.equal(x.locations.length, 1);
     assert.ok(x.partialFingerprints['nunchi/group/v1'] && x.partialFingerprints['nunchi/fp/v1']);

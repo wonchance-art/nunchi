@@ -24,7 +24,7 @@ import { redactText, redactUrl } from './network.mjs';
 import { redactSelector } from './selector-secrets.mjs';
 import { stableJson } from './stable.mjs';
 import { SEV, SEV_LABEL, STATUS_LABEL, MORE_STATUS, human, decidedText } from './board/shared.mjs';
-import { sarifLog, plainText } from './sarif.mjs';
+import { sarifLog, plainText, FLAT } from './sarif.mjs';
 
 export const STATUSES = ['open', 'regressed', 'to-fix', 'held', 'kept', 'dismissed', 'fixed', 'stale'];
 // what still counts for shipping: open, came back, to fix, later
@@ -50,7 +50,8 @@ const DATA_KEYS = new Set(['status', 'scrollWidth', 'viewportWidth', 'clientWidt
   'state', 'impact', 'type', 'count', 'kind', 'fonts', 'note']);
 const URL_KEYS = new Set(['url', 'href', 'src']);
 const NAME_KEYS = new Set(['name', 'label', 'placeholder']);
-const SAFE_FILE = p => typeof p === 'string' && p && p.length <= 1024 && !p.startsWith('/') && !/^[a-z]:/i.test(p) && !p.includes('\\') && !/[\u0000-\u001f\u007f]/.test(p)
+// a plain relative path: no root, drive or scheme (`https:`, `file:`), no backslash, control character or `..`
+const SAFE_FILE = p => typeof p === 'string' && p && p.length <= 1024 && !p.startsWith('/') && !/^[a-z][a-z0-9+.-]*:/i.test(p) && !p.includes('\\') && !/[\u0000-\u001f\u007f]/.test(p)
   && !p.split('/').some(s => s === '..');
 // quoted names in a selector (`aria=button "Delete Ana's fern"`, `:has-text('…')`)
 const QUOTED = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g;
@@ -160,7 +161,7 @@ export const exportJson = model => stableJson(deepClean(model));
 
 // Data as Markdown text: redacted, line breaks and control characters flattened, every character Markdown or GFM
 // gives a meaning (emphasis, code, links, images, headings, lists, tables, HTML, entities, autolinks) escaped.
-export const mdText = s => clean(s).replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029\ufeff]+/g, ' ').replace(/\s+/g, ' ').trim()
+export const mdText = s => clean(s).toWellFormed().replace(FLAT, ' ').replace(/\s+/g, ' ').trim()
   .replace(/[\\`*_{}[\]()#+\-.!|<>~&:@=$%^"']/g, '\\$&');
 const STATUS_WORDS = { ...STATUS_LABEL, ...MORE_STATUS };
 const WHO = { guest: 'Visitor', 'signed-in': 'Signed in' };

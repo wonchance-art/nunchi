@@ -1860,8 +1860,9 @@ creates them); what was left out is said on stderr.
   `aria=heading "Hello" [level=1]` → `aria=heading "…" [level=1]`) when the finding was seen on a signed-in screen.
   Numbers and enums the engine measured are kept; an evidence field nunchi does not know is page text. How many fields
   were left out is said (a selector with anything taken out of it counts as one). HAR, network bodies, `text.txt` and `aria.yml` are never read.
-- *Escaping:* Markdown gets no raw HTML and no structure from data: line breaks, control characters and bidi marks are
-  flattened, and every character Markdown or GFM gives a meaning (`` \ ` * _ { } [ ] ( ) # + - . ! | < > ~ & : @ = $ % ^ " ' ``)
+- *Escaping:* Markdown gets no raw HTML and no structure from data: control and format characters (`\p{Cc}`,
+  `\p{Cf}`: line breaks, bidi marks and isolates, zero-width characters, the soft hyphen, the Arabic letter mark) and
+  the line and paragraph separators are flattened to a space, a lone surrogate becomes U+FFFD, and every character Markdown or GFM gives a meaning (`` \ ` * _ { } [ ] ( ) # + - . ! | < > ~ & : @ = $ % ^ " ' ``)
   is backslash-escaped, so no data opens a link, an image, a heading, an entity, an autolink or HTML. SARIF uses
   `message.text` only.
 - *Locations:* paths relative to the repository root (`git rev-parse --show-prefix` of the app's root; without git,
@@ -1880,7 +1881,9 @@ creates them); what was left out is said on stderr.
   group) and `nunchi/fp/v1` (the fingerprint). Rules carry `shortDescription`, `defaultConfiguration.level` (the worst
   of their results) and tags (lens, rule or ai, `security` for L9); `security-severity` only on L9 rules (blocker 9.5,
   high 8.0, medium 5.5, low 2.0 by the worst result; GitHub reads over 9.0 as critical, 7.0–8.9 high, 4.0–6.9
-  medium, 0.1–3.9 low). URIs are percent-encoded outside RFC 3986's path characters (`app/posts/%5Bid%5D/page.tsx`).
+  medium, 0.1–3.9 low). URIs are percent-encoded outside RFC 3986's path characters (`app/posts/%5Bid%5D/page.tsx`), and `:` too, so
+  no first segment reads as a scheme; a finding's file that is not a plain relative path (a root, a drive, a scheme
+  such as `https:`, `..`) is not a location. SARIF text is clipped by code point (never half a surrogate pair).
 - *GitHub's limits* (docs.github.com/en/code-security/reference/code-scanning/sarif-files/sarif-support and its
   limits table, `data/reusables/code-scanning/sarif-limits.md` in github/docs, read 2026-10-15 KST from the docs'
   source, since docs.github.com is not reachable from this build machine): a gzip-compressed SARIF file of at most

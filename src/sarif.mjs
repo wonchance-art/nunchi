@@ -30,14 +30,20 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const sevRank = s => (Object.hasOwn(SEV, s) ? SEV[s] : 3);
 
 // A repo-relative path as a URI reference: each segment percent-encoded outside RFC 3986's path characters, so a
-// space, a `[id]` folder or a `%` stays one path (GitHub decodes it), and no scheme or authority can be smuggled in.
+// space, a `[id]` folder or a `%` stays one path (GitHub decodes it), and no scheme or authority can be smuggled in
+// (`:` is encoded too: `c:x.tsx` or `https:x` as a first segment would read as a scheme).
 export function uriOf(path) {
-  return String(path).split('/').map(seg => [...seg].map(ch => (/^[A-Za-z0-9\-._~!$&'()*+,;=:@]$/.test(ch) ? ch
+  return String(path).toWellFormed().split('/').map(seg => [...seg].map(ch => (/^[A-Za-z0-9\-._~!$&'()*+,;=@]$/.test(ch) ? ch
     : [...new TextEncoder().encode(ch)].map(b => '%' + b.toString(16).toUpperCase().padStart(2, '0')).join(''))).join('')).join('/');
 }
-// SARIF's message text is plain text; GitHub shows its first sentence when space is short. Control characters, bidi
-// marks and line breaks are flattened, and it is kept to a sane length.
-export const plainText = (s, n = 1000) => { const t = scrub(s).replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029\ufeff]+/g, ' ').replace(/\s+/g, ' ').trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
+// Control and format characters (line breaks, bidi marks and isolates, zero-width characters, the soft hyphen, the
+// Arabic letter mark …) and the line and paragraph separators: flattened to a space wherever data becomes text.
+export const FLAT = /[\p{Cc}\p{Cf}\u2028\u2029]+/gu;
+// Clipped to `n` code points (never half a surrogate pair), with an ellipsis.
+export const clip = (t, n) => { const cps = [...t]; return cps.length > n ? `${cps.slice(0, n - 1).join('')}…` : t; };
+// SARIF's message text is plain text; GitHub shows its first sentence when space is short. Control and format
+// characters and line breaks are flattened, a lone surrogate becomes U+FFFD, and it is kept to a sane length.
+export const plainText = (s, n = 1000) => clip(scrub(s).toWellFormed().replace(FLAT, ' ').replace(/\s+/g, ' ').trim(), n);
 
 // `rules`: Map id → { title, severity (the worst of its results), lens, tags, security }. `results`: [{ ruleId,
 // severity, message, path (repo-relative), line, column?, logical: [{ name, kind }], fingerprints: { name: value } }].

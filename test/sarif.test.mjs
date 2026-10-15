@@ -7,7 +7,8 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { validate, SCHEMA, sarifProblems } from './fixtures/sarif/validate.mjs';
-import { sarifLog, uriOf, LEVEL, SECURITY_SEVERITY, GITHUB_LIMITS, truncationLine, SARIF_SCHEMA } from '../src/sarif.mjs';
+import { sarifLog, uriOf, plainText, LEVEL, SECURITY_SEVERITY, GITHUB_LIMITS, truncationLine, SARIF_SCHEMA } from '../src/sarif.mjs';
+import { redactText } from '../src/network.mjs';
 
 const SCHEMA_PATH = fileURLToPath(new URL('./fixtures/sarif/sarif-schema-2.1.0.json', import.meta.url));
 // raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json (its id: the OASIS
@@ -96,4 +97,20 @@ test('every string of the log passes the secret scanner, whoever built it', () =
   const { text } = sarifLog({ version: '1', rules: new Map([[`r-${key}`, { title: `t ${key}` }]]), results: [result(1, { ruleId: `r-${key}`, message: `m ${key}`, path: `app/${key}/page.tsx`, logical: [{ name: `/r/${key}`, kind: 'resource' }], fingerprints: { 'nunchi/fp/v1': key } })] });
   assert.ok(!text.includes(key));
   assert.match(text, /secret-shaped: stripe-live-secret-key/);
+});
+
+test('text and URIs: control and format characters flattened, clipped by code point, well-formed; a colon never reads as a scheme', () => {
+  assert.equal(plainText('zero​width ‍joiner ⁠wj ­shy ؜ALM ‮RTL ⁦iso⁩ \u0085nel'), 'zero width joiner wj shy ALM RTL iso nel');
+  assert.equal(plainText('a'.repeat(998) + '\u{1F33F}' + 'bb'), 'a'.repeat(998) + '\u{1F33F}…', 'the emoji is one code point, kept whole');
+  assert.equal(plainText('a'.repeat(999) + '\u{1F33F}\u{1F33F}'), 'a'.repeat(999) + '…', 'never half of it');
+  assert.equal(plainText('x\ud800y'), 'x�y', 'a lone surrogate');
+  assert.ok(plainText('a'.repeat(5000)).isWellFormed());
+  assert.equal(uriOf('c:x/page.tsx'), 'c%3Ax/page.tsx');
+  assert.equal(uriOf('https://evil.invalid/x.tsx'), 'https%3A//evil.invalid/x.tsx');
+  assert.equal(uriOf('app/plants/[id]/page.tsx'), 'app/plants/%5Bid%5D/page.tsx');
+  // a long word is not retried at every letter for a URL's credentials (it took 2 s for 40,000 letters)
+  const t0 = process.hrtime.bigint();
+  redactText('a'.repeat(200000));
+  assert.ok(Number(process.hrtime.bigint() - t0) / 1e6 < 1000, 'linear');
+  assert.equal(redactText('see https://ana:pw@x.invalid/ and xhttps://u:p@y.invalid/'), 'see https://x.invalid/ and xhttps://y.invalid/');
 });
