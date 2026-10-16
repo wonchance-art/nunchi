@@ -6,7 +6,7 @@ import { existsSync, readdirSync, rmSync, lstatSync, readFileSync } from 'node:f
 import * as P from '../project.mjs';
 import { stateRoot } from '../state.mjs';
 import { latestRun, runKind, gitRunner, ensureGitignore } from '../runs.mjs';
-import { writeStable } from '../stable.mjs';
+import { writeStable, refuseLink } from '../stable.mjs';
 import { byRun } from '../ledger.mjs';
 import { readShare, readShareLog, updateLog, withSend, artifactUrl, shareFiles, kst, appName } from './config.mjs';
 import { buildPack, scanPack, writePackDir } from './pack.mjs';
@@ -129,6 +129,8 @@ export function share({ project, nunchiDir, root = project, run = null, auto = f
   const packDir = join(outbox, id, 'pack');
   const plan = publishPlan({ pack, run: id, app, packDir, url, at: url ? log.written[`artifact|${url}`] : null });
   if (plan.problem) return done(1, [limitLine(id, plan.problem)], { run: id });
+  // nunchi's own folders, never through a link (openState refused one at .nunchi/share already)
+  for (const d of [outbox, join(outbox, id)]) refuseLink(d);
   writePackDir(packDir, pack.files);
   writeStable(join(outbox, id, 'publish.json'), plan.call);
   // only the newest pack waits: older ones nunchi wrote are removed
