@@ -1,6 +1,6 @@
 // The fast first run (design 0.1-c §6, M5) without a browser: which screens a quick run picks (deterministic, every
 // tie-break), the recording's coverage and merge, the presence-only fold, which run each command builds on, gc, the
-// fix loop, and the board's words ("First look: …", "Too early to say", "Full check done: …"). Invented content only.
+// fix loop, and the board's words ("First look: …", "Too early to say", "Full check done · …"). Invented content only.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, utimesSync, readdirSync } from 'node:fs';
@@ -365,7 +365,7 @@ test('board: a capture whose writer is gone, or that wrote nothing for 10 minute
   assert.deepEqual(R.runningCaptures(join(p.nunchi, 'runs'), { now: old.getTime() + 1000 }).map(x => x.run), ['0002']);
 });
 
-test('board: "Full check done: N new groups" once the full check lands after a first look; the verdict is the formula again', async () => {
+test('board: "Full check done · N screens · M new groups" once the full check lands after a first look; the verdict is the formula again', async () => {
   const p = firstLookProject();
   const scenes = [...p.scenes, scene('/help', 'guest', 'normal', 'd'), scene('/help', 'guest', 'error', 'd')];
   const f = (rule, sc, selector, severity = 'medium') => ({ lens: 'L6', rule, severity, scene: sc.id, route: sc.route, viewport: 'd', selector, box: null, evidence: { text: 'x' } });
@@ -373,10 +373,10 @@ test('board: "Full check done: N new groups" once the full check lands after a f
     { lens: 'L8', rule: 'target-size-min', severity: 'low', scene: scenes[0].id, route: '/', viewport: 'd', selector: 'nav a', box: null, evidence: { width: 12 } },
     f('raw-error-text', scenes[3], 'main p.err'), f('dead-href', scenes[2], 'main a.more')] });
   const s = await boardSummary(p);
-  assert.deepEqual(s.now, ['Full check done: 2 new groups'], 'the first look\'s group is not new');
+  assert.deepEqual(s.now, ['Full check done · 3 screens · 2 new groups'], 'the first look\'s group is not new');
   assert.deepEqual(s.fullCheckDone, { run: '0002', newGroups: 2 });
   assert.equal(s.verdict.text, 'Probably · rules only — the AI review hasn’t run');
-  assert.match((await cli(p.root, 'findings')).stdout, /\nFull check done: 2 new groups\n/);
+  assert.match((await cli(p.root, 'findings')).stdout, /\nFull check done · 3 screens · 2 new groups\n/);
   // the next capture lands: the line goes
   writeRun(p.root, '0003', { scenes, parent: '0002', findings: [] });
   assert.deepEqual((await boardSummary(p)).now, []);
@@ -390,7 +390,7 @@ test('a check after a first look that skipped an unsampled route still gets the 
     { lens: 'L3', rule: 'dead-href', severity: 'medium', scene: scenes[2].id, route: '/help', viewport: 'd', selector: 'main a.more', box: null, evidence: { href: '#' } }] });
   const runJson = join(p.nunchi, 'runs', '0002', 'run.json');
   writeFileSync(runJson, JSON.stringify({ ...JSON.parse(readFileSync(runJson, 'utf8')), skipped: [{ route: '/posts/[id]', reason: 'needs-sample' }] }));
-  assert.deepEqual((await boardSummary(p)).now, ['Full check done: 1 new group · skipped /posts/[id] (needs-sample)']);
+  assert.deepEqual((await boardSummary(p)).now, ['Full check done · 3 screens · 1 new group · skipped /posts/[id] (needs-sample)']);
   // the static page of that check: not "Since run 0001" (the first look); what the first look found counts as new
   const out = tmp('nunchi-quick-export-');
   const r = await cli(p.root, 'export', '--html', out);

@@ -1,9 +1,10 @@
 // M5b in a real browser: the wall during a first look — "First look" on its key screens and "Not checked yet" on the
 // pages it did not open — as text in the board's chip style, 4.5:1 or more in light and dark, an edge in forced colours,
 // in each card's accessible name, axe with no violation; Enter or Space on a page not opened shows what it is (nothing
-// to open); and a capture that stops reaches the open board by itself (Progress's Now line, Coverage's banner). Every
-// measurement is one page.evaluate (a live redraw detaches handles). Needs Chromium (NUNCHI_BROWSER or `nunchi setup`):
-// skipped without one unless NUNCHI_REQUIRE_BROWSER is set.
+// to open); and a capture that stops reaches the open board by itself (the capture bar at the top of every view, since
+// 2026-10-16 KST: board-bar-e2e.test.mjs; Coverage's banner). Every measurement is one page.evaluate (a live redraw
+// detaches handles). Needs Chromium (NUNCHI_BROWSER or `nunchi setup`): skipped without one unless
+// NUNCHI_REQUIRE_BROWSER is set.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, mkdirSync, writeFileSync, utimesSync } from 'node:fs';
@@ -30,6 +31,10 @@ after(async () => { await closeBoards(); await browser?.close(); });
 
 // the board in Chromium (fixtures/board-browser.mjs): a failed open closes what it started and says which step it waited on
 const open = (p, ctx = {}) => openBoard(browser, p, { ctx: { viewport: { width: 1440, height: 900 }, ...ctx } });
+// what the page says of the captures: the capture bar's line (since 2026-10-16 KST it says the capture, at the top of
+// every view) and the Now lines Progress lists below the tiles
+const sayings = page => page.evaluate(() => ({ bar: document.getElementById('runbar')?.hidden === false ? document.querySelector('#runbar .runbar-text')?.textContent ?? null : null,
+  now: [...document.querySelectorAll('.now li')].map(l => l.textContent) }));
 async function axe(page) {
   await page.evaluate(AXE);
   return page.evaluate(async () => (await globalThis.axe.run(document, { resultTypes: ['violations'] })).violations.map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target.join(' ')).slice(0, 3) })));
@@ -118,7 +123,7 @@ test('m5b e2e: the wall during a first look — "First look" and "Not checked ye
   } finally { await s.close(); }
 });
 
-test('m5b e2e: a capture that stops reaches the open board by itself — Progress\'s Now line and Coverage\'s banner say "Capture stopped"', { timeout: 90000 }, async t => {
+test('m5b e2e: a capture that stops reaches the open board by itself — the bar at the top of Progress and Coverage says "Capture stopped"', { timeout: 90000 }, async t => {
   if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
   const p = leafy({ probes: false });
   const dir = join(p.nunchi, 'runs', '0005.partial');
@@ -128,19 +133,20 @@ test('m5b e2e: a capture that stops reaches the open board by itself — Progres
   const { page } = s;
   try {
     const running = 'Capture running · run 0005 · 12 of 25 screens (about 6 min left)';
-    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.now li')].map(l => l.textContent)), [running]);
+    assert.deepEqual(await sayings(page), { bar: running, now: [] });
     await page.evaluate(() => { location.hash = '#/coverage'; });
     await page.waitForSelector('#cv-capture');
-    assert.equal(await page.evaluate(() => document.getElementById('cv-capture').textContent), `${running}. This shows run 0004 until it finishes.`);
+    // the bar says the capture; Coverage's banner what it adds
+    assert.deepEqual([(await sayings(page)).bar, await page.evaluate(() => document.getElementById('cv-capture').textContent)], [running, 'This shows run 0004 until it finishes.']);
     // no progress for 10 minutes: nothing is written, and the board says so by itself
     const old = new Date(Date.now() - 10 * 60e3 - 1000);
     utimesSync(join(dir, 'progress.json'), old, old);
     const stopped = 'Capture stopped · run 0005 (no progress for 10 min) — tell your AI “capture again”';
-    await page.waitForFunction(t => document.getElementById('cv-capture')?.textContent === t, stopped, { timeout: 15000 });
+    await page.waitForFunction(t => document.querySelector('#runbar .runbar-text')?.textContent === t && !document.getElementById('cv-capture'), stopped, { timeout: 15000 });
     await page.evaluate(() => { location.hash = '#/progress'; });
     await page.waitForSelector('#h-progress');
-    assert.deepEqual(await page.evaluate(() => [document.getElementById('h-progress').textContent, [...document.querySelectorAll('.now li')].map(l => l.textContent)]),
-      ['Not yet · 1 high: 1 to decide', [stopped]], 'the verdict goes by the complete runs, as without the stopped capture');
+    assert.deepEqual([await page.evaluate(() => document.getElementById('h-progress').textContent), await sayings(page)],
+      ['Not yet · 1 high: 1 to decide', { bar: stopped, now: [] }], 'the verdict goes by the complete runs, as without the stopped capture');
     assert.deepEqual(s.errors, []);
   } finally { await s.close(); }
 });
@@ -168,8 +174,7 @@ test('m5b e2e (review): a capture that stops is announced, though "Full check do
   const { page } = s;
   try {
     await page.evaluate(() => { window.__said = []; new MutationObserver(() => { const x = document.getElementById('announce').textContent; if (x) window.__said.push(x); }).observe(document.getElementById('announce'), { childList: true, characterData: true, subtree: true }); });
-    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.now li')].map(l => l.textContent)),
-      ['Full check done: 0 new groups', 'Capture running · run 0004 · 3 of 25 screens (about 10 min left)']);
+    assert.deepEqual(await sayings(page), { bar: 'Capture running · run 0004 · 3 of 25 screens (about 10 min left)', now: ['Full check done · 2 screens · 0 new groups'] });
     // no progress for 10 minutes, a moment after the page said its first line
     progress(dir, 3, Date.now() - 10 * 60e3 - 1000);
     const stopped = 'Capture stopped · run 0004 (no progress for 10 min) — tell your AI “capture again”';
@@ -219,7 +224,9 @@ test('m5b e2e (review): a hunt\'s progress line (M6) is announced too, though a 
   const { page } = s;
   try {
     await page.evaluate(() => { window.__said = []; new MutationObserver(() => { const x = document.getElementById('announce').textContent; if (x) window.__said.push(x); }).observe(document.getElementById('announce'), { childList: true, characterData: true, subtree: true }); });
-    assert.match(await page.evaluate(() => [...document.querySelectorAll('.now li')].map(l => l.textContent).join('\n')), /^Capture running · run 0005 .*\nCodex · AI review L6 · 12\/40 units · just started$/);
+    const said = await sayings(page);
+    assert.match(said.bar, /^Capture running · run 0005 /);
+    assert.deepEqual(said.now, ['Codex · AI review L6 · 12/40 units · just started']);
     hunt(13);
     await page.waitForFunction(() => window.__said.some(x => x.includes('Codex · AI review L6 · 13/40 units')), null, { timeout: 25000 });
     assert.deepEqual(s.errors, []);
@@ -238,7 +245,7 @@ test('m5b e2e (owner\'s decision ①): a capture whose writer is gone says "its 
   const s = await open(p);
   const { page } = s;
   try {
-    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.now li')].map(l => l.textContent)), [ENDED]);
+    assert.deepEqual(await sayings(page), { bar: ENDED, now: [] });
     // (what the page said on load is said by then; listen from here)
     await page.waitForTimeout(500);
     await page.evaluate(() => { window.__said = []; new MutationObserver(() => { const x = document.getElementById('announce').textContent; if (x) window.__said.push(x); }).observe(document.getElementById('announce'), { childList: true, characterData: true, subtree: true }); });
@@ -247,7 +254,7 @@ test('m5b e2e (owner\'s decision ①): a capture whose writer is gone says "its 
     const old = new Date(Date.now() - 11 * 60e3);
     utimesSync(join(dir, 'progress.json'), old, old);
     await page.waitForTimeout(11000);
-    assert.deepEqual(await page.evaluate(() => [[...document.querySelectorAll('.now li')].map(l => l.textContent), window.__said.filter(x => /Capture/.test(x))]), [[ENDED], []]);
+    assert.deepEqual([await sayings(page), await page.evaluate(() => window.__said.filter(x => /Capture/.test(x)))], [{ bar: ENDED, now: [] }, []]);
     assert.deepEqual(s.errors, []);
   } finally { await s.close(); }
 });

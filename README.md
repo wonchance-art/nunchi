@@ -50,8 +50,10 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
   responses (replayed, so screens stay comparable between runs)
 - **A first look** (`nunchi capture --quick`): `/` and the key screens its navigation links to, then one per section
   (up to 8), with the checks that need no AI, on the board in a minute or two. It marks nothing fixed; the board says
-  "Too early to say" and how far the full check that follows has come, then what the full check added. Screens the
-  first look recorded are replayed by the full check, the rest are recorded and merged in
+  "Too early to say" and, in a bar at the top of every view (and the tab's title), how far the full check that follows
+  has come ("Full check running · 33 of 72 screens · about 16 min left"), then what it added ("Full check done · 72
+  screens · 16 new groups"); your AI says in chat when it starts and when it is done. Screens the first look recorded
+  are replayed by the full check, the rest are recorded and merged in
 - **Checks that need no AI** — layout overflow, clipped text, broken images, page errors and failed requests,
   raw error text shown to users, errors that look like empty lists, missing offline notices, leftover placeholder
   text, `NaN`/`undefined` on screen, accessibility (axe-core, target sizes, placeholder-only labels), native

@@ -10,6 +10,11 @@ d.documentElement.classList.add('js');
 const $ = id => d.getElementById(id);
 const main = () => $('main');
 const TOAST = $('toast');
+// The capture bar (the owner's mock-up, 2026-10-16 KST): one element at the top of every view, kept across redraws
+// (show() puts it first in main), so it never moves the focus and its content is drawn in place (renderBar). A status
+// region that is not live itself: what it says is announced by the page's one announcer, and only when the capture
+// starts, finishes or stops (sayNow), never route by route.
+const BAR = h('div', { id: 'runbar', class: 'runbar', role: 'status', 'aria-live': 'off', hidden: true });
 // Every view is drawn through here. The undo toast then sits in the view's dock, right above the decision bar and
 // moving with it (never over it, whatever the bar's height), or at the bottom of the window when the view has no bar
 // (then it is the last child of main: inside a landmark, as everything on the page);
@@ -19,7 +24,8 @@ function show(...nodes) {
   // a redraw (a live update, an undo) never drops the focus to the page: the same control again, or the row, or the
   // view's heading
   const was = d.activeElement, inside = was instanceof Element && was !== main() && main().contains(was);
-  main().replaceChildren(...nodes);
+  // the capture bar first, on every view (not on a page that lost the board, nor in label mode)
+  main().replaceChildren(...(S.stopped || S.mode === 'label' ? [] : [BAR]), ...nodes);
   if (inside && !main().contains(d.activeElement)) {
     // (a control that is gone names where its focus goes: `data-fallback`, e.g. the guard card's heading)
     const again = (was.id && $(was.id)) || (was.classList.contains('row') && S.focus && $(`row-${S.focus}`)) || (was.dataset?.fallback && $(was.dataset.fallback));
@@ -41,6 +47,8 @@ function fitDock() {
 }
 const nowMs = () => performance.now();
 const store = { get: k => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+// this tab's own memory (the capture bar's "looked at"): every access in try/catch; without it the page still works
+const tabStore = { get: k => { try { return sessionStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, v); } catch {} } };
 
 const S = {
   token: null, mode: 'board', labeller: null, version: null, summary: null,
@@ -58,6 +66,8 @@ const S = {
   keysOn: store.get('nunchi.keys') !== 'off',
   undo: null, clock: new W.DecisionClock(), images: new Map(), nowSay: new W.NowAnnouncer(), nowTimer: null, stopped: false,
   label: null,
+  barSay: null,          // what the announcer says for the capture bar, the same while its capture's state is (W.barSay)
+  looked: new Set(),     // full checks whose findings this tab has looked at since they landed (and in tabStore)
 };
 
 // ---- DOM, without parsing markup -----------------------------------------------------------------------------------
@@ -201,6 +211,7 @@ function lost(why) {
     h('p', { class: 'muted small' }, 'The key is never stored on disk or shown to your AI, so a reload needs a fresh link.')));
   $('nav').hidden = true;
   TOAST.hidden = true;
+  d.title = TITLE;                                        // (no capture bar on a tab that lost the board)
   const ls = $('live-status'); if (ls) ls.textContent = '';
   // said, and the focus on the message (it replaced whatever had the focus)
   focusHeading();
@@ -329,8 +340,80 @@ async function refreshSummary() {
   $('nav-findings').textContent = String(active);
   $('nav-screens').textContent = String(s.counts.screens);
   renderSharebox();
+  renderBar();
   sayNow();
 }
+
+// ---- the capture bar (the owner's mock-up, 2026-10-16 KST) ----------------------------------------------------------
+// At the top of every view: "◐ Full check running · 33 of 72 screens · about 16 min left", a meter "46%", and "You can
+// keep deciding; findings update as screens land." (another capture: M5b's "Capture running · run 0007 · …" with the
+// same meter); "✓ Full check done · 72 screens · 16 new groups [Review findings →]" until this tab has looked at the
+// findings (opened Findings, or pressed the button); "! Capture stopped · run 0002 (its process ended) — tell your AI
+// “capture again”". The lines are the summary's (summary.mjs bar: one source), and the Now lines it says are not
+// listed again on Progress. While a capture runs with a percentage, the tab's title says it: "46% · nunchi board".
+const TITLE = d.title;
+const lookedKey = run => `nunchi.looked.${run}`;
+const lookedAt = run => S.looked.has(run) || tabStore.get(lookedKey(run)) === '1';
+// The bar the page shows now, or null.
+function barNow() {
+  const b = S.summary?.bar;
+  if (!b || S.stopped || S.mode === 'label') return null;
+  return b.state === 'done' && lookedAt(b.run) ? null : b;
+}
+// The findings were looked at (Findings or a finding opened, or the bar's button pressed): a done bar goes, in this
+// tab.
+function lookedAtFindings() {
+  const b = S.summary?.bar;
+  if (b?.state !== 'done' || lookedAt(b.run)) return;
+  S.looked.add(b.run);
+  tabStore.set(lookedKey(b.run), '1');
+  renderBar();
+  sayNow();
+}
+let barDrawn = null;
+function renderBar() {
+  const b = barNow();
+  d.title = b?.state === 'running' && Number.isInteger(b.pct) ? `${b.pct}% · ${TITLE}` : TITLE;
+  const drawn = b ? JSON.stringify([b.state, b.full, b.run, b.line, b.done, b.routes, b.pct]) : '';
+  if (drawn === barDrawn) return;
+  barDrawn = drawn;
+  // a redraw keeps the focus on the bar's button (and a bar that goes gives it to the view's heading, never the page)
+  const had = d.activeElement === $('runbar-review');
+  if (!b) { BAR.hidden = true; BAR.className = 'runbar'; BAR.replaceChildren(); if (had) focusHeading(); return; }
+  const Wd = W.BAR_WORDS;
+  let review = null;
+  if (b.state === 'done') {
+    review = h('a', { class: 'b b-primary runbar-btn', id: 'runbar-review', href: '#/findings' }, Wd.review);
+    review.addEventListener('click', async e => {
+      e.preventDefault();
+      lookedAtFindings();
+      // on Findings already: the list as it is now (what landed), its first row focused
+      if (S.route.view === 'findings') { try { await loadList(); renderFindings(true); } catch (err) { announce(err.message); } } else go('#/findings');
+    });
+  }
+  const kids = [h('p', { class: 'runbar-line' }, h('span', { class: 'runbar-mark', 'aria-hidden': 'true' }, Wd.mark[b.state] || ''), h('span', { class: 'runbar-text', id: 'runbar-text' }, b.line), review)];
+  if (b.state === 'running' && Number.isInteger(b.routes) && b.routes > 0) {
+    const done = Math.max(0, Math.min(b.routes, Number.isInteger(b.done) ? b.done : 0));
+    const meter = h('div', { class: 'runbar-meter', id: 'runbar-meter', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(b.routes), 'aria-valuenow': String(done),
+      'aria-valuetext': Wd.meterText(done, b.routes, b.pct), 'aria-label': b.full ? Wd.meterFull : Wd.meterRun(b.run) }, h('span'));
+    meter.firstChild.style.width = `${Number.isInteger(b.pct) ? b.pct : 0}%`;
+    kids.push(h('div', { class: 'runbar-row' }, meter, Number.isInteger(b.pct) ? h('span', { class: 'runbar-pct', 'aria-hidden': 'true' }, `${b.pct}%`) : null));
+  }
+  if (b.state === 'running') kids.push(h('p', { class: 'runbar-note small' }, Wd.note));
+  BAR.className = `runbar runbar-${b.state}`;
+  BAR.replaceChildren(...kids);
+  BAR.hidden = false;
+  if (had) $('runbar-review')?.focus({ preventScroll: true });
+}
+// The Now lines Progress lists: the summary's, less those the bar says. → [{ line, title }]
+function nowListed() {
+  const s = S.summary, b = barNow();
+  const said = new Set(b ? b.replaces : []);
+  return (s?.now || []).map((line, i) => ({ line, title: s.nowTitles?.[i] || null, i })).filter(x => !said.has(x.i));
+}
+// A first look's line where a view repeats it (Coverage, the wall): while the bar says the full check after it, the
+// first look's own words (the bar has the rest, once).
+const firstLookText = q => (barNow()?.full && barNow().state === 'running' ? W.COVERAGE.quick(q.screens) : q.text || null);
 
 // ---- Sharing (spec §7.6; the owner's mock-up, design "nunchi share" §5.3) -----------------------------------------------
 // Under the run box and on Progress: "Sharing  On · Google Drive · My Drive/nunchi/shop [Turn off]" and "Last sent: run
@@ -384,7 +467,10 @@ async function toggleShare(btnId) {
 function sayNow() {
   clearTimeout(S.nowTimer);
   S.nowTimer = null;
-  const r = S.nowSay.update(S.summary?.now || [], Date.now());
+  // the bar's capture said when it starts, finishes or stops (W.barSay: the same words while its state is), then the
+  // other Now lines
+  S.barSay = W.barSay(S.barSay, barNow());
+  const r = S.nowSay.update([...(S.barSay ? [S.barSay.text] : []), ...nowListed().map(x => x.line)], Date.now());
   if (r.say) announce(r.say);
   if (r.wait !== null) S.nowTimer = setTimeout(sayNow, r.wait);
 }
@@ -414,6 +500,8 @@ async function router() {
   const from = S.route.view;
   S.route = r;
   setNav(r.view === 'detail' ? 'findings' : r.view === 'screen' ? 'screens' : r.view);
+  // the findings opened: a full check done is looked at (its bar goes, in this tab)
+  if (r.view === 'findings' || r.view === 'detail') lookedAtFindings();
   if (r.view !== 'detail' && r.view !== 'screen') S.returnTo = null;
   try {
     if (r.view === 'progress') renderProgress(true);
@@ -444,7 +532,8 @@ function renderProgress(focus = false) {
     h('div', { class: 'hero-top' }, h('div', null, h('p', { class: 'eyebrow' }, 'Ready to ship?'), h('h1', { id: 'h-progress' }, s.verdict.text)), decideBtn),
     handoff, s.treeChanged ? h('p', { class: 'banner banner-warn', role: 'note' }, W.WORDS['tree-differs']) : null, h('div', { class: 'tiles' }, tiles),
     h('p', { class: 'muted small' }, 'Open findings by severity: groups still open, to fix, or held for later. A group is one defect, however many screens show it.'),
-    s.now.length ? h('ul', { class: 'now', 'aria-label': 'Now' }, s.now.map((l, i) => h('li', { title: s.nowTitles?.[i] || null }, l))) : null);
+    // (the captures the bar at the top says are not listed again)
+    (now => (now.length ? h('ul', { class: 'now', 'aria-label': 'Now' }, now.map(x => h('li', { title: x.title }, x.line))) : null))(nowListed()));
   const confirm = s.confirm.length ? confirmPanel(s.confirm) : null;
   const checks = s.checks && s.checks.requested && !s.checks.approved ? checksPanel(s.checks) : null;
   const guards = s.guards && s.guards.rows.length ? guardsPanel(s.guards) : null;
@@ -1121,7 +1210,7 @@ function compareBox(g) {
 const NARROW = typeof matchMedia === 'function' ? matchMedia('(max-width: 760px)') : null;
 const narrow = () => !!NARROW?.matches;
 NARROW?.addEventListener?.('change', () => { if (S.route.view === 'coverage') CV.render(); else if (S.route.view === 'screens') SC.renderWall(); else if (S.route.view === 'screen') SC.renderDetail(); });
-const views = { d, $, h, show, api, bg, shot, copyButton, announce, go, focusHeading, sevOf, main, narrow, get S() { return S; } };
+const views = { d, $, h, show, api, bg, shot, copyButton, announce, go, focusHeading, sevOf, main, narrow, barNow, firstLookText, get S() { return S; } };
 CV.init(views); SC.init(views);
 
 // ---- keys -----------------------------------------------------------------------------------------------------------

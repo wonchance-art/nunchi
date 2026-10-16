@@ -294,7 +294,7 @@ test('review: a capture\'s progress file is there from the moment its folder is 
 });
 
 test('review: the Now lines are announced at most every 10 s — what changed first, never only the first line, and a change inside the 10 s said once they pass', () => {
-  const FCD = 'Full check done: 2 new groups', run = n => `Capture running · run 0004 · ${n} of 25 screens (about 6 min left)`, STOP = STOPPED('0004');
+  const FCD = 'Full check done · 2 screens · 2 new groups', run = n => `Capture running · run 0004 · ${n} of 25 screens (about 6 min left)`, STOP = STOPPED('0004');
   const a = new NowAnnouncer();
   assert.deepEqual(a.update([FCD], 0), { say: FCD, wait: null }, 'on load: the first line');
   assert.deepEqual(a.update([FCD], 4000), { say: null, wait: null }, 'nothing changed');
@@ -321,7 +321,7 @@ test('review: one order of the Now lines for the board and `findings` (the full 
   const { b, call } = await board(p);
   try {
     const now = (await call('/api/summary')).now;
-    assert.deepEqual(now, ['Full check done: 0 new groups', RUNNING('0004')]);
+    assert.deepEqual(now, ['Full check done · 2 screens · 0 new groups', RUNNING('0004')]);
     const out = (await cli(p.root, 'findings')).stdout;
     assert.ok(out.includes(`\n${now.join('\n')}\n`), out);
   } finally { await b.close(); }

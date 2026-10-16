@@ -123,9 +123,27 @@ export const VIEWS_CSS = `
 /* the list's numbers look like the markers on the screenshot (ringed), in the dark too */
 @media (prefers-color-scheme:dark){.board .sp-list .numb{box-shadow:0 0 0 2px #FFFFFF}}
 @media (max-width:760px){.sd-figs.sd-both{flex-direction:column}.sd-both>.sd-fig{width:100%}.sd-sbs{grid-template-columns:1fr}.sd-hint{display:none}}
+/* the capture bar at the top of every view (the owner's mock-up, 2026-10-16 KST): its words 4.5:1 and more on its ground
+   (accent ink on accent soft; done: good on good soft; stopped: high ink on high soft), the meter's fill (accent) and edge
+   (accent ink) 3:1 and more against the track (the panel) and the ground, light and dark. Nothing in it moves. */
+.runbar{max-width:1180px;margin:0 auto 18px;padding:12px 16px;border:1px solid var(--accent);border-radius:12px;background:var(--accent-soft);color:var(--accent-ink);display:flex;flex-direction:column;gap:8px}
+.runbar p{margin:0}
+.runbar-line{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-weight:600}
+.runbar-mark{flex:none;width:1.25em;text-align:center;font-family:"Apple Symbols","Segoe UI Symbol","DejaVu Sans","Noto Sans Symbols 2",sans-serif;font-weight:700}
+.runbar-text{flex:1 1 220px;min-width:0;overflow-wrap:anywhere}
+.runbar-btn{flex:none}
+.runbar-row{display:flex;align-items:center;gap:10px}
+.runbar-meter{flex:1 1 auto;min-width:0;height:12px;border:1px solid var(--accent-ink);border-radius:6px;background:var(--panel);overflow:hidden}
+.runbar-meter>span{display:block;height:100%;background:var(--accent)}
+.runbar-pct{flex:none;min-width:4ch;text-align:right;font-weight:600}
+.runbar-done{border-color:var(--good);background:var(--good-soft);color:var(--good)}
+.runbar-stopped{border-color:var(--high-ink);background:var(--high-soft);color:var(--high-ink)}
 /* forced colours (Windows contrast themes): the selected cell, the edges of segmented buttons and the pressed one, and
-   the markers keep their own drawing (their dark disc and white ring read on any screenshot) */
+   the markers keep their own drawing (their dark disc and white ring read on any screenshot); the capture bar keeps its
+   edge, and its meter its track, edge and fill in system colours */
 @media (forced-colors:active){
+.runbar{border:1px solid CanvasText}
+.runbar-meter{forced-color-adjust:none;background:Canvas;border:1px solid CanvasText}.runbar-meter>span{background:Highlight}
 .cv-cell.cv-sel{outline:3px solid Highlight;outline-offset:-3px}
 .tag-look{border:1px solid CanvasText}
 .board .seg-b{border:1px solid ButtonText}.board .seg-b button{border:1px solid ButtonText}

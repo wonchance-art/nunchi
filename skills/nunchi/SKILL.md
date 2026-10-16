@@ -55,15 +55,23 @@ the command after it. Where nunchi's messages or the board say `nunchi <command>
 5. Start the **full check** at once, in the background (it takes minutes; run it as a background command where your
    tool can): `capture --url <base> --samples .nunchi/samples.json` (add `--canaries 3` when the AI review will
    follow: see Canaries below); then run `open` (step 7), so the user sees the first look in the board with how far
-   the full check is. It captures every route, at phone and desktop width,
+   the full check is. As it starts, it prints one line, such as "Full check started in the background · 72 screens
+   · about 20 min. The board shows how far it is; you can keep deciding." ("about N min" only when an earlier run
+   measured a basis). Tell the user at once, in their own language, what that line says: that the full check started
+   in the background, how many screens, about how long (only if the line says it), that the board shows how far it
+   is, and that they can keep deciding meanwhile. It captures every route, at phone and desktop width,
    screens that load data also in forced empty, error, slow and offline states. Screens the first look recorded are
    replayed, the rest are recorded and merged into the recording (`network: … merge`); later runs replay them so
-   screens are comparable. While it runs, the board says how far it is ("First look: 8 key screens · full check
-   running, 12 of 25 screens (about 6 min left)") and the verdict is "Too early to say": never give the user a
-   verdict, a count or a time the engine did not print. The AI review (hunt, verify, re-check) and the fix loop work
-   on the full check, never on a first look (the engine picks it by itself).
-6. When the full check is done: if it printed `RUN PROBLEM`, say so first and fix that before reading any finding.
-   Then run `findings`: the verdict, "Full check done: N new groups" when it followed a first look, and one line per
+   screens are comparable. While it runs, the board shows it in a bar at the top of every view ("Full check running ·
+   33 of 72 screens · about 16 min left", with a meter, and the percentage in the tab's title) and the verdict is
+   "Too early to say": never give the user a verdict, a count or a time the engine did not print. When the background
+   command finishes, it has printed the done line (before `captured …`), such as "Full check done · 72 screens · 16
+   new groups": say it (in their language) first, unprompted, before anything else, then go on with step 6. The AI
+   review (hunt, verify, re-check) and the fix loop work on the full check, never on a first look (the engine picks
+   it by itself).
+6. When the full check is done: after its done line ("Full check done · 72 screens · 16 new groups", step 5), if it
+   printed `RUN PROBLEM`, say so and fix that before reading any finding. Then run `findings`: the verdict, the same
+   "Full check done · …" line when it followed a first look, and one line per
    kind of defect, most serious first, with how many screens and places it covers. Report those kinds, not
    individual occurrences; `findings --rule <rule>` lists the groups of one kind (a group is one defect however many
    screens show it). Say which routes were skipped and why, and how many replay misses there were. In replay every
