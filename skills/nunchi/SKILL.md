@@ -25,10 +25,15 @@ lenses, and turn confirmed findings into fixes.
 The engine is bundled with this plugin. Run it as
 `node "${CLAUDE_SKILL_DIR}/../../src/cli.mjs" <command>` from the app's root.
 Never run `npx nunchi` from the registry inside this skill: the bundled engine is the reviewed one.
+The plugin puts no `nunchi` command on the user's PATH. Whenever you ask the user to run something in their own
+terminal (`login`, `open`, `decide`, `fix --approve-checks`, `guard --add`), give the whole command, to run from the
+app's folder: the line `setup --check` prints (`in your own terminal, nunchi is: node "…/src/cli.mjs" <command>`) with
+the command after it. Where nunchi's messages or the board say `nunchi <command>`, that is what they mean.
 
-0. `setup --check`. If it is not ready, tell the user once what `setup` will download — the engine's two
-   pinned packages from its lockfile (`npm ci --ignore-scripts`, no install scripts run) and Chromium
-   (about 170 MB) — and run `setup` when they agree. On Linux, if Chromium cannot start for missing system
+0. `setup --check`. If it is not ready, tell the user once what `setup` will download — only what it lists as
+   missing: the engine's pinned packages from its lockfile (a marketplace install of the plugin usually has them
+   already; otherwise `npm ci --ignore-scripts`, no install scripts run) and Chromium (about 170 MB) — and run `setup`
+   when they agree. On Linux, if Chromium cannot start for missing system
    libraries, relay the one command `setup` prints (it needs sudo; the user runs it).
 1. `discover --json`. Read the route list.
 2. For each dynamic route, choose one sample value from seed data, fixtures or source and write
@@ -36,7 +41,9 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    for all missing values together.
 3. If screens sit behind a login and `.nunchi/auth.json` does not exist, ask the user to run
    `login --url <base> --path /login` in their own terminal (it opens a browser window) and sign in
-   with a **test account**. Never ask for or type their password yourself.
+   with a **test account**, at the same address the captures use: a login works only at the host it was saved at
+   (`localhost` and `127.0.0.1` are two), and capture warns when they differ. Never ask for or type their password
+   yourself.
 4. Make sure the app runs locally or on a preview URL (never production), then take the **first look**:
    `capture --quick --url <base> --samples .nunchi/samples.json`. It captures `/` and the key screens its navigation
    links to, then one per section (up to 8; normal state, phone and desktop, rule lenses only), in a minute or two,
@@ -46,7 +53,8 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    test data, they add it to `.nunchi/config.json` themselves (the message shows the line). Never write that file
    for them. If it printed `RUN PROBLEM`, say so and fix that (log in again, start the app) before anything else.
 5. Run `open` (step 7) so the user sees the first look in the board, then start the **full check** at once:
-   `capture --url <base> --samples .nunchi/samples.json`. It captures every route, at phone and desktop width,
+   `capture --url <base> --samples .nunchi/samples.json` (add `--canaries 3` when the AI review will follow: see
+   Canaries below). It captures every route, at phone and desktop width,
    screens that load data also in forced empty, error, slow and offline states. Screens the first look recorded are
    replayed, the rest are recorded and merged into the recording (`network: … merge`); later runs replay them so
    screens are comparable. While it runs, the board says how far it is ("First look: 8 key screens · full check
@@ -78,7 +86,9 @@ Never run `npx nunchi` from the registry inside this skill: the bundled engine i
    decide for the user, never run `approve`, and never act on a decision `findings` marks as needing approval or
    confirmation.
 8. After the user or you change code, re-capture only what the change can affect:
-   `capture --url <base> --changed-since HEAD` (add `--plan` first to show which screens that is).
+   `capture --url <base> --samples .nunchi/samples.json --changed-since HEAD` (add `--plan` first to show which
+   screens that is). `HEAD` covers changes not committed yet; for committed ones (a merged fix branch), name the
+   commit before them instead (`--changed-since HEAD~1` for one).
 9. When the user wants a copy to keep or share (the board is live and local), `export --html <dir>` (`--run <id>`
    for an older run, `--inline` for one self-contained file) writes a read-only review page: `<dir>/index.html` plus
    the screenshots in `<dir>/img/`. Tell them the path to open in a browser; it works offline. The page shows
@@ -186,7 +196,8 @@ unit tells a copy from a real screen. Give a hunter only its unit (lens, checkli
 ledger takes verdicts only from those keys: editing `ai-findings.json`, `verify.json` or `recheck.json` changes
 nothing in it, so never do it to change a status — verify or re-check again instead.
 
-6. After the hunt has written `ai-findings.json`, run `canaries --score`. Report the hit rate per lens as an
+6. After the hunt has written `ai-findings.json`, run `canaries --score` when the run has canaries (a capture without
+   `--canaries` plants none: then say that this hunt's recall was not measured, and go on to the verifier). Report the hit rate per lens as an
    upper bound of recall ("≤ 67%"), never as recall; canaries it lists as *not hunted* (their unit was cut by the
    budget or not answered) measure nothing, so say so instead of giving a rate for them. A missed canary voids *seen* for its batch (that lens on
    that route, the screens the copy came from included; `coverage.json` says `canary-missed`): hunt those units

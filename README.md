@@ -22,9 +22,16 @@ and don't write tests.
 /plugin install nunchi@nunchi
 ```
 
-Then, in your app's folder, ask Claude to check your app with nunchi (or run the `nunchi` skill). The first time,
-it runs `nunchi setup`: the pinned packages from the lockfile (`npm ci --ignore-scripts`, so no install scripts
-run) and Chromium (~170 MB), once.
+(From a shell: `claude plugin marketplace add wonchance-art/nunchi`, then `claude plugin install nunchi@nunchi`.)
+A session that was already open loads it after `/reload-plugins`. Then, in your app's folder with its dev server
+running, ask Claude to check your app with nunchi, or type `/nunchi` (`/nunchi:nunchi` is its full name, for when
+another command is also called `nunchi`). The first time, it runs `nunchi setup`: Chromium (~170 MB), once, and the
+pinned packages from the lockfile if Claude Code did not already install them with the plugin (`npm ci
+--ignore-scripts`, so no install scripts run).
+
+The plugin adds no `nunchi` command to your PATH. A few steps are yours to run in your own terminal (`nunchi login`
+with a test account, approving the check scripts, adding guards): `nunchi setup --check` prints the command to use
+there, `node "<where the plugin is>/src/cli.mjs"`, and Claude gives you the whole line when it asks.
 
 Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, then
 `node src/cli.mjs capture --url http://localhost:3000 --root <your app>`.
@@ -128,6 +135,9 @@ AI에게 할 한 문장까지 봅니다), 그리고 고치기(`nunchi fix`)까�
 카드에서 사람이 추가하고(색 규칙은 `nunchi guard --add colour-literal`), CI에서는 `nunchi check`(브라우저 · 네트워크
 없이, `--base`로 방지 규칙을 약하게 한 PR도 잡음)로 돌립니다. `nunchi export --format md|json|sarif`로 결과를 내보낼 수
 있습니다(비밀값은 종류만, 화면 문구는 요청할 때만).
-Claude Code에서 `/plugin marketplace add wonchance-art/nunchi` → `/plugin install nunchi@nunchi` 후, 앱 폴더에서
-nunchi로 검사해 달라고 하면 됩니다. 처음 한 번 `nunchi setup`이 고정된 패키지 2개(설치 스크립트 없이)와 Chromium(약
-170MB)을 받습니다. 실제 앱에서 틀리게 잡는 것이 있으면 알려 주세요.
+Claude Code에서 `/plugin marketplace add wonchance-art/nunchi` → `/plugin install nunchi@nunchi` 후(이미 열린 세션은
+`/reload-plugins`), 앱 폴더에서 nunchi로 검사해 달라고 하거나 `/nunchi`(전체 이름 `/nunchi:nunchi`)를 입력하면 됩니다.
+처음 한 번 `nunchi setup`이 Chromium(약 170MB)을, Claude Code가 플러그인과 함께 설치하지 않았다면 고정된 패키지도(설치
+스크립트 없이) 받습니다. 플러그인은 PATH에 `nunchi` 명령을 추가하지 않으므로, 내 터미널에서 직접 할 일(`login`, 검사
+스크립트 승인, 방지 규칙 추가)은 `nunchi setup --check`가 알려 주는 `node "…/src/cli.mjs"` 명령으로 실행합니다. 실제
+앱에서 틀리게 잡는 것이 있으면 알려 주세요.
