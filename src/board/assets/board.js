@@ -328,7 +328,56 @@ async function refreshSummary() {
   const active = Object.values(s.bySeverity).reduce((a, b) => a + b, 0);
   $('nav-findings').textContent = String(active);
   $('nav-screens').textContent = String(s.counts.screens);
+  renderSharebox();
   sayNow();
+}
+
+// ---- Sharing (spec §7.6; the owner's mock-up, design "nunchi share" §5.3) -----------------------------------------------
+// Under the run box and on Progress: "Sharing  On · Google Drive · My Drive/nunchi/shop [Turn off]" and "Last sent: run
+// 0007 · 26 visitor screens · 12 min ago"; or "Sharing  Off" and "Set up in your terminal: nunchi share --setup".
+// [Turn on] shows only once a destination was set up in the terminal; it asks first, Cancel focused. The board never
+// changes the destination or what goes.
+function shareNode(where) {
+  const sh = S.summary?.share;
+  if (!sh || S.mode === 'label') return null;
+  const id = `share-${where}`, Wd = W.SHARE_WORDS;
+  const state = sh.setUp ? `${sh.on ? Wd.on : Wd.off} · ${sh.where}` : Wd.off;
+  const can = sh.setUp && (sh.on || sh.canTurnOn);
+  const btn = can ? h('button', { type: 'button', class: 'b share-btn', id: `${id}-btn`, 'aria-label': `${sh.on ? Wd.turnOff : Wd.turnOn} sharing` }, sh.on ? Wd.turnOff : Wd.turnOn) : null;
+  if (btn) btn.addEventListener('click', () => toggleShare(`${id}-btn`));
+  const ago = sh.last ? (W.relativeTime(sh.last.at, Date.now()) ?? when(sh.last.at)) : null;
+  const sub = !sh.setUp ? Wd.setUp : sh.stopped ? sh.stopped : sh.waiting ? Wd.waiting(sh.waiting) : sh.last ? Wd.lastSent(sh.last.run, sh.last.screens, sh.last.visitorOnly, ago) : null;
+  return h('div', { class: `share share-${where}`, role: 'group', 'aria-labelledby': `${id}-h` },
+    h('div', { class: 'share-top' }, h('p', { class: 'share-line' }, h('span', { class: 'share-label', id: `${id}-h` }, Wd.title), ' ', h('span', { class: 'share-state', id: `${id}-state` }, state)), btn),
+    sub ? h('p', { class: 'share-sub small', id: `${id}-sub` }, sub) : null);
+}
+function renderSharebox() {
+  const box = $('sharebox');
+  if (!box) return;
+  const was = d.activeElement?.id;
+  const node = shareNode('s');
+  box.hidden = !node;
+  box.replaceChildren(...(node ? [node] : []));
+  if (was && was.startsWith('share-s') && $(was)) $(was).focus();
+}
+async function toggleShare(btnId) {
+  const sh = S.summary?.share;
+  if (!sh) return;
+  const on = !sh.on;
+  const again = () => { const b = $(btnId); if (b) b.focus(); };
+  try {
+    try { await api('/api/share', { method: 'POST', body: { on } }); }
+    catch (e) {
+      if (e.status !== 409 || !e.data?.confirm) throw e;
+      const c = e.data.confirm;
+      if (!(await ask(c.text, c.ok, c.more))) { again(); return; }
+      await api('/api/share', { method: 'POST', body: { on, confirmed: true } });
+    }
+    await refreshSummary();
+    if (S.route.view === 'progress') renderProgress();
+    announce(on ? W.SHARE_WORDS.turnedOn : W.SHARE_WORDS.turnedOff);
+    again();
+  } catch (e) { announce(e.message); again(); }
 }
 // The Now lines, announced at most every 10 s (design §3.4): what changed, the first changed line first, and a change
 // inside the 10 s said once they have passed, never dropped (M5b review: shared.mjs NowAnnouncer)
@@ -417,7 +466,7 @@ function renderProgress(focus = false) {
       sc.notSeen ? h('li', null, `${W.plural(sc.notSeen, 'screen')} not seen: ${sc.reasons.join(', ')}`) : null,
       s.ai.coverage?.budget ? h('li', null, `${W.plural(s.ai.coverage.budget, 'cell')} ${W.WORDS['not-seen-budget'].replace(/^Not checked/, 'not checked')}`) : null,
       s.ai.needsYou ? h('li', { class: 'warn' }, `${W.plural(s.ai.needsYou, 'AI finding')} need you: the re-check could not tell whether they are gone`) : null,
-      s.health.problems.map(p => h('li', { class: 'warn' }, `Run problem: ${p.status} (${p.scenes}/${p.of} screens) — ${WHY[p.status] || ''}`))));
+      s.health.problems.map(p => h('li', { class: 'warn' }, `Run problem: ${p.status} (${p.scenes}/${p.of} screens) — ${WHY[p.status] || ''}`))), shareNode('p'));
   const counts = h('section', { class: 'panel-box', 'aria-labelledby': 'h-status' }, h('h2', { id: 'h-status' }, 'Decisions'),
     h('ul', { class: 'statuses' }, W.FILTERS.filter(([k]) => k !== 'all').map(([k, label]) => h('li', null, h('span', { class: `st st-${k}` }, label), ' ', h('b', null, String(s.byStatus[k] || 0))))),
     s.fixNeedsYou ? h('p', { class: 'warn small' }, `${s.fixNeedsYou} to fix ${s.fixNeedsYou === 1 ? 'needs' : 'need'} you: ${s.fixNeedsYou === 1 ? 'its fix waits' : 'their fixes wait'} for you here, not for your AI.`) : null,
@@ -774,11 +823,11 @@ function hideToast() {
 }
 
 // A question that cannot misfire: the safe choice has the focus.
-function ask(text, ok = 'Yes') {
+function ask(text, ok = 'Yes', more = null) {
   return new Promise(res => {
     const dlg = $('dialog');
     const no = h('button', { type: 'button', class: 'b' }, 'Cancel'), yes = h('button', { type: 'button', class: 'b b-primary' }, ok);
-    dlg.replaceChildren(h('h2', { id: 'dialog-title' }, text), h('div', { class: 'dialog-actions' }, no, yes));
+    dlg.replaceChildren(h('h2', { id: 'dialog-title' }, text), more ? h('p', { class: 'small dialog-more' }, more) : null, h('div', { class: 'dialog-actions' }, no, yes));
     const done = v => { dlg.close(); res(v); };
     no.addEventListener('click', () => done(false)); yes.addEventListener('click', () => done(true));
     dlg.addEventListener('cancel', () => res(false), { once: true });

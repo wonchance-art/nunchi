@@ -30,7 +30,9 @@ import { coverageView, aiOnChecked } from './coverage.mjs';
 import { wallOut, screenDetail } from './screens.mjs';
 import { BASE_CSS, BOARD_CSS } from './look.mjs';
 import { VIEWS_CSS } from './look-views.mjs';
-import { decidedText, CAP_MS, fixingMinutes, AGENT_WORDS } from './shared.mjs';
+import { decidedText, CAP_MS, fixingMinutes, AGENT_WORDS, SHARE_WORDS, shareWhere, shareBoardWhere } from './shared.mjs';
+import { readShare, readShareLog, setOn, artifactUrl, lastSent, kst } from '../share/config.mjs';
+import { machineWord } from '../share/setup.mjs';
 import * as P from '../project.mjs';
 import { DECISIONS, protectOf, approvalKey, reasonProblem } from '../ledger.mjs';
 import { listRuns, workTree, captureStates } from '../runs.mjs';
@@ -397,6 +399,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     if (post && path === '/api/fix-accept') return fixAccept(res, await readJsonBody(req));
     if (post && path === '/api/fix-undo') return fixUndo(res, await readJsonBody(req));
     if (post && path === '/api/guard') return guardToggle(res, await readJsonBody(req));
+    if (post && path === '/api/share') return shareToggle(res, await readJsonBody(req));
     return fail(res, 404, 'not found');
   };
 
@@ -492,9 +495,47 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
       guards: m.guardOffer?.rows.length ? { title: OFFER_TITLE, unreadable: m.guardsUnreadable ? safe(m.guardsUnreadable, 600) : null,
         rows: m.guardOffer.rows.map(r => ({ kind: r.kind, text: safe(rowText(r), 200), label: safe(r.label, 200), added: r.added })) } : null,
       counts: { groups: m.groups.length, screens: m.latestEv?.scenes.length || 0 },
+      share: shareOut(),
       treeChanged: !!(runTree && now && now !== runTree),
       warnings: [...warnings].map(w => safe(w, 400)),
     };
+  }
+
+  // Sharing (spec §7.6, the owner's §5.3 mock-up): on or off, where, the last send, and whether [Turn on] may show (a
+  // destination set up in the terminal, not stopped). The setup's strings are the person's data: cleaned and clipped.
+  function shareOut() {
+    let cfg, log;
+    try { cfg = readShare(stateDir); log = readShareLog(stateDir); } catch { return { setUp: false, on: false, unreadable: true }; }
+    if (!cfg) return { setUp: false, on: false };
+    const dest = { ...cfg.dest, url: artifactUrl(cfg, log) };
+    const last = lastSent(log);
+    const waiting = cfg.on && cfg.dest.kind === 'artifact' && log?.sealed && !log.sealed.published ? safe(String(log.sealed.run), 12) : null;
+    return { setUp: true, on: cfg.on, kind: cfg.dest.kind, where: safe(shareBoardWhere(dest), 300), canTurnOn: !cfg.on && !cfg.stopped,
+      stopped: cfg.stopped ? safe(SHARE_WORDS.stopped[cfg.stopped.why] || SHARE_WORDS.setUp, 300) : null, waiting,
+      last: last ? { run: safe(String(last.run), 12), screens: Number(last.screens) || 0, visitorOnly: last.visitorOnly !== false, at: safe(String(last.at), 40) } : null };
+  }
+  // [Turn on] / [Turn off] (POST /api/share {on, confirmed}): off is anyone's; on only for a destination set up in the
+  // terminal and not stopped, and only once the person confirmed the question (409 with it first, as decide does)
+  function shareToggle(res, body) {
+    if (typeof body.on !== 'boolean') return fail(res, 400, 'on: true or false');
+    let cfg;
+    try { cfg = readShare(stateDir); } catch (e) { return fail(res, 409, safe(e.message, 400), { stale: true }); }
+    if (!body.on) {
+      if (cfg?.on) setOn(stateDir, false, { channel: 'board', at: kst(now()), generation: genFile });
+      cache = null;
+      return send(res, 200, { ok: true, on: false });
+    }
+    if (!cfg) return fail(res, 409, SHARE_WORDS.setUp, { stale: true });
+    if (cfg.stopped) return fail(res, 409, safe(SHARE_WORDS.stopped[cfg.stopped.why] || SHARE_WORDS.setUp, 300), { stale: true });
+    if (cfg.on) return send(res, 200, { ok: true, on: true });
+    if (body.confirmed !== true) {
+      let log = null; try { log = readShareLog(stateDir); } catch {}
+      const dest = { ...cfg.dest, url: artifactUrl(cfg, log) };
+      return fail(res, 409, 'confirm', { confirm: { text: safe(SHARE_WORDS.ask(cfg.app, dest, cfg.when, cfg.include), 600), more: safe(SHARE_WORDS.consent(machineWord(), shareWhere(dest)), 1200), ok: SHARE_WORDS.turnOn } });
+    }
+    const r = setOn(stateDir, true, { channel: 'board', at: kst(now()), generation: genFile });
+    cache = null;
+    return r.refused ? fail(res, 409, SHARE_WORDS.setUp, { stale: true }) : send(res, 200, { ok: true, on: true });
   }
 
   // ---- writes ------------------------------------------------------------------------------------------------------

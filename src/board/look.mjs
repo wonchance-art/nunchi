@@ -249,5 +249,13 @@ dialog h2{font-size:17px;margin:0 0 10px}.dialog-actions{display:flex;flex-wrap:
 @media (prefers-color-scheme:dark){.b-primary,.b-primary:hover{color:#141518}
 /* the toast is light on the dark board, so it stands out from the panel and the ground (3:1 or more) */
 .toast{background:#ECEDEF;color:#141518}.toast .b{color:#141518;border-color:#6B7079}.toast .b:hover{background:#D9DBDF}.toast :focus-visible{outline-color:#141518}}
+/* sharing (spec §7.6): the run box's neighbour in the sidebar (Progress has the same lines on a phone) and a block in
+   Progress's run panel */
+.sharebox{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--soft)}
+.share{display:flex;flex-direction:column;gap:6px;font-size:13px}.share-p{border-top:1px solid var(--line-soft);padding-top:12px;font-size:14px}
+.share-top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 10px}
+.share-line{margin:0;color:var(--ink);overflow-wrap:anywhere}.share-label{font-weight:600}.share-sub{margin:0;color:var(--muted);overflow-wrap:anywhere}
+.dialog-more{margin:0 0 4px;color:var(--ink-2)}
+@media (max-width:760px){.sharebox{display:none!important}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
 `;
