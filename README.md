@@ -101,6 +101,17 @@ Without Claude Code, from a clone of this repository: `node src/cli.mjs setup`, 
   replaced by their kind, text from your screens left out unless `--include-page-text`, paths relative to your
   repository and routes as templates
 
+- **Sharing results with a Claude session in the cloud** (`nunchi share`, a 0.2 preview): off until you set it up
+  in your own terminal (`nunchi share --setup`, confirmed with a code you type; your AI cannot). You choose where: a
+  private Claude artifact (your AI publishes it, and Claude Code asks you before every publish), a Google Drive folder
+  synced on your machine (nunchi writes files there, nothing else), or a private GitHub repository of its own (pushed
+  with your git login; before each push nunchi checks, without your login, that it does not answer: a public one is
+  refused). By default only screens seen as a visitor go, without text from your screens; never your saved login,
+  recordings, cookies or tokens, and a screen whose text looks like a key goes without its screenshot. A screenshot can
+  still show anything on the screen: use a test account and test data. A cloud session that fixes something proposes
+  commits on a branch; only a re-capture on your machine says what is fixed. `nunchi share --off` stops it. If you only
+  want to work from claude.ai while your machine runs the captures, Claude Code's Remote Control sends nothing off it
+
 Being measured (0.1): the AI lenses (copy, states, visual judgment) with a separate verifier, the fix loop, the guards
 with `nunchi check`, and the first look are built; their gates are not measured yet.
 
@@ -139,7 +150,11 @@ AI에게 할 한 문장까지 봅니다), 그리고 고치기(`nunchi fix`)까�
 막는 방지 규칙(`window.confirm`, `href="#"`, JSX의 `.message`, `{{ }}`, 토큰 밖 색)은 한 묶음의 고치기가 끝나면 진행판
 카드에서 사람이 추가하고(색 규칙은 `nunchi guard --add colour-literal`), CI에서는 `nunchi check`(브라우저 · 네트워크
 없이, `--base`로 방지 규칙을 약하게 한 PR도 잡음)로 돌립니다. `nunchi export --format md|json|sarif`로 결과를 내보낼 수
-있습니다(비밀값은 종류만, 화면 문구는 요청할 때만).
+있습니다(비밀값은 종류만, 화면 문구는 요청할 때만). 클라우드의 Claude 세션에 결과를 보내는 `nunchi share`(0.2 미리보기)는
+내 터미널에서 `nunchi share --setup`으로 직접 켜야만 동작합니다(입력하는 확인 코드, AI는 켤 수 없음). 비공개 Claude
+아티팩트(게시할 때마다 Claude Code가 묻습니다) · 동기화되는 Google Drive 폴더 · 결과 전용 비공개 GitHub 저장소(로그인 없이
+열리면 공개로 보고 보내지 않음) 중에서 고르고, 기본으로는 손님 화면의 스크린샷만, 화면 문구 없이 나갑니다. 로그인 정보 ·
+녹화 · 쿠키 · 토큰은 나가지 않습니다. 끄기는 `nunchi share --off`.
 Claude Code에서 `/plugin marketplace add wonchance-art/nunchi` → `/plugin install nunchi@nunchi` 후(이미 열린 세션은
 `/reload-plugins`), 앱 폴더에서 nunchi로 검사해 달라고 하거나 `/nunchi`(전체 이름 `/nunchi:nunchi`)를 입력하면 됩니다.
 처음 한 번 `nunchi setup`이 Chromium(약 170MB)을, Claude Code가 플러그인과 함께 설치하지 않았다면 고정된 패키지도(설치
