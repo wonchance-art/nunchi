@@ -6,7 +6,7 @@ import { cpSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { dependencyState } from '../src/setup.mjs';
+import { dependencyState, downloadFailedWords, terminalCommand } from '../src/setup.mjs';
 import { tmp } from './fixtures/tmp.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -20,6 +20,10 @@ test('fresh install without node_modules: setup --check says what is missing, ca
   const r = JSON.parse(check.stdout);
   assert.equal(r.ready, false);
   assert.deepEqual(r.dependencies.packages, { '@babel/parser': { want: '7.29.9', have: null }, 'axe-core': { want: '4.13.0', have: null }, 'playwright-core': { want: '1.63.0', have: null } });
+  // the plugin adds no `nunchi` to the person's PATH: setup says the whole command for their own terminal
+  assert.equal(r.command, `node "${join(copy, 'src', 'cli.mjs')}"`);
+  const words = cli('setup', '--check');
+  assert.ok(words.stdout.split('\n').includes(`in your own terminal, nunchi is: node "${join(copy, 'src', 'cli.mjs')}" <command>  (the plugin adds no nunchi command to your PATH)`), words.stdout);
   const cap = cli('capture', '--url', 'http://127.0.0.1:9', '--routes', '/');
   assert.equal(cap.status, 2);
   assert.match(cap.stderr, /Run `nunchi setup` once/);
@@ -32,4 +36,15 @@ test('fresh install without node_modules: setup --check says what is missing, ca
 
 test('the development checkout has the pinned versions', () => {
   assert.equal(dependencyState(ROOT).ok, true, JSON.stringify(dependencyState(ROOT)));
+});
+
+test('the Chromium download failing is said as a download failure; the Linux system-library command only on Linux', () => {
+  const root = join('/opt', 'engine');
+  for (const platform of ['darwin', 'win32', 'linux']) {
+    const w = downloadFailedWords(platform, root);
+    assert.match(w, /the Chromium download failed \(see above: no network, a proxy that blocks it, or a full disk\)\. Run `nunchi setup` again once that is fixed, or point NUNCHI_BROWSER at an installed Chrome or Chromium\./);
+    if (platform === 'linux') assert.ok(w.includes(`node "${join(root, 'node_modules', 'playwright-core', 'cli.js')}" install --with-deps chromium (needs sudo)`), w);
+    else assert.doesNotMatch(w, /Linux|sudo|with-deps/, `${platform}: nothing about Linux`);
+  }
+  assert.equal(terminalCommand(root), `node "${join(root, 'src', 'cli.mjs')}"`);
 });

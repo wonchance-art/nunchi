@@ -32,6 +32,18 @@ export async function browserState(root = ENGINE_ROOT) {
   return { ok: !!path && existsSync(path), path, from: 'playwright-core' };
 }
 
+// How a person runs this engine in their own terminal: a plugin install puts no `nunchi` command on their PATH, so the
+// skill and `setup` give the whole command (the commands only a person may run — login, approvals, guards — go there).
+export const terminalCommand = (root = ENGINE_ROOT) => `node "${join(root, 'src', 'cli.mjs')}"`;
+
+// What `setup` says when the Chromium download fails. The download is what failed (a network, a proxy, the disk):
+// system libraries are another matter, and only Linux's (Chromium starts without them nowhere else).
+export function downloadFailedWords(platform = process.platform, root = ENGINE_ROOT) {
+  return 'nunchi setup: the Chromium download failed (see above: no network, a proxy that blocks it, or a full disk). ' +
+    'Run `nunchi setup` again once that is fixed, or point NUNCHI_BROWSER at an installed Chrome or Chromium.' +
+    (platform === 'linux' ? ` On Linux, if Chromium then cannot start for missing system libraries: node "${join(root, 'node_modules', 'playwright-core', 'cli.js')}" install --with-deps chromium (needs sudo).` : '');
+}
+
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const run = (cmd, args, cwd) => spawnSync(cmd, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' }).status;
 
@@ -45,12 +57,8 @@ export async function setup({ root = ENGINE_ROOT, check = false, browser = true,
   let chrome = await browserState(root);
   if (deps.ok && !chrome.ok && browser && !check) {
     log('nunchi setup: downloading Chromium with the pinned playwright-core (about 170 MB, once)…');
-    if (run(process.execPath, [join(root, 'node_modules', 'playwright-core', 'cli.js'), 'install', 'chromium'], root) !== 0) {
-      log('nunchi setup: the Chromium download failed. On Linux, missing system libraries are installed with: ' +
-        `node "${join(root, 'node_modules', 'playwright-core', 'cli.js')}" install --with-deps chromium (needs sudo). ` +
-        'Or point NUNCHI_BROWSER at an installed Chrome/Chromium.');
-    }
+    if (run(process.execPath, [join(root, 'node_modules', 'playwright-core', 'cli.js'), 'install', 'chromium'], root) !== 0) log(downloadFailedWords(process.platform, root));
     chrome = await browserState(root);
   }
-  return { ready: deps.ok && (chrome.ok || !browser), dependencies: deps, browser: chrome };
+  return { ready: deps.ok && (chrome.ok || !browser), dependencies: deps, browser: chrome, command: terminalCommand(root) };
 }

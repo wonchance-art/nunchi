@@ -321,6 +321,7 @@ if (cmd === 'setup') {
     for (const [name, d] of Object.entries(r.dependencies.packages)) console.log(`${d.have === d.want ? 'ok     ' : 'missing'} ${name}@${d.want}${d.have && d.have !== d.want ? ` (found ${d.have})` : ''}`);
     console.log(`${r.browser.ok ? 'ok     ' : 'missing'} Chromium${r.browser.path ? ` ${r.browser.path}` : ''}`);
     console.log(r.ready ? 'ready' : args.check ? 'not ready: run `nunchi setup`' : 'not ready (see the messages above)');
+    console.log(`in your own terminal, nunchi is: ${r.command} <command>  (the plugin adds no nunchi command to your PATH)`);
   }
   process.exit(r.ready ? 0 : 1);
 } else if (cmd === 'map') {
