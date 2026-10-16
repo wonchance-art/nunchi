@@ -7,6 +7,8 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, symlinkSync, cpSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import net from 'node:net';
+import dns from 'node:dns';
 import { share, countLines } from '../src/share/send.mjs';
 import { readShareLog } from '../src/share/config.mjs';
 import { folderProblem, folderOf, driveRoots, shownRoot } from '../src/share/dest-folder.mjs';
@@ -62,6 +64,24 @@ test('share scan: one hit stops the send, said by location and kind, and nothing
   setUp(q, { kind: 'drive', root: e.root, folder: 'nunchi/shop' });
   assert.equal(share({ project: q.root, nunchiDir: q.nunchi, version: '0.0.0-test', deps: { now } }).code, 0);
   assert.deepEqual(readdirSync(join(e.root, 'nunchi', 'shop')), ['0001']);
+});
+
+test('share (A) and (C): nunchi makes no network call — the artifact pack is only prepared and sealed, the Drive folder only written (every socket refused here)', () => {
+  const p = shareProject();
+  const d = driveHome(p);
+  const tried = [];
+  const orig = { connect: net.Socket.prototype.connect, lookup: dns.lookup };
+  net.Socket.prototype.connect = function (...a) { tried.push(`connect ${JSON.stringify(a[0])}`); throw new Error('no network in this test'); };
+  dns.lookup = (host, ...a) => { tried.push(`lookup ${host}`); a.at(-1)(new Error('no network in this test')); };
+  try {
+    setUp(p, { kind: 'drive', root: d.root, folder: 'nunchi/shop' });
+    assert.equal(send(p).code, 0);
+    setUp(p, { kind: 'artifact', url: 'https://claude.ai/artifact/AbCdEf123456' });
+    const r = send(p);
+    assert.equal(r.code, 0);
+    assert.equal(r.lines.at(-1), '  Claude Code will ask you to allow the publish.');
+  } finally { net.Socket.prototype.connect = orig.connect; dns.lookup = orig.lookup; }
+  assert.deepEqual(tried, []);
 });
 
 test('share (C): retention keeps the last 5 runs, removing only the files nunchi\'s list says it wrote', () => {
