@@ -485,7 +485,9 @@ For the owner's decisions (2026-10-16 KST): ① no flip at 10:00: the line, the 
 (nothing is said again past the board's polls and the announcer's 10 s); ② the pages apart from the screens on Leafy's
 first look: Progress's "Screens checked 12 of 12", the sidebar's 12, the heading "3 pages, 12 screens", the chips,
 "6 shown of 12", the filters' counts and "0 not checked" all count the screens, a screen that did not load stays "Not
-checked", and the section's axe, contrast, forced colours and keys (End, Home, Space, Enter); ③ a writer on this machine
+checked", and the section's axe, contrast, forced colours and keys (End, Home, Space, Enter); its cards as the owner's
+mock-up draws them, compact (under half a screen card's height) with who and the widths on the second line, read in
+each card's name, from the run's plan (a plan of the visitor and the phone only says "Visitor · Phone"); ③ a writer on this machine
 against another machine's, at 9:59.999 and at 10:00 (`test/board-m5b.test.mjs`, `test/board-m5b-e2e.test.mjs`).
 
 *Measured (M5b, this development container, shared with other sessions).* With the owner's decisions (2026-10-16 KST),
@@ -2577,14 +2579,18 @@ with the last full check.
   chip, and, while no full check has been made (after one, the last full check checked those pages: Coverage shows
   how), each page its `flow.json` names that it did not open (less a page that needs a sample address, which the
   full check skips too) is one card, "Not checked yet", in a section of its own after the page groups ("Not checked yet
-  · 4 pages"; the owner's decision on the review of PR #36, 2026-10-16 KST): no screenshot, no finding, nothing to open (Enter or Space
-  shows what it is, with the first look's line). They are pages, not screens: shown under Show "All" and the search
+  · 4 pages"; the owner's decision on the review of PR #36, 2026-10-16 KST). The owner's mock-up: a compact text card,
+  no image area — the path; who and which widths the full check captures it for, in the screen cards' words and
+  separators ("Visitor, Signed in · Desktop, Phone": the run's plan, run.json `scope`, the people of the saved login and
+  the widths; the plan captures every page for every one of them, so no page lists fewer); the chip. No finding,
+  nothing to open (Enter or Space shows what it is, with that line and the first look's). They are pages, not screens: shown under Show "All" and the search
   whatever the width, who and state; never in a screen count (the heading, "N shown of M", the filters' counts, "not
   checked", Progress's "Screens checked"); "Not checked" keeps the captured screens that did not load; the page groups
   name only the pages captured. The chips are text in the board's chip
   style (`.tag`): `--accent-ink` on `--accent-soft`, and `--ink-2` on the panel with a `--control` edge (measured: 9.7:1
   and 8.3:1 light, 9.0:1 and 9.9:1 dark), with a 1 px edge in forced colours, and each card's accessible name says
-  them ("Plant shelf, Visitor · Desktop · Normal: 1 medium. First look…", "/checkout: Not checked yet"). A live redraw
+  them ("Plant shelf, Visitor · Desktop · Normal: 1 medium. First look…", "/checkout, Visitor, Signed in · Desktop, Phone: Not
+  checked yet"). A live redraw
   keeps what is being typed in the search, and where (review of PR #36).
 - *Screen detail (`#/screens/<run>/<scene>`, the latest run's screens):* the badge, a coverage line ("Rule checks ✓ · AI
   2 of 3 lenses (L6 doesn’t count) · Changed since run 0009", so "clean" is never read as "fully looked at") and
@@ -2612,7 +2618,8 @@ findings, text }] }, open, changed?, say }] }], byLens[], running, capture { run
 summary's line, M5b); `/api/summary`'s `ai.coverage` is `{ cells, seen,
 budget, run, aiRun }`, Coverage's count. `GET /api/screens` gains per screen `checked`, `changed`, `ai { seen, of,
 budget }`, `group`, `open`, `look` (M5b: `first` on a first look's screens), and `baseline`, `quick`, `groups` and,
-during a first look, `notYet` (M5b: the pages it did not open, `{ key, run, route, look }`, one each). `GET /api/screens/:run/:scene` (the latest run only;
+during a first look, `notYet` (M5b: the pages it did not open, `{ key, run, route, look, persons, viewports, label }`, one
+each). `GET /api/screens/:run/:scene` (the latest run only;
 ids checked; 404 otherwise) → `{ run, key, id, scene, baseline, page, widths, findings[{ group, n, …, viewports, others,
 at }], fixedHere[], compare[{ kind, id, label, per | gone }], coverage, siblings[], judged }`. Strings go out through
 `safe()` as everywhere. The live version also names the `coverage.json` of every run (its size and modification time: a

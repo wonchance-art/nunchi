@@ -106,13 +106,14 @@ export function renderWall(focus = false) {
   };
   // a page the first look did not open (M5b, one card per page: the owner's decision on the review of PR #36): no
   // screenshot, no finding, nothing to open; Space, Enter or a click show what it is
+  // (the owner's mock-up: a compact text card — the path, who and which widths the full check captures it for, the chip)
   const pageCard = pg => {
-    const th = h('span', { class: 'thumb thumb-d thumb-none', 'aria-hidden': 'true' }, 'No screenshot');
     const b = h('button', { type: 'button', id: cardId(pg.key), 'data-key': pg.key, tabindex: pg.key === S.wallFocus ? '0' : '-1', 'aria-pressed': sel?.key === pg.key ? 'true' : 'false',
-      'aria-label': `${pg.route}: ${T.notYet}` }, h('span', { class: 'thumb-wrap' }, th), h('span', { class: 'card-body' }, h('span', { class: 'card-name mono' }, pg.route), lookChip(pg)));
+      'aria-label': `${pg.route}${pg.label ? `, ${pg.label}` : ''}: ${T.notYet}` },
+    h('span', { class: 'card-body' }, h('span', { class: 'card-name mono' }, pg.route), pg.label ? h('span', { class: 'small muted' }, pg.label) : null, lookChip(pg)));
     b.addEventListener('click', e => { quickLook(pg.key); if (e.detail > 0) X.$('panel-h')?.focus(); });
     b.addEventListener('focus', () => { S.wallFocus = pg.key; for (const c of X.main().querySelectorAll('.card button')) c.setAttribute('tabindex', c === b ? '0' : '-1'); });
-    return h('li', { class: 'card' }, b);
+    return h('li', { class: 'card card-page' }, b);
   };
   let panel = h('p', { class: 'panels-empty muted' }, 'Select a screen to see it large, with its findings outlined and numbered.');
   if (sel) {
@@ -123,7 +124,7 @@ export function renderWall(focus = false) {
     open.addEventListener('click', () => openScreen(sel));
     // a page the first look did not open (M5b): what it is, and the first look's line (what comes next); nothing to open
     panel = sel.look === 'not-yet' ? h('section', { class: 'screen-panel', 'aria-labelledby': 'panel-h' },
-      h('div', { class: 'sp-head' }, h('div', null, h('h2', { id: 'panel-h', tabindex: '-1' }, sel.route)), close),
+      h('div', { class: 'sp-head' }, h('div', null, h('h2', { id: 'panel-h', tabindex: '-1' }, sel.route), sel.label ? h('p', { class: 'muted small' }, sel.label) : null), close),
       h('p', { class: 'pad sp-notyet' }, lookChip(sel), S.screens.quick?.text ? h('span', { class: 'small muted' }, S.screens.quick.text) : null))
       : h('section', { class: 'screen-panel', 'aria-labelledby': 'panel-h' },
         h('div', { class: 'sp-head' }, h('div', null, h('h2', { id: 'panel-h', tabindex: '-1' }, sel.h1 || sel.route), h('p', { class: 'muted small' }, h('span', { class: 'mono' }, sel.route), ` · ${sel.label}`)), close),

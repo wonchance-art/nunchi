@@ -9,7 +9,7 @@ import { allRecords } from '../fix/records.mjs';
 import { redactUrl } from '../network.mjs';
 import { screenWall, sceneOut, safe, RUN_ID } from './model.mjs';
 import { cellOf, sceneCoverage, checkedScene, isQuick } from './coverage.mjs';
-import { SEV, VPS, STATUS_LABEL, MORE_STATUS, SCREENS as T, drawable, listText } from './shared.mjs';
+import { SEV, VPS, PERSONS, WHO, WIDTH, STATUS_LABEL, MORE_STATUS, SCREENS as T, drawable, listText } from './shared.mjs';
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -63,17 +63,24 @@ function pageItems(model, s) {
 // every page of the app since M5b; one written before names only its own, so there are none), less a page that needs a
 // sample address (run.json `skipped`: the full check skips it too, so it is not "not checked yet"), in the flow's order.
 // One card per page (the owner's decision on the review of PR #36), counted apart from the screens: no screenshot, no
-// finding, nothing to open.
+// finding, nothing to open. Each says who and which widths the full check captures it for, in the screen cards' words
+// ("Visitor, Signed in · Desktop, Phone"): the run's plan (run.json `scope`: the people of the saved login and the
+// widths, the full check's own; the plan captures every page for every one of them, a page for some people only being
+// a screen the full check finds sent elsewhere).
 function notYet(model, flow) {
   const ev = model.latestEv;
   const meta = isObj(ev.meta) ? ev.meta : {};
+  const scope = isObj(meta.scope) ? meta.scope : {};
+  const from = (list, known, fallback) => known.filter(x => (Array.isArray(list) ? list : fallback).includes(x));
+  const persons = from(scope.persons, PERSONS, ev.scenes.map(s => s.person)), vps = from(scope.viewports, VPS, ev.scenes.map(s => s.viewport));
+  const label = [persons.map(x => WHO[x]).join(', '), vps.map(x => WIDTH[x]).join(', ')].filter(Boolean).join(' · ');
   const have = new Set(ev.scenes.map(s => s.route));
   const skip = new Set((Array.isArray(meta.skipped) ? meta.skipped : []).filter(x => isObj(x) && x.reason === 'needs-sample').map(x => x.route));
   const order = Array.isArray(flow?.order) ? flow.order : [];
   const rank = r => { const i = order.indexOf(r); return i < 0 ? order.length : i; };
   return [...new Set((Array.isArray(flow?.nodes) ? flow.nodes : []).filter(n => isObj(n) && typeof n.route === 'string' && n.captured !== true).map(n => n.route))]
     .filter(r => !have.has(r) && !skip.has(r)).sort((a, b) => rank(a) - rank(b) || cmp(a, b))
-    .map(route => ({ key: `${ev.runId}/not-yet:${safe(route, 200)}`, run: ev.runId, route: safe(route, 200), look: 'not-yet' }));
+    .map(route => ({ key: `${ev.runId}/not-yet:${safe(route, 200)}`, run: ev.runId, route: safe(route, 200), look: 'not-yet', persons, viewports: vps, label }));
 }
 
 // /api/screens: the wall (model.mjs screenWall) with, per screen, `changed` (pixels or text differ from the same screen

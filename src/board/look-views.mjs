@@ -92,6 +92,8 @@ export const VIEWS_CSS = `
 .tag-first{background:var(--accent-soft);color:var(--accent-ink)}
 .tag-notyet{background:var(--panel);color:var(--ink-2);box-shadow:inset 0 0 0 1px var(--control)}
 .sp-notyet{display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin:0;padding:14px 18px}
+/* a page the first look did not open: a compact text card (no image area), in a list of its own */
+#wall-notyet .wall{align-items:start}.board .card-page button{height:auto}
 /* Screen detail */
 .sd .detail-nav,.sd-box{max-width:1180px}
 .sd .pn{align-items:center;flex-wrap:wrap}

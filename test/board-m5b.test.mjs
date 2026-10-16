@@ -206,7 +206,9 @@ test('the wall during a first look: "First look" on its key screens; before any 
     assert.deepEqual(w.groups, [{ id: '/', title: 'Pages · /, /cart' }, { id: '/garden', title: '/garden/*' }]);
     // the pages it did not open (its flow names every page), one card per page, apart from the screens, in the flow's
     // order (this fixture's flow orders only the pages it opened: the others by name)
-    assert.deepEqual(w.notYet, ['/checkout', '/garden/[plot]', '/help', '/login'].map(route => ({ key: `0001/not-yet:${route}`, run: '0001', route, look: 'not-yet' })));
+    // each says who and which widths the full check captures it for: the run's plan, in the screen cards' words
+    assert.deepEqual(w.notYet, ['/checkout', '/garden/[plot]', '/help', '/login'].map(route => ({ key: `0001/not-yet:${route}`, run: '0001', route, look: 'not-yet',
+      persons: ['guest', 'signed-in'], viewports: ['d', 'm'], label: 'Visitor, Signed in · Desktop, Phone' })));
     // Progress counts the same screens (the owner's decision ②: pages are never screens)
     assert.deepEqual((await call('/api/summary')).health.scenes, { total: 12, checked: 12, notSeen: 0, reasons: [] });
   } finally { await b.close(); }
@@ -221,9 +223,16 @@ test('the wall during a first look: "First look" on its key screens; before any 
     assert.deepEqual((await call('/api/summary')).health.scenes, { total: 12, checked: 11, notSeen: 1, reasons: ['no-dom'] });
   } finally { await b.close(); }
   writeFileSync(manifest, stableJson(m));
-  // a page that needs a sample address is skipped by the full check too: not "not checked yet"
+  // a plan without a saved login and of the phone only (capture --viewports m): its own people and widths
   const meta = join(p.nunchi, 'runs', '0001', 'run.json');
-  writeFileSync(meta, stableJson({ ...JSON.parse(readFileSync(meta, 'utf8')), skipped: [{ route: '/garden/[plot]', reason: 'needs-sample' }] }));
+  const plan = JSON.parse(readFileSync(meta, 'utf8'));
+  writeFileSync(meta, stableJson({ ...plan, scope: { ...plan.scope, persons: ['guest'], viewports: ['m'] } }));
+  ({ b, call } = await board(p));
+  try {
+    assert.deepEqual([...new Set((await call('/api/screens')).notYet.map(pg => pg.label))], ['Visitor · Phone']);
+  } finally { await b.close(); }
+  // a page that needs a sample address is skipped by the full check too: not "not checked yet"
+  writeFileSync(meta, stableJson({ ...plan, skipped: [{ route: '/garden/[plot]', reason: 'needs-sample' }] }));
   ({ b, call } = await board(p));
   try {
     assert.deepEqual((await call('/api/screens')).notYet.map(pg => pg.route), ['/checkout', '/help', '/login']);

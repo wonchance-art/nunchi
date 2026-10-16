@@ -46,7 +46,9 @@ const chips = page => page.evaluate(() => {
   const of = sel => { const els = shown(sel); return { n: els.length, words: [...new Set(els.map(e => e.textContent))], least: Math.min(...els.map(e => ratio(getComputedStyle(e).color, bg(e)))),
     edge: [...new Set(els.map(e => `${getComputedStyle(e).borderTopStyle} ${getComputedStyle(e).borderTopWidth}`))] }; };
   const name = sel => document.querySelector(sel)?.closest('button')?.getAttribute('aria-label') ?? null;
+  const h = sel => Math.round(document.querySelector(sel)?.getBoundingClientRect().height ?? 0);
   return { first: of('.card .tag-first'), notYet: of('.card .tag-notyet'), firstName: name('.card .tag-first'), notYetName: name('.card .tag-notyet'),
+    who: of('.card-page .card-body .small'), heights: { screen: h('.card:not(.card-page) button'), page: h('.card-page button') },
     heading: document.getElementById('wall-g-notyet')?.textContent ?? null, counts: [document.querySelector('#screens .muted').textContent, document.getElementById('wall-shown').textContent],
     forced: matchMedia('(forced-colors: active)').matches, sideways: document.documentElement.scrollWidth > window.innerWidth + 1 };
 });
@@ -75,19 +77,23 @@ test('m5b e2e: the wall during a first look — "First look" and "Not checked ye
           facts: document.querySelector('.facts-inline').textContent, pages: [...document.querySelectorAll('#wall-notyet ul.wall > li.card > button[aria-label]')].map(b => b.getAttribute('aria-label')) };
       });
       assert.deepEqual(counts, { vp: width > 760 ? ['6', '6'] : ['Desktop (6)', 'Phone (6)'], not: width > 760 ? '0' : 'Not checked (0)', facts: '2 with open findings10 clean0 not checked6 shown of 12',
-        pages: ['/checkout: Not checked yet', '/garden/[plot]: Not checked yet', '/help: Not checked yet', '/login: Not checked yet'] }, scheme);
+        pages: ['/checkout', '/garden/[plot]', '/help', '/login'].map(r => `${r}, Visitor, Signed in · Desktop, Phone: Not checked yet`) }, scheme);
       assert.ok(c.first.least >= 4.5 && c.notYet.least >= 4.5, `${scheme}: ${c.first.least.toFixed(2)}:1, ${c.notYet.least.toFixed(2)}:1`);
       assert.match(c.firstName, /^Plant shelf, Visitor · Desktop · Normal: .+\. First look/);
-      assert.equal(c.notYetName, '/checkout: Not checked yet');
+      assert.equal(c.notYetName, '/checkout, Visitor, Signed in · Desktop, Phone: Not checked yet');
+      // the owner's mock-up: a compact text card (no image area), its second line who and which widths, 4.5:1 or more
+      assert.deepEqual([c.who.n, c.who.words], [4, ['Visitor, Signed in · Desktop, Phone']]);
+      assert.ok(c.who.least >= 4.5, `${scheme}: ${c.who.least.toFixed(2)}:1`);
+      assert.ok(c.heights.page > 0 && c.heights.page < c.heights.screen * 0.5, `${scheme}: a page card ${c.heights.page} px, a screen card ${c.heights.screen} px`);
       assert.equal(c.sideways, false);
       assert.deepEqual(await axe(page), [], `${scheme} at ${width} px`);
       // Enter on a page the first look did not open: what it is, and the first look's line; nothing to open
       await page.focus('[data-key="0001/not-yet:/checkout"]');
       await page.keyboard.press('Enter');
       await page.waitForSelector('.sp-notyet');
-      const panel = await page.evaluate(() => ({ h: document.getElementById('panel-h').textContent, chip: document.querySelector('.sp-notyet .tag-notyet')?.textContent, text: document.querySelector('.sp-notyet .small')?.textContent,
-        open: !!document.getElementById('sp-open'), hash: location.hash }));
-      assert.deepEqual(panel, { h: '/checkout', chip: 'Not checked yet', text: 'First look: 3 key screens · the full check has not started — tell your AI “full check”', open: false,
+      const panel = await page.evaluate(() => ({ h: document.getElementById('panel-h').textContent, who: document.querySelector('.sp-head p')?.textContent, chip: document.querySelector('.sp-notyet .tag-notyet')?.textContent,
+        text: document.querySelector('.sp-notyet .small')?.textContent, open: !!document.getElementById('sp-open'), hash: location.hash }));
+      assert.deepEqual(panel, { h: '/checkout', who: 'Visitor, Signed in · Desktop, Phone', chip: 'Not checked yet', text: 'First look: 3 key screens · the full check has not started — tell your AI “full check”', open: false,
         hash: `#/screen/${encodeURIComponent('0001/not-yet:/checkout')}` });
       // the keyboard walks the screens and the pages as one wall: End to the last page, Home back to the first screen,
       // Space on a page shows it (by key position: Playwright presses by code)
