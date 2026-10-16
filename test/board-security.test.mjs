@@ -10,7 +10,7 @@ import { networkInterfaces, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from 'node:child_process';
 import { startBoard, CSP, SECURITY_HEADERS, MAX_BODY, MAX_SESSION_BODY, MAX_CONNECTIONS, LIMITS, MAX_STREAMS, openerCommand, openerEnv, sameSecret, CODE_TTL_MS, controlPath } from '../src/board/server.mjs';
-import { openBoard, stopBoards, serverEnv, real, serverCwd } from '../src/board/launch.mjs';
+import { openBoard, stopBoards, serverEnv, real, serverCwd, openWords } from '../src/board/launch.mjs';
 import { smallProject, jpeg, writeRun } from './fixtures/board-project.mjs';
 import { tmp } from './fixtures/tmp.mjs';
 
@@ -560,6 +560,26 @@ test('§3.1 the browser opener: only a board link with a launch code, by an abso
   assert.equal(win.cmd, 'C:\\Windows\\System32\\cmd.exe', 'never ComSpec');
   assert.equal(win.args.at(-1), `start "" "${url}"`);
   for (const bad of ['http://evil.example/#t=' + 'a'.repeat(64), `http://127.0.0.1:4321/#t=${'a'.repeat(64)}&x`, 'file:///etc/passwd', `http://127.0.0.1:4321/x`]) assert.throws(() => openerCommand(bad, 'linux'));
+});
+
+test('§3.1 what nunchi open says is a step that works from there: a link only from a board it started in the person\'s terminal; no opener, or a running board asked for a link, says how to get one', () => {
+  const link = `http://127.0.0.1:4321/#t=${'a'.repeat(64)}`;
+  assert.match(openWords({ port: 4321, reused: false, link }, { noBrowser: true, tty: true }), /^open this link in your browser; it works once, for 2 minutes:\n {2}http:/);
+  assert.equal(openWords({ port: 4321, reused: false, opened: true }), 'the browser shows it; it stops after 2 hours idle (nunchi open --stop stops it now)');
+  assert.equal(openWords({ port: 4321, reused: true, opened: true }), 'a fresh one-time link was opened in the browser');
+  // no opener on this machine (a container, WSL without xdg-open): never "the browser shows it"
+  for (const reused of [false, true]) {
+    const w = openWords({ port: 4321, reused, opened: false });
+    assert.doesNotMatch(w, /browser shows it|was opened in the browser/);
+    assert.match(w, /no browser could be opened on this machine .*nunchi open --stop, then nunchi open --no-browser in your own terminal/);
+  }
+  // --no-browser in the person's own terminal while a board runs: it hands out no link, so not "run nunchi open in your own terminal" again
+  const again = openWords({ port: 4321, reused: true }, { noBrowser: true, tty: true });
+  assert.doesNotMatch(again, /run nunchi open in your own terminal$/);
+  assert.match(again, /a running board hands out no link: nunchi open --stop, then nunchi open --no-browser/);
+  // the agent's --no-browser (no terminal): the person opens it from their own terminal
+  assert.equal(openWords({ port: 4321, reused: false }, { noBrowser: true, tty: false }), 'no browser was opened; to open it, run nunchi open in your own terminal');
+  assert.ok(!/[0-9a-f]{64}/.test(openWords({ port: 4321, reused: true, opened: false })), 'no key in any line but the link itself');
 });
 
 test('§3.1 the opener and the detached server get an allow-listed environment: no BROWSER, PATH of the caller, LD_*, DYLD_* or NODE_*', { timeout: 60000 }, async () => {

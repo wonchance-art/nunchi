@@ -198,6 +198,9 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   // guards.json, committed and changed by the person's terminal or through git (neither bumps the generation): its mtime
   // and size
   const guardsSig = () => { try { const s = statSync(join(nunchiDir, 'guards.json')); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; } };
+  // the fix loop asking for the check scripts (`fix --plan` / `--start` write the request) and their approval from the
+  // person's terminal: neither bumps the generation, and the open board must show (or drop) the approval card
+  const checksSig = () => [checksRequestPath(stateDir), scriptsApprovedPath(stateDir)].map(f => { try { const s = statSync(f); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; } }).join(',');
   // the AI hunt's records: `canaries --score` rewrites a run's coverage.json without a ledger write (it bumps no
   // generation), and Coverage must still show the cells it voided (M7). Every run's (Coverage shows the last full
   // check, which the latest capture need not be), by size and time (a coarse file-system clock can leave the time as
@@ -211,7 +214,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   // that stops writes nothing at all (it turns stopped by the reader's clock), so what the summary's words come from (each
   // folder's state, why and progress) is part of the version
   const capturesSig = () => { const c = captureStates(runsDir); return c.length ? sha(JSON.stringify(c), 12) : '-'; };
-  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${huntsSig()}.${claimsSig()}.${coverageSig()}.${guardsSig()}.${capturesSig()}`;
+  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${huntsSig()}.${claimsSig()}.${coverageSig()}.${guardsSig()}.${capturesSig()}.${checksSig()}`;
   // claims as they are now (their minutes too) on a cached model
   const freshClaims = m => { const c = readClaims(claimsDir, now()); m.claims = c; for (const g of m.groups) g.fixing = c.get(g.id) || null; return m; };
   let cache = null;
@@ -747,13 +750,14 @@ async function main(argv) {
   record = writeRecord(board.stateDir, { pid: process.pid, port: board.port, mode: board.mode, project: board.project, socket: sockPath, ...(opt.labeller ? { labeller: opt.labeller } : {}) });
   for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, () => board.close('signal'));
   process.on('exit', cleanup);
-  if (opt.open) openInBrowser(board.newLink());
+  // whether a browser opener started (no opener on this machine: `nunchi open` says how to get a link instead)
+  const opened = opt.open ? openInBrowser(board.newLink()) : null;
   // A link is never written to stdout (anything that starts this script could read it there). It goes to the parent
   // `nunchi open` only, over the extra pipe the parent handed this process as fd 3, when the parent asked for it (its
   // own stdin and stdout are the person's terminal and no browser was opened). Started without that pipe, the board
   // hands out no link at all: it opens the browser, or nothing.
   if (opt.linkToParent) linkToParent(board.newLink());
-  process.stdout.write(JSON.stringify({ port: board.port }) + '\n');
+  process.stdout.write(JSON.stringify({ port: board.port, ...(opt.open ? { opened } : {}) }) + '\n');
 }
 
 // fd 3, when it is a pipe (never a file, a terminal or nothing): one line, the link. → whether it was written.

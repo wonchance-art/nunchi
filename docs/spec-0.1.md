@@ -2995,6 +2995,15 @@ comparison.
   them says so instead of failing with a stack trace. CI (`.github/workflows/ci.yml`) runs the tests on Linux, macOS
   and Windows × Node 20/22/24, a fresh install exactly as a plugin user gets it, and the benchmark gates.
 
-- Whether the skill can be invoked as `/nunchi` or only as `/nunchi:nunchi` once installed from the
-  marketplace (plugin skills are namespaced). Verify on a clean install.
+- *Resolved 2026-10-16 KST (first-run rehearsal on a clean install, Claude Code v2.1.301):* the skill answers to both
+  `/nunchi` and `/nunchi:nunchi`. The `/` menu lists it once, as `/nunchi:nunchi (nunchi)`, and the prompt marks a typed
+  `/nunchi` as a known command, as it does `/nunchi:nunchi` (and not `/nunchiz`). The Claude Code docs say the same
+  (skills, "How a skill gets its command name"): a plugin skill is `/plugin-name:skill-name`, and the bare `/name`
+  also invokes it unless another command already uses that name. The README says `/nunchi`, with the full name for
+  that case.
+- *Found in the same rehearsal:* a marketplace install now has `node_modules` already (Claude Code installs a plugin's
+  npm dependencies from its lockfile, with `--ignore-scripts`, when it caches it), so the first `nunchi setup` downloads
+  Chromium only; `setup` still installs the packages where they are missing (a clone, a local-path marketplace). The
+  plugin puts no `nunchi` on the person's PATH: `setup` prints the command for their own terminal, and the skill gives
+  the whole line whenever it asks the person to run one.
 - Reserve the npm name with a 0.0.x publish through trusted publishing (needs the owner's npm account).

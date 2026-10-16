@@ -1,7 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeUrl, isDataRequest, isBackendHost, emptyJson, redactJson, forceResponse, requestKey, Recording, redactUrl, redactText } from '../src/network.mjs';
+import { normalizeUrl, isDataRequest, isBackendHost, emptyJson, redactJson, forceResponse, requestKey, Recording, redactUrl, redactText, loginElsewhere } from '../src/network.mjs';
 import { pacScript } from '../src/capture.mjs';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { tmp } from './fixtures/tmp.mjs';
 
 test('normalizeUrl: sorted params, cache-busters dropped, epoch values masked', () => {
   assert.equal(normalizeUrl('http://localhost:3000/api/tasks?_=1760000000000&b=2&a=1'), 'http://localhost:3000/api/tasks?a=1&b=2');
@@ -105,4 +110,33 @@ test('request keys: credentials hashed, so distinct tokens stay distinct request
   assert.notEqual(a, b);
   assert.ok(!a.includes('one') && !b.includes('two'), a + ' ' + b);
   assert.equal(a, requestKey('GET', 'http://a/x?token=one'));
+});
+
+test('loginElsewhere: a saved login names the hosts it is for when none is the capture host (localhost and 127.0.0.1 are two); host names only', () => {
+  const cookie = (domain, value = 'invented-session-value') => ({ name: 'app_session', value, domain, path: '/', expires: -1, httpOnly: true, secure: false, sameSite: 'Lax' });
+  // signed in at 127.0.0.1, captured at localhost: the cookie is never sent
+  assert.deepEqual(loginElsewhere({ cookies: [cookie('127.0.0.1')], origins: [] }, 'http://localhost:3000'), ['127.0.0.1']);
+  assert.deepEqual(loginElsewhere({ cookies: [cookie('localhost')], origins: [] }, 'http://127.0.0.1:3000/'), ['localhost']);
+  // the same host (any port), a parent domain of it (a cookie set for .example.test), or local storage of that host: it applies
+  assert.equal(loginElsewhere({ cookies: [cookie('127.0.0.1')], origins: [] }, 'http://127.0.0.1:4100'), null);
+  assert.equal(loginElsewhere({ cookies: [cookie('.preview.example.test')], origins: [] }, 'https://app.preview.example.test'), null);
+  assert.equal(loginElsewhere({ cookies: [], origins: [{ origin: 'http://localhost:5173', localStorage: [{ name: 'sb-token', value: 'x' }] }] }, 'http://localhost:5173'), null);
+  assert.deepEqual(loginElsewhere({ cookies: [cookie('auth.example.test')], origins: [{ origin: 'http://localhost:5173', localStorage: [] }] }, 'http://127.0.0.1:5173'), ['auth.example.test', 'localhost']);
+  // a login with nothing in it, or not a storage state at all: nothing to say
+  for (const st of [{ cookies: [], origins: [] }, {}, null, 'text']) assert.equal(loginElsewhere(st, 'http://localhost:3000'), null);
+  const out = JSON.stringify(loginElsewhere({ cookies: [cookie('127.0.0.1', 'sekrit-cookie-value')], origins: [] }, 'http://localhost:3000'));
+  assert.ok(!out.includes('sekrit'), 'never a cookie value');
+});
+
+test('capture says, before it starts, that the saved login is for another host than --url (no browser: --plan)', () => {
+  const dir = tmp('nunchi-login-host-');
+  writeFileSync(join(dir, 'auth.json'), JSON.stringify({ cookies: [{ name: 'app_session', value: 'invented-session-value', domain: '127.0.0.1', path: '/' }], origins: [] }));
+  const cli = url => spawnSync(process.execPath, [fileURLToPath(new URL('../src/cli.mjs', import.meta.url)), 'capture', '--plan', '--routes', '/', '--url', url, '--auth', 'auth.json'], { cwd: dir, encoding: 'utf8' });
+  const other = cli('http://localhost:3999');
+  assert.equal(other.status, 0, other.stderr);
+  assert.match(other.stderr, /^warning: the saved login is for 127\.0\.0\.1, not localhost \(a login works only at the address it was saved at\): capture at that address, or run `nunchi login --url http:\/\/localhost:3999` to sign in here$/m);
+  assert.ok(!other.stderr.includes('invented-session-value'), 'never the cookie');
+  const same = cli('http://127.0.0.1:3999');
+  assert.equal(same.status, 0, same.stderr);
+  assert.doesNotMatch(same.stderr, /saved login is for/);
 });

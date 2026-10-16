@@ -6,7 +6,7 @@ import { readFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
 import { discover } from './discover.mjs';
 import { buildSourceMap, affectedRoutes, sourceHashes } from './sourcemap.mjs';
 import { startRun, finishRun, gcRuns, latestRun, latestSweep, PROGRESS_FILE, workTree, ensureGitignore, ensurePrivate, readConfig, gitRunner, DIFF_SAFE } from './runs.mjs';
-import { baseUrlRefusal } from './network.mjs';
+import { baseUrlRefusal, loginElsewhere } from './network.mjs';
 import { codeNavigations } from './flow.mjs';
 import { readDecisions, approvalKey, buildDecision, view, DECISIONS, NOT_LOOKED_RUNS, STALE_HUNTS, latestRunOf, latestSweepOf } from './ledger.mjs';
 import { ensureStateDir, writeKey, readKey, removeKey, removeKeys, keyPath, peekKey } from './state.mjs';
@@ -321,6 +321,7 @@ if (cmd === 'setup') {
     for (const [name, d] of Object.entries(r.dependencies.packages)) console.log(`${d.have === d.want ? 'ok     ' : 'missing'} ${name}@${d.want}${d.have && d.have !== d.want ? ` (found ${d.have})` : ''}`);
     console.log(`${r.browser.ok ? 'ok     ' : 'missing'} Chromium${r.browser.path ? ` ${r.browser.path}` : ''}`);
     console.log(r.ready ? 'ready' : args.check ? 'not ready: run `nunchi setup`' : 'not ready (see the messages above)');
+    console.log(`in your own terminal, nunchi is: ${r.command} <command>  (the plugin adds no nunchi command to your PATH)`);
   }
   process.exit(r.ready ? 0 : 1);
 } else if (cmd === 'map') {
@@ -380,6 +381,12 @@ if (cmd === 'setup') {
     }
   }
   const auth = args.auth ? resolve(args.auth) : existsSync(resolve('.nunchi/auth.json')) ? resolve('.nunchi/auth.json') : null;
+  // a login saved at another host than --url (signed in at 127.0.0.1, captured at localhost) sends no cookie: said before
+  // the capture, and again with the run problem it causes (host names only)
+  let loginHosts = null;
+  if (auth && args.url) { try { loginHosts = loginElsewhere(JSON.parse(readFileSync(auth, 'utf8')), args.url); } catch {} }
+  const loginHere = loginHosts ? `the saved login is for ${loginHosts.join(', ')}, not ${new URL(args.url).hostname} (a login works only at the address it was saved at): capture at that address, or run \`nunchi login --url ${args.url}\` to sign in here` : null;
+  if (loginHere) console.error(`warning: ${loginHere}`);
   if (args.changedSince) {
     const map = buildSourceMap(root, discover(root).routes);
     let changed;
@@ -556,6 +563,7 @@ if (cmd === 'setup') {
       }
       if (fixBranch) console.log(`This ran on the fix branch ${fixBranch}: it is kept apart as a fix probe (nunchi runs --all lists it) and does not change the findings. nunchi fix --verify judges a fix; capture on your main branch for a sweep.`);
       const why = { 'login-expired': 'the saved login no longer works: signed-in screens showed the sign-in page and were not judged. Run `nunchi login` again.', 'app-unreachable': 'most screens did not load at all. Is the app running at --url?', 'recording-stale': 'most screens asked for data the recording does not have. Re-record with --network record.' };
+      if (loginHere) why['login-expired'] = `signed-in screens showed the sign-in page and were not judged: ${loginHere}.`;
       for (const p of r.manifest.health.problems) console.log(`RUN PROBLEM ${p.status} (${p.scenes}/${p.of} screens): ${why[p.status]}`);
       console.log(`rule findings: blocker ${by.blocker} · high ${by.high} · medium ${by.medium} · low ${by.low}`);
       console.log(`network: ${Object.entries(r.run.network).map(([p, m]) => `${p} ${m}`).join(' · ')}`);
@@ -727,7 +735,7 @@ if (cmd === 'setup') {
   // The live board (design §3.1): a detached server; this command returns at once. The board's key never reaches this
   // output unless stdin and stdout are the person's own terminal and no browser was opened (--no-browser).
   const nunchiDir = resolve('.nunchi');
-  const { openBoard, stopBoards } = await import('./board/launch.mjs');
+  const { openBoard, stopBoards, openWords } = await import('./board/launch.mjs');
   const st = stateOf(nunchiDir);
   if (args.stop) {
     const n = await stopBoards(st.root.dir, process.cwd());
@@ -750,9 +758,7 @@ if (cmd === 'setup') {
   catch (e) { console.error(`nunchi open: ${e.message}`); process.exit(2); }
   console.log(`board open on 127.0.0.1:${r.port}${r.reused ? ' (already running)' : ''}${args.label ? ` · label mode for ${labeller}` : ''}`);
   if (r.portIgnored) console.log(`--port ${r.portIgnored} is ignored: the running board keeps port ${r.port} (nunchi open --stop, then nunchi open --port ${r.portIgnored}, to move it)`);
-  if (r.link) console.log(`open this link in your browser; it works once, for 2 minutes:\n  ${r.link}`);
-  else if (args.noBrowser) console.log('no browser was opened; to open it, run nunchi open in your own terminal');
-  else console.log(r.reused ? 'a fresh one-time link was opened in the browser' : 'the browser shows it; it stops after 2 hours idle (nunchi open --stop stops it now)');
+  console.log(openWords(r, { noBrowser: !!args.noBrowser, tty }));
 } else if (cmd === 'runs') {
   const { listRuns, runKind } = await import('./runs.mjs');
   const dir = resolve('.nunchi/runs');
