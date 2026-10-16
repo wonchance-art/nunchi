@@ -750,13 +750,14 @@ async function main(argv) {
   record = writeRecord(board.stateDir, { pid: process.pid, port: board.port, mode: board.mode, project: board.project, socket: sockPath, ...(opt.labeller ? { labeller: opt.labeller } : {}) });
   for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(sig, () => board.close('signal'));
   process.on('exit', cleanup);
-  if (opt.open) openInBrowser(board.newLink());
+  // whether a browser opener started (no opener on this machine: `nunchi open` says how to get a link instead)
+  const opened = opt.open ? openInBrowser(board.newLink()) : null;
   // A link is never written to stdout (anything that starts this script could read it there). It goes to the parent
   // `nunchi open` only, over the extra pipe the parent handed this process as fd 3, when the parent asked for it (its
   // own stdin and stdout are the person's terminal and no browser was opened). Started without that pipe, the board
   // hands out no link at all: it opens the browser, or nothing.
   if (opt.linkToParent) linkToParent(board.newLink());
-  process.stdout.write(JSON.stringify({ port: board.port }) + '\n');
+  process.stdout.write(JSON.stringify({ port: board.port, ...(opt.open ? { opened } : {}) }) + '\n');
 }
 
 // fd 3, when it is a pipe (never a file, a terminal or nothing): one line, the link. → whether it was written.

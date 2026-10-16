@@ -724,7 +724,7 @@ if (cmd === 'setup') {
   // The live board (design §3.1): a detached server; this command returns at once. The board's key never reaches this
   // output unless stdin and stdout are the person's own terminal and no browser was opened (--no-browser).
   const nunchiDir = resolve('.nunchi');
-  const { openBoard, stopBoards } = await import('./board/launch.mjs');
+  const { openBoard, stopBoards, openWords } = await import('./board/launch.mjs');
   const st = stateOf(nunchiDir);
   if (args.stop) {
     const n = await stopBoards(st.root.dir, process.cwd());
@@ -747,9 +747,7 @@ if (cmd === 'setup') {
   catch (e) { console.error(`nunchi open: ${e.message}`); process.exit(2); }
   console.log(`board open on 127.0.0.1:${r.port}${r.reused ? ' (already running)' : ''}${args.label ? ` · label mode for ${labeller}` : ''}`);
   if (r.portIgnored) console.log(`--port ${r.portIgnored} is ignored: the running board keeps port ${r.port} (nunchi open --stop, then nunchi open --port ${r.portIgnored}, to move it)`);
-  if (r.link) console.log(`open this link in your browser; it works once, for 2 minutes:\n  ${r.link}`);
-  else if (args.noBrowser) console.log('no browser was opened; to open it, run nunchi open in your own terminal');
-  else console.log(r.reused ? 'a fresh one-time link was opened in the browser' : 'the browser shows it; it stops after 2 hours idle (nunchi open --stop stops it now)');
+  console.log(openWords(r, { noBrowser: !!args.noBrowser, tty }));
 } else if (cmd === 'runs') {
   const { listRuns, runKind } = await import('./runs.mjs');
   const dir = resolve('.nunchi/runs');

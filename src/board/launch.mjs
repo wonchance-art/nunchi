@@ -85,8 +85,8 @@ async function openUnlocked({ projectDir, stateDir, mode = 'board', labeller = n
   const live = (await boardsOf(stateDir, projectDir)).filter(b => b.mode === mode && (mode !== 'label' || b.labeller === labeller));
   if (live.length) {
     const b = live[0];
-    if (browser) await ask(b.socket, 'open');
-    return { port: b.port, reused: true, ...(port && port !== b.port ? { portIgnored: port } : {}) };
+    const opened = browser ? !!(await ask(b.socket, 'open'))?.ok : null;
+    return { port: b.port, reused: true, ...(browser ? { opened } : {}), ...(port && port !== b.port ? { portIgnored: port } : {}) };
   }
   const wantLink = !browser && linkToTerminal;
   const args = [SERVER, '--project', resolve(projectDir), '--mode', mode, ...(port ? ['--port', String(port)] : []), ...(browser ? ['--open'] : []),
@@ -101,7 +101,19 @@ async function openUnlocked({ projectDir, stateDir, mode = 'board', labeller = n
     if (wantLink && !line.error) link = await firstLine(child.stdio[3], 5000).catch(() => null);
   } finally { for (const s of child.stdio) s?.destroy(); child.unref(); }
   if (line.error) throw Object.assign(new Error(line.error), { code: 'BOARD_FAILED' });
-  return { port: line.port, reused: false, ...(link && /^http:\/\/127\.0\.0\.1:\d{1,5}\/#t=[0-9a-f]{64}$/.test(link) ? { link } : {}) };
+  return { port: line.port, reused: false, ...(browser ? { opened: line.opened !== false } : {}), ...(link && /^http:\/\/127\.0\.0\.1:\d{1,5}\/#t=[0-9a-f]{64}$/.test(link) ? { link } : {}) };
+}
+
+// What `nunchi open` says after the board answered (`r` from openBoard): the next step that works from here. A running
+// board never hands out a link (only one it starts does, to the person's own terminal), and no browser opener on this
+// machine (`opened: false`: none of the fixed list, or it failed to start) leaves a person a link to open by hand only
+// through a board started from their terminal.
+export function openWords(r, { noBrowser = false, tty = false } = {}) {
+  if (r.link) return `open this link in your browser; it works once, for 2 minutes:\n  ${r.link}`;
+  const handLink = 'nunchi open --stop, then nunchi open --no-browser in your own terminal prints a link to open by hand';
+  if (noBrowser) return r.reused && tty ? `no browser was opened, and a running board hands out no link: ${handLink}` : 'no browser was opened; to open it, run nunchi open in your own terminal';
+  if (r.opened === false) return `no browser could be opened on this machine (no opener found): ${handLink}`;
+  return r.reused ? 'a fresh one-time link was opened in the browser' : 'the browser shows it; it stops after 2 hours idle (nunchi open --stop stops it now)';
 }
 
 export async function stopBoards(stateDir, projectDir) {
