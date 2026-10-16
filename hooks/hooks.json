@@ -1,13 +1,25 @@
 {
-  "description": "nunchi: keeps the AI's tools away from the board's key, nunchi's shared state, the answer keys and the commands only a person may run (design 0.1-c §1)",
+  "description": "nunchi: keeps the AI's tools away from the board's key, nunchi's shared state, the answer keys and the commands only a person may run (design 0.1-c §1); lets an Artifact publish from .nunchi/ through only as the pack nunchi share sealed, and asks the person first; records what that publish's result says (spec §7.6)",
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|NotebookRead|Write|Edit|MultiEdit|NotebookEdit|Bash|Grep|Glob|WebFetch",
+        "matcher": "Read|NotebookRead|Write|Edit|MultiEdit|NotebookEdit|Bash|Grep|Glob|WebFetch|Artifact",
         "hooks": [
           {
             "type": "command",
             "command": "command -v node >/dev/null 2>&1 || exit 0; node \"${CLAUDE_PLUGIN_ROOT}/src/deny-hook.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Artifact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v node >/dev/null 2>&1 || exit 0; node \"${CLAUDE_PLUGIN_ROOT}/src/share/post-hook.mjs\"",
             "timeout": 10
           }
         ]

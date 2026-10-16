@@ -283,8 +283,9 @@ export function workTree(root) {
   }
 }
 
-// `.nunchi/.gitignore`: evidence, runs, recordings, login state and volatile state are local only.
-export const IGNORED = ['auth.json', 'evidence/', 'har/', 'runs/', 'state/'];
+// `.nunchi/.gitignore`: evidence, runs, recordings, login state, volatile state and the packs `nunchi share` prepares are
+// local only.
+export const IGNORED = ['auth.json', 'evidence/', 'har/', 'runs/', 'share/', 'state/'];
 export function ensureGitignore(nunchiDir) {
   mkdirSync(nunchiDir, { recursive: true });
   const f = join(nunchiDir, '.gitignore');

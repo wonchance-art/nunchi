@@ -196,6 +196,44 @@ export const GUARD_WORDS = {
   takenBack: label => `Taken back · ${label} isn't guarded.`,
   unreadable: (name, reason) => `Can't read \`${name}\`: ${reason}. Guards can't be added until it's fixed — \`git checkout -- .nunchi/guards.json\` restores the committed one.`,
 };
+// Sharing (spec §7.6; the owner's text mock-ups of 2026-10-16 KST, design "nunchi share" §5.3 and §5.4). The same
+// words in the share lines, `share --status`, the setup in the terminal and the board. `dest` is the setup's
+// destination (as data: cleaned by whoever sends it to the page).
+// - where: as the lines say it ("Google Drive · My Drive/nunchi/shop", "your artifact <its link>",
+//   "github.com/mina/nunchi-results · branch nunchi/shop");
+// - boardWhere: the board's line after "On · " ("Google Drive · My Drive/nunchi/shop", "GitHub · github.com/…").
+export const SHARE_KINDS_LABEL = { artifact: 'Claude artifact', drive: 'Google Drive', git: 'GitHub' };
+export function shareWhere(dest) {
+  if (!dest) return '';
+  if (dest.kind === 'artifact') return dest.url ? `your artifact ${dest.url}` : 'a new private artifact';
+  if (dest.kind === 'drive') return `Google Drive · My Drive/${dest.folder}`;
+  if (dest.kind === 'git') return `${dest.web} · branch ${dest.branch}`;
+  return '';
+}
+export function shareBoardWhere(dest) {
+  if (!dest) return '';
+  if (dest.kind === 'artifact') return `${SHARE_KINDS_LABEL.artifact} · ${dest.url || 'a new private artifact'}`;
+  if (dest.kind === 'drive') return `${SHARE_KINDS_LABEL.drive} · My Drive/${dest.folder}`;
+  if (dest.kind === 'git') return `${SHARE_KINDS_LABEL.git} · ${dest.web}`;
+  return '';
+}
+export const SHARE_WORDS = {
+  title: 'Sharing', on: 'On', off: 'Off', turnOn: 'Turn on', turnOff: 'Turn off', cancel: 'Cancel',
+  setUp: 'Set up in your terminal: nunchi share --setup',
+  // "Last sent: run 0007 · 26 visitor screens · 12 min ago" (the time is the page's, from the send log's)
+  lastSent: (run, screens, visitorOnly, when) => `Last sent: run ${run} · ${screens} ${visitorOnly ? 'visitor ' : ''}screen${screens === 1 ? '' : 's'}${when ? ` · ${when}` : ''}`,
+  // an artifact pack waiting for the publish your AI makes (Claude Code asks you first)
+  waiting: run => `Run ${run} is ready to share: Claude Code asks you before your AI publishes it`,
+  stays: include => (!include?.signedIn && !include?.pageText ? 'Signed-in screens and page text stay out.'
+    : include.signedIn && include.pageText ? 'Signed-in screens and page text go too.'
+      : include.signedIn ? 'Signed-in screens go too; page text stays out.' : 'Page text goes too; signed-in screens stay out.'),
+  // the board's Turn on question (Cancel has the focus)
+  ask: (app, dest, when, include) => `Send screenshots of ${app} to ${shareWhere(dest)} ${when === 'after' ? 'after each full check' : 'when you run nunchi share'}? ${SHARE_WORDS.stays(include)}`,
+  // §5.4: the consent, in the terminal's setup and under the board's question
+  consent: (machine, where) => `Sharing sends screenshots of your app off ${machine} to ${where}. Anyone who can open ${where} can see them. Use a test account and test data. nunchi leaves out your login, network recordings, cookies and tokens, and leaves out screens seen signed in and text from your screens unless you turn them on. A screenshot can still show anything that is on the screen.`,
+  stopped: { 'artifact-not-private': 'Stopped: your artifact is no longer private. Set up again in your terminal: nunchi share --setup' },
+  turnedOn: 'Sharing is on.', turnedOff: 'Sharing is off.',
+};
 export const LABELS = { 1: 'correct', 2: 'wrong', 3: 'unsure' };
 export const LABEL_WORDS = { correct: 'Correct: a real defect', wrong: 'Wrong: not a defect', unsure: 'Unsure' };
 

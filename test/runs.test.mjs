@@ -63,7 +63,7 @@ test('ensureGitignore adds missing entries once and keeps the user\'s own lines'
   const dir = tmp('ign');
   writeFileSync(join(dir, '.gitignore'), 'evidence/\nmine.txt');
   ensureGitignore(dir); ensureGitignore(dir);
-  assert.equal(readFileSync(join(dir, '.gitignore'), 'utf8'), 'evidence/\nmine.txt\nauth.json\nhar/\nruns/\nstate/\n');
+  assert.equal(readFileSync(join(dir, '.gitignore'), 'utf8'), 'evidence/\nmine.txt\nauth.json\nhar/\nruns/\nshare/\nstate/\n');
 });
 
 test('run health: whole-run failures are named once, a single bounced screen is not one', () => {
