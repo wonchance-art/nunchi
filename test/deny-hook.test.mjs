@@ -318,11 +318,13 @@ test('deny hook: the script answers exit 2 with the reason on stderr to deny, ex
   assert.equal(run({ tool_name: 'Bash', tool_input: { command: 'nunchi approve --all' }, cwd: r.root }).status, 2);
 });
 
-test('CI validates the plugin manifests (claude plugin validate --strict, the CLI pinned)', () => {
+test('CI validates the plugin manifests (claude plugin validate, strict but for the unpinned version; the CLI pinned)', () => {
   // line ends as git checks the file out (CRLF on Windows)
   const ci = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8').replace(/\r\n/g, '\n');
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
-  assert.equal(pkg.scripts['validate:plugin'], 'claude plugin validate --strict .');
+  assert.equal(pkg.scripts['validate:plugin'], 'node scripts/validate-plugin.mjs .');
+  // the script reads the CLI's own report; what it lets through is tested in plugin-manifest.test.mjs
+  assert.match(readFileSync(join(ROOT, 'scripts', 'validate-plugin.mjs'), 'utf8'), /\['plugin', 'validate', '--json', dir\]/);
   assert.match(ci, /\n {6}- run: npm run validate:plugin\n/, 'a step runs it');
   assert.match(ci, /npm install --global @anthropic-ai\/claude-code@\d+\.\d+\.\d+\n/, 'with an exact version of the CLI');
 });
