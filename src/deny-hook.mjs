@@ -35,6 +35,15 @@
 // board of this project runs (its record is in the state). Grep and Glob are denied with a base in .git, .nunchi
 // itself or .nunchi/runs, and /proc while a board runs.
 //
+// Sharing (spec §7.6): `nunchi share --setup` / `--on` (and the words `--to`, `--include-…`, `--doorbell`) are the
+// person's; `share`, `share --status` and `share --off` are anyone's. The state (where the setup and the send log live)
+// is denied as above. Denied as writes: `.nunchi/share/**` (the sealed packs: the agent may read them, as the Artifact
+// tool reads a file before it publishes it) and the Drive folder sharing writes to. Denied commands: one that copies,
+// moves, packs or uploads run files or a pack (`.nunchi/runs/**`, `.nunchi/share/**`: cp, mv, rsync, scp, tar, zip,
+// curl -T …, or `cat` redirected into another file), and `git push` / `git remote add|set-url` naming the
+// repository sharing pushes to. The Artifact tool: a publish from `.nunchi/` only as the pack nunchi share sealed, and
+// then the person is asked (share/hook.mjs).
+//
 // Honest limits (design §8.3): this matches paths and words in the tool call. A command that builds a path at run
 // time (variables, base64, a script file) is not seen. Neither this hook nor the board's channels are a security
 // boundary against code that runs as the same user: such code can read the same files and start the same processes
@@ -46,6 +55,7 @@ import { join, resolve, dirname, basename, isAbsolute, relative } from 'node:pat
 import { homedir } from 'node:os';
 import { gitRunner } from './runs.mjs';
 import { pathToFileURL } from 'node:url';
+import { sharesOf, shareFolders, shareRemotes, namesRemote, artifactRule } from './share/hook.mjs';
 
 const FOLD = process.platform === 'win32' || process.platform === 'darwin';
 const norm = p => { const s = String(p).replace(/\\/g, '/').replace(/\/+$/, ''); return FOLD ? s.toLowerCase() : s; };
@@ -88,7 +98,7 @@ function boards(stateDirs) {
   return out;
 }
 // Every state folder of this repository: `<common>/nunchi/<app>/state` for each app, and `.nunchi/state` of the cwd.
-function stateDirsOf(cwd, common) {
+export function stateDirsOf(cwd, common) {
   const out = [join(cwd, '.nunchi', 'state')];
   if (common) { try { for (const app of readdirSync(join(common, 'nunchi'))) out.push(join(common, 'nunchi', app, 'state')); } catch {} }
   return out;
@@ -133,7 +143,9 @@ export function usesNunchi(cwd) {
 export function protectedOf(cwd, { env = process.env, common = undefined, askGit = gitCommonDir } = {}) {
   const gc = common === undefined ? (usesNunchi(cwd) ? askGit(cwd) : null) : common;
   const stateDirs = stateDirsOf(cwd, gc);
-  return { cwd, common: gc, keys: keyBases(env), boards: boards(stateDirs) };
+  // sharing's setup and log (read when a rule needs them, once)
+  let shares = null;
+  return { cwd, common: gc, keys: keyBases(env), boards: boards(stateDirs), stateDirs, get shares() { return (shares ??= sharesOf(stateDirs)); } };
 }
 
 // A path (absolute, or relative to the cwd): which protection it falls under, or null. `write`: the call writes.
@@ -153,7 +165,9 @@ const WRITE_DENY = [
   [/(^|\/)\.nunchi\/lenses(\/|$)|(^|\/)\.nunchi\/lenses\.lock\.json$/, 'lens packs are approved by the person; edit them only when they ask, in their own editor'],
   [/(^|\/)\.nunchi\/config\.json$/, '.nunchi/config.json (allowHosts) is written by the user, never by the AI'],
   [/(^|\/)\.nunchi\/guards\.json$/i, GUARDS_WHY],
+  [/(^|\/)\.nunchi\/share(\/|$)/i, 'nunchi share writes .nunchi/share (the sealed packs) itself: nothing else may change a pack it sealed'],
 ];
+const SHARE_FOLDER_WHY = 'the folder sharing sends to is written by nunchi share only (the person set it up in their own terminal)';
 export function pathRule(p, prot, { write = false } = {}) {
   const abs = isAbsolute(p) ? resolve(p) : resolve(prot.cwd, p);
   for (const cand of [abs, realish(abs)]) {
@@ -166,6 +180,7 @@ export function pathRule(p, prot, { write = false } = {}) {
     }
     for (const [re, why, when] of READ_DENY) if ((when !== 'board' || prot.boards.length) && re.test(n)) return why;
     if (write) for (const [re, why] of WRITE_DENY) if (re.test(n)) return why;
+    if (write && prot.shares.length) for (const f of shareFolders(prot.shares)) if (within(cand, f) || within(cand, realish(f))) return SHARE_FOLDER_WHY;
   }
   return null;
 }
@@ -175,6 +190,14 @@ export function pathRule(p, prot, { write = false } = {}) {
 // nunchi by name (`npx nunchi@latest`, `npx -y nunchi@0.1.0` too) or by its CLI file
 const NUNCHI = /(^|[\s;&|(`'"/])(nunchi(@[\w.^~<>=*-]+)?|cli\.mjs)(?=[\s;&|)`'"]|$)/;
 const GUARD_CHANGE = /(nunchi|cli\.mjs)\b[^;&|\n]*\sguard\b[^;&|\n]*\s--(add|remove|baseline)\b/;
+// sharing's person-only flags (spec §7.6): turning it on, the destination, what goes, the doorbell
+const SHARE_SETUP = /(nunchi|cli\.mjs)\b[^;&|\n]*\sshare\b[^;&|\n]*\s--(setup|on|to|include[\w-]*|doorbell|signed-in|page-text)\b/;
+const SHARE_WHY = 'sharing is turned on and set up by the person, in their own terminal (nunchi share --setup); you may run nunchi share, nunchi share --status and nunchi share --off';
+// commands that copy, move, pack or upload what they name: run files and packs leave the machine only through nunchi share
+const COPIERS = new Set(['cp', 'mv', 'ln', 'rsync', 'scp', 'sftp', 'tar', 'zip', '7z', '7za', 'ditto', 'install', 'rclone', 'gsutil', 'pax', 'cpio', 'dd', 'tee', 'base64', 'uuencode', 'xxd', 'gzip', 'bzip2', 'xz', 'zstd']);
+const UPLOAD = { curl: /^(-T|--upload-file|-F|--form|--form-string|-d|--data(-binary|-raw|-urlencode)?|-K|--config)$|^-[A-Za-z]*T/, wget: /^--(post|put|body)-file/, http: /@/, gh: /^(gist|release|api)$/ };
+const RUN_FILES_PART = /(^|\/)\.nunchi\/(runs|share)(\/|$)/i;
+const COPY_WHY = 'run files and shared packs leave this machine only through nunchi share, as the person set it up (nunchi share --status says where)';
 // a variable that moves where nunchi writes its answer keys (or its home), set in a command that runs nunchi
 const KEY_HOME = /(^|[\s;&|(`'"])(export\s+|env\s+(-\S+\s+)*|setx?\s+)?(XDG_STATE_HOME|LOCALAPPDATA|HOME|USERPROFILE|APPDATA)=|\$env:(XDG_STATE_HOME|LOCALAPPDATA|HOME|USERPROFILE|APPDATA)\s*=/i;
 // what gives a command a pseudo-terminal: terminal multiplexers and detachers, script/expect-style wrappers, a pty
@@ -301,7 +324,8 @@ export function expandGlob(word, cwd, { max = 4000 } = {}) {
 // sample names of what the state holds (a filter that leaves the state out has to rule each of them out), the fix loop's
 // records, recording snapshots, claims and file markers included (M3)
 const STATE_FILES = ['ledger.json', 'approved.json', 'generation', 'metrics.json', 'run-id', '4242.json', '4242.sock', 'scripts-approved.json', 'labels-approved.json',
-  'checks-request.json', 'fix-plan.json', 'fixes/abcabcabcabc/1.json', 'fixes/abcabcabcabc/1-har/guest.json', 'claims/abcabcabcabc.json', 'claims/files/0f0f0f0f'];
+  'checks-request.json', 'fix-plan.json', 'fixes/abcabcabcabc/1.json', 'fixes/abcabcabcabc/1-har/guest.json', 'claims/abcabcabcabc.json', 'claims/files/0f0f0f0f',
+  'share.json', 'share-log.json', 'share/git/HEAD', 'share/no-config'];
 const KEY_FILES = ['hunt-key.json', 'verify-key.json', 'recheck-key.json'];
 const RUN_FILES = ['canaries.json', ...KEY_FILES];
 // What the AI must not read, as places (a folder, or a file) with sample names of the files a folder holds.
@@ -535,6 +559,7 @@ export function bashRule(command, prot, { depth = 0, cwd: start = prot.cwd } = {
   }
   // in the words as the shell joins them too (`nunchi guard --ad""d`, `nunchi "guard" "--add"`)
   if ([flat, ...joined].some(t => NUNCHI.test(t) && GUARD_CHANGE.test(t))) return 'guards are added, removed and re-baselined by the person (the board\'s card after a fix, or nunchi guard in their own terminal); you may propose one: nunchi guard, nunchi guard --lint';
+  if ([flat, ...joined].some(t => NUNCHI.test(t) && SHARE_SETUP.test(t))) return SHARE_WHY;
   if (NUNCHI.test(flat)) {
     if (/\b(approve)\b/.test(flat) && /(nunchi|cli\.mjs)\b[^;&|\n]*\sapprove\b/.test(flat)) return 'approving decisions is the person\'s (the board, or nunchi approve in their own terminal)';
     if (/(nunchi|cli\.mjs)\b[^;&|\n]*\s(label\b|--label\b)/.test(flat)) return 'labelling is done by a person in the board (they run nunchi open --label themselves)';
@@ -559,6 +584,15 @@ export function bashRule(command, prot, { depth = 0, cwd: start = prot.cwd } = {
     const writes = />/.test(text.replace(/\d*>&\d*-?|&>>?\s*\/dev\/null\b|\d*>>?\s*\/dev\/null\b/g, ''));
     const folderWrite = FOLDER_WRITERS.has(name) || (name === 'git' && GIT_FOLDER_WRITERS.has(args.find(a => !a.startsWith('-'))));
     const readsOnly = !writes && (READ_ONLY.has(name) || (name === 'git' && GIT_READ.has(args.find(a => !a.startsWith('-')))) || (name === 'find' && !args.some(a => /^-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/.test(a))));
+    // copying, packing or uploading run files or a pack (also `cat run-file > elsewhere`), and git pushing to the
+    // repository sharing pushes to
+    // (a redirection copies only for `cat`: a `jq` or `grep` that writes what it extracted is the agent's own work)
+    const copies = COPIERS.has(name) || (writes && name === 'cat') || (UPLOAD[name] && args.some(a => UPLOAD[name].test(a)));
+    if (name === 'git' && prot.shares.length) {
+      const sub = args.find(a => !a.startsWith('-'));
+      const remotes = shareRemotes(prot.shares);
+      if ((sub === 'push' || sub === 'remote' || sub === 'clone' || sub === 'send-pack') && remotes.length && args.some(a => namesRemote(a, remotes))) return 'the repository sharing pushes to is written by nunchi share only (the person set it up in their own terminal)';
+    }
     // path-like words, and pieces of words (`readFileSync('.git/nunchi/…')`); a glob as the files it names
     const cands = new Set();
     for (const f of forms) {
@@ -567,10 +601,12 @@ export function bashRule(command, prot, { depth = 0, cwd: start = prot.cwd } = {
     }
     for (const raw of cands) {
       if (!/[/\\.~$%]/.test(raw)) continue;
-      const p = raw.replace(/^~(?=\/|$)/, home).replace(/^\$\{?HOME\}?(?=\/|$)/, home);
+      // (`@file`: curl's and httpie's way of naming a file to send)
+      const p = raw.replace(/^@(?=[./~$])/, '').replace(/^~(?=\/|$)/, home).replace(/^\$\{?HOME\}?(?=\/|$)/, home);
       if (/\$\{?(XDG_STATE_HOME|LOCALAPPDATA)\}?|%LOCALAPPDATA%/i.test(p) && /nunchi/.test(text)) return 'the answer keys are kept out of reach of the AI';
       for (const x of GLOB_CHARS.test(p) || BRACES.test(p) ? expandGlob(p, cwd) : [p]) {
         if (folderWrite && nunchiFolder(resolve(cwd, x))) return GUARDS_WHY;
+        if (copies && [resolve(cwd, x), realish(resolve(cwd, x))].some(c => RUN_FILES_PART.test(norm(c)))) return COPY_WHY;
         const why = pathRule(resolve(cwd, x), prot, { write: !readsOnly });
         if (why) return why;
       }
@@ -639,6 +675,7 @@ export function judge(input, { env = process.env, common } = {}) {
     }
     case 'Bash': return bashRule(ti.command, prot);
     case 'WebFetch': return urlRule(ti.url, prot);
+    case 'Artifact': return artifactRule(ti, { cwd, shares: prot.shares, pathRule: (q, o) => pathRule(q, prot, o) });
     default: return null;
   }
 }
@@ -653,6 +690,8 @@ export function answer(raw, { judgeFn = judge } = {}) {
   try { input = JSON.parse(raw); } catch { return deny('the hook could not read this tool call (not JSON)'); }
   let why;
   try { why = judgeFn(input); } catch (e) { return deny(`the hook could not judge this call (${String(e?.message || e).split('\n')[0].slice(0, 200)})`); }
+  // an Artifact publish of the pack nunchi share sealed: the person is asked (a hook's "ask" forces a prompt in auto mode too)
+  if (why && typeof why === 'object' && typeof why.ask === 'string') return { status: 0, stderr: '', stdout: JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask', permissionDecisionReason: why.ask } }) };
   return why ? deny(why) : { status: 0, stderr: '' };
 }
 // The hook: the tool call on stdin; exit 0 allows it, exit 2 with a reason on stderr denies it (Claude Code shows the
@@ -661,6 +700,7 @@ async function main() {
   let raw = '';
   try { for await (const chunk of process.stdin) { raw += chunk; if (raw.length > MAX_INPUT) break; } } catch { raw = null; }
   const r = answer(raw);
+  if (r.stdout) process.stdout.write(r.stdout);
   if (r.stderr) process.stderr.write(r.stderr);
   process.exit(r.status);
 }

@@ -149,6 +149,14 @@ Usage:
                                             open it in a browser. It shows screenshots of your app: sharing it
                                             sends them off this machine. --no-page-text leaves out text from your
                                             screens (evidence text, AI claims, signed-in screens' names and links)
+  nunchi share [--run <id>] [--json] | --status | --off
+                                            Send the latest full check where you chose (preview): a private Claude
+                                            artifact (your AI publishes it; Claude Code asks you first), a Google
+                                            Drive folder synced here, or a private GitHub repository. Off until you
+                                            set it up; --status says where it went; --off stops it (anyone may)
+  nunchi share --setup | --on               In your own terminal only: choose where results go and what goes (visitor
+                                            screens by default; signed-in screens and page text only if you say so),
+                                            confirmed with a code you type. Your AI cannot
   nunchi export --format md|json|sarif [--status open,to-fix,…|all] [--include-page-text] [--out <file>] [--root <dir>]
                                             The findings as a file to share: Markdown, JSON or SARIF (code scanning).
                                             Secret-shaped strings become [secret-shaped: <kind>]; page text (evidence
@@ -199,6 +207,9 @@ function parse(argv) {
     else if (a === '--baseline') args.baseline = true;
     else if (a === '--lint') args.lint = true;
     else if (a === '--strict') args.strict = true;
+    else if (a === '--setup') args.setup = true;
+    else if (a === '--on') args.on = true;
+    else if (a === '--off') args.off = true;
     else if (a === '--no-page-text') args.noPageText = true;
     else if (['--start', '--brief', '--verify', '--undo', '--abort', '--serve', '--agent'].includes(a)) args[a.slice(2)] = argv[++i];
     else if (a === '--checks') args.checks = argv[++i];
@@ -578,6 +589,15 @@ if (cmd === 'setup') {
       for (const [p, side] of Object.entries(r.run.recordingUnsaved || {})) console.error(`warning: the recording of ${p} was busy (another capture was saving it), so what this run recorded is in ${side}; the next capture records those screens again`);
       if (misses) console.log(`replay misses: ${misses} request(s) were not in the recording and were not sent (replay never goes live); re-record with --network record`);
       for (const s of skipped) console.log(`  skipped ${s.route} (${s.reason})`);
+    }
+    // sharing (spec §7.6): after a full check, when the person chose "after" (never a first look or a fix probe); a send
+    // that cannot go is said, and never fails the capture
+    if (run && runMeta.kind === 'sweep') {
+      try {
+        const { share } = await import('./share/send.mjs');
+        const sh = share({ project: process.cwd(), nunchiDir, root, run: run.id, auto: true, version: pkg.version });
+        for (const l of sh.lines) (sh.code ? console.error : args.json ? console.error : console.log)(l);
+      } catch (e) { console.error(`warning: run ${run.id} was not shared (${String(e?.message ?? e).split('\n')[0]})`); }
     }
     if (r.manifest.health.problems.some(p => p.status === 'login-expired' || p.status === 'app-unreachable')) process.exitCode = 3;
   } catch (e) {
@@ -1293,6 +1313,10 @@ if (cmd === 'setup') {
     if (args.noPageText) console.log('Text from your screens is left out (evidence text, AI claims, the names and links of signed-in screens).');
     console.log('Open it in a browser. It holds screenshots of your app: putting it anywhere else sends them off this machine.');
   }
+} else if (cmd === 'share') {
+  // Sharing results (spec §7.6): send now, --status, --off for anyone; --setup and --on only in the person's terminal
+  const { shareCommand } = await import('./share/cli.mjs');
+  await shareCommand(args, { version: pkg.version, flagsOutside });
 } else if (cmd === 'tokens') {
   // Design supporter, Stage 0 (Tidy): a token proposal from the run's evidence. Writes into the run only.
   const { buildTokens, readRunScenes, formatTokens, tokensCss } = await import('./tokens.mjs');
