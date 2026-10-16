@@ -2176,7 +2176,16 @@ refused), its 44 px link and its contrast; the start, the stop by the clock alon
 forced colours; a writer gone. `test/quick-cli.test.mjs`: a real full check after a first look prints the start line
 (with the first look's basis) and the done line `findings` gives; with no basis, no time, and the done line before
 `captured …`; a capture with no first look before it, no start line. `test/board-m5b-e2e.test.mjs` reads the captures
-from the bar.
+from the bar. Each fails without its part (checked by undoing it: the announcer's steady words, the Now lines not
+listed twice, the findings looked at).
+
+*Measured (the capture bar, this development container, 2026-10-16 KST).* 909 tests on Node 22.22.0 (22:53–22:59), on
+Node 24.21.0 (22:59–23:05) and on Node 22 with bun off `PATH` (23:05–23:11), each as CI runs it (`node
+scripts/tcp-peak.mjs node scripts/tmp-leftovers.mjs npm test`, Chromium required): 908 pass and 1 skipped (Windows only)
+each time, nothing left in the temporary folder; `npm run validate:plugin` passes; `node bench/run.mjs --twice`
+(23:11–23:16) unchanged: rule recall 34/34, 0 false positives on 8 clean scenes, determinism identical (1,141 files),
+fingerprints 100% (52/52), 140.4 s per capture (the bench's captures have no first look before them, so they print no
+start or done line).
 
 **Decision time (§3.5).** The page's `DecisionClock` runs from showing a group (focusing its row, opening its detail)
 to the first decision key, paused while the tab is hidden and after 30 s without input, capped at 120 s. The board
