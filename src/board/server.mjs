@@ -198,6 +198,9 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
   // guards.json, committed and changed by the person's terminal or through git (neither bumps the generation): its mtime
   // and size
   const guardsSig = () => { try { const s = statSync(join(nunchiDir, 'guards.json')); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; } };
+  // the fix loop asking for the check scripts (`fix --plan` / `--start` write the request) and their approval from the
+  // person's terminal: neither bumps the generation, and the open board must show (or drop) the approval card
+  const checksSig = () => [checksRequestPath(stateDir), scriptsApprovedPath(stateDir)].map(f => { try { const s = statSync(f); return `${s.mtimeMs}:${s.size}`; } catch { return '-'; } }).join(',');
   // the AI hunt's records: `canaries --score` rewrites a run's coverage.json without a ledger write (it bumps no
   // generation), and Coverage must still show the cells it voided (M7). Every run's (Coverage shows the last full
   // check, which the latest capture need not be), by size and time (a coarse file-system clock can leave the time as
@@ -207,7 +210,7 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     for (const id of listRuns(runsDir).complete) { try { const st = statSync(join(runsDir, id, 'coverage.json')); parts.push(`${id}:${st.size}:${st.mtimeMs}`); } catch {} }
     return parts.length ? sha(parts.join('|'), 12) : '-';
   };
-  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${huntsSig()}.${claimsSig()}.${coverageSig()}.${guardsSig()}`;
+  const version = () => `${readGeneration(genFile)}.${decisionsSig()}.${huntsSig()}.${claimsSig()}.${coverageSig()}.${guardsSig()}.${checksSig()}`;
   // claims as they are now (their minutes too) on a cached model
   const freshClaims = m => { const c = readClaims(claimsDir, now()); m.claims = c; for (const g of m.groups) g.fixing = c.get(g.id) || null; return m; };
   let cache = null;

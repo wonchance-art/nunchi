@@ -428,6 +428,27 @@ test('api: /api/approve-checks approves the check profile shown, once, as the pe
   } finally { await b.close(); }
 });
 
+test('api: the fix loop asking for the check scripts changes the version, and so does an approval from the terminal: the open board shows the card, then drops it', async () => {
+  const p = smallProject();
+  writeFileSync(join(p.root, 'package.json'), JSON.stringify({ name: 'x', scripts: { build: 'next build' } }));
+  const { b, call } = await board(p);
+  try {
+    const v0 = (await call('/api/generation')).json.version;
+    assert.equal((await call('/api/summary')).json.checks.requested, false);
+    mkdirSync(b.stateDir, { recursive: true });
+    writeFileSync(join(b.stateDir, 'checks-request.json'), '{"schema":1}');      // what `nunchi fix --plan` writes
+    const v1 = (await call('/api/generation')).json.version;
+    assert.notEqual(v1, v0, 'the request alone changes the version: the board refreshes and shows the card');
+    assert.equal((await call('/api/summary')).json.checks.requested, true);
+    const hash = (await call('/api/summary')).json.checks.profile.hash;
+    // `nunchi fix --approve-checks` in the person's terminal writes the approval, which bumps no generation
+    writeFileSync(join(b.stateDir, 'scripts-approved.json'), JSON.stringify({ schema: 1, profiles: { [hash]: { channel: 'cli-tty' } } }));
+    const v2 = (await call('/api/generation')).json.version;
+    assert.notEqual(v2, v1, 'the approval changes it again: the card goes');
+    assert.equal((await call('/api/summary')).json.checks.approved, true);
+  } finally { await b.close(); }
+});
+
 test('api: live updates — the stream says when the ledger changes (a CLI decision, a decision that came through git); /api/generation polls the same', { timeout: 30000 }, async () => {
   const p = smallProject();
   const { b, call, token } = await board(p);
