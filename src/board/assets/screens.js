@@ -125,7 +125,7 @@ export function renderWall(focus = false) {
     // a page the first look did not open (M5b): what it is, and the first look's line (what comes next); nothing to open
     panel = sel.look === 'not-yet' ? h('section', { class: 'screen-panel', 'aria-labelledby': 'panel-h' },
       h('div', { class: 'sp-head' }, h('div', null, h('h2', { id: 'panel-h', tabindex: '-1' }, sel.route), sel.label ? h('p', { class: 'muted small' }, sel.label) : null), close),
-      h('p', { class: 'pad sp-notyet' }, lookChip(sel), S.screens.quick?.text ? h('span', { class: 'small muted' }, S.screens.quick.text) : null))
+      h('p', { class: 'pad sp-notyet' }, lookChip(sel), S.screens.quick && X.firstLookText(S.screens.quick) ? h('span', { class: 'small muted' }, X.firstLookText(S.screens.quick)) : null))
       : h('section', { class: 'screen-panel', 'aria-labelledby': 'panel-h' },
         h('div', { class: 'sp-head' }, h('div', null, h('h2', { id: 'panel-h', tabindex: '-1' }, sel.h1 || sel.route), h('p', { class: 'muted small' }, h('span', { class: 'mono' }, sel.route), ` · ${sel.label}`)), close),
         sel.img ? X.shot(sel, boxes, { label: `Screenshot of ${sel.route}, ${sel.label}${boxes.length ? `, ${W.plural(boxes.length, 'finding')} outlined and numbered` : ''}`, cls: sel.viewport === 'm' ? 'shot-m' : '' }) : h('p', { class: 'pad muted' }, `Not seen: ${sel.reason || sel.status}.`),
@@ -141,7 +141,7 @@ export function renderWall(focus = false) {
   X.show(h('section', { id: 'screens', class: 'view', 'aria-labelledby': 'h-screens' }, h('div', { class: 'stack' },
     h('div', { class: 'head-row' }, h('div', null, h('h1', { id: 'h-screens' }, 'Screens'), h('p', { class: 'muted' }, `${W.plural(new Set(all.map(s => s.route)).size, 'page')}, ${W.plural(all.length, 'screen')} · every one nunchi captured in run ${S.screens.run || '—'}, as it saw it`))),
     // a quick first look (M5) says so, as Coverage does
-    S.screens.quick ? h('p', { class: 'banner', role: 'note', id: 'wall-first-look' }, S.screens.quick.text || W.COVERAGE.quick(S.screens.quick.screens)) : null,
+    S.screens.quick ? h('p', { class: 'banner', role: 'note', id: 'wall-first-look' }, X.firstLookText(S.screens.quick) || W.COVERAGE.quick(S.screens.quick.screens)) : null,
     h('div', { class: 'filters wall-filters' }, filter('Width', vps, W.WIDTH, 'vp'), filter('Who', whos, W.WHO, 'who'), filter('State', states, W.STATE_LABEL, 'state'),
       narrow ? (() => { const sel2 = h('select', { id: 'wall-show' }, ['all', ...showList].map(v => h('option', { value: v, selected: F.show === v }, v === 'all' ? T.all : `${{ open: T.open, not: T.not, changed: T.changed(base) }[v]} (${count('show', v)})`))); sel2.addEventListener('change', () => set('show', sel2.value)); return h('label', { class: 'field', for: 'wall-show' }, T.show, sel2); })()
         : h('span', { class: 'cv-fl' }, h('span', { class: 'muted small', id: 'wall-l-show' }, T.show), h('div', { class: 'seg-b', role: 'group', 'aria-labelledby': 'wall-l-show' }, ['all', ...showList].map(v => {

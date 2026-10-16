@@ -3,7 +3,7 @@
 // recording with merge (no recording-stale). Needs Chromium (skipped otherwise).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, existsSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +36,8 @@ test('a capture that fails, or is stopped, takes its unfinished run folder with 
   const failed = await cli(app, 'capture', '--url', srv.base, '--samples', '.nunchi/samples.json', '--auth', 'no-such-login.json');
   assert.equal(failed.code, 2, failed.stderr);
   assert.match(failed.stderr, /signed-in scenes need a saved login state/);
+  // a capture with no first look before it is no "full check" in the chat's words (M5's): no start line
+  assert.doesNotMatch(failed.stdout + failed.stderr, /Full check started/);
   assert.deepEqual(partial(), []);
   if (process.platform === 'win32') return;                                   // a signal there ends the process at once
   const child = spawn(process.execPath, [CLI, 'capture', '--url', srv.base, '--samples', '.nunchi/samples.json', '--viewports', 'm'], { cwd: app, stdio: ['ignore', 'ignore', 'pipe'] });
@@ -102,8 +104,16 @@ test('capture --quick: the key screens, presence-only, rule lenses only; the ful
   // the full check: the screens the first look recorded replay, the rest are recorded and merged in; no recording-stale
   srv.set({ lowContrast: false });
   const asked = srv.hits.get('/api/data/pricing'), zebra = srv.hits.get('/api/data/zebra') || 0;
-  const full = json(await cli(app, 'capture', ...base, '--states', 'normal', '--json'));
+  const fullRun = await cli(app, 'capture', ...base, '--states', 'normal', '--json');
+  const full = json(fullRun);
   assert.deepEqual([full.run, full.kind, full.network, full.health.status, full.replayMisses], ['0002', 'sweep', { guest: 'merge' }, 'ok', 0]);
+  // the chat's start and end (the owner's words, 2026-10-16 KST; with --json on stderr): how many screens, about how
+  // long on the first look's measured time per screen (8 routes, the guest, the phone; normal only, as this check), and
+  // at the end the board's own line, the same `findings` prints
+  const timing = read(join(runs, '0001', 'timing.json')).scenes.map(x => x.ms);
+  const min = Math.max(1, Math.ceil((timing.reduce((a, b) => a + b, 0) / timing.length) * ROUTES.length / 60000));
+  const lines = fullRun.stderr.split('\n');
+  assert.equal(lines.find(l => l.startsWith('Full check started')), `Full check started in the background · ${ROUTES.length} screens · about ${min} min. The board shows how far it is; you can keep deciding.`);
   assert.equal(srv.hits.get('/api/data/pricing'), asked, 'a screen the first look recorded is not asked again');
   assert.equal(srv.hits.get('/api/data/zebra'), zebra + 1, 'one it did not is recorded');
   assert.equal(Object.keys(read(join(app, '.nunchi', 'har', 'guest.json')).routes).length, 14);
@@ -111,8 +121,10 @@ test('capture --quick: the key screens, presence-only, rule lenses only; the ful
   const f2 = json(await cli(app, 'findings', '--all', '--json'));
   assert.ok(f2.groups.filter(g => g.rule === 'axe-color-contrast').every(g => g.status === 'fixed'), 'the full check fixes, like for like');
   assert.ok(f2.summary.fullCheckDone, JSON.stringify(f2.summary.fullCheckDone));
-  assert.equal(f2.summary.fullCheckDone.text, `Full check done: ${f2.summary.fullCheckDone.newGroups} new group${f2.summary.fullCheckDone.newGroups === 1 ? '' : 's'}`);
+  assert.equal(f2.summary.fullCheckDone.text, `Full check done · ${ROUTES.length} screens · ${f2.summary.fullCheckDone.newGroups} new group${f2.summary.fullCheckDone.newGroups === 1 ? '' : 's'}`);
   assert.ok(f2.summary.fullCheckDone.newGroups >= 2, 'the link to a missing route and the unreachable page are new');
+  assert.ok(lines.includes(f2.summary.fullCheckDone.text), fullRun.stderr);
+  assert.equal(f2.summary.bar.line, f2.summary.fullCheckDone.text, 'the board\'s bar says it too');
 
   // a first look after it: the hunt and the verifier still build on the full check
   json(await cli(app, 'capture', '--quick', ...base, '--json'));
@@ -124,4 +136,14 @@ test('capture --quick: the key screens, presence-only, rule lenses only; the ful
   assert.match(listed.stdout, /0001 {2}no git {2}health ok {2}8 routes {2}quick \(a first look\)/);
   assert.match(listed.stdout, /0003 \(latest\).*quick \(a first look\)/);
   assert.deepEqual(readdirSync(runs).sort(), ['0001', '0002', '0003', 'latest']);
+
+  // a check after that first look with no measured time to go by (no run has its timing.json): the start line without
+  // "about N min"; printed on stdout without --json, and the end's line before the capture's own lines
+  for (const id of ['0001', '0002', '0003']) rmSync(join(runs, id, 'timing.json'));
+  const two = await cli(app, 'capture', ...base, '--states', 'normal', '--routes', '/,/pricing');
+  assert.equal(two.code, 0, two.stderr);
+  const out = two.stdout.split('\n');
+  assert.equal(out[0], 'Full check started in the background · 2 screens. The board shows how far it is; you can keep deciding.');
+  assert.match(out[1], /^Full check done · 2 screens · \d+ new groups? · only the routes given \(--routes\)$/);
+  assert.match(out[2], /^captured \d+ scenes in /);
 });

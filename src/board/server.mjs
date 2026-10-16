@@ -472,13 +472,19 @@ export async function startBoard({ projectDir, mode = 'board', port = 0, labelle
     // the summary's Now lines (summary.mjs: the full check done, the first look, the captures running or stopped, M5b),
     // then the fixes being made (and, below, the hunts running: M6)
     const hunting = huntNow();
-    const nowLines = [...(s.now || []), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)} · ${fixingMinutes(c.minutes)}`)];
+    // (a partial check's lines name routes, the app's data: cleaned and clipped like every string the board did not
+    // write)
+    const nowLines = [...(s.now || []).map(l => safe(l, 300)), ...[...m.claims.entries()].map(([g, c]) => `${c.agent} is fixing ${safe(m.byId.get(g)?.headline || g, 80)} · ${fixingMinutes(c.minutes)}`)];
     return {
       version: version(), mode, project: safe(basename(project), 80), run: s.run, kind: s.kind, commit: s.commit ? safe(String(s.commit).slice(0, 7), 7) : null, dirty: s.dirty,
       verdict: s.verdict, bySeverity: s.bySeverity, byStatus: s.byStatus, toDecide: s.toDecide, decideNow: s.decideNow, toFix: s.toFix, fixNeedsYou: s.fixNeedsYou || 0, handoff: s.handoff, since: s.since, running: s.running,
       fullCheck: s.fullCheck, previousFullCheck: s.previousFullCheck,
       firstLook: s.firstLook ? { run: s.firstLook.run, screens: s.firstLook.screens, full: s.firstLook.full } : null,
       fullCheckDone: s.fullCheckDone ? { run: s.fullCheckDone.run, newGroups: s.fullCheckDone.newGroups } : null,
+      // the bar at the top of every view (summary.mjs, the owner's mock-up of 2026-10-16 KST): its line (a partial
+      // check's routes are the app's data: cleaned and clipped), how far, and which of the Now lines below it stands
+      // for
+      bar: s.bar ? { state: s.bar.state, full: s.bar.full, run: s.bar.run, line: safe(s.bar.line, 300), done: s.bar.done, routes: s.bar.routes, pct: s.bar.pct, replaces: s.bar.replaces } : null,
       confirm: s.confirm.map(c => ({ key: c.key, id: safe(c.id, 60), decision: c.decision, reason: c.reason, channel: c.channel, by: c.by ? safe(c.by, 80) : null, at: c.at ? safe(c.at, 40) : null,
         note: c.note ? safe(c.note, 500) : null, group: c.group, title: safe(c.title, 160), severity: c.severity })),
       health: { problems: s.health.problems.map(p => ({ status: safe(p.status, 40), scenes: p.scenes, of: p.of })), blind: s.health.blind ? safe(s.health.blind, 40) : null,

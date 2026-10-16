@@ -264,6 +264,7 @@ const NOT_CHECKED = 'Not checked: ';
 // quoted sentence or start another line) and it is put in backticks, so it reads as an address, never as words to obey.
 export const routeInSay = route => `\`${String(route ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').replace(/["'`\u2018\u2019\u201c\u201d]/g, '').replace(/\s+/g, ' ').trim()}\``;
 const routesInSay = routes => listText((Array.isArray(routes) ? routes : [routes]).map(routeInSay), 5);
+const shownUntil = shown => `This shows run ${shown} until it finishes.`;
 export const COVERAGE = {
   nav: 'Coverage', title: 'Coverage',
   sub: (run, full) => `What nunchi looked at in run ${run}${full ? ' (full check)' : ''}, and what it didn’t`,
@@ -339,7 +340,9 @@ export const COVERAGE = {
   lookedText: (findings, cannot) => ['Looked', findings ? plural(findings, 'finding') : null, cannot ? `couldn’t judge ${plural(cannot, 'question')}` : null, !findings && !cannot ? 'nothing found' : null].filter(Boolean).join(' · '),
   // states of the view (§3.5)
   loading: 'Loading coverage…', noRun: 'Nothing captured yet. Tell your AI “capture my app”.',
-  running: (line, shown) => `${line}. This shows run ${shown} until it finishes.`,
+  running: (line, shown) => `${line}. ${shownUntil(shown)}`,
+  // the same, when the bar at the top says the capture (the line is said once, there)
+  shownUntil: shown => shownUntil(shown),
   quick: n => `First look: ${plural(n, 'key screen')}, rule checks only · the full check isn’t done yet`,
   prev: 'This is the first cell with a gap', next: 'This is the last cell with a gap',
 };
@@ -523,6 +526,27 @@ export class DecisionClock {
   show(now) { this.settle(now); this.hidden = false; this.last = now; this.since = now; }
   // the reading at the first key, in whole milliseconds, capped
   read(now) { this.settle(now); return Math.min(CAP_MS, Math.round(this.spent)); }
+}
+
+// ---- the capture bar (the owner's mock-up, 2026-10-16 KST) ----------------------------------------------------------
+
+// The bar's own words; its lines are the summary's (summary.mjs `bar`). The marks repeat what the words say (never the
+// only sign) and do not move: ◐ running, ✓ done, ! stopped.
+export const BAR_WORDS = {
+  mark: { running: '◐', done: '✓', stopped: '!' },
+  note: 'You can keep deciding; findings update as screens land.',
+  review: 'Review findings →',
+  meterFull: 'How far the full check is', meterRun: run => `How far run ${run} is`,
+  meterText: (done, routes, pct) => `${done} of ${routes} screens${Number.isInteger(pct) ? `, ${pct}%` : ''}`,
+};
+// What the announcer says for the bar: its line as it was when its capture took the state it is in (running, done or
+// stopped), and the same words until that changes, so a capture is announced when it starts, finishes or stops, never
+// route by route (the bar's count and time change in place, unsaid). `prev`: the last answer; `bar`: the bar shown, or
+// null. → { key, text } or null.
+export function barSay(prev, bar) {
+  if (!bar) return null;
+  const key = `${bar.state}:${bar.run}:${bar.full ? 'full' : 'run'}`;
+  return prev?.key === key ? prev : { key, text: bar.line };
 }
 
 // ---- the Now lines' announcements (design §3.4; M5b review) ---------------------------------------------------------

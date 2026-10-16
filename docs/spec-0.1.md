@@ -371,13 +371,18 @@ the latest capture of this worktree is a quick run:
   "Capture running · run N" for that capture. Screens here are routes, as in the design (8 key screens of a 25-route
   app). `findings` prints the same line under the verdict. With no full check after it (M5b, below): "First look: 8 key
   screens · the full check has not started — tell your AI “full check”";
-- once that sweep lands, until the next capture does: "Full check done: 16 new groups" (groups whose first sighting is
-  the sweep: the first look did not show them), and the verdict is the §7.2 formula again.
+- once that sweep lands, until the next capture does: "Full check done · 25 screens · 16 new groups" (its routes, and
+  the groups whose first sighting is the sweep: the first look did not show them; "Full check done: 16 new groups"
+  until 2026-10-16 KST, when it became one wording with what `capture` prints as it ends: §7.2 *The capture bar*), and
+  the verdict is the §7.2 formula again.
+- on the board these lines are said by the capture bar at the top of every view ("Full check running · 12 of 25
+  screens · about 6 min left", a meter, "Full check done · …") rather than in Progress's Now list; `findings` prints
+  them as before (§7.2 *The capture bar*).
 
 Any sweep after the first look counts (review of PR #33: only a whole-app one did, so a check that skipped a dynamic
 route without a sample got none of these lines). One that is not of the whole app says why, in the words `capture`
-prints for it: "… (about 6 min left) · skipped /posts/[id] (needs-sample)" and "Full check done: 16 new groups ·
-skipped /posts/[id] (needs-sample)" (also `(unchanged)` for `--changed-since`, up to 3 then "and N more"), or "· only
+prints for it: "… (about 6 min left) · skipped /posts/[id] (needs-sample)" and "Full check done · 25 screens · 16 new
+groups · skipped /posts/[id] (needs-sample)" (also `(unchanged)` for `--changed-since`, up to 3 then "and N more"), or "· only
 the routes given (--routes)". `run.json` and `progress.json` carry `skipped` (`{route, reason}`, the reasons that make a
 sweep partial) and `routesGiven`.
 
@@ -505,7 +510,9 @@ generation bumps before the poll saw the second); the test now waits for the str
 
 **Skill.** A first look, then the full check: `capture --quick`, `findings`, then `capture` started in the background
 and `open` (review of PR #36: so the board opens on the full check running, not on "has not started" and two more
-wordings within seconds); the chat reports only what those print (§1, design §6).
+wordings within seconds); the chat reports only what those print (§1, design §6). Since 2026-10-16 KST it says the
+start at once ("Full check started in the background · 72 screens · about 20 min. …", the line `capture` prints) and,
+when the background command finishes, the done line first, unprompted (§7.2 *The capture bar*).
 
 *Measured (2026-10-15 13:29 KST, Pebble, this development container; **not the time gate of design §9.5**, which needs
 a reference and a lower-spec machine, a pre-chosen app with ≥ 25 routes, cold runs on each, setup and build reported
@@ -1756,7 +1763,9 @@ fills the board live.
 *Amended (2026-10-15 KST, design 0.1-c §6, M5): no live partial runs.* The first look (`capture --quick`, §2.6) is
 folded and shown as it lands; the full check after it is not shown screen by screen. The board says how far it is —
 "First look: 8 key screens · full check running, 12 of 25 screens (about 6 min left)" — and the verdict is "Too early
-to say" until the full check lands, then "Full check done: 16 new groups" (§2.6 *The board and `findings`*).
+to say" until the full check lands, then "Full check done · 25 screens · 16 new groups" (§2.6 *The board and
+`findings`*); since 2026-10-16 KST in a bar at the top of every view, and said in the chat as it starts and ends (§7.2
+*The capture bar*).
 
 ### 7.1 `nunchi export --html` (built 2026-10-14 KST)
 
@@ -2049,7 +2058,8 @@ from the agent counts (design §1 table). `decide` takes the board's words `not-
   a decision the focus moves to the next row and a polite live region says "Kept (intended). Next: Raw error text,
   high, 4 screens"; the Now lines are announced at most every 10 s: what changed since the last announcement, the first
 changed line first, and a change inside the 10 s once they have passed, never dropped (review of PR #36, `shared.mjs`
-`NowAnnouncer`; the summary's lines, the claims and M6's hunts alike); single-character shortcuts can be turned off in
+`NowAnnouncer`; the summary's lines, the claims and M6's hunts alike; the capture the bar at the top says, only when it
+starts, finishes or stops: *The capture bar*, below); single-character shortcuts can be turned off in
   the keys dialog (`?`), and keys are off in text fields (`/` searches; Esc goes back to the row); the focus never
   falls to the page: a redraw (a live update, an undo) puts it back on the same control, the row or the heading, Z in
   Detail goes back to the finding it reopened, and a tab that lost the board focuses and says its message; Shift+J and
@@ -2083,6 +2093,90 @@ changed line first, and a change inside the 10 s once they have passed, never dr
   in the list), else every group to decide (`summary.decideNow`). "Screens are from before your latest edits: tell
   your AI “capture again”" when the working tree differs. A request with no answer says "the board did not answer
   (is it still running? nunchi open starts it)", never the browser's "Failed to fetch".
+
+**The capture bar, and the chat's start and end (built 2026-10-16 KST; the owner's text mock-up of that day, "권장대로":
+option A, both parts).** Why: on the owner's Mac, "First look: 8 key screens · full check running, 33 of 72 screens (about
+16 min left)" sat as small text in Progress's Now list, below the tiles, on Progress only; the owner did not notice that
+a capture was running, and the chat did not say so either.
+- *The bar* (`summary.mjs` `bar`: the numbers as before, one source; the page's `renderBar`): the first thing in `main`,
+  above the content of every view (Progress, Findings, Finding detail, Screens, Screen detail, Coverage), one element
+  kept across redraws. In the owner's words, with the summary's numbers:
+  - the full check after a first look, running: "◐ Full check running · 33 of 72 screens · about 16 min left", a meter
+    with "46%", and "You can keep deciding; findings update as screens land." The time left is M5's (`minutesLeft`).
+    Before the first route is done, "Full check running · 0 of 72 screens": no percentage and no time. A writer here
+    that made no progress for 10 minutes says "· no progress for 10 min" in place of the time left; a partial check adds
+    its "· skipped …", as the first look's line did. The percentage is whole, at least 1 once a route is done and at most
+    99 until every route is;
+  - any other capture running (a partial run, another first look, a capture of the whole app with no first look before
+    it, a fix probe): M5b's "Capture running · run 0007 · 12 of 25 screens (about 6 min left)", with the same meter and
+    note; no meter for a folder without a progress file ("Capture running · run 0007");
+  - the full check done: "✓ Full check done · 72 screens · 16 new groups [Review findings →]", until this tab has looked
+    at the findings: opened Findings or a finding, or pressed the button (a link to Findings, 44 px; on Findings already,
+    it shows the list as it is now). Kept per tab in `sessionStorage` (`nunchi.looked.<run>`, every access in try/catch)
+    and in the page's memory, so it works without storage. The line then goes back to Progress's Now list;
+  - a capture stopped: M5b's "! Capture stopped · run 0002 (its process ended) — tell your AI “capture again”".
+
+  One bar: the full check first, else the newest capture running, else one stopped, else the full check done. The Now
+  lines it says (`bar.replaces`: their indices in `now`) are not listed again on Progress; Coverage and the wall say the
+  first look in its own words ("First look: 3 key screens, rule checks only · the full check isn’t done yet") while the
+  bar says its full check, and Coverage only "This shows run 0004 until it finishes." for the capture the bar says.
+  `findings` prints every Now line as before. The tab's title is "46% · nunchi board" while a capture runs with a
+  percentage, else "nunchi board".
+- *Live:* drawn from `/api/summary` on each version change (the capture state is part of the version, M5b), so it moves
+  route by route and a capture that stops reaches it by the clock alone.
+- *Accessible:* a `role="status"` region with `aria-live="off"`, so it is no second announcer: the page's one polite
+  region says it (`NowAnnouncer`, its 10 s and trailing edge unchanged), and only when the capture starts, finishes or
+  stops. The announcer gets the bar's line as it was when its capture took that state (`shared.mjs` `barSay`), so a
+  route that lands changes the bar in place, unsaid. The meter is `role="progressbar"`: minimum 0, maximum the routes,
+  value the routes done, `aria-valuetext` "33 of 72 screens, 46%", named "How far the full check is" (another capture:
+  "How far run 0007 is"). The marks ◐ ✓ ! repeat the words, `aria-hidden`, and do not move (no animation or
+  transition). Its text is 4.5:1 and more on the bar (accent ink on accent soft; done, good on good soft; stopped, high
+  ink on high soft); the meter's fill (accent) on its track (the panel) and its edge (accent ink) on the track and on
+  the bar 3:1 and more, light and dark. In forced colours the bar keeps a 1 px edge and the meter its track, edge and
+  fill (Canvas, CanvasText, Highlight). It never takes the focus (a redraw keeps it on the button; a bar that goes
+  gives it to the view's heading). No sideways scroll at 390 px or at 200% zoom (640 × 400).
+- *The chat* (`capture`; the skill, step 5): when the full check after a first look starts (its run folder and plan
+  exist), "Full check started in the background · 72 screens · about 20 min. The board shows how far it is; you can keep
+  deciding." "About N min" only with a measured basis (`summary.mjs` `timeBasis`, `minutesFor`): the newest complete run
+  of the worktree that is not a fix probe and has its `timing.json` and manifest (the first look, or the last run), its
+  mean measured time per captured screen × this check's screens (routes × persons × widths, a route's forced states
+  counted as often as the basis's normal screens loaded data), rounded up, at least 1; without such a run, none. When it
+  ends, once the ledger holds it, its done line comes first: "Full check done · 72 screens · 16 new groups"
+  (`fullCheckDoneOf`, the one wording of the bar, Progress and `findings`). With `--json` both go to stderr. The skill
+  tells the user at once, in their own language, that it started in the background, how many screens, about how long,
+  that the board shows how far it is and that they can keep deciding; and when the background command finishes, it
+  says the done line first, unprompted, before anything else.
+
+*Choices (the capture bar).* (1) "Full check" is M5's, the sweep after a first look (the one the board said "full check
+running" of). Every other capture keeps M5b's "Capture running · run N" words in the bar, with the same meter, and has
+no start or done line in the chat: a "Full check done" after every capture of the whole app would stand in `findings`
+until the next capture. (2) The bar sits at the top of each view and scrolls with it, not sticky: above the sticky
+decision dock, a sticky bar would cover the focused row at 390 px and at 200% zoom (WCAG 2.4.11); the tab's title keeps
+the percentage in sight. (3) Only the start, the stop and the done are announced (the brief), so "no progress for 10
+min" on a capture still running changes the bar without being said. (4) Before the first route the title stays "nunchi
+board" (no percentage, as on the bar). (5) In a person's own terminal (stdout a TTY) the start line is not printed: the
+capture runs in the foreground there, and "in the background" would not be true. (6) Once the done bar goes, its line is
+back in Progress's Now list, so what the full check added stays said. (7) The meter counts routes (its maximum the
+routes, its value those done) and its text gives both and the percentage, rather than 0–100. (8) The Now lines
+`/api/summary` sends are now cleaned and clipped on the server (a partial check's "· skipped …" names routes, the app's
+data), as the bar's line is.
+
+*Tested (the capture bar).* `test/board-bar.test.mjs`: each state from the summary with a fixture that shows it and one
+that does not (the full check running, before its first route, without progress, partial; another capture with and
+without a progress file; stopped; done, then gone once the next capture lands; none), the percentage's bounds, the Now
+lines the bar stands for while `findings` keeps them, `/api/summary` (its line cleaned), the announcer's words (start,
+stop and done said, a route not), the start line with and without a basis (the newest run, never a fix probe, nor a
+timing that does not parse), the skill's steps 5 and 6 in the engine's words, and the page's tab storage in try/catch.
+`test/board-bar-e2e.test.mjs` (Chromium): the bar first on every view, its role, liveness, words, meter (values, name)
+and the tab's title, the Now line not listed twice; axe light at 1440 px and dark at 390 px; contrast measured in one
+evaluation; no motion; no sideways scroll at 390 px and at 640 × 400; the focus kept on a row through a live update;
+live before and after the first route, another first look, a partial run (Coverage's "This shows run 0004 until it
+finishes."), and none; done until looked at (the button by keyboard, the sidebar's Findings, another tab, storage
+refused), its 44 px link and its contrast; the start, the stop by the clock alone and the done announced, and no route;
+forced colours; a writer gone. `test/quick-cli.test.mjs`: a real full check after a first look prints the start line
+(with the first look's basis) and the done line `findings` gives; with no basis, no time, and the done line before
+`captured …`; a capture with no first look before it, no start line. `test/board-m5b-e2e.test.mjs` reads the captures
+from the bar.
 
 **Decision time (§3.5).** The page's `DecisionClock` runs from showing a group (focusing its row, opening its detail)
 to the first decision key, paused while the tab is hidden and after 30 s without input, capped at 120 s. The board

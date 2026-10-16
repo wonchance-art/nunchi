@@ -11,7 +11,7 @@
 // Otherwise the verdict names what stands in the way.
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { captureStates, STALE_MS } from './runs.mjs';
+import { captureStates, STALE_MS, listRuns, runKind } from './runs.mjs';
 import { captureRuns, latestRunOf, byRun, titleOf, foldKindOf } from './ledger.mjs';
 import { SEV, plural, human } from './board/shared.mjs';
 
@@ -82,6 +82,36 @@ export function minutesLeft({ routes, done, routeMs }) {
   return Math.max(1, Math.ceil((mean * left) / 60000));
 }
 
+// How long a capture will take, before its first route is done (the chat's "about 20 min" when the full check starts:
+// the owner's words, 2026-10-16 KST), from measured times only. The basis is the newest complete run of this worktree
+// (a first look or a sweep; a fix probe captures a few screens its own way) whose timing.json and manifest can be read:
+// its mean measured time per captured screen, and the share of its normal screens that loaded data (a page that loads
+// data is captured in every forced state too). → { run, sceneMs, dataShare } or null (no such run: no estimate).
+export function timeBasis(runsDir) {
+  for (const id of [...listRuns(runsDir).complete].reverse()) {
+    if (runKind(runsDir, id) === 'fix-probe') continue;
+    const timing = readJsonOr(join(runsDir, id, 'timing.json'), null), manifest = readJsonOr(join(runsDir, id, 'manifest.json'), null);
+    const ms = (Array.isArray(timing?.scenes) ? timing.scenes : []).map(x => x?.ms).filter(x => Number.isFinite(x) && x >= 0);
+    const normal = (Array.isArray(manifest?.scenes) ? manifest.scenes : []).filter(x => x && x.canary === undefined && x.state === 'normal');
+    if (!ms.length || !normal.length) continue;
+    return { run: id, sceneMs: ms.reduce((a, b) => a + b, 0) / ms.length, dataShare: normal.filter(x => Number(x.dataRequests) > 0).length / normal.length };
+  }
+  return null;
+}
+// The minutes a capture of `routes` routes × `persons` × `viewports`, in `states` (normal and the forced ones), takes
+// on that basis: its screens (each route's normal screens, and its forced states as often as the basis's pages loaded
+// data) times the basis's time per screen, rounded up to whole minutes, at least 1. Null without a basis. Like the time
+// left, it does not count the canaries, the inventory or the fold.
+export function minutesFor(basis, { routes, persons, viewports, states }) {
+  if (!basis || !(routes > 0) || !(persons > 0) || !(viewports > 0)) return null;
+  const forced = (Array.isArray(states) ? states : []).filter(x => x !== 'normal').length;
+  const screens = routes * persons * viewports * (1 + forced * basis.dataShare);
+  return Math.max(1, Math.ceil((basis.sceneMs * screens) / 60000));
+}
+// What `capture` prints when the full check starts (the owner's words): how many screens (routes, as everywhere here)
+// and, with a basis, about how long.
+export const fullCheckStartedText = (screens, minutes) => `Full check started in the background · ${plural(screens, 'screen')}${minutes ? ` · about ${minutes} min` : ''}. The board shows how far it is; you can keep deciding.`;
+
 // The fast first run on the board (design §6, the agreed words):
 // - while the latest capture of this worktree is a quick first look and a sweep is being captured after it: "First
 //   look: 8 key screens · full check running, 12 of 25 screens (about 6 min left)";
@@ -137,16 +167,59 @@ function firstRun(state, stream, runsDir, rows, live, stopped) {
     return { firstLook: { run: latest, screens: n, full: { run: now.run, done: full.done, routes: full.routes, minutesLeft: min, wholeApp: full.wholeApp },
       text: `First look: ${plural(n, 'key screen')} · full check running, ${howFar(full, quiet)}${partialWhy(full)}` }, fullCheckDone: null };
   }
-  const previous = runs[runs.length - 2] ?? null;
-  if (latest && previous && kind(latest) === 'sweep' && kind(previous) === 'quick') {
-    const meta = readJsonOr(join(runsDir, latest, 'run.json'), {});
-    const first = new Map();
-    for (const r of rows) if (typeof r.firstSeen === 'string' && (!first.has(r.group) || byRun(r.firstSeen, first.get(r.group)) < 0)) first.set(r.group, r.firstSeen);
-    const n = [...first.values()].filter(id => id === latest).length;
-    const why = partialWhy({ wholeApp: meta?.wholeApp === true, routesGiven: meta?.routesGiven === true, skipped: meta?.skipped });
-    return { firstLook: null, fullCheckDone: { run: latest, after: previous, newGroups: n, wholeApp: meta?.wholeApp === true, text: `Full check done: ${plural(n, 'new group')}${why}` } };
+  return { firstLook: null, fullCheckDone: fullCheckDoneOf({ state, stream, runsDir, rows }) };
+}
+// The full check after a first look, once it lands, until the next capture does (M5; the words are one wording for the
+// board, `findings` and what `capture` prints when it ends, the owner's of 2026-10-16 KST): "Full check done · 72
+// screens · 16 new groups" — its routes, and the groups whose first sighting is that sweep (the first look did not show
+// them). → { run, after, screens, newGroups, wholeApp, text } or null.
+export function fullCheckDoneOf({ state, stream = 'main', runsDir, rows }) {
+  const runs = captureRuns(state, stream);
+  const latest = runs[runs.length - 1] ?? null, previous = runs[runs.length - 2] ?? null;
+  const kind = id => foldKindOf(state, id, stream);
+  if (!latest || !previous || kind(latest) !== 'sweep' || kind(previous) !== 'quick') return null;
+  const meta = readJsonOr(join(runsDir, latest, 'run.json'), {});
+  const first = new Map();
+  for (const r of rows) if (typeof r.firstSeen === 'string' && (!first.has(r.group) || byRun(r.firstSeen, first.get(r.group)) < 0)) first.set(r.group, r.firstSeen);
+  const n = [...first.values()].filter(id => id === latest).length;
+  const screens = Array.isArray(meta?.scope?.routes) ? meta.scope.routes.length : 0;
+  const why = partialWhy({ wholeApp: meta?.wholeApp === true, routesGiven: meta?.routesGiven === true, skipped: meta?.skipped });
+  return { run: latest, after: previous, screens, newGroups: n, wholeApp: meta?.wholeApp === true, text: `Full check done · ${plural(screens, 'screen')} · ${plural(n, 'new group')}${why}` };
+}
+
+// The bar at the top of every view of the board (the owner's mock-up, 2026-10-16 KST, approved as recommended: a
+// running capture impossible to miss), from these same numbers: the capture the person waits for, or the one that just
+// stopped or finished. One of, in this order:
+// - the full check after a first look running: "Full check running · 33 of 72 screens · about 16 min left" (the time
+//   left by minutesLeft, none before the first route is done: "Full check running · 0 of 72 screens"; "· no progress
+//   for 10 min" in its place when its writer here made none; a partial one's "· skipped …" after it, as the first
+//   look's line);
+// - any other capture running (the newest): M5b's "Capture running · run 0007 · 12 of 25 screens (about 6 min left)";
+// - a capture stopped: M5b's "Capture stopped · run 0002 (its process ended) — tell your AI “capture again”";
+// - the full check done: "Full check done · 72 screens · 16 new groups" (the board shows it until the person looked at
+//   the findings, in that tab).
+// → null, or { state: 'running' | 'stopped' | 'done', full, run, line, done, routes, pct, minutesLeft, replaces }: `pct`
+// how far in whole percent (none before a route is done; 1 to 99 until every route is, so it never says 0% or 100% of
+// a capture still going), `replaces` the indices of the Now lines it stands for (the board says them once, in the bar).
+export const barPct = (done, routes) => (Number.isInteger(done) && Number.isInteger(routes) && routes > 0 && done > 0 ? (done >= routes ? 100 : Math.min(99, Math.max(1, Math.round((done / routes) * 100)))) : null);
+function barOf({ firstLook, fullCheckDone: fcd, live, lines, now }) {
+  const at = text => { const i = now.indexOf(text); return i < 0 ? [] : [i]; };
+  const f = firstLook?.full;
+  if (f) {
+    const x = live.find(c => c.run === f.run), quiet = x?.why === 'no-progress';
+    const line = `Full check running · ${f.done} of ${f.routes} screens${quiet ? ` · ${STOPPED_WHY['no-progress']}` : f.minutesLeft ? ` · about ${f.minutesLeft} min left` : ''}${x?.progress ? partialWhy(x.progress) : ''}`;
+    return { state: 'running', full: true, run: f.run, line, done: f.done, routes: f.routes, pct: barPct(f.done, f.routes), minutesLeft: f.minutesLeft, replaces: at(firstLook.text) };
   }
-  return { firstLook: null, fullCheckDone: null };
+  const running = lines.filter(c => c.state === 'running').pop();
+  if (running) {
+    const p = live.find(c => c.run === running.run)?.progress ?? null, quiet = live.find(c => c.run === running.run)?.why === 'no-progress';
+    return { state: 'running', full: false, run: running.run, line: running.text, done: p ? p.done : null, routes: p ? p.routes : null, pct: p ? barPct(p.done, p.routes) : null,
+      minutesLeft: p && !quiet ? minutesLeft(p) : null, replaces: at(running.text) };
+  }
+  const stopped = lines.find(c => c.state === 'stopped');
+  if (stopped) return { state: 'stopped', full: false, run: stopped.run, line: stopped.text, done: null, routes: null, pct: null, minutesLeft: null, replaces: at(stopped.text) };
+  if (fcd) return { state: 'done', full: true, run: fcd.run, line: fcd.text, done: null, routes: null, pct: null, minutesLeft: null, replaces: at(fcd.text) };
+  return null;
 }
 
 // `git`: the hardened git runner of the project (runs.mjs gitRunner), to count commits with a `Nunchi-Fix:` trailer
@@ -244,11 +317,12 @@ export function summary({ state, rows, groups, stream = 'main', runsDir, git = n
   // when it says one, so the two never disagree; otherwise every group to decide
   const decideNow = seriousTotal && serious.decide ? serious.decide : toDecide;
   const handoff = !toDecide && toFix ? { toFix, text: `All decided. ${toFix} to fix. Go back to your AI chat and say “fix them”.`, say: 'fix them' } : null;
+  // the Now lines, in one order for the board and `findings` (M5b review): the full check done, the first look, the
+  // captures running or stopped; and the board's bar, which says one of them at the top of every view
+  const now = [fullCheckDone?.text, firstLook?.text, ...lines.map(c => c.text)].filter(Boolean);
   return {
     run: latest, kind: meta.kind ?? 'sweep', fullCheck: full, previousFullCheck: previous, running, runningRuns: live.map(x => x.run), captures: lines, firstLook, fullCheckDone,
-    // the Now lines, in one order for the board and `findings` (M5b review): the full check done, the first look, the
-    // captures running or stopped
-    now: [fullCheckDone?.text, firstLook?.text, ...lines.map(c => c.text)].filter(Boolean),
+    now, bar: barOf({ firstLook, fullCheckDone, live, lines, now }),
     verdict, bySeverity, byStatus, standing, toDecide, decideNow, toFix, fixNeedsYou, handoff, since, confirm,
     health: { problems, blind: (latest && state.blind?.[latest]) || null, scenes: { total: scenes.length, checked: scenes.length - notSeen.length, notSeen: notSeen.length, reasons: [...new Set(notSeen.map(s => String(s.reason || s.status)))].sort() } },
     ai: { ran: aiRan, groups: new Set(ai.map(r => r.group)).size, doubleChecked: new Set(ai.filter(r => r.checked).map(r => r.group)).size,

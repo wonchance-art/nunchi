@@ -5,7 +5,7 @@ import { resolve, join, relative, isAbsolute, dirname } from 'node:path';
 import { readFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
 import { discover } from './discover.mjs';
 import { buildSourceMap, affectedRoutes, sourceHashes } from './sourcemap.mjs';
-import { startRun, finishRun, gcRuns, latestRun, latestSweep, PROGRESS_FILE, workTree, ensureGitignore, ensurePrivate, readConfig, gitRunner, DIFF_SAFE } from './runs.mjs';
+import { startRun, finishRun, gcRuns, latestRun, latestSweep, runKind, PROGRESS_FILE, workTree, ensureGitignore, ensurePrivate, readConfig, gitRunner, DIFF_SAFE } from './runs.mjs';
 import { baseUrlRefusal, loginElsewhere } from './network.mjs';
 import { codeNavigations } from './flow.mjs';
 import { readDecisions, approvalKey, buildDecision, view, DECISIONS, NOT_LOOKED_RUNS, STALE_HUNTS, latestRunOf, latestSweepOf } from './ledger.mjs';
@@ -528,6 +528,20 @@ if (cmd === 'setup') {
   const progressFile = run ? join(run.path, PROGRESS_FILE) : null;
   // (a progress file that cannot be written only leaves the board without the line: it never fails a capture)
   const onProgress = progressFile ? p => { try { writeStable(progressFile, progressDoc(p)); } catch {} } : null;
+  // The chat says when the full check starts and ends (the owner's words, 2026-10-16 KST): the full check is the sweep
+  // after a first look (M5: the one the board calls "full check running"). Its start, once its run folder and plan
+  // exist: how many screens, and about how long when an earlier run of this worktree measured a basis (summary.mjs
+  // timeBasis: the first look's, or the last run's, time per screen). Run by the AI in the background (the skill, step
+  // 5); in a person's own terminal (stdout a TTY) it runs in the foreground, where "in the background" would not be
+  // true, so it is not said there. With --json, on stderr (stdout is the JSON).
+  const { fullCheckStartedText, timeBasis, minutesFor, fullCheckDoneOf } = await import('./summary.mjs');
+  const fullCheck = !!run && kind === 'sweep' && !!run.parent && runKind(runsDir, run.parent) === 'quick';
+  const chat = line => (args.json ? console.error : console.log)(line);
+  if (fullCheck && !process.stdout.isTTY) {
+    let min = null;
+    try { min = minutesFor(timeBasis(runsDir), { routes: firstRoutes, persons: persons.length, viewports: viewports.length, states }); } catch {}
+    chat(fullCheckStartedText(firstRoutes, min));
+  }
   try {
     const r = await capture({
       baseUrl: args.url, scenes: quick ? quick.scenes : all, out, viewports, browserPath: args.browserPath, storageState: auth,
@@ -558,9 +572,19 @@ if (cmd === 'setup') {
     finished = true;
     // fold the run into the local ledger state (what is open, fixed, back again), with any complete run a
     // crash left unfolded; if this fails, the next ledger command folds it
+    let folded = false;
     if (run) {
-      try { sweep(nunchiDir, st); if (st.root.shared) adopt(st); syncState(st, { root }); }
+      try { sweep(nunchiDir, st); if (st.root.shared) adopt(st); syncState(st, { root }); folded = true; }
       catch (e) { if (!LEDGER_ERRORS.includes(e.code)) throw e; console.error(`warning: run ${run.id} is complete but not in the ledger yet (${e.message})`); }
+    }
+    // and its end, first, in the board's words (summary.mjs: "Full check done · 72 screens · 16 new groups"), once the
+    // ledger holds it (a ledger that cannot be read leaves the line out: `findings` says it once it can)
+    if (fullCheck && folded) {
+      try {
+        const led = P.loadLedger(nunchiDir, { root, warn });
+        const done = fullCheckDoneOf({ state: led.state, stream: led.st.root.stream, runsDir: led.st.runsDir, rows: P.ledgerView(led).rows });
+        if (done?.run === run.id) chat(done.text);
+      } catch (e) { if (!LEDGER_ERRORS.includes(e.code)) throw e; }
     }
     const misses = r.manifest.scenes.reduce((n, x) => n + (x.replayMisses || 0), 0);
     const canaryCount = r.canaries ? r.canaries.planted.length : 0;

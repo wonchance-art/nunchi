@@ -105,12 +105,13 @@ export function render(focus = false) {
   const narrow = narrowNow();
   V().narrow = narrow;
   const banners = [
-    // a capture running (the summary's line, M5b: how far it is) or stopped ("tell your AI “capture again”")
-    D.capture ? h('p', { class: 'banner', role: 'note', id: 'cv-capture' }, D.capture.state === 'running' ? C.running(D.capture.text, D.run) : D.capture.text) : null,
+    // a capture running (the summary's line, M5b: how far it is) or stopped ("tell your AI “capture again”"); the one
+    // the bar at the top says is not said again: only what Coverage adds ("This shows run 0004 until it finishes.")
+    capturing(D),
     S.summary?.treeChanged ? h('p', { class: 'banner banner-warn', role: 'note' }, W.WORDS['tree-differs']) : null,
     // the latest capture when it is a first look (M5): the summary's line while the full check after it runs, as Progress
     // says it, else the mock-up's; a newer partial run than the one shown: "Run 0005 · Not a full check: …"
-    D.quick ? h('p', { class: 'banner', role: 'note', id: 'cv-first-look' }, D.quick.text || C.quick(D.quick.screens)) : null,
+    D.quick ? h('p', { class: 'banner', role: 'note', id: 'cv-first-look' }, X.firstLookText(D.quick) || C.quick(D.quick.screens)) : null,
     D.newer ? h('p', { class: 'banner', role: 'note', id: 'cv-newer' }, D.newer.text) : null,
     V().missing ? h('p', { class: 'banner', role: 'note', id: 'cv-missing' }, W.SCREENS.gone(D.run)) : null,
   ];
@@ -118,6 +119,14 @@ export function render(focus = false) {
     h('div', null, h('h1', { id: 'h-coverage' }, C.title), h('p', { class: 'muted' }, C.sub(D.run, D.fullCheck)), V().updating ? h('p', { class: 'muted small', role: 'status' }, 'Updating…') : null),
     banners, totals(D), gapsPanel(D, narrow), mapPanel(D, narrow), lensPanel(D, narrow))));
   if (focus) X.focusHeading();
+}
+
+function capturing(D) {
+  const c = D.capture;
+  if (!c) return null;
+  const inBar = X.barNow()?.run === c.run;
+  if (inBar && c.state !== 'running') return null;
+  return X.h('p', { class: 'banner', role: 'note', id: 'cv-capture' }, c.state !== 'running' ? c.text : inBar ? C.shownUntil(D.run) : C.running(c.text, D.run));
 }
 
 function meter(n, m) {
