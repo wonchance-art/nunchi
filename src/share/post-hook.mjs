@@ -6,7 +6,7 @@
 import { resolve, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { protectedOf, stateDirsOf } from '../deny-hook.mjs';
-import { postArtifact } from './hook.mjs';
+import { postArtifact, indexedStates } from './hook.mjs';
 
 export const MAX_INPUT = 4 * 1024 * 1024;
 export function answerPost(raw, { env = process.env } = {}) {
@@ -16,7 +16,7 @@ export function answerPost(raw, { env = process.env } = {}) {
   try {
     const cwd = typeof input.cwd === 'string' && isAbsolute(input.cwd) ? input.cwd : process.cwd();
     const prot = protectedOf(cwd, { env });
-    const r = postArtifact(input, { stateDirs: stateDirsOf(cwd, prot.common) });
+    const r = postArtifact(input, { stateDirs: [...stateDirsOf(cwd, prot.common), ...indexedStates(prot.keys)] });
     return { status: 0, stdout: r ? JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: r.context } }) : '' };
   } catch (e) {
     return { status: 0, stdout: '', stderr: `nunchi: the publish was not recorded (${String(e?.message || e).split('\n')[0].slice(0, 200)}); run nunchi share --status\n` };

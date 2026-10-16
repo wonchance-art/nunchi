@@ -22,13 +22,14 @@ function terminal() {
 }
 export async function shareCommand(args, { version, flagsOutside }) {
   const usage = m => { console.error(`nunchi share: ${m}`); process.exit(1); };
-  const outside = flagsOutside(args, ['setup', 'on', 'off', 'status', 'run', 'json', 'fromChat', 'root']);
+  // no --root: the pack is of this project's runs and ledger, as set up here (the setup is per project and worktree)
+  const outside = flagsOutside(args, ['setup', 'on', 'off', 'status', 'run', 'json', 'fromChat']);
   if (outside.length) usage(`${outside.join(', ')}: not a flag of share (nunchi share [--run <id>] [--json] | --status | --off | --setup | --on)`);
   if (args._.length > 1) usage(`unexpected ${JSON.stringify(args._[1])} (nunchi share [--run <id>] [--json] | --status | --off | --setup | --on)`);
   const modes = ['setup', 'on', 'off', 'status'].filter(k => args[k]);
   if (modes.length > 1) usage(`use one of --setup, --on, --off or --status`);
   if ('run' in args && (typeof args.run !== 'string' || !/^\d{4,}$/.test(args.run))) usage('--run takes a run id (0007)');
-  const project = process.cwd(), nunchiDir = resolve('.nunchi'), root = resolve(args.root || project);
+  const project = process.cwd(), nunchiDir = resolve('.nunchi'), root = project;
   const tty = !!(process.stdin.isTTY && process.stdout.isTTY) && !args.fromChat;
   try {
     if (args.setup || args.on) {

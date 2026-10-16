@@ -3,15 +3,16 @@
 // the destination, what goes, when, the doorbell — and the setup is recorded only once the person types back the
 // 4-character code it shows (`cli-tty`, as `fix --approve-checks` and `nunchi decide`). The words are the owner's text
 // mock-up of 2026-10-16 KST (design "nunchi share" §5.1, §5.4). `io`: { say(line), ask(question) → answer or null }.
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
 import { randomInt } from 'node:crypto';
 import { homedir } from 'node:os';
 import * as P from '../project.mjs';
 import { latestSweep, ensureGitignore } from '../runs.mjs';
+import { userStateBase } from '../state.mjs';
 import { readShare, writeSetup, setOn, appName, appSlug, kst, ARTIFACT_URL } from './config.mjs';
 import { driveRoots, shownRoot, folderOf, folderProblem } from './dest-folder.mjs';
-import { parseRepo } from './dest-git.mjs';
+import { parseRepo, appRepos } from './dest-git.mjs';
 import { parseSession, findClaude } from './doorbell.mjs';
 import { SHARE_WORDS, shareWhere } from '../board/shared.mjs';
 
@@ -43,27 +44,29 @@ export const whoWords = include => `${include.signedIn ? 'visitor and signed-in 
 export const whenWords = when => (when === 'after' ? 'after every full check' : 'when you run nunchi share');
 export const turnOnLine = cfg => `Turn on: ${cfg.app} → ${shareWhere(cfg.dest)} · ${whoWords(cfg.include)} · ${whenWords(cfg.when)}${cfg.doorbell ? ` · wakes ${cfg.doorbell.session}` : ''}`;
 
-// → { code, lines (already said) }. `deps`: { platform, home, env, findClaude, driveRoots, code, now, by }
+// → { code, lines (already said) }. `deps`: { platform, home, env, findClaude, driveRoots, code, now, by, index (the
+// person's state folder for share-index.json: userStateBase of `env`) }
 export async function setupShare({ project, nunchiDir, io, deps = {} }) {
   const platform = deps.platform ?? process.platform, home = deps.home ?? homedir(), env = deps.env ?? process.env;
   const machine = machineWord(platform);
   const app = appName(project);
   const say = l => io.say(l);
   const stop = why => { say(why); return { code: 1 }; };
-  // asked again on a wrong answer, three times at most
+  // asked again on a wrong answer, three times at most (`again`: the line, or a function of the answer giving it)
   const askFor = async (q, parse, again) => {
     for (let i = 0; i < 3; i++) {
       const a = await io.ask(q);
       if (a === null || a === undefined) return { gone: true };
       const v = parse(a);
       if (v !== undefined) return { v };
-      say(again);
+      say(typeof again === 'function' ? again(a) : again);
     }
     return { gone: true };
   };
   // the state and the packs are never committed (.nunchi/.gitignore), whichever folder holds the state
   ensureGitignore(nunchiDir);
   const st = P.openState(nunchiDir);
+  const before = (() => { try { return readShare(st.root.dir); } catch { return null; } })();
   const claude = (deps.findClaude ?? findClaude)({ env, home, platform });
   const roots = (deps.driveRoots ?? driveRoots)({ home, platform });
 
@@ -113,7 +116,11 @@ export async function setupShare({ project, nunchiDir, io, deps = {} }) {
     say('  nunchi cannot see Drive sharing. Open this folder in Google Drive and check it is not');
     say('  shared with anyone.');
   } else {
-    const g = await askFor('Repository (github.com/<you>/<name>): ', a => parseRepo(a) || undefined, '  Give it as github.com/<you>/<name> (a repository of its own, never your app\'s).');
+    // GitHub only, and never one of the app's own repositories (its remotes)
+    const own = appRepos(project);
+    const ownOf = a => { const r = parseRepo(a); return r ? own.get(r.web.toLowerCase()) : undefined; };
+    const g = await askFor('Repository (github.com/<you>/<name>): ', a => (parseRepo(a) && ownOf(a) === undefined ? parseRepo(a) : undefined),
+      a => (ownOf(a) !== undefined ? `  That is this app's own repository (its remote ${String(ownOf(a)).replace(/[^\w.-]/g, '?').slice(0, 60)}). Use a repository of its own.` : '  Give it as github.com/<you>/<name> (a repository of its own, never your app\'s).'));
     if (g.gone) return stop('Not set up: nothing was recorded.');
     dest = { kind: 'git', remote: g.v.remote, web: g.v.web, branch: `nunchi/${appSlug(app)}` };
     say(`  → ${shareWhere(dest)}`);
@@ -146,15 +153,21 @@ export async function setupShare({ project, nunchiDir, io, deps = {} }) {
     if (d.gone) return stop('Not set up: nothing was recorded.');
     if (d.v) doorbell = { session: d.v, claude };
   }
-  const cfg = { schema: 1, on: true, app, dest, include, when: wh.v, doorbell, set: { channel: 'cli-tty', by: deps.by ?? P.whoAmI(project), at: kst((deps.now ?? Date.now)()) }, stopped: null };
+  const worktree = { stream: st.root.stream, path: resolve(project) };
+  const cfg = { schema: 1, on: true, app, dest, include, when: wh.v, doorbell, set: { channel: 'cli-tty', by: deps.by ?? P.whoAmI(project), at: kst((deps.now ?? Date.now)()) }, worktree, stopped: null };
   say('');
   for (const l of wrap(SHARE_WORDS.consent(machine, shareWhere(dest)))) say(l);
   say('');
+  // one worktree's full checks: a repository's other worktrees (other branches) send nothing
+  if (st.root.shared) {
+    for (const l of wrap(`For this worktree only (${worktree.path}): full checks in the repository's other worktrees are not sent.${before?.worktree && before.worktree.stream !== worktree.stream ? ` This replaces the setup made in the worktree at ${before.worktree.path}.` : ''}`)) say(l);
+  }
   say(turnOnLine(cfg));
   const code = (deps.code ?? newCode)();
   const typed = await io.ask(`Type ${code} to confirm: `);
   if (String(typed ?? '').trim().toUpperCase() !== code) return stop('Not turned on: the code did not match.');
-  writeSetup(st.root.dir, cfg, { generation: st.files.generation });
+  // the person's own state folder lists this one, so the deny hook knows the destination from any working folder
+  writeSetup(st.root.dir, cfg, { generation: st.files.generation, index: deps.index ?? userStateBase(env) });
   say('Sharing is on. To stop: nunchi share --off (or the switch in the board).');
   return { code: 0 };
 }

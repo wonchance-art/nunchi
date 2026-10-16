@@ -1,33 +1,26 @@
 // `nunchi share`'s destinations (spec §7.6), against local fakes only: a temp folder standing in for Google Drive's
-// "My Drive", a local bare git repository behind an `insteadOf` (the anonymous check sees none of the person's config,
-// so it asks the fake host and gets no answer), the artifact's publish plan and limits, and a fake `claude` for the
-// doorbell. Nothing here reaches the network, a real repository, a real Drive or a real artifact.
+// "My Drive", a fake GitHub that the person's git reaches over ssh (their `core.sshCommand` runs
+// test/fixtures/fake-github-ssh.mjs, which serves local bare repositories; the anonymous check is the test's, so no
+// request leaves the machine), the artifact's publish plan and limits, and a fake `claude` for the doorbell. Nothing
+// here reaches the network, a real repository, a real Drive or a real artifact.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, symlinkSync, cpSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import net from 'node:net';
 import dns from 'node:dns';
-import { share, countLines } from '../src/share/send.mjs';
-import { readShareLog } from '../src/share/config.mjs';
+import { share, countLines, shareStatus } from '../src/share/send.mjs';
+import { readShareLog, artifactUrl } from '../src/share/config.mjs';
 import { folderProblem, folderOf, driveRoots, shownRoot } from '../src/share/dest-folder.mjs';
 import { parseRepo, anonEnv, answersAnonymously, anonUrl } from '../src/share/dest-git.mjs';
 import { publishPlan, ARTIFACT_LIMITS, limitLine } from '../src/share/dest-artifact.mjs';
 import { ring, parseSession, doorbellText, doorbellEnv, findClaude } from '../src/share/doorbell.mjs';
-import { shareProject, driveHome, setUp, now, FAKE_KEY } from './fixtures/share-project.mjs';
+import { shareProject, driveHome, setUp, now, nextRun, fakeGitHub, withEnv, FAKE_KEY } from './fixtures/share-project.mjs';
 import { tmp } from './fixtures/tmp.mjs';
 
 const POSIX = process.platform !== 'win32';
 const send = (p, deps = {}, extra = {}) => share({ project: p.root, nunchiDir: p.nunchi, version: '0.0.0-test', deps: { now, ...deps }, ...extra });
-// another complete run, the same screens (a copy of 0001 under a new id)
-function nextRun(p, id) {
-  const to = join(p.nunchi, 'runs', id);
-  cpSync(p.run, to, { recursive: true });
-  const meta = JSON.parse(readFileSync(join(to, 'run.json'), 'utf8'));
-  writeFileSync(join(to, 'run.json'), JSON.stringify({ ...meta, id, parent: null }));
-  writeFileSync(join(p.nunchi, 'runs', 'latest'), `${id}\n`);
-}
 
 test('share (C): the pack lands in My Drive/<folder>/<run>, with the owner\'s lines; no network', () => {
   const p = shareProject();
@@ -132,63 +125,95 @@ test('share (C) setup helpers: Drive for desktop\'s My Drive folders are found a
   assert.equal(shownRoot(d.root, d.home), join('~', 'Library', 'CloudStorage', 'GoogleDrive-…', 'My Drive'));
 });
 
-// a bare repository standing in for the person's private GitHub repository: their git config maps the URL onto it
-function fakeRemote() {
-  const dir = tmp('nunchi-share-remote-');
-  const bare = join(dir, 'results.git');
-  execFileSync('git', ['init', '-q', '--bare', bare]);
-  const cfg = join(dir, 'person.gitconfig');
-  writeFileSync(cfg, `[url "${bare.replace(/\\/g, '/')}"]\n\tinsteadOf = https://github.invalid/mina/results.git\n`);
-  return { bare, cfg, dest: { kind: 'git', remote: 'https://github.invalid/mina/results.git', web: 'github.invalid/mina/results', branch: 'nunchi/shop' } };
-}
-const withEnv = (vars, fn) => { const was = {}; for (const k of Object.keys(vars)) { was[k] = process.env[k]; process.env[k] = vars[k]; } try { return fn(); } finally { for (const k of Object.keys(vars)) { if (was[k] === undefined) delete process.env[k]; else process.env[k] = was[k]; } } };
+// The fake GitHub's pushes run a node script through git's shell: POSIX only (the refusals below run everywhere)
+const SSH_FAKE = !POSIX && 'the fake GitHub is an ssh command git runs through its shell';
+const refsOf = bare => execFileSync('git', ['--git-dir', bare, 'for-each-ref', '--format=%(refname)'], { encoding: 'utf8' }).trim();
 
-test('share (B): committed on nunchi/<app> and pushed with the person\'s own git login; the anonymous check sees none of their config', () => {
+test('share (B): committed on nunchi/<app> and pushed with the person\'s own git login; the anonymous check asks the repository the push goes to', { skip: SSH_FAKE }, () => {
   const p = shareProject({ git: true });
-  const f = fakeRemote();
-  setUp(p, f.dest);
-  const r = withEnv({ GIT_CONFIG_GLOBAL: f.cfg }, () => send(p));
+  // the person's https remote, which their git turns into the ssh form of the same repository (a usual config)
+  const f = fakeGitHub('[url "git@github.com:mina/results.git"]\n\tinsteadOf = https://github.com/mina/results.git\n');
+  setUp(p, { ...f.dest, remote: 'https://github.com/mina/results.git' });
+  const checked = [];
+  const check = u => { checked.push(u); return false; };
+  const r = withEnv({ GIT_CONFIG_GLOBAL: f.cfg }, () => send(p, { check }));
   assert.equal(r.code, 0, r.lines.join('\n'));
-  assert.match(r.lines[0], /^Shared run 0001 → github\.invalid\/mina\/results · branch nunchi\/shop · commit [0-9a-f]{7}$/);
+  assert.match(r.lines[0], /^Shared run 0001 → github\.com\/mina\/results · branch nunchi\/shop · commit [0-9a-f]{7}$/);
   assert.equal(r.lines[1], '  Checked just now: the repository does not answer without your login.');
-  assert.equal(r.lines.at(-2), '  In your cloud session, say: “read the nunchi results in github.invalid/mina/results, branch nunchi/shop, runs/0001”.');
+  assert.equal(r.lines.at(-2), '  In your cloud session, say: “read the nunchi results in github.com/mina/results, branch nunchi/shop, runs/0001”.');
+  assert.deepEqual(checked, ['git@github.com:mina/results.git'], 'the URL git pushes to, asked anonymously');
   const tree = execFileSync('git', ['--git-dir', f.bare, 'ls-tree', '-r', '--name-only', 'nunchi/shop'], { encoding: 'utf8' }).trim().split('\n');
   assert.ok(tree.includes('runs/0001/share.json') && tree.includes('runs/0001/index.html'), tree.join(' '));
   // a second run on top (never a force): history grows, the first run stays
   nextRun(p, '0002');
-  assert.equal(withEnv({ GIT_CONFIG_GLOBAL: f.cfg }, () => send(p)).code, 0);
+  assert.equal(withEnv({ GIT_CONFIG_GLOBAL: f.cfg }, () => send(p, { check })).code, 0);
   assert.equal(execFileSync('git', ['--git-dir', f.bare, 'rev-list', '--count', 'nunchi/shop'], { encoding: 'utf8' }).trim(), '2');
+  assert.equal(refsOf(f.other), '', 'nothing anywhere else');
   // the anonymous check's environment: no person config, no askpass, no prompt, no ssh agent
   const env = anonEnv({ HOME: '/h', GIT_CONFIG_GLOBAL: f.cfg, SSH_AUTH_SOCK: '/s', GIT_ASKPASS: '/a', PATH: '/bin' }, '/empty');
   assert.deepEqual(env, { HOME: '/h', PATH: '/bin', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/empty', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '', SSH_ASKPASS: '', GCM_INTERACTIVE: 'never' });
 });
 
-test('share (B): a repository that answers without a login is public, and nothing is pushed (a fixture that triggers it, one that does not)', () => {
+test('share (B): the person\'s git config sending the fetch or the push to another place (pushInsteadOf, insteadOf, a pushurl) is refused before anything is fetched or pushed', () => {
   const p = shareProject({ git: true });
-  const f = fakeRemote();
-  // a repository anyone here can read without a login: the bare one itself, by path
-  setUp(p, { ...f.dest, remote: f.bare, web: 'github.invalid/mina/results' });
-  assert.equal(answersAnonymously(f.bare, { dir: tmp('nunchi-share-anon-') }), true);
-  const r = send(p);
-  assert.deepEqual(r.lines, ['Not shared: github.invalid/mina/results answers without a login, so it is public. Make it private on GitHub, then run nunchi share.']);
-  assert.throws(() => execFileSync('git', ['--git-dir', f.bare, 'rev-parse', '--verify', '-q', 'refs/heads/nunchi/shop'], { stdio: 'pipe' }), 'nothing was pushed');
-  // the private one (the fake host answers nobody without the person's config)
-  assert.equal(answersAnonymously('https://github.invalid/mina/results.git', { dir: tmp('nunchi-share-anon-'), timeout: 20000 }), false);
-  assert.equal(anonUrl('git@github.com:mina/r.git'), 'https://github.com/mina/r.git');
-  assert.deepEqual(parseRepo('github.com/mina/nunchi-results'), { remote: 'https://github.com/mina/nunchi-results.git', web: 'github.com/mina/nunchi-results', anon: 'https://github.com/mina/nunchi-results.git' });
-  for (const bad of ['mina/results', 'https://github.com/mina', 'github.com/../x', 'ftp://github.com/a/b', 'github.com/a/b; rm -rf ~']) assert.equal(parseRepo(bad), null, bad);
+  for (const [extra, to] of [
+    ['[url "git@github.com:mina/other.git"]\n\tpushInsteadOf = git@github.com:mina/results.git\n', '(github.com/mina/other)'],
+    ['[remote "origin"]\n\tpushurl = git@github.com:mina/other.git\n', '(github.com/mina/other)'],
+    [null, '(an address that is not a GitHub repository)'],
+  ]) {
+    const f = fakeGitHub(extra ?? '');
+    // a rewrite onto a path of this machine: git would push there, and an anonymous check of GitHub would not see it
+    if (extra === null) writeFileSync(f.cfg, `${readFileSync(f.cfg, 'utf8')}[url "${f.bare.replace(/\\/g, '/')}"]\n\tinsteadOf = git@github.com:mina/results.git\n`);
+    setUp(p, f.dest);
+    const checked = [];
+    const r = withEnv({ GIT_CONFIG_GLOBAL: f.cfg }, () => send(p, { check: u => { checked.push(u); return false; } }));
+    assert.deepEqual(r.lines, [`Not shared: your git config sends github.com/mina/results's fetches or pushes somewhere else ${to}. Nothing was sent. Remove the insteadOf, pushInsteadOf or pushurl that rewrites it, or set up the repository it goes to: nunchi share --setup in your own terminal.`]);
+    assert.deepEqual([refsOf(f.bare), refsOf(f.other), checked], ['', '', []], 'nothing fetched, checked or pushed');
+  }
 });
 
-test('share (B): a push git refuses is said, with git\'s first line, and nothing else changes', () => {
+test('share (B): a repository that answers without a login is public, and nothing is pushed (a fixture that triggers it, one that does not)', () => {
+  const f = fakeGitHub();
+  if (!SSH_FAKE) {
+    const p = shareProject({ git: true });
+    setUp(p, f.dest);
+    const r = withEnv({ GIT_CONFIG_GLOBAL: f.cfg }, () => send(p, { check: () => true }));
+    assert.deepEqual(r.lines, ['Not shared: github.com/mina/results answers without a login, so it is public. Make it private on GitHub, then run nunchi share.']);
+    assert.equal(refsOf(f.bare), '', 'nothing was pushed');
+  }
+  // the check itself: a repository anyone here can read (a local path) answers; the person's config never answers for
+  // them (here it would map the URL onto that same readable repository)
+  assert.equal(answersAnonymously(f.bare, { dir: tmp('nunchi-share-anon-') }), true);
+  writeFileSync(f.cfg, `[url "${f.bare.replace(/\\/g, '/')}"]\n\tinsteadOf = https://github.invalid/mina/results.git\n`);
+  assert.equal(withEnv({ GIT_CONFIG_GLOBAL: f.cfg }, () => answersAnonymously('https://github.invalid/mina/results.git', { dir: tmp('nunchi-share-anon-'), timeout: 20000 })), false);
+  assert.equal(anonUrl('git@github.com:mina/r.git'), 'https://github.com/mina/r.git');
+  assert.deepEqual(parseRepo('github.com/mina/nunchi-results'), { remote: 'https://github.com/mina/nunchi-results.git', web: 'github.com/mina/nunchi-results', anon: 'https://github.com/mina/nunchi-results.git' });
+  assert.equal(parseRepo('GitHub.com/Mina/R.git').web, 'github.com/Mina/R');
+  for (const bad of ['mina/results', 'https://github.com/mina', 'github.com/../x', 'ftp://github.com/a/b', 'github.com/a/b; rm -rf ~', 'gitlab.com/mina/results', 'git@example.com:mina/r.git', 'https://github.com.evil.example/a/b'])
+    assert.equal(parseRepo(bad), null, bad);
+});
+
+test('share (B): the app\'s own repository is never pushed to (any of its remotes, however written)', () => {
   const p = shareProject({ git: true });
-  const f = fakeRemote();
-  // a remote branch that moved on: nunchi's clone fetched an older tip; a hook of the remote refuses every push
+  execFileSync('git', ['remote', 'add', 'upstream', 'git@github.com:Mina/Shop.git'], { cwd: p.root });
+  const f = fakeGitHub();
+  setUp(p, { kind: 'git', remote: 'https://github.com/mina/shop.git', web: 'github.com/mina/shop', branch: 'nunchi/shop' });
+  const checked = [];
+  const r = withEnv({ GIT_CONFIG_GLOBAL: f.cfg }, () => send(p, { check: u => { checked.push(u); return false; } }));
+  assert.deepEqual(r.lines, ['Not shared: github.com/mina/shop is this app\'s own repository (its remote upstream). Set up a repository of its own: nunchi share --setup in your own terminal. Nothing was sent.']);
+  assert.deepEqual(checked, []);
+});
+
+test('share (B): a push git refuses is said, with git\'s first line, and nothing else changes', { skip: SSH_FAKE }, () => {
+  const p = shareProject({ git: true });
+  const f = fakeGitHub();
+  // a hook of the remote refuses every push
   writeFileSync(join(f.bare, 'hooks', 'pre-receive'), '#!/bin/sh\necho "refused by the test remote" >&2\nexit 1\n', { mode: 0o755 });
   setUp(p, f.dest);
-  const r = withEnv({ GIT_CONFIG_GLOBAL: f.cfg }, () => send(p));
-  if (!POSIX) return;               // the bare repository's hook is a shell script
+  const r = withEnv({ GIT_CONFIG_GLOBAL: f.cfg }, () => send(p, { check: () => false }));
   assert.equal(r.code, 1);
-  assert.match(r.lines[0], /^Not shared: github\.invalid\/mina\/results: the push failed: .+\. Nothing was sent\.$/);
+  assert.match(r.lines[0], /^Not shared: github\.com\/mina\/results: the push failed: .+\. Nothing was sent\.$/);
+  assert.equal(refsOf(f.bare), '');
 });
 
 test('share (A): the publish plan — the latest run at the top, screenshots shared by runs, the last 5 runs\' data, nulls only for what nunchi published', () => {
@@ -236,7 +261,8 @@ test('share (A): the engine only prepares and seals; the line says Claude Code a
   assert.match(r.lines[1], /^ {2}3 screens \(visitor\) · 4 findings · \d+ KB · 6 files\. Left out: 3 signed-in screenshots, 1 screenshot whose screen text looks like a key or token, text from your screens, your login, network recordings\.$/);
   assert.equal(r.lines[2], '  Claude Code will ask you to allow the publish.');
   const call = JSON.parse(readFileSync(r.json.publish, 'utf8'));
-  assert.equal(call.file_path, join(p.nunchi, 'share', 'outbox', '0001', 'pack', 'index.html'));
+  assert.equal(r.json.publish, join(p.nunchi, 'share', 'outbox', 'publish.json'));
+  assert.match(call.file_path.slice(join(p.nunchi, 'share', 'outbox').length), /^[/\\]0001-[0-9a-f]{12}[/\\]index\.html$/, 'the pack\'s folder is named by its bytes');
   const st = readShareLog(join(p.nunchi, 'state'));
   assert.equal(st.sealed.run, '0001');
   assert.equal(st.sends.at(-1).state, 'prepared');
@@ -299,4 +325,81 @@ test('share doorbell (B/C): the person\'s own claude -p "<fixed message>" --clou
   for (const x of ['fix my app', 'session_', '--help', 'https://evil.example/code/session_01AbCdEfGhIjKlMn']) assert.equal(parseSession(x), null, x);
   assert.equal(ring({ claude: c.bin, session: 'not a session', run: '0001', app: 'shop', where: 'x' }).ok, false);
   assert.equal(findClaude({ env: { PATH: dir }, home: join(dir, 'nohome'), platform: 'linux' }), c.bin);
+});
+
+test('share: a run of part of the app, or with a run problem, is never sent by itself; on demand it goes marked partial (the line and share.json kind "partial")', () => {
+  const p = shareProject({ wholeApp: false });
+  const d = driveHome(p);
+  setUp(p, { kind: 'drive', root: d.root, folder: 'nunchi/shop' });
+  assert.deepEqual(send(p, {}, { auto: true }).lines, ['Not shared: run 0001 is not a full check (not the whole app), so it was not sent by itself. To send it anyway, marked as a partial check: nunchi share']);
+  assert.equal(existsSync(join(d.root, 'nunchi')), false, 'nothing sent after the capture');
+  const r = send(p);
+  assert.equal(r.lines[0], 'Shared run 0001 (partial check: not the whole app) → Google Drive · My Drive/nunchi/shop/0001');
+  const s = JSON.parse(readFileSync(join(d.root, 'nunchi', 'shop', '0001', 'share.json'), 'utf8'));
+  assert.deepEqual([s.kind, s.partialWhy, s.wholeApp], ['partial', 'not the whole app', false]);
+  assert.match(shareStatus({ nunchiDir: p.nunchi, project: p.root }).lines[1], /^ {2}Sent run 0001 \(partial check\) · /);
+  // a run of the whole app whose saved login no longer worked, and one whose app did not load: the same
+  for (const [status, why] of [['login-expired', 'the saved login no longer worked'], ['app-unreachable', 'most screens did not load']]) {
+    const q = shareProject({ problems: [{ status, scenes: 3, of: 7 }] });
+    setUp(q, { kind: 'artifact', url: null });
+    assert.deepEqual(send(q, {}, { auto: true }).lines, [`Not shared: run 0001 is not a full check (${why}), so it was not sent by itself. To send it anyway, marked as a partial check: nunchi share`]);
+    assert.equal(existsSync(join(q.nunchi, 'share', 'outbox')), false);
+    assert.equal(send(q).lines[0], `Run 0001 (partial check: ${why}) is ready to share → a new private artifact`);
+  }
+  // a full check: "(full check)", kind "full"
+  const f = shareProject();
+  const e = driveHome(f);
+  setUp(f, { kind: 'drive', root: e.root, folder: 'nunchi/shop' });
+  assert.equal(send(f, {}, { auto: true }).lines[0], 'Shared run 0001 (full check) → Google Drive · My Drive/nunchi/shop/0001');
+  assert.equal(JSON.parse(readFileSync(join(e.root, 'nunchi', 'shop', '0001', 'share.json'), 'utf8')).kind, 'full');
+});
+
+test('share: only the worktree sharing was set up in sends; a capture or nunchi share in another worktree of the repository says where it was set up', () => {
+  const main = shareProject({ git: true });
+  const d = driveHome(main);
+  setUp(main, { kind: 'drive', root: d.root, folder: 'nunchi/shop' });
+  const wt = join(tmp('nunchi-share-wt-'), 'experiment');
+  execFileSync('git', ['worktree', 'add', '-q', '-b', 'experiment', wt], { cwd: main.root });
+  const other = shareProject({ into: wt, id: '0002' });
+  const line = `Not shared: sharing for shop was set up in the worktree at ${resolve(main.root)}, not in this one. Share from there, or set it up for this worktree in your own terminal: nunchi share --setup`;
+  assert.deepEqual(share({ project: wt, nunchiDir: other.nunchi, auto: true, version: '0.0.0-test', deps: { now } }).lines, [line]);
+  assert.deepEqual(share({ project: wt, nunchiDir: other.nunchi, version: '0.0.0-test', deps: { now } }).lines, [line]);
+  assert.equal(existsSync(join(d.root, 'nunchi')), false, 'nothing of the other worktree was sent');
+  assert.ok(shareStatus({ nunchiDir: other.nunchi, project: wt }).lines.includes(`  Set up for the worktree at ${resolve(main.root)}: only its full checks are sent, not this one's.`));
+  // the worktree it was set up in sends
+  assert.equal(send(main).lines[0], 'Shared run 0001 (full check) → Google Drive · My Drive/nunchi/shop/0001');
+});
+
+test('share (A): a link in nunchi\'s outbox is never written through (said, nothing prepared)', { skip: !POSIX && 'symbolic links' }, () => {
+  const p = shareProject();
+  setUp(p, { kind: 'artifact', url: null });
+  const away = tmp('nunchi-share-away-');
+  mkdirSync(join(p.nunchi, 'share'), { recursive: true });
+  symlinkSync(away, join(p.nunchi, 'share', 'outbox'));
+  const r = send(p);
+  assert.equal(r.code, 1);
+  assert.match(r.lines[0], /^Not shared: .+outbox is a symbolic link; nunchi does not write through links .+\. Nothing was prepared\.$/);
+  assert.deepEqual(readdirSync(away), []);
+  assert.equal(readShareLog(join(p.nunchi, 'state')).sealed, null);
+});
+
+test('share (A): the pinned link is never one a publish result called shared', () => {
+  const cfg = { dest: { kind: 'artifact', url: null } };
+  const pinned = audience => artifactUrl(cfg, { artifact: { url: 'https://claude.ai/artifact/AbCdEf123456', audience } });
+  assert.deepEqual([pinned('private'), pinned('unknown'), pinned('shared')], ['https://claude.ai/artifact/AbCdEf123456', 'https://claude.ai/artifact/AbCdEf123456', null]);
+});
+
+test('share (A): a pack folder is written once — the same pack again is the folder as written; one changed since is refused, never rewritten', () => {
+  const p = shareProject();
+  setUp(p, { kind: 'artifact', url: null });
+  const a = send(p);
+  const page = JSON.parse(readFileSync(a.json.publish, 'utf8')).file_path;
+  assert.equal(JSON.parse(readFileSync(send(p).json.publish, 'utf8')).file_path, page, 'the same pack, the same folder');
+  writeFileSync(page, '<p>changed</p>');
+  const name = page.split(/[/\\]/).at(-2);
+  assert.deepEqual(send(p).lines, [`Not shared: .nunchi/share/outbox/${name} was changed after nunchi wrote it. Delete that folder, then run nunchi share again. Nothing was prepared.`]);
+  assert.equal(readFileSync(page, 'utf8'), '<p>changed</p>', 'not rewritten');
+  rmSync(join(p.nunchi, 'share', 'outbox', name), { recursive: true });
+  assert.equal(send(p).code, 0);
+  assert.notEqual(readFileSync(page, 'utf8'), '<p>changed</p>');
 });

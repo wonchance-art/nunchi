@@ -10,9 +10,11 @@ import { join } from 'node:path';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { setupShare, turnOnShare, offShare, turnOnLine } from '../src/share/setup.mjs';
-import { readShare } from '../src/share/config.mjs';
+import { readShare, readShareIndex, setOn, stopShare } from '../src/share/config.mjs';
 import { findClaude } from '../src/share/doorbell.mjs';
+import { stateRoot } from '../src/state.mjs';
 import { shareProject, driveHome, setUp, now } from './fixtures/share-project.mjs';
+import { tmp } from './fixtures/tmp.mjs';
 
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 // the person at their terminal, scripted: each ask() takes the next answer
@@ -20,7 +22,8 @@ function person(answers) {
   const said = [], asked = [];
   return { said, asked, io: { say: l => said.push(l), ask: async q => { asked.push(q); return answers.length ? answers.shift() : null; } } };
 }
-const DEPS = (extra = {}) => ({ platform: 'darwin', code: () => 'K7QM', now, by: 'test person', findClaude: () => '/Users/mina/.local/bin/claude', ...extra });
+// `index`: a state folder of the test's own standing in for the person's (setup lists the share there for the hook)
+const DEPS = (extra = {}) => ({ platform: 'darwin', code: () => 'K7QM', now, by: 'test person', findClaude: () => '/Users/mina/.local/bin/claude', index: tmp('nunchi-share-index-'), ...extra });
 
 test('share --setup: the owner\'s dialog for a Google Drive folder, recorded only with the code typed back', async () => {
   const p = shareProject();
@@ -55,6 +58,23 @@ test('share --setup: the owner\'s dialog for a Google Drive folder, recorded onl
   assert.ok(t.said.join(' ').includes('Sharing sends screenshots of your app off this Mac to Google Drive · My Drive/nunchi/shop. Anyone who can open'), 'the consent (§5.4)');
   const cfg = readShare(join(p.nunchi, 'state'));
   assert.deepEqual([cfg.on, cfg.dest.kind, cfg.dest.folder, cfg.include, cfg.when, cfg.doorbell, cfg.set.channel], [true, 'drive', 'nunchi/shop', { signedIn: false, pageText: false }, 'after', null, 'cli-tty']);
+  assert.deepEqual(cfg.worktree, { stream: 'main', path: p.root });
+});
+
+test('share --setup in a repository: for this worktree only (said, and recorded with the worktree); listed in the person\'s own index for the hook; the app\'s own repository and other hosts are not taken', async () => {
+  const p = shareProject({ git: true });
+  execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/mina/shop.git'], { cwd: p.root });
+  const index = tmp('nunchi-share-index-');
+  const t = person(['3', 'gitlab.com/mina/results', 'git@github.com:Mina/Shop.git', 'github.com/mina/nunchi-results', 'n', 'n', 'manual', '', 'K7QM']);
+  const r = await setupShare({ project: p.root, nunchiDir: p.nunchi, io: t.io, deps: DEPS({ index }) });
+  assert.equal(r.code, 0, t.said.join('\n'));
+  assert.ok(t.said.includes('  Give it as github.com/<you>/<name> (a repository of its own, never your app\'s).'), 'GitHub only');
+  assert.ok(t.said.includes('  That is this app\'s own repository (its remote origin). Use a repository of its own.'), t.said.join('\n'));
+  assert.ok(t.said.join(' ').includes(`For this worktree only (${p.root}): full checks in the repository's other worktrees are not sent.`), t.said.join('\n'));
+  const state = stateRoot(p.root).dir;
+  const cfg = readShare(state);
+  assert.deepEqual([cfg.dest.web, cfg.worktree], ['github.com/mina/nunchi-results', { stream: 'main', path: p.root }]);
+  assert.deepEqual(readShareIndex(index), [state]);
 });
 
 test('share --setup: a wrong code records nothing ("Not turned on: the code did not match.")', async () => {
@@ -97,6 +117,12 @@ test('share --on in the terminal and the board\'s Turn on need a setup first; --
   assert.equal(readShare(join(p.nunchi, 'state')).on, true);
   assert.match(offShare({ nunchiDir: p.nunchi }), /^Sharing is off\./);
   assert.equal(readShare(join(p.nunchi, 'state')).on, false);
+  // stopped (an artifact a publish result called shared): nothing turns it on again but a new setup
+  const q = shareProject();
+  const sq = setUp(q, { kind: 'artifact', url: null });
+  stopShare(sq.root.dir, 'artifact-not-private', { url: 'https://claude.ai/artifact/AbCdEf123456', at: 'x' });
+  assert.deepEqual(setOn(sq.root.dir, true, { channel: 'board', at: 'x' }).refused, 'artifact-not-private');
+  assert.equal(readShare(sq.root.dir).on, false);
 });
 
 test('share --setup / --on from the agent (no TTY, or --from-chat) is refused with the owner\'s line; share, --status and --off run', () => {
@@ -118,6 +144,7 @@ test('share --setup / --on from the agent (no TTY, or --from-chat) is refused wi
   assert.equal(now1.status, 1);
   assert.match(now1.stderr, /^Not shared: sharing is off for /);
   assert.match(run('--to', 'x').stderr, /--to: not a flag of share/);
+  assert.match(run('--root', '/elsewhere').stderr, /--root: not a flag of share/, 'the pack is of this project, as set up here');
 });
 
 // The person's own terminal (a pseudo-terminal stands in): the whole dialog typed, the code read off the screen
@@ -125,9 +152,10 @@ const hasScript = (() => { try { return process.platform === 'linux' && execFile
 test('share --setup in a terminal: typed answers and the code it shows turn sharing on (cli-tty); a wrong code does not', { skip: !hasScript && 'needs util-linux script (Linux)', timeout: 60000 }, async () => {
   const p = shareProject();
   const d = driveHome(p);
+  const xdg = tmp('nunchi-share-xdg-');
   // each prompt in turn, answered once it shows (the code as the terminal shows it, or a wrong one)
   const typed = (answers, code) => new Promise(res => {
-    const c = spawn('script', ['-qfec', `${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} share --setup`, '/dev/null'], { cwd: p.root, env: { ...process.env, HOME: d.home, PATH: '/usr/bin:/bin' } });
+    const c = spawn('script', ['-qfec', `${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} share --setup`, '/dev/null'], { cwd: p.root, env: { ...process.env, HOME: d.home, XDG_STATE_HOME: xdg, PATH: '/usr/bin:/bin' } });
     const steps = [/Choose 1(, 2)? or [23]: /, /Folder inside My Drive: /, /Turn on\? \[y\/N\]: /, /Turn on\? \[y\/N\]: /, /\[after\/manual\]: /,
       ...(answers.length > 5 ? [/\(Enter to skip\): /] : []), /Type ([A-Z0-9]{4}) to confirm: /];
     let out = '', at = 0, k = 0;

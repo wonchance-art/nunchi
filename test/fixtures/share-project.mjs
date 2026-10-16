@@ -2,9 +2,10 @@
 // a secret-shaped string, and everything a pack must never carry planted where capture writes it (the saved login, a
 // recording, network.json, console.json, text.txt, aria.yml, canaries) with marker strings a test looks for. Invented
 // content only.
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync, readFileSync, cpSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { writeRun, scene, HOSTILE } from './board-project.mjs';
 import { tmp } from './tmp.mjs';
 import { writeSetup, kst } from '../../src/share/config.mjs';
@@ -17,7 +18,7 @@ export const PAGE_TEXT = ['PAGE-TEXT-CLAIM-1', 'Hello Ana Fern', 'ana-fern-diary
 // a synthetic key shape (Stripe's live-key prefix and 24 invented characters): what the scrubber calls stripe-live-secret-key
 export const FAKE_KEY = `sk_live_${'Zq9'.repeat(8)}`;
 
-export function shareProject({ git = false, name = null, secretScreen = true, kind = 'sweep', id = '0001', into = null } = {}) {
+export function shareProject({ git = false, name = null, secretScreen = true, kind = 'sweep', id = '0001', into = null, wholeApp = true, problems = [] } = {}) {
   let root = into ?? tmp('nunchi-share-');
   if (name && !into) { root = join(root, name); mkdirSync(root); }
   if (git && !into) {
@@ -41,7 +42,7 @@ export function shareProject({ git = false, name = null, secretScreen = true, ki
     f('link-unnamed', 'medium', scenes[4], 'a.diary:has-text("Ana Fern diary")', { href: '/people/ana-fern-diary', name: 'Ana Fern diary' }, 'L8'),
     f('target-size-min', 'low', scenes[6], 'nav a', { width: 12 }, 'L8'),
   ];
-  const r = writeRun(root, id, { scenes, findings, extraScene: (dir, s) => {
+  const r = writeRun(root, id, { scenes, findings, wholeApp, problems, extraScene: (dir, s) => {
     writeFileSync(join(dir, 'console.json'), JSON.stringify({ errors: ['CONSOLE-LINE-SECRET'] }));
     writeFileSync(join(dir, 'aria.yml'), '- heading "ARIA-NODE-SECRET"\n');
     // capture writes what it scrubbed as a marker: this screen's text held a key
@@ -67,11 +68,37 @@ export function driveHome(p) {
   return { home, root };
 }
 export const SETUP = { schema: 1, on: true, app: 'shop', include: { signedIn: false, pageText: false }, when: 'after', doorbell: null, set: { channel: 'cli-tty', by: 'test person', at: '2026-10-16T16:00:00+09:00' }, stopped: null };
-// The setup as the person's terminal records it (tests stand in for the person here)
-export function setUp(p, dest, extra = {}) {
+// The setup as the person's terminal records it (tests stand in for the person here): for the worktree `p` is in.
+// `index`: a state folder of the test's own standing in for the person's (where setup lists the share for the hook).
+export function setUp(p, dest, extra = {}, { index = null } = {}) {
   const st = openState(p.nunchi);
-  writeSetup(st.root.dir, { ...SETUP, ...extra, dest });
+  writeSetup(st.root.dir, { ...SETUP, worktree: { stream: st.root.stream, path: resolve(p.root) }, ...extra, dest }, { index });
   return st;
 }
 export const now = () => Date.parse('2026-10-16T17:00:00+09:00');
+// another complete run, the same screens (a copy of the first run under a new id), now the latest
+export function nextRun(p, id) {
+  const to = join(p.nunchi, 'runs', id);
+  cpSync(p.run, to, { recursive: true });
+  const meta = JSON.parse(readFileSync(join(to, 'run.json'), 'utf8'));
+  writeFileSync(join(to, 'run.json'), JSON.stringify({ ...meta, id, parent: null }));
+  writeFileSync(join(p.nunchi, 'runs', 'latest'), `${id}\n`);
+}
+// A fake GitHub (test/fixtures/fake-github-ssh.mjs) behind the person's git config (`core.sshCommand`): the bare
+// repositories mina/results and mina/other, and the person's config file to point GIT_CONFIG_GLOBAL at; `extra` is more
+// of their config (a rewrite of the URL, say). → { root, bare, other, cfg, dest } (dest: git@github.com:mina/results.git)
+const FAKE_SSH = new URL('./fake-github-ssh.mjs', import.meta.url);
+export function fakeGitHub(extra = '') {
+  const dir = tmp('nunchi-share-github-');
+  const root = join(dir, 'github');
+  const bare = join(root, 'mina', 'results.git'), other = join(root, 'mina', 'other.git');
+  for (const b of [bare, other]) execFileSync('git', ['init', '-q', '--bare', b]);
+  const q = x => `\\"${String(x).replace(/\\/g, '/')}\\"`;
+  const script = fileURLToPath(FAKE_SSH);
+  const cfg = join(dir, 'person.gitconfig');
+  writeFileSync(cfg, `[core]\n\tsshCommand = "${q(process.execPath)} ${q(script)} ${q(root)}"\n[ssh]\n\tvariant = simple\n${extra}`);
+  return { root, bare, other, cfg, dest: { kind: 'git', remote: 'git@github.com:mina/results.git', web: 'github.com/mina/results', branch: 'nunchi/shop' } };
+}
+// The test's process.env for the length of fn (GIT_CONFIG_GLOBAL: the person's git config)
+export const withEnv = (vars, fn) => { const was = {}; for (const k of Object.keys(vars)) { was[k] = process.env[k]; process.env[k] = vars[k]; } try { return fn(); } finally { for (const k of Object.keys(vars)) { if (was[k] === undefined) delete process.env[k]; else process.env[k] = was[k]; } } };
 export { kst };

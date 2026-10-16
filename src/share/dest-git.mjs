@@ -8,13 +8,19 @@
 // person's (no credential helper, no `insteadOf` that would turn it into an ssh URL with their key), no prompt. If it
 // answers without a login, it is public, and nothing is pushed. A repository that does not answer is private or missing
 // (or the network is down); the push then tells which. It is one HTTPS request, at a send the person turned on.
+//
+// The check and the push name one repository: the person's git config may rewrite a URL (`url.<x>.insteadOf`,
+// `pushInsteadOf`, a `pushurl`), and the push keeps their config. So once the remote is added, git is asked where its
+// fetches and pushes really go (`git remote get-url [--push] --all`, with their config); every one must be the same
+// GitHub repository the person set up (its https or ssh form), or nothing is fetched or pushed. The anonymous check
+// asks that push URL's repository.
 import { existsSync, writeFileSync, mkdirSync, rmSync, readdirSync, lstatSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { gitRunner } from '../runs.mjs';
 import { privateDir, refuseLink, setMode } from '../stable.mjs';
-import { parseRepo } from './config.mjs';
+import { parseRepo, sameRepo } from './config.mjs';
 
 export { parseRepo };
 // The URL the anonymous check asks: the https form of the remote; a local or file remote as it is (a local path answers
@@ -44,9 +50,42 @@ export function answersAnonymously(remote, { dir, timeout = 20_000, run = execFi
   } catch { return false; }
 }
 
+// The app's own GitHub repositories (every remote of the project's repository, as configured and as git rewrites it):
+// sharing never pushes there (it may be public, and an orphan branch there reaches every clone).
+// → Map(web in lower case → remote name)
+export function appRepos(root) {
+  const out = new Map();
+  let git;
+  try { git = gitRunner(root, { timeout: 15_000 }); git(['rev-parse', '--git-dir']); } catch { return out; }
+  const add = (url, name) => { const p = parseRepo(url); if (p && !out.has(p.web.toLowerCase())) out.set(p.web.toLowerCase(), name); };
+  let configured = [];
+  try { configured = git(['config', '-z', '--get-regexp', '^remote\\..*\\.(url|pushurl)$'], { encoding: 'utf8' }).split('\0').filter(Boolean); } catch {}
+  const names = new Set();
+  for (const e of configured) {
+    const i = e.indexOf('\n');
+    const key = i < 0 ? e : e.slice(0, i), url = i < 0 ? '' : e.slice(i + 1);
+    const name = /^remote\.(.+)\.(?:url|pushurl)$/s.exec(key)?.[1];
+    if (name === undefined) continue;
+    names.add(name);
+    add(url, name);
+  }
+  for (const name of [...names].sort()) {
+    for (const how of [['--all'], ['--push', '--all']]) {
+      try { for (const u of git(['remote', 'get-url', ...how, name], { encoding: 'utf8' }).split('\n')) if (u.trim()) add(u.trim(), name); } catch {}
+    }
+  }
+  return out;
+}
+// Where the clone's `origin` really fetches from and pushes to, with the person's config → { fetch: [urls], push: [urls] }
+function realUrls(git) {
+  const list = how => git(['remote', 'get-url', ...how, 'origin'], { encoding: 'utf8' }).split('\n').map(u => u.trim()).filter(Boolean);
+  return { fetch: list(['--all']), push: list(['--push', '--all']) };
+}
+
 const firstLine = e => String(e?.stderr || e?.message || e).split('\n').map(l => l.trim()).filter(l => l && !/^hint:/.test(l))[0]?.slice(0, 200) || 'git failed';
-// Commits the pack into nunchi's clone and pushes it. `check`: the anonymous check (answersAnonymously, or a test's).
-// → { commit, pushed: true } or throws { code: 'PUBLIC' | 'GIT_FAILED', message }
+// Commits the pack into nunchi's clone and pushes it. `check`: the anonymous check (answersAnonymously, or a test's),
+// given the URL the push goes to. → { commit, pushed: true } or throws { code: 'PUBLIC' | 'REDIRECTED' (with `to`: the
+// repositories it would reach instead, or null for an address that is not one) | 'GIT_FAILED', message }
 export function sendToGit({ clone, remote, branch, run, app, files, check = r => answersAnonymously(r, { dir: dirname(clone) }) }) {
   privateDir(clone);
   refuseLink(clone);
@@ -55,6 +94,14 @@ export function sendToGit({ clone, remote, branch, run, app, files, check = r =>
   const fail = (e, what) => { throw Object.assign(new Error(`${what}: ${firstLine(e)}`), { code: 'GIT_FAILED' }); };
   try { git(['remote', 'remove', 'origin']); } catch {}
   git(['remote', 'add', 'origin', '--', remote]);
+  // where git really fetches and pushes, the person's rewrites applied: the repository set up, or nothing goes
+  const want = parseRepo(remote)?.web;
+  let real;
+  try { real = realUrls(git); } catch (e) { fail(e, 'could not read the remote'); }
+  const elsewhere = [...real.fetch, ...real.push].filter(u => !sameRepo(parseRepo(u)?.web, want));
+  if (!want || !real.push.length || elsewhere.length) {
+    throw Object.assign(new Error('redirected'), { code: 'REDIRECTED', to: [...new Set(elsewhere.map(u => parseRepo(u)?.web ?? null))] });
+  }
   // the branch as GitHub has it (the person's login), or none yet
   let heads;
   try { heads = git(['ls-remote', '--heads', 'origin', `refs/heads/${branch}`], { encoding: 'utf8' }).trim(); } catch (e) { fail(e, 'could not reach the repository'); }
@@ -82,8 +129,8 @@ export function sendToGit({ clone, remote, branch, run, app, files, check = r =>
   if (changed) git(['-c', 'user.name=nunchi share', '-c', 'user.email=share@nunchi.invalid', '-c', 'commit.gpgsign=false', 'commit', '-q', '--no-verify', '-m', `nunchi share: run ${run} of ${app}`]);
   let commit;
   try { commit = git(['rev-parse', '--short=7', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (e) { fail(e, 'nothing to push'); }
-  // right before the push: does it answer without a login?
-  if (check(remote)) throw Object.assign(new Error('public'), { code: 'PUBLIC' });
+  // right before the push: does the repository the push goes to answer without a login?
+  for (const u of [...new Set(real.push)]) if (check(u)) throw Object.assign(new Error('public'), { code: 'PUBLIC' });
   try { git(['push', '-q', '--no-verify', 'origin', `HEAD:refs/heads/${branch}`]); } catch (e) { fail(e, 'the push failed'); }
   return { commit, pushed: true, unchanged: !changed };
 }

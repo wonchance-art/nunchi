@@ -42,7 +42,10 @@
 // moves, packs or uploads run files or a pack (`.nunchi/runs/**`, `.nunchi/share/**`: cp, mv, rsync, scp, tar, zip,
 // curl -T …, or `cat` redirected into another file), and `git push` / `git remote add|set-url` naming the
 // repository sharing pushes to. The Artifact tool: a publish from `.nunchi/` only as the pack nunchi share sealed, and
-// then the person is asked (share/hook.mjs).
+// then the person is asked; nothing else to, from or deleting the artifact sharing publishes to; a page nunchi export
+// --html wrote is asked about (share/hook.mjs). The destinations come from this repository's state folders and the
+// person's index that setup writes, so a call from a working folder outside the repository is judged the same. Not
+// seen: MCP tools (the matcher), and copies made by inline interpreter code (judged for nunchi's state names only).
 //
 // Honest limits (design §8.3): this matches paths and words in the tool call. A command that builds a path at run
 // time (variables, base64, a script file) is not seen. Neither this hook nor the board's channels are a security
@@ -55,7 +58,7 @@ import { join, resolve, dirname, basename, isAbsolute, relative } from 'node:pat
 import { homedir } from 'node:os';
 import { gitRunner } from './runs.mjs';
 import { pathToFileURL } from 'node:url';
-import { sharesOf, shareFolders, shareRemotes, namesRemote, artifactRule } from './share/hook.mjs';
+import { sharesOf, indexedStates, shareFolders, shareRemotes, namesRemote, artifactRule } from './share/hook.mjs';
 
 const FOLD = process.platform === 'win32' || process.platform === 'darwin';
 const norm = p => { const s = String(p).replace(/\\/g, '/').replace(/\/+$/, ''); return FOLD ? s.toLowerCase() : s; };
@@ -143,9 +146,11 @@ export function usesNunchi(cwd) {
 export function protectedOf(cwd, { env = process.env, common = undefined, askGit = gitCommonDir } = {}) {
   const gc = common === undefined ? (usesNunchi(cwd) ? askGit(cwd) : null) : common;
   const stateDirs = stateDirsOf(cwd, gc);
-  // sharing's setup and log (read when a rule needs them, once)
+  // sharing's setup and log (read when a rule needs them, once): this repository's, and every one the person's index
+  // lists (setup writes it), so a call from a working folder outside the repository is judged the same
   let shares = null;
-  return { cwd, common: gc, keys: keyBases(env), boards: boards(stateDirs), stateDirs, get shares() { return (shares ??= sharesOf(stateDirs)); } };
+  const keys = keyBases(env);
+  return { cwd, common: gc, keys, boards: boards(stateDirs), stateDirs, get shares() { return (shares ??= sharesOf([...stateDirs, ...indexedStates(keys)])); } };
 }
 
 // A path (absolute, or relative to the cwd): which protection it falls under, or null. `write`: the call writes.

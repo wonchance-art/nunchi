@@ -61,10 +61,13 @@ export function publishPlan({ pack, run, app, packDir, url = null, at = null, re
 
 // The seal the deny hook checks an Artifact call against: the call, and the sha256 of every file it sends (the page's
 // too), by the real path the call names.
-export function sealOf({ plan, pack, packDir, run, app, include, counts, url }) {
+// `prepared`: when (ms; another pack is not sealed while this one waits, send.mjs PENDING_MS); `partial`: why the run is
+// not a full check, or null (the hook's question says so).
+export function sealOf({ plan, pack, packDir, run, app, include, counts, url, prepared = null, partial = null }) {
   const hashes = {};
   for (const f of pack.files) hashes[resolve(packDir, ...f.path.split('/'))] = f.sha ?? sha256(f.data);
-  return { run, app, packDir: resolve(packDir), call: plan.call, hashes, after: plan.after, url, include, counts: { screens: counts.screens, bytes: counts.bytes, files: counts.files, visitorOnly: counts.visitorOnly } };
+  return { run, app, packDir: resolve(packDir), call: plan.call, hashes, after: plan.after, url, include, counts: { screens: counts.screens, bytes: counts.bytes, files: counts.files, visitorOnly: counts.visitorOnly },
+    prepared, ...(partial ? { partial } : {}) };
 }
 // "1.3 MB" (the owner's mock-up); a pack under 0.1 MB in KB, so it never reads "0 MB"
 export const MB = n => (n < 1e5 ? `${Math.max(1, Math.round(n / 1e3))} KB` : `${Math.round(n / 1e5) / 10} MB`);

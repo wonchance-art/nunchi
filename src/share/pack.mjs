@@ -66,9 +66,9 @@ export function scanPack(files) {
 }
 
 // The pack of one run. `led`/`view`: the ledger (project.mjs loadLedger, ledgerView); `include`: { signedIn, pageText };
-// `form`: 'page' or 'fragment' (an artifact); `branch`: the branch the run's commit is on, when known.
-// → { files: [{ path, data }], share, counts }
-export function buildPack({ runDir, nunchiDir, led, view, root, project, include, form = 'page', version, app, branch = null }) {
+// `form`: 'page' or 'fragment' (an artifact); `branch`: the branch the run's commit is on, when known; `partial`: why the
+// run is not a full check (send.mjs partialWhy), or null. → { files: [{ path, data }], share, counts }
+export function buildPack({ runDir, nunchiDir, led, view, root, project, include, form = 'page', version, app, branch = null, partial = null }) {
   const meta = JSON.parse(readFileSync(join(runDir, 'run.json'), 'utf8'));
   const manifest = readManifest(runDir);
   const persons = include.signedIn ? ['guest', 'signed-in'] : ['guest'];
@@ -87,7 +87,7 @@ export function buildPack({ runDir, nunchiDir, led, view, root, project, include
   const textOnly = fm.groups.filter(g => g.items.some(it => it.route !== null) && g.items.every(it => !it.persons.some(p => persons.includes(p)))).length;
   const listed = files.map(f => ({ path: f.path, bytes: f.data.length, sha256: sha256(f.data) })).sort((a, b) => cmp(a.path, b.path));
   const share = {
-    schema: 1, tool: 'nunchi', version, app, run: meta.id ?? null, kind: 'full', wholeApp: meta.wholeApp === true,
+    schema: 1, tool: 'nunchi', version, app, run: meta.id ?? null, kind: partial ? 'partial' : 'full', ...(partial ? { partialWhy: partial } : {}), wholeApp: meta.wholeApp === true,
     commit: typeof meta.commit === 'string' ? meta.commit : null, branch, treeMatches: meta.dirty === false,
     included: { screens: shown.length, persons, pageText: include.pageText },
     leftOut: { signedInScreens: m.scenes.filter(s => s.notShared === 'signed-in').length, secretShapedScreens: m.scenes.filter(s => s.notShared === 'secret-shaped').length, pageTextFields: fm.counts.pageTextLeftOut },
