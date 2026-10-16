@@ -13,6 +13,7 @@ import { chromium } from 'playwright-core';
 import { writeRun, scene } from './fixtures/board-project.mjs';
 import { tmp } from './fixtures/tmp.mjs';
 import { boardRequest } from './fixtures/board-call.mjs';
+import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 import * as P from '../src/project.mjs';
 import * as R from '../src/fix/records.mjs';
 import * as F from '../src/fix/loop.mjs';
@@ -235,13 +236,15 @@ test('deny hook: the agent cannot write guards.json or add, remove or re-baselin
 });
 
 // ---- in a real browser (skipped without Chromium unless NUNCHI_REQUIRE_BROWSER is set) ----------------------------------
+// Through openBoard() (test/fixtures/board-browser.mjs): a page whose first view, or a later wait (the card's #h-guards),
+// never comes says why — the board's requests and answers, the page's failed requests, the stalls, the sockets.
 
 let browser = null, browserOk = true;
 before(async () => {
   try { browser = await chromium.launch({ executablePath: process.env.NUNCHI_BROWSER || undefined }); }
   catch (e) { if (process.env.NUNCHI_REQUIRE_BROWSER) throw e; browserOk = false; }
 });
-after(async () => { await browser?.close(); });
+after(async () => { await closeBoards(); await browser?.close(); });
 // the card, measured in one evaluation (live redraws detach handles)
 const CARD = () => {
   const c = document.getElementById('h-guards')?.closest('section');
@@ -268,14 +271,10 @@ test('board e2e: the card on Progress in the design\'s words, the Add toggle pre
   attempt(p, c2, 'fixed');
   mkdirSync(join(p.root, 'app'), { recursive: true });
   writeFileSync(join(p.root, 'app', 'remove.jsx'), "export const R = () => <button onClick={() => confirm('Remove?')}>x</button>;\nexport const W = () => <button onClick={() => confirm('Water now?')}>y</button>;\n");
-  const b = await startBoard({ projectDir: p.root });
-  try {
-    for (const [viewport, scheme] of [[{ width: 1280, height: 900 }, 'light'], [{ width: 390, height: 844 }, 'dark']]) {
-      const context = await browser.newContext({ viewport, colorScheme: scheme });
-      const pg = await context.newPage();
-      const errors = [];
-      pg.on('pageerror', e => errors.push(String(e)));
-      await pg.goto(b.newLink());
+  for (const [viewport, scheme] of [[{ width: 1280, height: 900 }, 'light'], [{ width: 390, height: 844 }, 'dark']]) {
+    const s = await openBoard(browser, p, { ctx: { viewport, colorScheme: scheme } });
+    const { page: pg, errors } = s;
+    try {
       await pg.waitForSelector('#h-guards');
       const m = await pg.evaluate(CARD);
       assert.equal(m.head, 'Stop these coming back?');
@@ -306,9 +305,8 @@ test('board e2e: the card on Progress in the design\'s words, the Add toggle pre
         assert.deepEqual(await axeRun(pg), [], 'findings with the chip');
       }
       assert.deepEqual(errors, []);
-      await context.close();
-    }
-  } finally { await b.close(); }
+    } finally { await s.close(); }
+  }
 });
 
 test('the offer waits for the end of the batch, on the board and in fix --summary', () => {
@@ -369,11 +367,9 @@ test('board e2e: a toggle in focus whose file turns unreadable leaves the focus 
   const [c1, c2] = p.by('native-dialog'), [d1] = p.by('dead-href');
   plan(p, [c1, c2, d1]);
   for (const g of [c1, c2, d1]) attempt(p, g, 'fixed');
-  const b = await startBoard({ projectDir: p.root });
+  const s = await openBoard(browser, p, { ctx: { viewport: { width: 1280, height: 900 }, forcedColors: 'active' } });
+  const { page: pg } = s;
   try {
-    const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, forcedColors: 'active' });
-    const pg = await context.newPage();
-    await pg.goto(b.newLink());
     await pg.waitForSelector('#guard-b-native-dialog');
     await pg.click('#guard-b-native-dialog');
     await pg.waitForFunction(() => document.getElementById('guard-b-native-dialog')?.getAttribute('aria-pressed') === 'true');
@@ -399,8 +395,7 @@ test('board e2e: a toggle in focus whose file turns unreadable leaves the focus 
     assert.match(card.note, /^Can't read \.nunchi\/guards\.json: it is not a guards file nunchi can use \(.+\)\. Guards can't be added until it's fixed — git checkout -- \.nunchi\/guards\.json restores the committed one\.$/);
     assert.deepEqual(card.rows, [['window.confirm (fixed twice)', false], ['href="#"', false]]);
     assert.deepEqual(await axeRun(pg), []);
-    await context.close();
-  } finally { await b.close(); }
+  } finally { await s.close(); }
 });
 
 test('the card\'s words: the owner\'s, singular and plural; "More views in 0.2" names nunchi guard for the Guards view', async () => {
