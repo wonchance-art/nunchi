@@ -301,7 +301,7 @@ export const COVERAGE = {
   lookedText: (findings, cannot) => ['Looked', findings ? plural(findings, 'finding') : null, cannot ? `couldn’t judge ${plural(cannot, 'question')}` : null, !findings && !cannot ? 'nothing found' : null].filter(Boolean).join(' · '),
   // states of the view (§3.5)
   loading: 'Loading coverage…', noRun: 'Nothing captured yet. Tell your AI “capture my app”.',
-  running: (run, shown) => `A capture is running (run ${run}). This shows run ${shown} until it finishes.`,
+  running: (line, shown) => `${line}. This shows run ${shown} until it finishes.`,
   quick: n => `First look: ${plural(n, 'key screen')}, rule checks only · the full check isn’t done yet`,
   prev: 'This is the first cell with a gap', next: 'This is the last cell with a gap',
 };
@@ -374,6 +374,8 @@ export const SCREENS = {
   nothing: 'Nothing found on this screen.', notOutlined: why => `Not outlined: ${why}`, whole: 'Whole screen', firstView: 'First view',
   first: 'This is the first screen', last: 'This is the last screen', loading: 'Loading screens…',
   said: (name, label, badge, i, n) => `${name}, ${label}: ${badge}. ${i} of ${n}.`,
+  firstLook: 'First look', notYet: 'Not checked yet',   // during a first look (M5b): its key screens, and the others
+  notYetPages: n => `Not checked yet · ${plural(n, 'page')}`,
 };
 
 // ---- screenshot geometry (shared by the static export's markup and the board's DOM) -----------------------------
@@ -483,4 +485,26 @@ export class DecisionClock {
   show(now) { this.settle(now); this.hidden = false; this.last = now; this.since = now; }
   // the reading at the first key, in whole milliseconds, capped
   read(now) { this.settle(now); return Math.min(CAP_MS, Math.round(this.spent)); }
+}
+
+// ---- the Now lines' announcements (design §3.4; M5b review) ---------------------------------------------------------
+
+// At most one announcement every NOW_EVERY_MS. What is said is what changed since the last one, the first changed line
+// first, never only the first line (a "Full check done" above a capture that stopped does not change); a change inside
+// the 10 s is said once they have passed (trailing edge), with the lines as they are then, so a capture that stops right
+// after a route is said late, never dropped. Pure: the caller passes the clock, and calls again after `wait` ms.
+export const NOW_EVERY_MS = 10000;
+export class NowAnnouncer {
+  constructor() { this.said = null; this.last = -Infinity; }
+  // the Now lines on the board → { say: the words to announce, or null; wait: ms until a change can be said, or null }
+  update(lines, now) {
+    if (this.said === null && !lines.length) { this.said = []; return { say: null, wait: null }; }
+    // (the first time: the first line, as before; after that, every line not said yet)
+    const news = this.said === null ? lines.slice(0, 1) : lines.filter(l => !this.said.includes(l));
+    if (!news.length) return { say: null, wait: null };
+    if (now - this.last < NOW_EVERY_MS) return { say: null, wait: NOW_EVERY_MS - (now - this.last) };
+    this.said = [...lines];
+    this.last = now;
+    return { say: news.join('. '), wait: null };
+  }
 }

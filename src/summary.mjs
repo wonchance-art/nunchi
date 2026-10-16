@@ -1,7 +1,7 @@
 // What the board's Progress view says, computed once for the board (`/api/summary`) and `nunchi findings --json`
 // (`summary`), so the two never disagree (design 0.1-c §3.3, §3.4). Deterministic: the same ledger and run folders
-// give the same summary; the clock and the process table are read only to tell whether a capture is still running
-// (runs.mjs runningCaptures, passed in as `live`).
+// give the same summary; the clock and the process table are read only to tell whether a capture is still running or
+// has stopped (runs.mjs captureStates, passed in as `captures`).
 //
 // The verdict formula (design §3.4). "Ready to ship? Yes" only when all of these hold:
 // - no blocker or high group is open, to fix, held, needs you, or not double-checked, and none is kept or called
@@ -11,7 +11,7 @@
 // Otherwise the verdict names what stands in the way.
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
-import { runningCaptures } from './runs.mjs';
+import { captureStates, STALE_MS } from './runs.mjs';
 import { captureRuns, latestRunOf, byRun, titleOf, foldKindOf } from './ledger.mjs';
 import { SEV, plural, human } from './board/shared.mjs';
 
@@ -98,7 +98,32 @@ export function partialWhy({ wholeApp, routesGiven = false, skipped = [] }) {
   if (!why.length) return '';
   return ` · skipped ${why.slice(0, 3).join(', ')}${why.length > 3 ? ` and ${why.length - 3} more` : ''}`;
 }
-function firstRun(state, stream, runsDir, rows, live) {
+// The captures the board names besides that full check (M5b; the owner's text mock-ups, 2026-10-15 KST), the words
+// computed here once for the board's Now lines, Coverage and `findings`:
+// - a capture running: "Capture running · run 0007 · 12 of 25 screens (about 6 min left)" (how far, and the time left by
+//   minutesLeft), or "Capture running · run 0007" before its first route is done (or with no progress file); one whose
+//   writer runs here but made no progress for 10 minutes says so in place of the time left: "… 12 of 25 screens (no
+//   progress for 10 min)" (the owner's decision on the review of PR #36: no "capture again" beside a capture that runs);
+// - a capture stopped (runs.mjs captureStates): "Capture stopped · run 0002 (no progress for 10 min) — tell your AI
+//   “capture again”", or "(its process ended)" when its writer on this machine is gone (said so for good). The minutes
+//   are the rule's (STALE_MS), so a line stays the same while the folder stays and is not announced again each minute.
+const FIRST_LOOK_IDLE = n => `First look: ${plural(n, 'key screen')} · the full check has not started — tell your AI “full check”`;
+const STOPPED_WHY = { 'no-progress': `no progress for ${STALE_MS / 60e3} min`, ended: 'its process ended' };
+// how far a capture is: "12 of 25 screens (about 6 min left)", or "(no progress for 10 min)" in place of the time left
+const howFar = (p, quiet) => { const min = quiet ? null : minutesLeft(p); return `${p.done} of ${p.routes} screens${quiet ? ` (${STOPPED_WHY['no-progress']})` : min ? ` (about ${min} min left)` : ''}`; };
+function runningText(run, p, quiet = false) {
+  if (!p || !(p.done > 0)) return `Capture running · run ${run}${quiet ? ` (${STOPPED_WHY['no-progress']})` : ''}`;
+  return `Capture running · run ${run} · ${howFar(p, quiet)}`;
+}
+const stoppedText = (run, why) => `Capture stopped · run ${run} (${STOPPED_WHY[why] || STOPPED_WHY['no-progress']}) — tell your AI “capture again”`;
+// Which stopped capture is said: the newest, and only while it is the latest thing this worktree did (newer than its
+// latest run, and no capture running); a later capture, running or complete, answers it.
+function stoppedShown(captures, latest) {
+  if (captures.some(c => c.state === 'running')) return null;
+  const s = captures.filter(c => c.state === 'stopped').pop() ?? null;
+  return s && (!latest || byRun(s.run, latest) > 0) ? s : null;
+}
+function firstRun(state, stream, runsDir, rows, live, stopped) {
   const runs = captureRuns(state, stream);
   const latest = runs[runs.length - 1] ?? null;
   const kind = id => foldKindOf(state, id, stream);
@@ -106,10 +131,11 @@ function firstRun(state, stream, runsDir, rows, live) {
     const screens = readJsonOr(join(runsDir, latest, 'run.json'), {})?.scope?.routes;
     const n = Array.isArray(screens) ? screens.length : 0;
     const now = live.filter(x => x.progress?.kind === 'sweep' && byRun(x.run, latest) > 0).pop() ?? null;
-    if (!now) return { firstLook: { run: latest, screens: n, full: null, text: null }, fullCheckDone: null };
-    const full = now.progress, min = minutesLeft(full);
+    // no full check after it (M5b): it has not started, unless a capture running or stopped says what happens instead
+    if (!now) return { firstLook: { run: latest, screens: n, full: null, text: live.length || stopped ? null : FIRST_LOOK_IDLE(n) }, fullCheckDone: null };
+    const full = now.progress, quiet = now.why === 'no-progress', min = quiet ? null : minutesLeft(full);
     return { firstLook: { run: latest, screens: n, full: { run: now.run, done: full.done, routes: full.routes, minutesLeft: min, wholeApp: full.wholeApp },
-      text: `First look: ${plural(n, 'key screen')} · full check running, ${full.done} of ${full.routes} screens${min ? ` (about ${min} min left)` : ''}${partialWhy(full)}` }, fullCheckDone: null };
+      text: `First look: ${plural(n, 'key screen')} · full check running, ${howFar(full, quiet)}${partialWhy(full)}` }, fullCheckDone: null };
   }
   const previous = runs[runs.length - 2] ?? null;
   if (latest && previous && kind(latest) === 'sweep' && kind(previous) === 'quick') {
@@ -124,12 +150,17 @@ function firstRun(state, stream, runsDir, rows, live) {
 }
 
 // `git`: the hardened git runner of the project (runs.mjs gitRunner), to count commits with a `Nunchi-Fix:` trailer
-// after the last full check's commit; null when there is no git. `running`: a capture folder still being written, by a
-// writer that is still there (runs.mjs runningCaptures: the one reading of the clock and of processes here; `live`
-// replaces it in a test).
-export function summary({ state, rows, groups, stream = 'main', runsDir, git = null, fixNeeds = new Set(), live = runningCaptures(runsDir) }) {
+// after the last full check's commit; null when there is no git. `captures`: the capture folders still being written by
+// a writer that is still there, and those that stopped (runs.mjs captureStates: the one reading of the clock and of
+// processes here; a test passes its own).
+export function summary({ state, rows, groups, stream = 'main', runsDir, git = null, fixNeeds = new Set(), captures = captureStates(runsDir) }) {
   const latest = latestRunOf(state, stream);
-  const { firstLook, fullCheckDone } = firstRun(state, stream, runsDir, rows, live);
+  const live = captures.filter(c => c.state === 'running');
+  // a stopped capture is not there for the verdict (M5b): it goes by the complete runs; the Now line says it stopped
+  const stopped = stoppedShown(captures, latest);
+  const { firstLook, fullCheckDone } = firstRun(state, stream, runsDir, rows, live, stopped);
+  const lines = [...live.filter(x => x.run !== firstLook?.full?.run).map(x => ({ run: x.run, state: 'running', text: runningText(x.run, x.progress, x.why === 'no-progress') })),
+    ...(stopped ? [{ run: stopped.run, state: 'stopped', text: stoppedText(stopped.run, stopped.why) }] : [])];
   const meta = latest ? readJsonOr(join(runsDir, latest, 'run.json'), {}) : {};
   const manifest = latest ? readJsonOr(join(runsDir, latest, 'manifest.json'), {}) : {};
   const running = live.length > 0;
@@ -214,7 +245,10 @@ export function summary({ state, rows, groups, stream = 'main', runsDir, git = n
   const decideNow = seriousTotal && serious.decide ? serious.decide : toDecide;
   const handoff = !toDecide && toFix ? { toFix, text: `All decided. ${toFix} to fix. Go back to your AI chat and say “fix them”.`, say: 'fix them' } : null;
   return {
-    run: latest, kind: meta.kind ?? 'sweep', fullCheck: full, previousFullCheck: previous, running, runningRuns: live.map(x => x.run), firstLook, fullCheckDone,
+    run: latest, kind: meta.kind ?? 'sweep', fullCheck: full, previousFullCheck: previous, running, runningRuns: live.map(x => x.run), captures: lines, firstLook, fullCheckDone,
+    // the Now lines, in one order for the board and `findings` (M5b review): the full check done, the first look, the
+    // captures running or stopped
+    now: [fullCheckDone?.text, firstLook?.text, ...lines.map(c => c.text)].filter(Boolean),
     verdict, bySeverity, byStatus, standing, toDecide, decideNow, toFix, fixNeedsYou, handoff, since, confirm,
     health: { problems, blind: (latest && state.blind?.[latest]) || null, scenes: { total: scenes.length, checked: scenes.length - notSeen.length, notSeen: notSeen.length, reasons: [...new Set(notSeen.map(s => String(s.reason || s.status)))].sort() } },
     ai: { ran: aiRan, groups: new Set(ai.map(r => r.group)).size, doubleChecked: new Set(ai.filter(r => r.checked).map(r => r.group)).size,

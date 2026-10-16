@@ -422,13 +422,25 @@ if (cmd === 'setup') {
   // the state store: shared by every worktree in a repository (its run-id counter keeps run ids one sequence)
   const st = stateOf(nunchiDir);
   try { ensurePrivate(nunchiDir, st.root.shared ? ['har/', 'runs/'] : undefined); if (st.root.shared) ensureStateDir(st.root); } catch (e) { console.error('nunchi: ' + e.message); process.exit(2); }
-  // a capture on a fix branch is the fix loop's probe (below): a first look belongs on the branch the findings are on
-  if (args.quick) {
-    let b = '';
-    try { b = gitRunner(root)(['symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8' }).trim(); } catch {}
-    if (/^nunchi\/fix/.test(b)) { console.error(`nunchi capture: --quick is a first look on your own branch; ${b} is a fix branch (nunchi fix --verify judges a fix)`); process.exit(1); }
-  }
-  const run = args.out ? null : startRun(runsDir, { ids: st.root.shared ? st.files.runIds : null });
+  // design §7: only runs on the tracked branch fold as sweeps; a capture on a nunchi/fix… branch is a fix probe
+  // (kept apart, folded by nobody), so a fix not yet judged never reads as fixed, and never cancels its own attempt
+  let fixBranch = null;
+  try { const b = gitRunner(root)(['symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8' }).trim(); if (/^nunchi\/fix/.test(b)) fixBranch = b; } catch {}
+  // a capture on a fix branch is the fix loop's probe: a first look belongs on the branch the findings are on
+  if (args.quick && fixBranch) { console.error(`nunchi capture: --quick is a first look on your own branch; ${fixBranch} is a fix branch (nunchi fix --verify judges a fix)`); process.exit(1); }
+  // kind (design §2.1) and whether this run is of the whole app (below, runMeta), known before its folder is made: the
+  // progress file says them from the start (M5b review)
+  const kind = fixBranch ? 'fix-probe' : args.quick ? 'quick' : 'sweep';
+  const wholeApp = !args.quick && !args.routes && !args.changedSince && !skipped.some(s => s.reason === 'needs-sample');
+  const partialSkips = skipped.filter(s => s.reason === 'needs-sample' || s.reason === 'unchanged').map(s => ({ route: s.route, reason: s.reason }));
+  // How far the capture is, for the board (design §6: "full check running, 12 of 25 screens (about 6 min left)"):
+  // progress.json in the run folder from the moment it is made (startRun) until just before it is complete (finishRun);
+  // measured times live there and in timing.json only, never in the evidence. Its writer (pid and machine), so a board
+  // can tell a capture that was killed from one still running (review of PR #33; the machine: M5b review).
+  const { thisMachine } = await import('./stable.mjs');
+  const progressDoc = p => ({ schema: 1, kind, wholeApp, ...(args.routes ? { routesGiven: true } : {}), skipped: partialSkips, routes: p.routes, done: p.done, routeMs: p.routeMs, pid: process.pid, ...thisMachine() });
+  const firstRoutes = new Set((args.quick ? all.filter(s => s.route === '/') : all).map(s => s.route)).size;
+  const run = args.out ? null : startRun(runsDir, { ids: st.root.shared ? st.files.runIds : null, progress: progressDoc({ routes: firstRoutes, done: 0, routeMs: [] }) });
   const out = run ? run.path : resolve(args.out);
   // A capture that fails, or is stopped (Ctrl-C, a kill that lets it exit), takes its unfinished run folder with it, so
   // nothing says it is still running (review of PR #33); the previous runs are untouched. A kill that runs no handler
@@ -451,22 +463,18 @@ if (cmd === 'setup') {
     catch (e) { console.error(`nunchi capture: lens packs not loaded (${String(e.message).split('\n')[0]}); canaries follow the built-in packs`); }
   }
   const states = args.quick ? ['normal'] : (args.states || 'normal,empty,error,slow,offline').split(',').map(x => x.trim());
-  // design §7: only runs on the tracked branch fold as sweeps; a capture on a nunchi/fix… branch is a fix probe
-  // (kept apart, folded by nobody), so a fix not yet judged never reads as fixed, and never cancels its own attempt
-  let fixBranch = null;
-  try { const b = gitRunner(root)(['symbolic-ref', '--quiet', '--short', 'HEAD'], { encoding: 'utf8' }).trim(); if (/^nunchi\/fix/.test(b)) fixBranch = b; } catch {}
   const runMeta = {
     // kind (design §2.1): a full capture is a sweep; only a sweep folds as one. worktree: whose runs these are
     // (runs stay per worktree, the ledger is shared, §7).
     // A quick run (design §6) is `quick`: folded presence-only, its whole-app detectors off.
-    schema: 1, id: run?.id ?? null, parent: run?.parent ?? null, kind: fixBranch ? 'fix-probe' : args.quick ? 'quick' : 'sweep', ...(fixBranch ? { fixBranch } : {}), worktree: st.root.stream, ...workTree(root),
+    schema: 1, id: run?.id ?? null, parent: run?.parent ?? null, kind, ...(fixBranch ? { fixBranch } : {}), worktree: st.root.stream, ...workTree(root),
     scope: { routes: [...new Set(all.map(s => s.route))].sort(), persons, viewports, states, changedSince: args.changedSince || null },
     // every route the source has, none skipped for this run only (a dynamic route without a sample), so
     // whole-app detectors (secrets, the link graph, one-offs) judged the whole app. Paths discover cannot
     // resolve are skipped by every run: they never make a run partial, and are listed here so they stay visible.
-    wholeApp: !args.quick && !args.routes && !args.changedSince && !skipped.some(s => s.reason === 'needs-sample'),
+    wholeApp,
     // why a sweep is not of the whole app, in the words capture prints (the board says it: review of PR #33)
-    ...(args.routes ? { routesGiven: true } : {}), skipped: skipped.filter(s => s.reason === 'needs-sample' || s.reason === 'unchanged').map(s => ({ route: s.route, reason: s.reason })),
+    ...(args.routes ? { routesGiven: true } : {}), skipped: partialSkips,
     unresolved: skipped.filter(s => s.reason !== 'needs-sample' && s.reason !== 'unchanged').map(s => s.route).sort(),
   };
   // A quick run captures `/` first, then the key screens chosen from its navigation (quick.mjs); which ones and why go
@@ -491,6 +499,10 @@ if (cmd === 'setup') {
   if (!args.routes && !args.quick) {
     const routes = discover(root).routes;
     flow = { routes: routes.filter(r => !r.needsResolution).map(r => r.path).sort(), wholeApp: !args.changedSince, code: codeNavigations(root, buildSourceMap(root, routes)) };
+  } else if (args.quick) {
+    // a first look's flow.json names every page too, captured or not (M5b): the board's wall says which ones it has not
+    // checked yet. Its link-graph findings stay off (whole-app detectors), as before.
+    flow = { routes: discover(root).routes.filter(r => !r.needsResolution).map(r => r.path).sort(), wholeApp: false };
   }
   if (auth) {
     try {
@@ -499,16 +511,10 @@ if (cmd === 'setup') {
       if (dated.length && dated.every(c => c.expires * 1000 < Date.now())) console.error('warning: every cookie in the saved login has expired; run `nunchi login` again or signed-in screens will show the sign-in page');
     } catch {}
   }
-  // How far the capture is, for the board (design §6: "full check running, 12 of 25 screens (about 6 min left)"):
-  // progress.json in the run folder while it is being written (removed before the run is complete; measured times
-  // live there and in timing.json only, never in the evidence).
   const { writeStable } = await import('./stable.mjs');
   const progressFile = run ? join(run.path, PROGRESS_FILE) : null;
   // (a progress file that cannot be written only leaves the board without the line: it never fails a capture)
-  // (its writer, so a board can tell a capture that was killed from one still running: review of PR #33)
-  const { hostname } = await import('node:os');
-  const onProgress = progressFile ? p => { try { writeStable(progressFile, { schema: 1, kind: runMeta.kind, wholeApp: runMeta.wholeApp, ...(args.routes ? { routesGiven: true } : {}), skipped: runMeta.skipped, routes: p.routes, done: p.done, routeMs: p.routeMs, pid: process.pid, host: hostname() }); } catch {} } : null;
-  if (onProgress) onProgress({ routes: new Set((quick ? quick.scenes : all).map(s => s.route)).size, done: 0, routeMs: [] });
+  const onProgress = progressFile ? p => { try { writeStable(progressFile, progressDoc(p)); } catch {} } : null;
   try {
     const r = await capture({
       baseUrl: args.url, scenes: quick ? quick.scenes : all, out, viewports, browserPath: args.browserPath, storageState: auth,
@@ -516,7 +522,6 @@ if (cmd === 'setup') {
       allowHosts: (args.allowHost || '').split(',').map(x => x.trim()).filter(Boolean), allowBaseHosts, canaries, lenses,
       persons, pick: quick?.pick ?? null, wholeAppDetectors: !args.quick, onProgress,
     });
-    if (progressFile) rmSync(progressFile, { force: true });
     const by = { blocker: 0, high: 0, medium: 0, low: 0 };
     for (const f of r.findings) by[f.severity]++;
     // the source map, source hashes and inventory serve the AI hunt and the re-check, which never run on a quick run
@@ -658,10 +663,8 @@ if (cmd === 'setup') {
       const b = sum.byStatus;
       console.log(`run ${latest} · ${rows.length} unique defects in ${gs.length} groups · groups open ${b.open} · to fix ${b['to-fix']} · later ${b.held} · fixed ${b.fixed} · kept ${b.kept} · not a problem ${b.dismissed}`);
       console.log(`ready to ship? ${sum.verdict.text}`);
-      // the fast first run (design §6): the board's words
-      if (sum.firstLook?.text) console.log(sum.firstLook.text);
-      else if (sum.firstLook) console.log(`run ${sum.firstLook.run} is a quick first look (${sum.firstLook.screens} key screen${sum.firstLook.screens === 1 ? '' : 's'}): it marks nothing fixed, and no full check is running`);
-      if (sum.fullCheckDone) console.log(sum.fullCheckDone.text);
+      // the fast first run (design §6) and the captures running or stopped (M5b): the board's Now lines, its words and order
+      for (const line of sum.now) console.log(line);
       const blindWhy = { 'app-unreachable': 'the app did not load', 'recording-stale': 'the recording no longer had the data', 'one-page': 'most screens showed one and the same page (another app or an error page at that address?)' };
       if (blind) console.log(`run ${latest} marked nothing fixed: ${blindWhy[blind] || blind}`);
       const stale = rows.filter(r => r.notLookedAt).length;
