@@ -86,6 +86,14 @@ export const VIEWS_CSS = `
 .wall-groups{flex:999 1 520px;min-width:0;display:flex;flex-direction:column;gap:18px}
 .wall-g-h{margin:0 0 8px;font-size:14px;color:var(--ink-2);overflow-wrap:anywhere}
 .sp-open{margin:0;padding:6px 18px 14px}
+/* a first look on the wall (M5b): "First look" and "Not checked yet" are text in the chip style (.tag), 4.5:1 and more in
+   light and dark (accent-ink on accent-soft; ink-2 on the panel, with a control-coloured edge); an edge in forced colours */
+.tag-look{align-self:flex-start;margin:3px 0 1px;font-weight:600}
+.tag-first{background:var(--accent-soft);color:var(--accent-ink)}
+.tag-notyet{background:var(--panel);color:var(--ink-2);box-shadow:inset 0 0 0 1px var(--control)}
+.sp-notyet{display:flex;flex-direction:column;align-items:flex-start;gap:8px;margin:0;padding:14px 18px}
+/* a page the first look did not open: a compact text card (no image area), in a list of its own */
+#wall-notyet .wall{align-items:start}.board .card-page button{height:auto}
 /* Screen detail */
 .sd .detail-nav,.sd-box{max-width:1180px}
 .sd .pn{align-items:center;flex-wrap:wrap}
@@ -119,6 +127,7 @@ export const VIEWS_CSS = `
    the markers keep their own drawing (their dark disc and white ring read on any screenshot) */
 @media (forced-colors:active){
 .cv-cell.cv-sel{outline:3px solid Highlight;outline-offset:-3px}
+.tag-look{border:1px solid CanvasText}
 .board .seg-b{border:1px solid ButtonText}.board .seg-b button{border:1px solid ButtonText}
 .board .seg-b button[aria-pressed=true]{background:Highlight;color:HighlightText;forced-color-adjust:none}
 .box,.num,.numb{forced-color-adjust:none}}

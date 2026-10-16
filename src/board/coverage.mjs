@@ -410,6 +410,10 @@ export function coverageView(model) {
   // captures being written by a writer that is still there (summary.mjs, M5: a killed one's folder is not "running");
   // the full check after a first look is said by the first look's line instead, as on Progress
   const running = (Array.isArray(sum.runningRuns) ? sum.runningRuns : []).map(String).filter(r => RUN_ID.test(r) && r !== sum.firstLook?.full?.run).sort(byRun);
+  // the summary's line for the newest of them, or for a capture that stopped (M5b): one source, summary.mjs, so Coverage
+  // says what Progress and `findings` say
+  const cap = (Array.isArray(sum.captures) ? sum.captures : []).filter(c => c && RUN_ID.test(String(c.run)) && typeof c.text === 'string').pop() ?? null;
+  const capture = cap ? { run: String(cap.run), state: cap.state === 'stopped' ? 'stopped' : 'running', text: safe(cap.text, 300) } : null;
   return (model._coverage = {
     run, kind, fullCheck, wholeApp: meta.wholeApp === true, quick, newer,
     scope: { persons, viewports: vps, states },
@@ -421,7 +425,7 @@ export function coverageView(model) {
     totals: { screens: { checked: checked.length, total: scenes.length }, ai: aiTotals, pages },
     wholeLine, aiLine,
     gaps, fine, muted, warnings,
-    routes, byLens, running,
+    routes, byLens, running, capture,
   });
 }
 

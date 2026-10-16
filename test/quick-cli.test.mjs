@@ -8,8 +8,9 @@ import { join } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { launch } from '../src/capture.mjs';
-import { quickApp, quickServer, SAMPLES } from './fixtures/quick-app.mjs';
+import { quickApp, quickServer, SAMPLES, ROUTES } from './fixtures/quick-app.mjs';
 import { tmp } from './fixtures/tmp.mjs';
+import { thisMachine } from '../src/stable.mjs';
 
 process.env.XDG_STATE_HOME = tmp('nunchi-quick-cli-xdg-');
 const CLI = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -46,6 +47,10 @@ test('a capture that fails, or is stopped, takes its unfinished run folder with 
   // and artifacts folders in the temporary folder)
   for (let i = 0; i < 600 && !(srv.hits.size > 0 && partial().some(p => existsSync(join(runs, p, 'progress.json')))); i++) await new Promise(r => setTimeout(r, 50));
   assert.equal(partial().length, 1, 'it is running');
+  // its progress file names it and its writer: the pid and this machine (host, boot, pid namespace: M5b review)
+  const doc = read(join(runs, partial()[0], 'progress.json'));
+  const { host, boot, ns } = thisMachine();
+  assert.deepEqual([doc.kind, doc.wholeApp, doc.routes, doc.pid, doc.host, doc.boot, doc.ns], ['sweep', true, ROUTES.length, child.pid, host, boot, ns]);
   child.kill('SIGINT');
   assert.equal(await exited, 130, stderr);
   assert.match(stderr, /stopped \(SIGINT\); run 0001 was not completed and is removed/);
@@ -78,6 +83,10 @@ test('capture --quick: the key screens, presence-only, rule lenses only; the ful
   assert.ok(rules.has('axe-color-contrast'), [...rules].join(', '));
   for (const r of ['link-to-missing-route', 'unreachable-route', 'secret-in-client-bundle']) assert.ok(!rules.has(r), r);
   for (const f of ['source-map.json', 'source-hashes.json', 'inventory.json', 'canaries.json', 'progress.json']) assert.ok(!existsSync(join(runs, '0001', f)), f);
+  // its flow.json names every page of the app, captured or not (M5b: the board's wall says which it has not checked yet)
+  const flow = read(join(runs, '0001', 'flow.json'));
+  assert.deepEqual([flow.complete, flow.wholeApp, flow.nodes.map(n => n.route)], [true, false, [...ROUTES].sort()]);
+  assert.deepEqual(flow.nodes.filter(n => n.captured).map(n => n.route), [...q.quick.routes].sort());
   assert.deepEqual(read(join(app, '.nunchi', 'har', 'guest.json')).routes, Object.fromEntries([...q.quick.routes].sort().map(r => [r, ['m']])));
 
   // the AI side builds on a full check only
@@ -87,6 +96,7 @@ test('capture --quick: the key screens, presence-only, rule lenses only; the ful
   assert.match((await cli(app, 'hunt', '--plan', '--run', '0001')).stderr, /run 0001 is a quick first look \(rule lenses only\)/);
   const f1 = json(await cli(app, 'findings', '--json'));
   assert.equal(f1.summary.verdict.text, 'Too early to say');
+  assert.equal(f1.summary.firstLook.text, 'First look: 8 key screens · the full check has not started — tell your AI “full check”');
   assert.ok(f1.groups.some(g => g.rule === 'axe-color-contrast' && g.status === 'open'), 'what the first look found is open');
 
   // the full check: the screens the first look recorded replay, the rest are recorded and merged in; no recording-stale

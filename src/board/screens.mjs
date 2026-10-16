@@ -9,7 +9,7 @@ import { allRecords } from '../fix/records.mjs';
 import { redactUrl } from '../network.mjs';
 import { screenWall, sceneOut, safe, RUN_ID } from './model.mjs';
 import { cellOf, sceneCoverage, checkedScene, isQuick } from './coverage.mjs';
-import { SEV, VPS, STATUS_LABEL, MORE_STATUS, SCREENS as T, drawable, listText } from './shared.mjs';
+import { SEV, VPS, PERSONS, WHO, WIDTH, STATUS_LABEL, MORE_STATUS, SCREENS as T, drawable, listText } from './shared.mjs';
 
 const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -27,11 +27,10 @@ export function baselineOf(model) {
 
 // The wall's page groups (flow.json `groups`; the same rule when a run has none: routes sharing a first path segment
 // with another route are one group, single pages are "Pages").
-function groupsOf(model) {
+const flowOf = model => { try { return JSON.parse(readFileSync(join(model.led.st.runsDir, model.latestEv.runId, 'flow.json'), 'utf8')); } catch { return null; } };
+function groupsOf(model, flow = flowOf(model)) {
   const ev = model.latestEv;
   const routes = [...new Set(ev.scenes.map(s => s.route))];
-  let flow = null;
-  try { flow = JSON.parse(readFileSync(join(model.led.st.runsDir, ev.runId, 'flow.json'), 'utf8')); } catch {}
   const of = new Map();
   for (const g of Array.isArray(flow?.groups) ? flow.groups : []) if (isObj(g) && typeof g.id === 'string' && Array.isArray(g.routes)) for (const r of g.routes) if (typeof r === 'string') of.set(r, g.id);
   const first = r => r.split('/').filter(Boolean)[0] || '';
@@ -60,9 +59,34 @@ function pageItems(model, s) {
   return out;
 }
 
+// The pages a first look did not open (M5b): the pages its flow.json names that it did not open (a first look's names
+// every page of the app since M5b; one written before names only its own, so there are none), less a page that needs a
+// sample address (run.json `skipped`: the full check skips it too, so it is not "not checked yet"), in the flow's order.
+// One card per page (the owner's decision on the review of PR #36), counted apart from the screens: no screenshot, no
+// finding, nothing to open. Each says who and which widths the full check captures it for, in the screen cards' words
+// ("Visitor, Signed in · Desktop, Phone"): the run's plan (run.json `scope`: the people of the saved login and the
+// widths, the full check's own; the plan captures every page for every one of them, a page for some people only being
+// a screen the full check finds sent elsewhere).
+function notYet(model, flow) {
+  const ev = model.latestEv;
+  const meta = isObj(ev.meta) ? ev.meta : {};
+  const scope = isObj(meta.scope) ? meta.scope : {};
+  const from = (list, known, fallback) => known.filter(x => (Array.isArray(list) ? list : fallback).includes(x));
+  const persons = from(scope.persons, PERSONS, ev.scenes.map(s => s.person)), vps = from(scope.viewports, VPS, ev.scenes.map(s => s.viewport));
+  const label = [persons.map(x => WHO[x]).join(', '), vps.map(x => WIDTH[x]).join(', ')].filter(Boolean).join(' · ');
+  const have = new Set(ev.scenes.map(s => s.route));
+  const skip = new Set((Array.isArray(meta.skipped) ? meta.skipped : []).filter(x => isObj(x) && x.reason === 'needs-sample').map(x => x.route));
+  const order = Array.isArray(flow?.order) ? flow.order : [];
+  const rank = r => { const i = order.indexOf(r); return i < 0 ? order.length : i; };
+  return [...new Set((Array.isArray(flow?.nodes) ? flow.nodes : []).filter(n => isObj(n) && typeof n.route === 'string' && n.captured !== true).map(n => n.route))]
+    .filter(r => !have.has(r) && !skip.has(r)).sort((a, b) => rank(a) - rank(b) || cmp(a, b))
+    .map(route => ({ key: `${ev.runId}/not-yet:${safe(route, 200)}`, run: ev.runId, route: safe(route, 200), look: 'not-yet', persons, viewports: vps, label }));
+}
+
 // /api/screens: the wall (model.mjs screenWall) with, per screen, `changed` (pixels or text differ from the same screen
 // in the last full check; null when there is none to compare), `ai` (its AI cells: seen of applicable), `group` and
-// `open` (open findings), and the page groups in the wall's order.
+// `open` (open findings), and the page groups in the wall's order; during a first look `look` on each screen and
+// `notYet`, the pages it did not open (M5b).
 export function wallOut(model) {
   if (model._wall) return model._wall;
   const w = screenWall(model);
@@ -70,7 +94,12 @@ export function wallOut(model) {
   const ev = model.latestEv;
   const base = baselineOf(model);
   const now = rawOf(ev), then = base ? rawOf(model.evidenceOf(base)) : null;
-  const groupOf = groupsOf(model);
+  // a first look (M5b): its screens say "First look", and, while no full check has been made, the pages it did not open
+  // are on the wall as "Not checked yet" (after a full check they were checked: the last full check says how, M5b review)
+  const firstLook = isQuick(model);
+  const flow = flowOf(model);
+  const others = firstLook && !model.summary.fullCheck ? notYet(model, flow) : [];
+  const groupOf = groupsOf(model, flow);
   const scenes = w.scenes.map((s, i) => {
     const e = ev.scenes[i];
     const cell = cellOf(model, e);
@@ -81,7 +110,7 @@ export function wallOut(model) {
     // reason a box is not drawn
     const num = pageItems(model, e).n;
     const findings = s.findings.map(f => ({ ...f, n: num.get(f.group) ?? null })).sort((a, b) => (a.n ?? 1e9) - (b.n ?? 1e9));
-    return { ...s, findings, checked: cell.checked, changed, ai, group: safe(groupOf.get(e.route) || '/', 200), open: Object.values(cell.open).reduce((x, y) => x + y, 0) };
+    return { ...s, findings, checked: cell.checked, changed, ai, group: safe(groupOf.get(e.route) || '/', 200), open: Object.values(cell.open).reduce((x, y) => x + y, 0), ...(firstLook ? { look: 'first' } : {}) };
   });
   const groups = [];
   for (const [i, s] of scenes.entries()) {
@@ -92,8 +121,9 @@ export function wallOut(model) {
   }
   // a quick first look (M5) says so, in the words Coverage and Progress use for it
   const first = model.summary.firstLook && model.summary.firstLook.run === w.run ? model.summary.firstLook : null;
-  const quick = isQuick(model) ? { screens: Number.isInteger(first?.screens) && first.screens > 0 ? first.screens : groups.reduce((n, g) => n + g.routes.length, 0), text: first?.text ? safe(first.text, 300) : null } : null;
-  return (model._wall = { run: w.run, baseline: base, quick, scenes, groups: groups.map(g => ({ id: g.id, title: safe(g.id === '/' ? `${T.pages} · ${listText(g.routes, 5)}` : `${g.id}/*`, 300) })) });
+  const quick = isQuick(model) ? { screens: Number.isInteger(first?.screens) && first.screens > 0 ? first.screens : new Set(ev.scenes.map(x => x.route)).size, text: first?.text ? safe(first.text, 300) : null } : null;
+  return (model._wall = { run: w.run, baseline: base, quick, scenes, groups: groups.map(g => ({ id: g.id, title: safe(g.id === '/' ? `${T.pages} · ${listText(g.routes, 5)}` : `${g.id}/*`, 300) })),
+    ...(firstLook ? { notYet: others } : {}) });
 }
 
 const statusText = s => STATUS_LABEL[s] || MORE_STATUS[s] || 'Mixed';

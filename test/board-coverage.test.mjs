@@ -262,11 +262,13 @@ test('a quick first look (M5): with a full check before it, Coverage shows that 
   let { b, call } = await board(p);
   try {
     const c = (await call('/api/coverage')).json;
-    assert.deepEqual([c.run, c.kind, c.fullCheck, c.quick, c.newer], ['0004', 'sweep', true, { run: '0005', screens: 3, text: null }, null], 'the full check, the first look noted');
+    // no full check after it (M5b): the summary's line, as on Progress
+    const idle = 'First look: 3 key screens · the full check has not started — tell your AI “full check”';
+    assert.deepEqual([c.run, c.kind, c.fullCheck, c.quick, c.newer], ['0004', 'sweep', true, { run: '0005', screens: 3, text: idle }, null], 'the full check, the first look noted');
     assert.deepEqual(c.totals, { screens: { checked: 62, total: 68 }, ai: { seen: 232, of: 264 }, pages: { opened: 7, total: 8 } });
     assert.ok(c.gaps.some(g => g.kind === 'unresolved') && c.gaps.some(g => g.kind === 'budget'), 'the full check\'s gaps stay');
     const w = (await call('/api/screens')).json;
-    assert.deepEqual([w.run, w.quick, w.baseline, w.scenes.filter(s => s.ai).length], ['0005', { screens: 3, text: null }, '0004', 0], 'the wall shows the first look, compared with the last full check');
+    assert.deepEqual([w.run, w.quick, w.baseline, w.scenes.filter(s => s.ai).length], ['0005', { screens: 3, text: idle }, '0004', 0], 'the wall shows the first look, compared with the last full check');
     const s = (await call('/api/summary')).json;
     assert.deepEqual([s.verdict.text, s.ai.coverage], ['Too early to say', { cells: 264, seen: 232, budget: 10, run: '0004', aiRun: '0004' }], 'Progress counts as Coverage does');
   } finally { await b.close(); }
@@ -287,7 +289,7 @@ test('a quick first look (M5): with a full check before it, Coverage shows that 
   ({ b, call } = await board(q));
   try {
     const c = (await call('/api/coverage')).json;
-    assert.deepEqual([c.run, c.kind, c.fullCheck, c.quick], ['0001', 'quick', false, { run: '0001', screens: 3, text: null }]);
+    assert.deepEqual([c.run, c.kind, c.fullCheck, c.quick], ['0001', 'quick', false, { run: '0001', screens: 3, text: 'First look: 3 key screens · the full check has not started — tell your AI “full check”' }]);
     assert.deepEqual(c.totals, { screens: { checked: 12, total: 12 }, ai: null, pages: { opened: 3, total: 8 } });
     assert.equal(c.wholeLine, 'Not a full check: a first look. Whole-app checks can’t mark anything fixed.');
     const cells = c.routes.flatMap(r => r.cells);

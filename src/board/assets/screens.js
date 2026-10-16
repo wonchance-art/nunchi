@@ -30,6 +30,8 @@ export const shownScenes = () => {
 };
 const aiLine = s => (!s.checked ? null : !s.ai || !s.ai.of ? T.rulesOnly : s.ai.budget ? T.aiBudget : T.ai(s.ai.seen, s.ai.of));
 const cardId = key => `card-${String(key).replace(/\s/g, '_')}`;
+// "First look" or "Not checked yet" (M5b): text in the board's chip style, never colour alone
+const lookChip = s => X.h('span', { class: `tag tag-look tag-${s.look === 'not-yet' ? 'notyet' : 'first'}` }, s.look === 'not-yet' ? T.notYet : T.firstLook);
 const BADGES = ['blocker', 'high', 'medium', 'low', 'clean', 'dark'];
 
 export function renderWall(focus = false) {
@@ -64,7 +66,11 @@ export function renderWall(focus = false) {
     })));
   };
   const showList = ['open', 'not', ...(base ? ['changed'] : [])];
-  const search = h('input', { id: 'screen-search', type: 'search', value: F.q || '', placeholder: T.searchHint, autocomplete: 'off', spellcheck: 'false' });
+  // a redraw while someone types in the search (a live update: M5b redraws as a capture goes) keeps what they typed and
+  // where, though the wall applies it only 250 ms after the last key (M5b review)
+  const was = X.$('screen-search'), typing = !!was && X.d.activeElement === was;
+  const caret = typing ? [was.selectionStart, was.selectionEnd] : null;
+  const search = h('input', { id: 'screen-search', type: 'search', value: typing ? was.value : F.q || '', placeholder: T.searchHint, autocomplete: 'off', spellcheck: 'false' });
   let timer = null;
   search.addEventListener('input', () => {
     clearTimeout(timer);
@@ -76,37 +82,57 @@ export function renderWall(focus = false) {
     }, 250);
   });
   const shown = shownScenes();
-  const sel = S.screenSel ? all.find(s => s.key === S.screenSel) : null;
-  if (!S.wallFocus || !shown.some(s => s.key === S.wallFocus)) S.wallFocus = shown[0]?.key || null;
+  // the pages a first look did not open, under Show "All" and the search (they are pages, not screens of a width or
+  // a person, and never in a screen count)
+  const pages = F.show === 'all' ? (S.screens.notYet || []).filter(pg => qOk(pg, F.q)) : [];
+  const sel = S.screenSel ? all.find(s => s.key === S.screenSel) || (S.screens.notYet || []).find(pg => pg.key === S.screenSel) || null : null;
+  if (!S.wallFocus || ![...shown, ...pages].some(s => s.key === S.wallFocus)) S.wallFocus = shown[0]?.key || pages[0]?.key || null;
   const card = s => {
     const th = h('span', { class: `thumb thumb-${s.viewport === 'm' ? 'm' : 'd'}`, 'aria-hidden': 'true' });
     if (s.img) lazy(th, s.img.thumb); else { th.classList.add('thumb-none'); th.textContent = 'No screenshot'; }
     const ai = aiLine(s);
     const extra = [ai, s.changed === true ? T.changedWord : null].filter(Boolean).join(' · ');
+    // during a first look (M5b): a text chip, "First look", on its screens; said in the card's name too
+    const look = s.look === 'first' ? T.firstLook : null;
     const b = h('button', { type: 'button', id: cardId(s.key), 'data-key': s.key, tabindex: s.key === S.wallFocus ? '0' : '-1', 'aria-pressed': sel?.key === s.key ? 'true' : 'false',
-      'aria-label': `${s.h1 || s.route}, ${s.label}: ${s.badge}${extra ? `. ${extra}` : ''}` },
+      'aria-label': `${s.h1 || s.route}, ${s.label}: ${s.badge}${look ? `. ${look}` : ''}${extra ? `. ${extra}` : ''}` },
     h('span', { class: 'thumb-wrap' }, th, h('span', { class: `badge badge-${BADGES.includes(s.kind) ? s.kind : 'low'}` }, s.badge)),
     h('span', { class: 'card-body' }, h('span', { class: 'card-name' }, s.h1 || s.route), h('span', { class: 'mono muted small' }, s.route), h('span', { class: 'small muted' }, s.label),
-      h('span', { class: `small ${s.kind === 'dark' ? 'warn' : 'muted'}` }, s.note), extra ? h('span', { class: 'small muted' }, extra) : null));
+      look ? lookChip(s) : null, h('span', { class: `small ${s.kind === 'dark' ? 'warn' : 'muted'}` }, s.note), extra ? h('span', { class: 'small muted' }, extra) : null));
     // a click looks at it in the side panel; the keyboard's Space does the same, Enter opens the screen (wallKey)
     b.addEventListener('click', e => { quickLook(s.key); if (e.detail > 0) X.$('panel-h')?.focus(); });
     b.addEventListener('focus', () => { S.wallFocus = s.key; for (const c of X.main().querySelectorAll('.card button')) c.setAttribute('tabindex', c === b ? '0' : '-1'); });
     return h('li', { class: 'card' }, b);
   };
+  // a page the first look did not open (M5b, one card per page: the owner's decision on the review of PR #36): no
+  // screenshot, no finding, nothing to open; Space, Enter or a click show what it is
+  // (the owner's mock-up: a compact text card — the path, who and which widths the full check captures it for, the chip)
+  const pageCard = pg => {
+    const b = h('button', { type: 'button', id: cardId(pg.key), 'data-key': pg.key, tabindex: pg.key === S.wallFocus ? '0' : '-1', 'aria-pressed': sel?.key === pg.key ? 'true' : 'false',
+      'aria-label': `${pg.route}${pg.label ? `, ${pg.label}` : ''}: ${T.notYet}` },
+    h('span', { class: 'card-body' }, h('span', { class: 'card-name mono' }, pg.route), pg.label ? h('span', { class: 'small muted' }, pg.label) : null, lookChip(pg)));
+    b.addEventListener('click', e => { quickLook(pg.key); if (e.detail > 0) X.$('panel-h')?.focus(); });
+    b.addEventListener('focus', () => { S.wallFocus = pg.key; for (const c of X.main().querySelectorAll('.card button')) c.setAttribute('tabindex', c === b ? '0' : '-1'); });
+    return h('li', { class: 'card card-page' }, b);
+  };
   let panel = h('p', { class: 'panels-empty muted' }, 'Select a screen to see it large, with its findings outlined and numbered.');
   if (sel) {
-    const boxes = sel.findings.filter(f => f.n && !f.why).map(f => ({ box: f.box, n: f.n }));
+    const boxes = (sel.findings || []).filter(f => f.n && !f.why).map(f => ({ box: f.box, n: f.n }));
     const close = h('button', { type: 'button', class: 'b b-quiet', id: 'sp-close' }, 'Close');
     close.addEventListener('click', () => { S.screenSel = null; history.replaceState(null, '', '/#/screens'); renderWall(); X.$(cardId(sel.key))?.focus(); });
     const open = h('button', { type: 'button', class: 'b', id: 'sp-open', 'aria-keyshortcuts': 'Enter' }, W.COVERAGE.openScreen, ' ', h('span', { class: 'kbd', 'aria-hidden': 'true' }, '↵'));
     open.addEventListener('click', () => openScreen(sel));
-    panel = h('section', { class: 'screen-panel', 'aria-labelledby': 'panel-h' },
-      h('div', { class: 'sp-head' }, h('div', null, h('h2', { id: 'panel-h', tabindex: '-1' }, sel.h1 || sel.route), h('p', { class: 'muted small' }, h('span', { class: 'mono' }, sel.route), ` · ${sel.label}`)), close),
-      sel.img ? X.shot(sel, boxes, { label: `Screenshot of ${sel.route}, ${sel.label}${boxes.length ? `, ${W.plural(boxes.length, 'finding')} outlined and numbered` : ''}`, cls: sel.viewport === 'm' ? 'shot-m' : '' }) : h('p', { class: 'pad muted' }, `Not seen: ${sel.reason || sel.status}.`),
-      sel.findings.length ? h('ol', { class: 'sp-list' }, sel.findings.map(f => h('li', null, h('a', { href: `#/finding/${f.group}` },
-        h('span', { class: `numb${f.n ? '' : ' numb-none'}` }, f.n ? String(f.n) : '–'),
-        h('span', { class: 'sp-text' }, h('span', { class: 'sp-what' }, f.headline), h('span', { class: 'small' }, `${W.SEV_LABEL[X.sevOf(f.severity)]} · ${f.source === 'ai' ? 'AI' : 'Rule'} · ${f.statusText}${f.why ? ` · not outlined: ${f.why}` : ''}`)))))) : sel.img ? h('p', { class: 'pad muted' }, T.nothing) : null,
-      h('p', { class: 'pad sp-open' }, open));
+    // a page the first look did not open (M5b): what it is, and the first look's line (what comes next); nothing to open
+    panel = sel.look === 'not-yet' ? h('section', { class: 'screen-panel', 'aria-labelledby': 'panel-h' },
+      h('div', { class: 'sp-head' }, h('div', null, h('h2', { id: 'panel-h', tabindex: '-1' }, sel.route), sel.label ? h('p', { class: 'muted small' }, sel.label) : null), close),
+      h('p', { class: 'pad sp-notyet' }, lookChip(sel), S.screens.quick?.text ? h('span', { class: 'small muted' }, S.screens.quick.text) : null))
+      : h('section', { class: 'screen-panel', 'aria-labelledby': 'panel-h' },
+        h('div', { class: 'sp-head' }, h('div', null, h('h2', { id: 'panel-h', tabindex: '-1' }, sel.h1 || sel.route), h('p', { class: 'muted small' }, h('span', { class: 'mono' }, sel.route), ` · ${sel.label}`)), close),
+        sel.img ? X.shot(sel, boxes, { label: `Screenshot of ${sel.route}, ${sel.label}${boxes.length ? `, ${W.plural(boxes.length, 'finding')} outlined and numbered` : ''}`, cls: sel.viewport === 'm' ? 'shot-m' : '' }) : h('p', { class: 'pad muted' }, `Not seen: ${sel.reason || sel.status}.`),
+        sel.findings.length ? h('ol', { class: 'sp-list' }, sel.findings.map(f => h('li', null, h('a', { href: `#/finding/${f.group}` },
+          h('span', { class: `numb${f.n ? '' : ' numb-none'}` }, f.n ? String(f.n) : '–'),
+          h('span', { class: 'sp-text' }, h('span', { class: 'sp-what' }, f.headline), h('span', { class: 'small' }, `${W.SEV_LABEL[X.sevOf(f.severity)]} · ${f.source === 'ai' ? 'AI' : 'Rule'} · ${f.statusText}${f.why ? ` · not outlined: ${f.why}` : ''}`)))))) : sel.img ? h('p', { class: 'pad muted' }, T.nothing) : null,
+        h('p', { class: 'pad sp-open' }, open));
   }
   const withOpen = all.filter(s => s.open > 0).length, clean = all.filter(s => s.badge === 'Clean').length, notChecked = all.filter(s => !s.checked).length;
   const groups = S.screens.groups.map(g => ({ g, list: shown.filter(s => s.group === g.id) })).filter(x => x.list.length);
@@ -127,7 +153,10 @@ export function renderWall(focus = false) {
     h('p', { class: 'facts-inline' }, h('span', null, h('b', null, String(withOpen)), ' with open findings'), h('span', null, h('b', null, String(clean)), ' clean'),
       h('span', null, h('b', null, String(notChecked)), ' not checked'), h('span', { id: 'wall-shown' }, T.shown(shown.length, all.length))),
     h('div', { class: 'wall-wrap' }, h('div', { class: 'wall-groups' }, groups.length ? groups.map(({ g, list }, i) => h('section', { class: 'wall-group', 'aria-labelledby': `wall-g-${i}` }, h('h2', { id: `wall-g-${i}`, class: 'wall-g-h' }, g.title), h('ul', { class: 'wall' }, list.map(card))))
-      : h('div', { class: 'empty-note' }, h('p', null, T.noMatch), h('p', null, clear))), h('aside', { class: 'panels', 'aria-label': 'Selected screen' }, panel)))));
+      : h('div', { class: 'empty-note' }, h('p', null, T.noMatch), h('p', null, clear)),
+      pages.length ? h('section', { class: 'wall-group', id: 'wall-notyet', 'aria-labelledby': 'wall-g-notyet' }, h('h2', { id: 'wall-g-notyet', class: 'wall-g-h' }, T.notYetPages(pages.length)), h('ul', { class: 'wall' }, pages.map(pageCard))) : null),
+    h('aside', { class: 'panels', 'aria-label': 'Selected screen' }, panel)))));
+  if (caret) { const s = X.$('screen-search'); if (s) { s.focus(); try { s.setSelectionRange(caret[0], caret[1]); } catch {} } }
   if (focus) {
     const back = S.wallReturn && X.$(cardId(S.wallReturn));
     S.wallReturn = null;
@@ -170,8 +199,10 @@ export function wallKey(e, k) {
     to(row[0]?.c);
     return true;
   }
-  if (k === ' ') { quickLook(cur.getAttribute('data-key')); X.announce(`${cur.getAttribute('aria-label')}`); return true; }
-  if (k === 'Enter') { const s = S.screens.scenes.find(x => x.key === cur.getAttribute('data-key')); if (s) openScreen(s); return true; }
+  const s = S.screens.scenes.find(x => x.key === cur.getAttribute('data-key'));
+  // (a page the first look did not open has no screen to open: Enter shows what it is, as Space does)
+  if (k === ' ' || (k === 'Enter' && !s)) { quickLook(cur.getAttribute('data-key')); X.announce(`${cur.getAttribute('aria-label')}`); return true; }
+  if (k === 'Enter') { openScreen(s); return true; }
   return false;
 }
 
