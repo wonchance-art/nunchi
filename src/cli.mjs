@@ -142,12 +142,13 @@ Usage:
                                             hunt into the ledger (claims not double-checked yet; screens it saw).
                                             Each answers file may say "agent" and "vendor": every agent's latest
                                             answers stand side by side
-  nunchi export --html <dir> [--run <id>] [--inline] [--json]
+  nunchi export --html <dir> [--run <id>] [--inline] [--no-page-text] [--json]
                                             A static review page of one run and the ledger: <dir>/index.html plus
                                             <dir>/img/ (screenshots, copied). --inline puts the images inside
                                             index.html (one file). Offline, no scripts or fonts from anywhere;
                                             open it in a browser. It shows screenshots of your app: sharing it
-                                            sends them off this machine
+                                            sends them off this machine. --no-page-text leaves out text from your
+                                            screens (evidence text, AI claims, signed-in screens' names and links)
   nunchi export --format md|json|sarif [--status open,to-fix,…|all] [--include-page-text] [--out <file>] [--root <dir>]
                                             The findings as a file to share: Markdown, JSON or SARIF (code scanning).
                                             Secret-shaped strings become [secret-shaped: <kind>]; page text (evidence
@@ -198,6 +199,7 @@ function parse(argv) {
     else if (a === '--baseline') args.baseline = true;
     else if (a === '--lint') args.lint = true;
     else if (a === '--strict') args.strict = true;
+    else if (a === '--no-page-text') args.noPageText = true;
     else if (['--start', '--brief', '--verify', '--undo', '--abort', '--serve', '--agent'].includes(a)) args[a.slice(2)] = argv[++i];
     else if (a === '--checks') args.checks = argv[++i];
     else if (a === '--status') args.status = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : true;
@@ -1274,20 +1276,21 @@ if (cmd === 'setup') {
 } else if (cmd === 'export') {
   // A static review page (spec §7): read-only, offline, byte-identical for the same run and ledger.
   if (typeof args.html !== 'string' || !args.html || args.html.startsWith('--')) { console.error('nunchi export: use --html <dir> (writes <dir>/index.html and <dir>/img/), or --format md|json|sarif'); process.exit(1); }
-  const outside = flagsOutside(args, ['html', 'run', 'inline', 'json']);
-  if (outside.length) { console.error(`nunchi export: ${outside.join(', ')}: not a flag of export --html (nunchi export --html <dir> [--run <id>] [--inline] [--json])`); process.exit(1); }
+  const outside = flagsOutside(args, ['html', 'run', 'inline', 'json', 'noPageText']);
+  if (outside.length) { console.error(`nunchi export: ${outside.join(', ')}: not a flag of export --html (nunchi export --html <dir> [--run <id>] [--inline] [--no-page-text] [--json])`); process.exit(1); }
   const { exportHtml } = await import('./export-html.mjs');
   const dir = runDirOf(args, 'export');
   let r;
   // read-only on the page's side; the ledger is brought up to date first, like `findings` does
   const ledger = existsSync(resolve('.nunchi')) ? loadLedger(resolve('.nunchi')) : null;
-  try { r = exportHtml({ runDir: dir, nunchiDir: resolve('.nunchi'), outDir: resolve(args.html), inline: !!args.inline, ledger }); }
+  try { r = exportHtml({ runDir: dir, nunchiDir: resolve('.nunchi'), outDir: resolve(args.html), inline: !!args.inline, ledger, pageText: !args.noPageText }); }
   catch (e) { if (e.code !== 'EXPORT_TARGET') throw e; console.error(`nunchi export: ${e.message}`); process.exit(1); }
   if (args.json) console.log(JSON.stringify(r, null, 2));
   else {
     const mb = Math.round(r.bytes / 1e5) / 10;
     console.log(`review page → ${r.out}${r.inline ? ' (one file, images inline)' : ` (+ ${r.images} screenshots in img/)`} · ${mb} MB`);
     console.log(`run ${r.run ?? '(not numbered)'} · ${r.scenes} screens · ${r.groups} groups, ${r.open} open${r.inLedger ? '' : ' · this run is not in the local ledger: statuses come from decisions only'}`);
+    if (args.noPageText) console.log('Text from your screens is left out (evidence text, AI claims, the names and links of signed-in screens).');
     console.log('Open it in a browser. It holds screenshots of your app: putting it anywhere else sends them off this machine.');
   }
 } else if (cmd === 'tokens') {

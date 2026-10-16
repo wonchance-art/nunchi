@@ -56,7 +56,7 @@ const SAFE_FILE = p => typeof p === 'string' && p && p.length <= 1024 && !p.star
 // quoted names in a selector (`aria=button "Delete Ana's fern"`, `:has-text('…')`)
 const QUOTED = /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g;
 
-function evidenceOut(row, { pageText, signedIn }) {
+export function evidenceOut(row, { pageText, signedIn }) {
   const ev = row.evidence && typeof row.evidence === 'object' && !Array.isArray(row.evidence) ? row.evidence : {};
   const out = {};
   let left = 0;
@@ -82,7 +82,7 @@ function evidenceOut(row, { pageText, signedIn }) {
 // states (`[level=1]`), and drops the text after `: `.
 const ARIA = /^aria=\s*([a-z]+)((?:\s+"(?:[^"\\]|\\.)*")?)((?:\s+\[[^\]"']*\])*)/;
 // → { element, left }: `left` 1 when page text was taken out of it
-const elementOut = (selector, { pageText, signedIn }) => {
+export const elementOut = (selector, { pageText, signedIn }) => {
   if (typeof selector !== 'string' || !selector) return { element: null, left: 0 };
   const s = clean(redactSelector(selector));
   if (pageText || !signedIn) return { element: s, left: 0 };

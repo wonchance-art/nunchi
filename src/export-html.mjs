@@ -23,6 +23,7 @@ import { redactUrl, redactText } from './network.mjs';
 import { sha, privateDir, setMode } from './stable.mjs';
 import { BASE_CSS } from './board/look.mjs';
 import { SEV, SEV_LABEL, STATUS_LABEL, FILTERS, WHO, WIDTH, STATES, STATE_LABEL, PERSONS, VPS, drawable as drawableOn, shotGeometry, pct, plural, human, sceneLabelText, WORDS } from './board/shared.mjs';
+import { evidenceOut, elementOut } from './export-findings.mjs';
 
 // Board words (design §3.4) and the screenshot geometry come from one table shared with the live board.
 const ACTIVE = new Set(['open', 'regressed', 'to-fix', 'held']);
@@ -102,7 +103,11 @@ function dataNow(state, decisions) {
 // ---- model ---------------------------------------------------------------------------------------------
 
 // Reads one run and the ledger through the ledger's own functions; nothing here re-parses what they parse.
-export function buildModel({ runDir, nunchiDir, ledger = null }) {
+// `shots` (`nunchi share`, spec §7.6): which screenshots the page may show — `persons` (the people whose screens go,
+// e.g. ['guest']) and `withheld` (scene ids whose captured text holds a secret-shaped string). A screen left out keeps
+// its card and its findings, with `notShared` saying why and no image; an image whose bytes a withheld screen has is
+// left out wherever it appears.
+export function buildModel({ runDir, nunchiDir, ledger = null, shots = null }) {
   const manifest = readManifest(runDir);
   const meta = readJsonOr(join(runDir, 'run.json'), {});
   const runId = meta.id ?? null;
@@ -177,6 +182,9 @@ export function buildModel({ runDir, nunchiDir, ledger = null }) {
   const vpById = Object.fromEntries((manifest.viewports || []).map(v => [v.id, v]));
   const images = new Map();
   const sceneById = new Map();
+  const shotOf = s => { const dir = sceneDir(runDir, s.id), full = join(dir, 'full.jpg'), top = join(dir, 'top.jpg'); return existsSync(full) ? full : existsSync(top) ? top : null; };
+  const withheldKeys = new Set();
+  if (shots) for (const s of scenes) if (shots.withheld?.has(s.id)) { const f = shotOf(s); if (f) withheldKeys.add(sha(readFileSync(f), 16)); }
   scenes.forEach((s, i) => {
     s.order = i;
     s.hid = 's-' + sha(s.id, 10);
@@ -189,8 +197,10 @@ export function buildModel({ runDir, nunchiDir, ledger = null }) {
     if (file && s.status === 'captured') {
       const buf = readFileSync(file);
       const size = jpegSize(buf);
-      if (size && size.width && size.height) {
-        const key = sha(buf, 16);
+      const key = sha(buf, 16);
+      const notShared = !shots ? null : !shots.persons.includes(s.person) ? 'signed-in' : withheldKeys.has(key) ? 'secret-shaped' : null;
+      if (notShared) s.notShared = notShared;
+      else if (size && size.width && size.height) {
         if (!images.has(key)) images.set(key, { key, file, bytes: buf.length });
         // screenshot pixels per CSS pixel: the first-view image is exactly the viewport
         const top = file === topPath ? size : existsSync(topPath) ? jpegSize(readFileSync(topPath)) : null;
@@ -288,7 +298,11 @@ function shot(s, { boxes = [], crop = false, label, cls = '' }) {
 // Where a box can be drawn (board/shared.mjs, the same rule the live board uses).
 const drawable = (f, s) => drawableOn(f, s ? s.img : null);
 
-function evidenceList(f) {
+function evidenceList(f, m) {
+  if (textOff(m)) {
+    const { evidence } = evidenceOut({ evidence: f.evidence, rule: f.rule }, { pageText: false, signedIn: signedInOf(m, f) });
+    return Object.keys(evidence).sort().map(k => { const v = evidence[k]; return `<dt>${t(k, 80)}</dt><dd class="${typeof v === 'string' ? '' : 'mono'}">${t(typeof v === 'string' ? v : JSON.stringify(v), 400)}</dd>`; }).join('');
+  }
   const ev = f.evidence || {};
   const secret = f.rule === 'secret-in-client-bundle';
   const out = [];
@@ -305,8 +319,13 @@ function evidenceList(f) {
 
 // One line that tells two groups of the same kind apart: the quoted value, the control's name, else the element.
 const GIST_KEYS = ['text', 'name', 'message', 'href', 'src', 'value', 'placeholder', 'kind', 'summary', 'what'];
-const gistOf = f => {
+const gistOf = (f, m) => {
   if (!f) return '';
+  if (m && textOff(m)) {
+    const { evidence } = evidenceOut({ evidence: f.evidence, rule: f.rule }, { pageText: false, signedIn: signedInOf(m, f) });
+    for (const k of GIST_KEYS) if (typeof evidence[k] === 'string' && evidence[k].trim()) return evidence[k];
+    return selectorOf(m, f, f.selector) || '';
+  }
   const ev = f.evidence || {};
   for (const k of GIST_KEYS) if (typeof ev[k] === 'string' && ev[k].trim()) return ['href', 'src'].includes(k) ? redactUrl(ev[k]) : ev[k];
   return f.selector || '';
@@ -318,6 +337,20 @@ const codeOf = f => {
   if (typeof ev.file === 'string') return ev.file;
   return null;
 };
+
+// Page text off (`export --html --no-page-text`, and the page `nunchi share` sends: spec §7.6): what the export of md
+// and json leaves out is left out here too — evidence text and AI claims always; control names, URLs and the quoted
+// names in a selector when the screen was seen signed in; a screen's heading (its own words); who decided. `m.pageText`
+// is false only then: the default page is as before, byte for byte.
+const textOff = m => m.pageText === false;
+const signedInOf = (m, f) => (f?.scene && m.sceneById.has(f.scene) ? m.sceneById.get(f.scene).person === 'signed-in' : String(f?.scene || '').includes('.signed-in.'));
+const headOf = (m, g) => (textOff(m) ? g.title : g.headline);
+const nameOf = (m, s) => (textOff(m) ? null : s.h1);
+const selectorOf = (m, f, sel) => (textOff(m) ? elementOut(sel, { pageText: false, signedIn: signedInOf(m, f) }).element : sel);
+const urlShown = (m, s) => !textOff(m) || s.person !== 'signed-in';
+// a screen whose screenshot was left out of a shared page, and why
+const NOT_SHARED = { 'signed-in': 'seen signed in', 'secret-shaped': 'its screen text looked like a key or token' };
+const notSharedWhy = s => NOT_SHARED[s.notShared] || 'left out';
 
 // ---- views ----------------------------------------------------------------------------------------------
 
@@ -391,7 +424,7 @@ function findingsView(m) {
   const count = k => (k === 'all' ? m.groups.length : m.groups.filter(g => g.filterKeys.includes(k)).length);
   const radios = FILTERS.map(([k, label]) => `<input type="radio" name="fs" id="fs-${k}" value="${k}"${k === 'open' ? ' checked' : ''}><label for="fs-${k}">${label} <span class="cnt">${count(k)}</span></label>`).join('');
   const row = g => `<li class="row" data-st="${g.filterKeys.join(' ')}"><a href="#${g.hid}">
-<span class="row-main">${g.ai ? `<span class="row-what">${t(g.headline, 160)}</span><span class="row-where">${whereOf(g)}</span>` : `<span class="row-what">${whereOf(g)}</span>${g.instances.length ? `<span class="row-where">${t(gistOf(g.instances[0]), 120)}</span>` : ''}`}</span>
+<span class="row-main">${g.ai ? `<span class="row-what">${t(headOf(m, g), 160)}</span><span class="row-where">${whereOf(g)}</span>` : `<span class="row-what">${whereOf(g)}</span>${g.instances.length ? `<span class="row-where">${t(gistOf(g.instances[0], m), 120)}</span>` : ''}`}</span>
 <span class="row-tags">${notLooked(g) ? `<span class="tag tag-warn">Not looked at since run ${t(notLooked(g))}</span> ` : ''}${sourceTag(g)} ${statusChips(g)}</span></a></li>`;
   const kind = k => `<details class="kind" data-st="${[...new Set(k.groups.flatMap(g => g.filterKeys))].sort().join(' ')}"${k.severity === 'low' ? '' : ' open'}>
 <summary><span class="kind-title">${sevChip(k.severity)} <span>${t(k.title)}</span></span><span class="muted small">${plural(k.groups.length, 'group')}</span></summary>
@@ -451,31 +484,32 @@ ${s.img && boxes.length ? `<details class="whole"><summary>Whole screen</summary
   const decision = g.rows.map(r => r.decision).find(Boolean);
   const notes = [...new Set(g.rows.map(r => r.note).filter(Boolean))];
   const examples = fixedOnly ? [...new Set(g.rows.flatMap(r => r.examples || []))].sort() : [];
+  const left = figs.length ? null : inst.map(f => m.sceneById.get(f.scene)).find(s => s?.notShared) || null;
   return `<article id="${g.hid}" class="view detail" data-view="findings" tabindex="-1" aria-labelledby="h-${g.group}">
 <nav class="detail-nav" aria-label="Finding navigation"><a href="#findings">← All findings</a><span class="pn">${prev ? `<a href="#${prev.hid}" rel="prev">Previous</a>` : ''}${next ? `<a href="#${next.hid}" rel="next">Next</a>` : ''}</span></nav>
 <div class="panel-box detail-box">
 <header class="detail-head"><p class="chips">${sevChip(g.severity)} <span class="muted">${t(g.title)}</span> ${sourceTag(g)} ${statusChips(g)}</p>
-<h1 id="h-${g.group}">${t(g.headline, 160)}</h1></header>
+<h1 id="h-${g.group}">${t(headOf(m, g), 160)}</h1></header>
 ${fixedOnly ? `<p>Gone on re-capture in run ${t(m.runId)} (last seen in run ${t(row.lastSeen)}).</p>${examples.length ? `<p class="muted small">Where it was: ${examples.map(id => (m.sceneById.has(id) ? `<a href="#${m.sceneById.get(id).hid}">${t(id)}</a>` : `<span class="mono">${t(id)}</span>`)).join(', ')}</p>` : ''}` : ''}
-${figs.length ? `${toggle}${figs.map(f => figure(f, f.viewport)).join('')}` : !fixedOnly ? '<p class="muted">No screenshot: this finding belongs to the whole app, not one screen.</p>' : ''}
+${figs.length ? `${toggle}${figs.map(f => figure(f, f.viewport)).join('')}` : left ? `<p class="muted">No screenshot shared: ${notSharedWhy(left)}.</p>` : !fixedOnly ? '<p class="muted">No screenshot: this finding belongs to the whole app, not one screen.</p>' : ''}
 <dl class="facts-dl">
 ${code ? `<dt>Code</dt><dd class="mono">${t(code)}</dd>` : ''}
 ${first?.rule === 'secret-in-client-bundle' ? `<dt>Where</dt><dd class="mono">${t(redactUrl(first.evidence?.url || ''))}</dd><dt>Kind</dt><dd>${t(first.evidence?.kind || '')}</dd>` : ''}
 ${seen.length ? `<dt>Seen on</dt><dd>${seen.slice(0, 12).map(s => `<a href="#${s.hid}">${t(s.route)} · ${sceneLabel(s)}</a>`).join('<br>')}${seen.length > 12 ? `<br><span class="muted">+${seen.length - 12} more</span>` : ''}</dd>` : ''}
-${decision ? `<dt>Decision</dt><dd>${t(decision.decision)}${decision.reason ? ` (${t(decision.reason)})` : ''} · ${t(decision.by)} · ${t(decision.at)}${decision.verified ? '' : ' · <span class="warn">came through git, not approved on this machine</span>'}</dd>` : ''}
+${decision ? `<dt>Decision</dt><dd>${t(decision.decision)}${decision.reason ? ` (${t(decision.reason)})` : ''}${textOff(m) ? '' : ` · ${t(decision.by)}`} · ${t(decision.at)}${decision.verified ? '' : ' · <span class="warn">came through git, not approved on this machine</span>'}</dd>` : ''}
 ${notes.map(n => `<dt>Note</dt><dd class="warn">${t(n)}</dd>`).join('')}
 ${notLooked(g) ? `<dt>Looked at</dt><dd class="warn">Not looked at since run ${t(notLooked(g))}: no run since has captured every screen it was on, so it cannot be marked fixed.</dd>` : ''}
-${verification ? `<dt>Reviewer</dt><dd>${t(verification.verdict)} · ${t(verification.verifier || '')}${verification.suspect ? ' · <span class="warn">suspect</span>' : ''}${verification.tooFewDecoys === true ? ` · <span class="warn">${WORDS['too-few-decoys']}: not a double-check</span>` : ''}${verification.reason ? ` — ${t(verification.reason, 240)}` : ''}</dd>` : ''}
+${verification ? `<dt>Reviewer</dt><dd>${t(verification.verdict)} · ${t(verification.verifier || '')}${verification.suspect ? ' · <span class="warn">suspect</span>' : ''}${verification.tooFewDecoys === true ? ` · <span class="warn">${WORDS['too-few-decoys']}: not a double-check</span>` : ''}${verification.reason && !textOff(m) ? ` — ${t(verification.reason, 240)}` : ''}</dd>` : ''}
 </dl>
 <details class="evidence"><summary>Evidence details</summary>
 <dl class="facts-dl">
 <dt>Rule</dt><dd class="mono">${t(g.lens)} · ${t(g.rule)}</dd>
 <dt>Group</dt><dd class="mono">${t(g.group)}</dd>
 <dt>Fingerprints</dt><dd class="mono">${g.fps.map(x => t(x)).join(' ')}</dd>
-${first?.selector ? `<dt>Element</dt><dd class="mono">${t(first.selector, 300)}</dd>` : ''}
+${first?.selector ? `<dt>Element</dt><dd class="mono">${t(selectorOf(m, first, first.selector), 300)}</dd>` : ''}
 ${Array.isArray(first?.box) ? `<dt>Box</dt><dd class="mono">${first.box.slice(0, 2).map(Number).join(',')} · ${Number(first.box[2])}×${Number(first.box[3])}</dd>` : ''}
-${first?.inside ? `<dt>Inside</dt><dd class="mono">${t(first.inside, 200)}</dd>` : ''}
-${first ? evidenceList(first) : ''}
+${first?.inside ? `<dt>Inside</dt><dd class="mono">${t(selectorOf(m, first, first.inside), 200)}</dd>` : ''}
+${first ? evidenceList(first, m) : ''}
 <dt>History</dt><dd>first seen in run ${t(row.firstSeen)} · last seen in run ${t(row.lastSeen)}${row.regressedAt ? ` · came back in run ${t(row.regressedAt)}` : ''}</dd>
 </dl></details>
 </div>
@@ -495,17 +529,17 @@ function screensView(m) {
     const sevs = Object.keys(by).sort((a, b) => SEV[a] - SEV[b]);
     let badge, kind, note;
     const redirected = s.reason && /^redirected/.test(s.reason);
-    if (s.reason === 'redirected-off-origin') { badge = 'Left the app'; kind = 'dark'; note = `Sent to ${s.finalOrigin || 'another site'}`; }
+    if (s.reason === 'redirected-off-origin') { badge = 'Left the app'; kind = 'dark'; note = `Sent to ${(urlShown(m, s) && s.finalOrigin) || 'another site'}`; }
     else if (s.status !== 'captured') { badge = 'Not seen'; kind = 'dark'; note = s.reason || s.status; }
     else if (redirected && fs.some(f => f.rule === 'signed-in-bounced')) { badge = 'Sent to sign-in'; kind = 'dark'; note = 'Signed in, but shown the sign-in page'; }
-    else if (redirected) { badge = 'Redirected'; kind = 'low'; note = `Shows ${redactUrl(s.finalPath || '')}`; }
+    else if (redirected) { badge = 'Redirected'; kind = 'low'; note = urlShown(m, s) ? `Shows ${redactUrl(s.finalPath || '')}` : 'Shows another page'; }
     else if (!fs.length) { badge = 'Clean'; kind = 'clean'; note = 'Nothing found'; }
     else if (!act.length) { badge = 'Nothing open'; kind = 'clean'; note = `${plural(fs.length, 'finding')}, all decided`; }
-    else { badge = sevs.slice(0, 2).map(k => `${by[k]} ${k}`).join(' · '); kind = sevs[0]; note = act.length === 1 ? groupOf.get(act[0].group)?.headline || '' : plural(act.length, 'open finding'); }
-    const thumb = s.img ? `<div class="thumb thumb-${vpCls(s.viewport)} i-${s.img.key}" aria-hidden="true"></div>` : '<div class="thumb thumb-none" aria-hidden="true">No screenshot</div>';
+    else { badge = sevs.slice(0, 2).map(k => `${by[k]} ${k}`).join(' · '); kind = sevs[0]; note = act.length === 1 ? (groupOf.get(act[0].group) ? headOf(m, groupOf.get(act[0].group)) : '') : plural(act.length, 'open finding'); }
+    const thumb = s.img ? `<div class="thumb thumb-${vpCls(s.viewport)} i-${s.img.key}" aria-hidden="true"></div>` : `<div class="thumb thumb-none" aria-hidden="true">${s.notShared ? 'Screenshot not shared' : 'No screenshot'}</div>`;
     return `<li class="card" data-sid="${s.hid}" data-vp="${t(s.viewport)}" data-who="${t(s.person)}" data-state="${t(s.state)}"><a href="#${s.hid}">
 <span class="thumb-wrap">${thumb}<span class="badge badge-${kind}">${t(badge)}</span></span>
-<span class="card-body"><span class="card-name">${t(s.h1 || s.route, 60)}</span><span class="mono muted small">${t(s.route)}</span><span class="small muted">${sceneLabel(s)}</span><span class="small ${kind === 'dark' ? 'warn' : 'muted'}">${t(note, 80)}</span></span></a></li>`;
+<span class="card-body"><span class="card-name">${t(nameOf(m, s) || s.route, 60)}</span><span class="mono muted small">${t(s.route)}</span><span class="small muted">${sceneLabel(s)}</span><span class="small ${kind === 'dark' ? 'warn' : 'muted'}">${t(note, 80)}</span></span></a></li>`;
   };
   const panel = s => {
     const fs = (onScene.get(s.id) || []).slice().sort((a, b) => SEV[a.severity] - SEV[b.severity] || cmp(groupOf.get(a.group)?.headline || '', groupOf.get(b.group)?.headline || '') || cmp(a.fp, b.fp));
@@ -515,10 +549,10 @@ function screensView(m) {
     const sibs = m.scenes.filter(o => o.route === s.route && o.id !== s.id);
     const g = f => groupOf.get(f.group);
     return `<section id="${s.hid}" class="screen-panel" data-view="screens" tabindex="-1" aria-labelledby="h-${s.hid}">
-<div class="sp-head"><div><h2 id="h-${s.hid}">${t(s.h1 || s.route, 80)}</h2><p class="muted small"><span class="mono">${t(s.route)}</span> · ${sceneLabel(s)}</p></div><a href="#screens">Close</a></div>
-${s.img ? shot(s, { boxes, label: `Screenshot of ${s.route}, ${sceneLabelText(s)}${boxes.length ? `, ${plural(boxes.length, 'finding')} outlined and numbered` : ''}`, cls: `shot-${vpCls(s.viewport)}` }) : s.reason === 'redirected-off-origin' ? `<p class="pad muted">This screen sent the browser to another site (<span class="mono">${t(s.finalOrigin || 'unknown')}</span>); nunchi does not capture other sites.</p>` : `<p class="pad muted">Not seen: ${t(s.reason || s.status)}.</p>`}
-${s.reason && /^redirected/.test(s.reason) ? `<p class="pad small muted">Redirected to <span class="mono">${t(redactUrl(s.finalPath || ''))}</span>.</p>` : ''}
-${items.length ? `<ol class="sp-list">${items.map(({ f, d, n }) => `<li><a href="#${g(f)?.hid || ''}"><span class="numb${n ? '' : ' numb-none'}">${n || '–'}</span><span class="sp-text"><span class="sp-what">${t(g(f)?.headline || titleOf(f.rule), 120)}</span><span class="small">${SEV_LABEL[f.severity]} · ${f.source === 'ai' ? 'AI' : 'Rule'} · ${STATUS_LABEL[statusOf(f)] || 'Open'}${n ? '' : ` · not outlined: ${d.why}`}</span></span></a></li>`).join('')}</ol>` : s.img ? '<p class="pad muted">Nothing found on this screen.</p>' : ''}
+<div class="sp-head"><div><h2 id="h-${s.hid}">${t(nameOf(m, s) || s.route, 80)}</h2><p class="muted small"><span class="mono">${t(s.route)}</span> · ${sceneLabel(s)}</p></div><a href="#screens">Close</a></div>
+${s.img ? shot(s, { boxes, label: `Screenshot of ${s.route}, ${sceneLabelText(s)}${boxes.length ? `, ${plural(boxes.length, 'finding')} outlined and numbered` : ''}`, cls: `shot-${vpCls(s.viewport)}` }) : s.notShared ? `<p class="pad muted">Screenshot not shared: ${notSharedWhy(s)}.</p>` : s.reason === 'redirected-off-origin' ? `<p class="pad muted">This screen sent the browser to another site (<span class="mono">${t((urlShown(m, s) && s.finalOrigin) || 'unknown')}</span>); nunchi does not capture other sites.</p>` : `<p class="pad muted">Not seen: ${t(s.reason || s.status)}.</p>`}
+${s.reason && /^redirected/.test(s.reason) ? (urlShown(m, s) ? `<p class="pad small muted">Redirected to <span class="mono">${t(redactUrl(s.finalPath || ''))}</span>.</p>` : '<p class="pad small muted">Redirected to another page.</p>') : ''}
+${items.length ? `<ol class="sp-list">${items.map(({ f, d, n }) => `<li><a href="#${g(f)?.hid || ''}"><span class="numb${n ? '' : ' numb-none'}">${n || '–'}</span><span class="sp-text"><span class="sp-what">${t((g(f) && headOf(m, g(f))) || titleOf(f.rule), 120)}</span><span class="small">${SEV_LABEL[f.severity]} · ${f.source === 'ai' ? 'AI' : 'Rule'} · ${STATUS_LABEL[statusOf(f)] || 'Open'}${n ? '' : ` · not outlined: ${d.why}`}</span></span></a></li>`).join('')}</ol>` : s.img || s.notShared ? '<p class="pad muted">Nothing found on this screen.</p>' : ''}
 ${sibs.length ? `<details class="sp-sibs small"><summary>Same page, ${plural(sibs.length, 'other screen')}</summary><p>${sibs.map(o => `<a href="#${o.hid}">${sceneLabel(o)}</a>`).join(' ')}</p></details>` : ''}
 </section>`;
   };
@@ -568,27 +602,19 @@ ${imgs}
 `;
 }
 
-export function renderHtml(m, { imageUrl }) {
+// `form`: 'page' (the offline page, with its CSP), or 'fragment' for a Claude artifact (`nunchi share`, spec §7.6): the
+// artifact service wraps the file in a document of its own, so a page's doctype, head and CSP meta would land inside
+// its body, where a browser ignores them; the fragment is the title, the style, the body's content and the script.
+// `pageText`: false leaves page text out (above, `textOff`).
+export function renderHtml(model, { imageUrl, form = 'page', pageText = true }) {
+  const m = pageText === false ? { ...model, pageText: false } : model;
   const scriptHash = createHash('sha256').update(SCRIPT).digest('base64');
   const csp = `default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'sha256-${scriptHash}'; base-uri 'none'; form-action 'none'`;
   const commit = m.meta.commit ? `${String(m.meta.commit).slice(0, 7)}${m.meta.dirty ? ' + edits' : ''}` : 'no git commit';
   const runLabel = m.runId ? `Run ${m.runId}` : 'Run (not numbered)';
   const active = m.groups.filter(g => g.active).length;
   const details = m.groups.map((g, i) => detailView(m, g, m.groups[i - 1], m.groups[i + 1])).join('\n');
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="${csp}">
-<meta name="referrer" content="no-referrer">
-${GENERATOR}
-<title>nunchi · ${t(runLabel)}</title>
-<style>
-${css(m, imageUrl)}</style>
-</head>
-<body>
-<a class="skip" href="#main">Skip to content</a>
+  const body = `<a class="skip" href="#main">Skip to content</a>
 <div class="shell">
 <nav class="side" aria-label="nunchi">
 <div class="side-top"><span class="brand">nunchi</span>
@@ -607,7 +633,22 @@ ${details}
 ${screensView(m)}
 </main>
 </div>
-<script>${SCRIPT}</script>
+<script>${SCRIPT}</script>`;
+  if (form === 'fragment') return `${GENERATOR}\n<title>nunchi · ${t(runLabel)}</title>\n<style>\n${css(m, imageUrl)}</style>\n${body}\n`;
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="${csp}">
+<meta name="referrer" content="no-referrer">
+${GENERATOR}
+<title>nunchi · ${t(runLabel)}</title>
+<style>
+${css(m, imageUrl)}</style>
+</head>
+<body>
+${body}
 </body>
 </html>
 `;
@@ -639,14 +680,14 @@ export function within(parent, child) {
 // data URIs inside index.html and no image is written. Nothing else in outDir is touched, and nothing is replaced
 // that an earlier export did not write: an index.html without the generator marker, a symlink, or an img/ folder
 // with files of the user's own is refused before anything changes.
-export function exportHtml({ runDir, nunchiDir, outDir, inline = false, ledger = null }) {
+export function exportHtml({ runDir, nunchiDir, outDir, inline = false, ledger = null, pageText = true }) {
   if (within(join(nunchiDir, 'runs'), outDir)) refuse('write the page outside .nunchi/runs (runs are evidence and are never edited)');
   if (within(runDir, outDir)) refuse('write the page outside the run folder');
   const m = buildModel({ runDir, nunchiDir, ledger });
   const imageUrl = inline
     ? key => `"data:image/jpeg;base64,${readFileSync(m.images.get(key).file).toString('base64')}"`
     : key => `"img/${key}.jpg"`;
-  const html = renderHtml(m, { imageUrl });
+  const html = renderHtml(m, { imageUrl, pageText });
 
   // check everything first
   const out = lstatOr(outDir);
@@ -685,7 +726,7 @@ export function exportHtml({ runDir, nunchiDir, outDir, inline = false, ledger =
   setMode(tmp, 0o600);
   renameSync(tmp, index);
   return {
-    out: index, run: m.runId, inline, bytes, images: keys.length,
+    out: index, run: m.runId, inline, bytes, images: keys.length, ...(pageText === false ? { pageText: false } : {}),
     scenes: m.scenes.length, groups: m.groups.length, open: m.groups.filter(g => g.active).length, inLedger: m.inLedger,
   };
 }
