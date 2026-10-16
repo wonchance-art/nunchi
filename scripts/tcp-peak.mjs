@@ -3,8 +3,11 @@
 // are in use. A Windows runner refused Chromium a connection to a board in the suite with net::ERR_NO_BUFFER_SPACE
 // (WSAENOBUFS, PR #36, 2026-10-16 KST): Windows had no room for one more socket, which it says when no port of that
 // range is free, or no memory for the socket. Measured on Linux (2026-10-16 KST), the whole suite opens 1,069 loopback
-// connections, at most 191 at once. The board e2e helper (test/fixtures/board-browser.mjs) says this line when a wait
-// fails, and CI runs the suite through this script, which samples the table while it runs:
+// connections, at most 191 at once; sampled here on the Windows runners of PR #42 (16:35–16:51 KST, Node 20, 22, 24), at
+// most 240, 252 and 259 of the 16,384 ports of its range were in use at once (484 in TIME_WAIT at most), fewer than on
+// Linux (291), where it never failed: the suite does not run Windows out of ports. The board e2e helper
+// (test/fixtures/board-browser.mjs) says this line when a wait fails, so a failure says what the machine held then;
+// CI runs the suite through this script, which samples the table while it runs:
 //   node scripts/tcp-peak.mjs <command> [args…]
 // → the command's exit code; at the end one line: the most ports in use at once, when, and the states then.
 // Read from /proc on Linux; from netstat (and netsh, sysctl for the range) on Windows and macOS, by absolute path.
