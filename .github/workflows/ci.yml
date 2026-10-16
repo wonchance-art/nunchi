@@ -55,7 +55,12 @@ jobs:
         with:
           node-version: 22
       - name: Copy the repository without node_modules
-        run: mkdir "$RUNNER_TEMP/fresh" && git archive HEAD | tar -x -C "$RUNNER_TEMP/fresh"
+        run: |
+          # Git Bash's tar reads D:\a\… as host:path: on Windows it gets the same folder as a POSIX path
+          dest="$RUNNER_TEMP/fresh"
+          if [ "$RUNNER_OS" = "Windows" ]; then dest="$(cygpath -u "$RUNNER_TEMP")/fresh"; fi
+          mkdir -p "$dest" && git archive HEAD | tar -x -f - -C "$dest"
+          test -f "$dest/src/cli.mjs" && test -f "$dest/package-lock.json" && test ! -e "$dest/node_modules"
       - name: Not set up yet is reported, not crashed
         working-directory: ${{ runner.temp }}/fresh
         run: |
