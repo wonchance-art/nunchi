@@ -419,7 +419,7 @@ computed, never the mock-up's:
   progress*, precisely: a capture's last progress is its progress file's modification time (the CLI rewrites the file
   after each route × person × viewport), or its folder's while it has none; it made no progress for 10 minutes when now
   − that time ≥ 10 minutes (`runs.mjs` `captureStates`, `STALE_MS`: at 9:59 it is running, at 10:00 not; tested with an
-  injected clock, never by waiting). By its writer (the owner's decisions on the review of PR #36, 2026-10-15 KST):
+  injected clock, never by waiting). By its writer (the owner's decisions on the review of PR #36, 2026-10-16 KST):
   - a writer that runs on this machine keeps the capture running, however long (a laptop asleep, a long end phase:
     "capture again" would start a second capture beside it); after 10 minutes without progress its line says so in
     place of the time left: "Capture running · run 0007 · 12 of 25 screens (no progress for 10 min)" (and the first
@@ -448,13 +448,17 @@ computed, never the mock-up's:
 *Choices (M5b).* (1) The stopped line says the rule's "10 min", not a count that grows: it stays the same while the
 folder stays, so the polite live region does not announce it again every minute, and "no progress for 10 min" is true
 for as long as it shows. (2) A writer known to be gone says "(its process ended)", and keeps saying it (the owner's
-decision: it never turns into "no progress for 10 min" and is never announced twice). (3) The verdict choice above (the
+decision ①: it never turns into "no progress for 10 min" and is never announced twice). (3) The verdict choice above (the
 recommended one). (4) No "has not started" line while another capture runs or after one stopped: "full check" then
 would start a second capture, or contradict the stopped line, whose "capture again" is the same step (the skill: step
 5). (5) The running line does not repeat a partial check's "· skipped …" (the first look's line keeps it): the owner's
 line has none. (6) "No progress for 10 minutes" moved from M5's "more than 10 minutes" to "10 minutes or more", so the
 owner's words hold at 10:00. (7) `findings` no longer prints "run N is a quick first look … no full check is running":
-the owner's line says it.
+the owner's line says it. (8) The owner's decisions on the review of PR #36 (2026-10-16 KST, the recommended options):
+① "(its process ended)" once the writer is known to be gone, for good (above); ② one "Not checked yet" card per page,
+in a section of its own, never counted as a screen (§7.5); ③ a writer that runs on this machine keeps its capture
+running, with "(no progress for 10 min)" in place of the time left and no "capture again"; only a writer that cannot be
+asked stops at 10:00 (above).
 
 *Review of PR #36 (2026-10-15 KST).* The Now lines are announced as §7.2 now says (what changed, a change inside the
 10 s said once they pass): a capture that stopped was never heard when "Full check done" was the first line, or when it
@@ -477,6 +481,12 @@ Now lines, the version (how far, why) and Coverage's newest capture (`test/board
 "Full check done" and inside the 10 s, a hunt's progress (M6) announced below a capture's line, and the search kept
 through a live redraw (`test/board-m5b-e2e.test.mjs`); the
 CLI's progress file naming its machine (`test/quick-cli.test.mjs`). Each fails without its fix (checked by undoing it).
+For the owner's decisions (2026-10-16 KST): ① no flip at 10:00: the line, the version and so the announcements stay
+(nothing is said again past the board's polls and the announcer's 10 s); ② the pages apart from the screens on Leafy's
+first look: Progress's "Screens checked 12 of 12", the sidebar's 12, the heading "3 pages, 12 screens", the chips,
+"6 shown of 12", the filters' counts and "0 not checked" all count the screens, a screen that did not load stays "Not
+checked", and the section's axe, contrast, forced colours and keys (End, Home, Space, Enter); ③ a writer on this machine
+against another machine's, at 9:59.999 and at 10:00 (`test/board-m5b.test.mjs`, `test/board-m5b-e2e.test.mjs`).
 
 *Measured (M5b, 2026-10-15 KST, this development container, shared with other sessions).* With the review of PR #36,
 on the merged head `f7f5ab0` (M4, #37 and M6 merged in): 806 tests on Node 22.22.0 (21:04–21:11), on Node 24.21.0
@@ -2566,7 +2576,7 @@ with the last full check.
   chip, and, while no full check has been made (after one, the last full check checked those pages: Coverage shows
   how), each page its `flow.json` names that it did not open (less a page that needs a sample address, which the
   full check skips too) is one card, "Not checked yet", in a section of its own after the page groups ("Not checked yet
-  · 4 pages"; the owner's decision on the review of PR #36): no screenshot, no finding, nothing to open (Enter or Space
+  · 4 pages"; the owner's decision on the review of PR #36, 2026-10-16 KST): no screenshot, no finding, nothing to open (Enter or Space
   shows what it is, with the first look's line). They are pages, not screens: shown under Show "All" and the search
   whatever the width, who and state; never in a screen count (the heading, "N shown of M", the filters' counts, "not
   checked", Progress's "Screens checked"); "Not checked" keeps the captured screens that did not load; the page groups

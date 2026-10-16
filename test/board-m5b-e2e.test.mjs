@@ -13,6 +13,7 @@ import { chromium } from 'playwright-core';
 import { openBoard, closeBoards } from './fixtures/board-browser.mjs';
 import { leafy } from './fixtures/coverage-project.mjs';
 import { writeRun, scene } from './fixtures/board-project.mjs';
+import { spawnSync } from 'node:child_process';
 import { tmp } from './fixtures/tmp.mjs';
 import { stableJson, thisMachine } from '../src/stable.mjs';
 import { noteHunt } from '../src/activity.mjs';
@@ -57,6 +58,8 @@ test('m5b e2e: the wall during a first look — "First look" and "Not checked ye
     const s = await open(p, { colorScheme: scheme, viewport: { width, height: 900 } });
     const { page } = s;
     try {
+      // Progress counts the screens: 12 of 12 checked, and the sidebar's Screens 12 (the owner's decision ②)
+      assert.deepEqual(await page.evaluate(() => [document.querySelector('.meter-row a').textContent, document.getElementById('nav-screens').textContent]), ['12 of 12', '12']);
       await page.evaluate(() => { location.hash = '#/screens'; });
       await page.waitForSelector('#h-screens');
       const c = await chips(page);
@@ -64,6 +67,15 @@ test('m5b e2e: the wall during a first look — "First look" and "Not checked ye
       // card each, in a section of their own; the counts are the screens'
       assert.deepEqual([c.first.n, c.first.words, c.notYet.n, c.notYet.words], [6, ['First look'], 4, ['Not checked yet']], scheme);
       assert.deepEqual([c.heading, c.counts], ['Not checked yet · 4 pages', ['3 pages, 12 screens · every one nunchi captured in run 0001, as it saw it', '6 shown of 12']]);
+      // the filters and the facts count the screens only: Desktop 6, Phone 6, Not checked 0, 0 not checked
+      const counts = await page.evaluate(() => {
+        const btn = id => document.querySelector(`#${id} .cnt`)?.textContent.trim() ?? null;
+        const opts = id => [...(document.getElementById(id)?.options || [])].map(o => o.textContent);
+        return { vp: btn('wall-vp-d') !== null ? [btn('wall-vp-d'), btn('wall-vp-m')] : opts('wall-vp').slice(0, 2), not: btn('wall-show-not') ?? opts('wall-show').find(x => x.startsWith('Not checked')),
+          facts: document.querySelector('.facts-inline').textContent, pages: [...document.querySelectorAll('#wall-notyet ul.wall > li.card > button[aria-label]')].map(b => b.getAttribute('aria-label')) };
+      });
+      assert.deepEqual(counts, { vp: width > 760 ? ['6', '6'] : ['Desktop (6)', 'Phone (6)'], not: width > 760 ? '0' : 'Not checked (0)', facts: '2 with open findings10 clean0 not checked6 shown of 12',
+        pages: ['/checkout: Not checked yet', '/garden/[plot]: Not checked yet', '/help: Not checked yet', '/login: Not checked yet'] }, scheme);
       assert.ok(c.first.least >= 4.5 && c.notYet.least >= 4.5, `${scheme}: ${c.first.least.toFixed(2)}:1, ${c.notYet.least.toFixed(2)}:1`);
       assert.match(c.firstName, /^Plant shelf, Visitor · Desktop · Normal: .+\. First look/);
       assert.equal(c.notYetName, '/checkout: Not checked yet');
@@ -77,6 +89,16 @@ test('m5b e2e: the wall during a first look — "First look" and "Not checked ye
         open: !!document.getElementById('sp-open'), hash: location.hash }));
       assert.deepEqual(panel, { h: '/checkout', chip: 'Not checked yet', text: 'First look: 3 key screens · the full check has not started — tell your AI “full check”', open: false,
         hash: `#/screen/${encodeURIComponent('0001/not-yet:/checkout')}` });
+      // the keyboard walks the screens and the pages as one wall: End to the last page, Home back to the first screen,
+      // Space on a page shows it (by key position: Playwright presses by code)
+      await page.focus('[data-key="0001/not-yet:/checkout"]');
+      await page.keyboard.press('End');
+      assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-key')), '0001/not-yet:/login');
+      await page.keyboard.press('Space');
+      await page.waitForFunction(() => document.getElementById('panel-h')?.textContent === '/login');
+      await page.focus('[data-key="0001/not-yet:/login"]');
+      await page.keyboard.press('Home');
+      assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-key')), '0001/~.guest.normal.d');
       assert.deepEqual(s.errors, []);
     } finally { await s.close(); }
   }
@@ -194,6 +216,32 @@ test('m5b e2e (review): a hunt\'s progress line (M6) is announced too, though a 
     assert.match(await page.evaluate(() => [...document.querySelectorAll('.now li')].map(l => l.textContent).join('\n')), /^Capture running · run 0005 .*\nCodex · AI review L6 · 12\/40 units · just started$/);
     hunt(13);
     await page.waitForFunction(() => window.__said.some(x => x.includes('Codex · AI review L6 · 13/40 units')), null, { timeout: 25000 });
+    assert.deepEqual(s.errors, []);
+  } finally { await s.close(); }
+});
+
+test('m5b e2e (owner\'s decision ①): a capture whose writer is gone says "its process ended" once, and still after 10 minutes — no flip, no second announcement', { timeout: 90000 }, async t => {
+  if (!browserOk) return t.skip('no Chromium found (set NUNCHI_BROWSER)');
+  const p = leafy({ probes: false });
+  const dir = join(p.nunchi, 'runs', '0005.partial');
+  const dead = spawnSync(process.execPath, ['-e', '0']).pid;                       // a process that has ended, on this machine
+  const doc = JSON.stringify({ schema: 1, kind: 'sweep', wholeApp: true, routes: 25, done: 12, routeMs: Array(12).fill(27000), pid: dead, ...thisMachine() });
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'progress.json'), doc);
+  const ENDED = 'Capture stopped · run 0005 (its process ended) — tell your AI “capture again”';
+  const s = await open(p);
+  const { page } = s;
+  try {
+    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('.now li')].map(l => l.textContent)), [ENDED]);
+    // (what the page said on load is said by then; listen from here)
+    await page.waitForTimeout(500);
+    await page.evaluate(() => { window.__said = []; new MutationObserver(() => { const x = document.getElementById('announce').textContent; if (x) window.__said.push(x); }).observe(document.getElementById('announce'), { childList: true, characterData: true, subtree: true }); });
+    // its last progress now 11 minutes ago: the line and the version stay, so nothing is said again (past the board's
+    // 3 s polls and the announcer's 10 s)
+    const old = new Date(Date.now() - 11 * 60e3);
+    utimesSync(join(dir, 'progress.json'), old, old);
+    await page.waitForTimeout(11000);
+    assert.deepEqual(await page.evaluate(() => [[...document.querySelectorAll('.now li')].map(l => l.textContent), window.__said.filter(x => /Capture/.test(x))]), [[ENDED], []]);
     assert.deepEqual(s.errors, []);
   } finally { await s.close(); }
 });

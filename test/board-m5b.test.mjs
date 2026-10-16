@@ -207,7 +207,20 @@ test('the wall during a first look: "First look" on its key screens; before any 
     // the pages it did not open (its flow names every page), one card per page, apart from the screens, in the flow's
     // order (this fixture's flow orders only the pages it opened: the others by name)
     assert.deepEqual(w.notYet, ['/checkout', '/garden/[plot]', '/help', '/login'].map(route => ({ key: `0001/not-yet:${route}`, run: '0001', route, look: 'not-yet' })));
+    // Progress counts the same screens (the owner's decision ②: pages are never screens)
+    assert.deepEqual((await call('/api/summary')).health.scenes, { total: 12, checked: 12, notSeen: 0, reasons: [] });
   } finally { await b.close(); }
+  // a captured screen that did not load is "Not checked" (a screen), and the pages not opened stay pages
+  const manifest = join(p.nunchi, 'runs', '0001', 'manifest.json');
+  const m = JSON.parse(readFileSync(manifest, 'utf8'));
+  writeFileSync(manifest, stableJson({ ...m, scenes: m.scenes.map(x => (x.id === 'cart.guest.normal.d' ? { ...x, status: 'capture-failed', reason: 'no-dom', finalPath: null } : x)) }));
+  ({ b, call } = await board(p));
+  try {
+    const w = await call('/api/screens');
+    assert.deepEqual([w.scenes.length, w.scenes.filter(x => !x.checked).map(x => x.id), w.notYet.length], [12, ['cart.guest.normal.d'], 4]);
+    assert.deepEqual((await call('/api/summary')).health.scenes, { total: 12, checked: 11, notSeen: 1, reasons: ['no-dom'] });
+  } finally { await b.close(); }
+  writeFileSync(manifest, stableJson(m));
   // a page that needs a sample address is skipped by the full check too: not "not checked yet"
   const meta = join(p.nunchi, 'runs', '0001', 'run.json');
   writeFileSync(meta, stableJson({ ...JSON.parse(readFileSync(meta, 'utf8')), skipped: [{ route: '/garden/[plot]', reason: 'needs-sample' }] }));
@@ -327,8 +340,15 @@ test('review: the live version changes with how far a capture is, and with its r
     assert.notEqual(await version(), v3, 'still running, another reason');
     assert.equal((await call('/api/summary')).now[0], 'Capture running · run 0005 · 2 of 25 screens (no progress for 10 min)');
     // its writer gone (this machine): stopped, "its process ended"
-    prog({ ...SWEEP, done: 2, routeMs: [27000, 27000], pid: spawnSync(process.execPath, ['-e', '0']).pid });
-    assert.equal((await call('/api/summary')).now[0], 'Capture stopped · run 0005 (its process ended) — tell your AI “capture again”');
+    const dead = spawnSync(process.execPath, ['-e', '0']).pid;
+    prog({ ...SWEEP, done: 2, routeMs: [27000, 27000], pid: dead });
+    const ENDED = 'Capture stopped · run 0005 (its process ended) — tell your AI “capture again”';
+    assert.equal((await call('/api/summary')).now[0], ENDED);
+    // the owner's decision ①: past 10 minutes it stays "its process ended" and the version stays, so it is said once
+    const v4 = await version();
+    prog({ ...SWEEP, done: 2, routeMs: [27000, 27000], pid: dead }, Date.now() - 11 * MIN);
+    assert.equal(await version(), v4, 'no flip at 10:00: nothing to announce again');
+    assert.equal((await call('/api/summary')).now[0], ENDED);
     // two captures running: Coverage says the newest, as Progress lists both
     rmSync(dir, { recursive: true });
     partial({ runs: join(p.nunchi, 'runs') }, '0005', { ...SWEEP, done: 1, routeMs: [27000] });
