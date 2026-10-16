@@ -827,7 +827,9 @@ function ask(text, ok = 'Yes', more = null) {
   return new Promise(res => {
     const dlg = $('dialog');
     const no = h('button', { type: 'button', class: 'b' }, 'Cancel'), yes = h('button', { type: 'button', class: 'b b-primary' }, ok);
-    dlg.replaceChildren(h('h2', { id: 'dialog-title' }, text), more ? h('p', { class: 'small dialog-more' }, more) : null, h('div', { class: 'dialog-actions' }, no, yes));
+    dlg.replaceChildren(h('h2', { id: 'dialog-title' }, text), more ? h('p', { class: 'small dialog-more', id: 'dialog-desc' }, more) : null, h('div', { class: 'dialog-actions' }, no, yes));
+    // the paragraph under the question (the consent, for Turn on) is the dialog's description: read with its name
+    if (more) dlg.setAttribute('aria-describedby', 'dialog-desc'); else dlg.removeAttribute('aria-describedby');
     const done = v => { dlg.close(); res(v); };
     no.addEventListener('click', () => done(false)); yes.addEventListener('click', () => done(true));
     dlg.addEventListener('cancel', () => res(false), { once: true });
@@ -839,6 +841,7 @@ function dialog(title, ...body) {
   const close = h('button', { type: 'button', class: 'b' }, 'Close');
   close.addEventListener('click', () => dlg.close());
   dlg.replaceChildren(h('h2', { id: 'dialog-title' }, title), ...body, h('div', { class: 'dialog-actions' }, close));
+  dlg.removeAttribute('aria-describedby');
   dlg.showModal(); close.focus();
 }
 function help() {

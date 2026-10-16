@@ -160,6 +160,11 @@ test('share board e2e: Turn on asks first with Cancel focused (Esc cancels, noth
       buttons: [...document.querySelectorAll('dialog .dialog-actions button')].map(b => b.textContent) }));
     assert.deepEqual([dlg.title, dlg.focus, dlg.buttons], ['Send screenshots of shop to Google Drive · My Drive/nunchi/shop after each full check? Signed-in screens and page text stay out.', 'Cancel', ['Cancel', 'Turn on']]);
     assert.match(dlg.more, /A screenshot can still show anything that is on the screen\.$/);
+    // the consent under the question is the dialog's accessible description (read with its name)
+    const cdp = await page.context().newCDPSession(page);
+    const ax = (await cdp.send('Accessibility.getFullAXTree')).nodes.find(n => n.role?.value === 'dialog');
+    assert.deepEqual([ax?.name?.value, ax?.description?.value], [dlg.title, dlg.more]);
+    await cdp.detach();
     assert.deepEqual(await axe(page), [], 'the dialog');
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector('dialog[open]'));
