@@ -488,17 +488,18 @@ first look: Progress's "Screens checked 12 of 12", the sidebar's 12, the heading
 checked", and the section's axe, contrast, forced colours and keys (End, Home, Space, Enter); ③ a writer on this machine
 against another machine's, at 9:59.999 and at 10:00 (`test/board-m5b.test.mjs`, `test/board-m5b-e2e.test.mjs`).
 
-*Measured (M5b, 2026-10-15 KST, this development container, shared with other sessions).* With the review of PR #36,
-on the merged head `f7f5ab0` (M4, #37 and M6 merged in): 806 tests on Node 22.22.0 (21:04–21:11), on Node 24.21.0
-(21:11–21:16) and on Node 22 with bun off `PATH` (21:16–21:22), Chromium required (`NUNCHI_REQUIRE_BROWSER`), each run
-in a temp folder of its own: 805 pass and 1 skipped (Windows only) each time; `npm run validate:plugin` passes; `node
-bench/run.mjs --twice` (21:22–21:28) unchanged: rule recall 34/34, 0 false positives on 8 clean scenes, determinism
-identical (1,141 files), fingerprints 100% (52/52), 181.8 s per capture. Two bench attempts found the benchmark app
-unreachable in the replay run (18:50, with the load average near 30 on 4 CPUs; 20:28, while another session's
-benchmark used the same port), so their evidence differed; each rerun on a quieter machine is the result. CI on Windows
-with Node 24 failed M2's live-update test once (the stream reported the first of a decision's two generation bumps
-before the poll saw the second); the test now waits for the stream to settle on the polled version. Before the review
-(18:20–19:04, head `54ecffa`) the same gates gave 742 tests, 741 pass, and the same bench.
+*Measured (M5b, this development container, shared with other sessions).* With the owner's decisions (2026-10-16 KST),
+on the merged head `4a38bc0` (M4, #37, M6, #38 and #39 merged in), 2026-10-16 KST: 823 tests on Node 22.22.0
+(13:00–13:05), on Node 24.21.0 (13:05–13:09) and on Node 22 with bun off `PATH` (13:09–13:13), each run as CI runs it
+(`node scripts/tmp-leftovers.mjs npm test`: nothing left in its temporary folder) with Chromium required
+(`NUNCHI_REQUIRE_BROWSER`): 822 pass and 1 skipped (Windows only) each time; `npm run validate:plugin` passes; `node
+bench/run.mjs --twice` (13:13–13:18) unchanged: rule recall 34/34, 0 false positives on 8 clean scenes, determinism
+identical (1,141 files), fingerprints 100% (52/52), 128.5 s per capture. On 2026-10-15 KST two bench attempts found the
+benchmark app unreachable in the replay run (18:50, with the load average near 30 on 4 CPUs; 20:28, while another
+session's benchmark used the same port), so their evidence differed; each rerun on a quieter machine gave the same
+numbers. CI on Windows with Node 24 failed M2's live-update test once (the stream reported the first of a decision's two
+generation bumps before the poll saw the second); the test now waits for the stream to settle on the polled version
+(also in #38).
 
 **Skill.** A first look, then the full check: `capture --quick`, `findings`, then `capture` started in the background
 and `open` (review of PR #36: so the board opens on the full check running, not on "has not started" and two more
