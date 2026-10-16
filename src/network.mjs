@@ -32,6 +32,21 @@ export function isLocalHost(host) {
 const listed = entry => { try { return bare(new URL(String(entry).includes('://') ? entry : `http://${entry}`).hostname); } catch { return null; } };
 const parse = url => { try { return new URL(url); } catch { return null; } };
 // null when the URL may be captured, else why not.
+// A saved login (Playwright storageState, from `nunchi login`) works only at the host it was saved at: cookies are kept
+// per host, and `localhost` and `127.0.0.1` are two hosts. → the hosts it holds cookies or storage for, when none of
+// them is the host of `baseUrl` (or a parent domain of it, for a cookie); null when one is, or when it names no host.
+// Host names only, never a cookie or a value (the state holds live sessions).
+export function loginElsewhere(state, baseUrl) {
+  let host;
+  try { host = bare(new URL(baseUrl).hostname); } catch { return null; }
+  const cookies = Array.isArray(state?.cookies) ? state.cookies.map(c => bare(String(c?.domain ?? '')).replace(/^\./, '')).filter(Boolean) : [];
+  const origins = Array.isArray(state?.origins) ? state.origins.map(o => { try { return bare(new URL(String(o?.origin)).hostname); } catch { return ''; } }).filter(Boolean) : [];
+  const hosts = [...new Set([...cookies, ...origins])].sort();
+  if (!hosts.length) return null;
+  if (cookies.some(d => host === d || host.endsWith('.' + d)) || origins.includes(host)) return null;
+  return hosts;
+}
+
 export function baseUrlProblem(url, allowHosts = []) {
   const u = parse(url);
   if (!u) return 'not a URL (expected something like http://localhost:3000)';

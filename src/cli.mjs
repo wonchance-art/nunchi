@@ -6,7 +6,7 @@ import { readFileSync, existsSync, rmSync, readdirSync } from 'node:fs';
 import { discover } from './discover.mjs';
 import { buildSourceMap, affectedRoutes, sourceHashes } from './sourcemap.mjs';
 import { startRun, finishRun, gcRuns, latestRun, latestSweep, PROGRESS_FILE, workTree, ensureGitignore, ensurePrivate, readConfig, gitRunner, DIFF_SAFE } from './runs.mjs';
-import { baseUrlRefusal } from './network.mjs';
+import { baseUrlRefusal, loginElsewhere } from './network.mjs';
 import { codeNavigations } from './flow.mjs';
 import { readDecisions, approvalKey, buildDecision, view, DECISIONS, NOT_LOOKED_RUNS, STALE_HUNTS, latestRunOf, latestSweepOf } from './ledger.mjs';
 import { ensureStateDir, writeKey, readKey, removeKey, removeKeys, keyPath, peekKey } from './state.mjs';
@@ -381,6 +381,12 @@ if (cmd === 'setup') {
     }
   }
   const auth = args.auth ? resolve(args.auth) : existsSync(resolve('.nunchi/auth.json')) ? resolve('.nunchi/auth.json') : null;
+  // a login saved at another host than --url (signed in at 127.0.0.1, captured at localhost) sends no cookie: said before
+  // the capture, and again with the run problem it causes (host names only)
+  let loginHosts = null;
+  if (auth && args.url) { try { loginHosts = loginElsewhere(JSON.parse(readFileSync(auth, 'utf8')), args.url); } catch {} }
+  const loginHere = loginHosts ? `the saved login is for ${loginHosts.join(', ')}, not ${new URL(args.url).hostname} (a login works only at the address it was saved at): capture at that address, or run \`nunchi login --url ${args.url}\` to sign in here` : null;
+  if (loginHere) console.error(`warning: ${loginHere}`);
   if (args.changedSince) {
     const map = buildSourceMap(root, discover(root).routes);
     let changed;
@@ -552,6 +558,7 @@ if (cmd === 'setup') {
       }
       if (fixBranch) console.log(`This ran on the fix branch ${fixBranch}: it is kept apart as a fix probe (nunchi runs --all lists it) and does not change the findings. nunchi fix --verify judges a fix; capture on your main branch for a sweep.`);
       const why = { 'login-expired': 'the saved login no longer works: signed-in screens showed the sign-in page and were not judged. Run `nunchi login` again.', 'app-unreachable': 'most screens did not load at all. Is the app running at --url?', 'recording-stale': 'most screens asked for data the recording does not have. Re-record with --network record.' };
+      if (loginHere) why['login-expired'] = `signed-in screens showed the sign-in page and were not judged: ${loginHere}.`;
       for (const p of r.manifest.health.problems) console.log(`RUN PROBLEM ${p.status} (${p.scenes}/${p.of} screens): ${why[p.status]}`);
       console.log(`rule findings: blocker ${by.blocker} · high ${by.high} · medium ${by.medium} · low ${by.low}`);
       console.log(`network: ${Object.entries(r.run.network).map(([p, m]) => `${p} ${m}`).join(' · ')}`);
