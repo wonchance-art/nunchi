@@ -29,6 +29,11 @@ another command is also called `nunchi`). The first time, it runs `nunchi setup`
 pinned packages from the lockfile if Claude Code did not already install them with the plugin (`npm ci
 --ignore-scripts`, so no install scripts run).
 
+**Updates.** The plugin carries no version number, so each commit on `main` is an update. Get it with
+`claude plugin marketplace update nunchi` and `claude plugin update nunchi@nunchi`, or turn on auto-update for the
+nunchi marketplace (`/plugin` → Marketplaces; Claude Code then checks after your first message in a session). An
+open session keeps the old copy until `/reload-plugins`; a new session loads the update.
+
 The plugin adds no `nunchi` command to your PATH. A few steps are yours to run in your own terminal (`nunchi login`
 with a test account, approving the check scripts, adding guards): `nunchi setup --check` prints the command to use
 there, `node "<where the plugin is>/src/cli.mjs"`, and Claude gives you the whole line when it asks.
@@ -141,3 +146,6 @@ Claude Code에서 `/plugin marketplace add wonchance-art/nunchi` → `/plugin in
 스크립트 없이) 받습니다. 플러그인은 PATH에 `nunchi` 명령을 추가하지 않으므로, 내 터미널에서 직접 할 일(`login`, 검사
 스크립트 승인, 방지 규칙 추가)은 `nunchi setup --check`가 알려 주는 `node "…/src/cli.mjs"` 명령으로 실행합니다. 실제
 앱에서 틀리게 잡는 것이 있으면 알려 주세요.
+업데이트: 플러그인에 버전 번호를 두지 않아서 `main`의 커밋 하나하나가 업데이트입니다. `claude plugin marketplace update nunchi`
+→ `claude plugin update nunchi@nunchi`, 또는 `/plugin` → Marketplaces에서 nunchi의 자동 업데이트를 켜 둡니다(세션에서 첫
+메시지를 보낸 뒤 확인합니다). 열려 있던 세션은 `/reload-plugins` 뒤에, 새 세션은 바로 새 판을 씁니다.

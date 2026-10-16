@@ -24,7 +24,7 @@
   },
   "scripts": {
     "test": "node --test --test-timeout=240000",
-    "validate:plugin": "claude plugin validate --strict .",
+    "validate:plugin": "node scripts/validate-plugin.mjs .",
     "bench": "node bench/run.mjs --twice"
   },
   "keywords": [

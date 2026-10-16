@@ -3001,6 +3001,12 @@ comparison.
   (skills, "How a skill gets its command name"): a plugin skill is `/plugin-name:skill-name`, and the bare `/name`
   also invokes it unless another command already uses that name. The README says `/nunchi`, with the full name for
   that case.
+- *Resolved 2026-10-16 KST:* the plugin carries no `version` (plugin.json, marketplace entry), so Claude Code takes
+  the commit as its version and each commit on `main` reaches `claude plugin update`. Claude Code caches an installed
+  plugin per version: with `version` pinned at 0.0.2, an update said "already at the latest version" and kept the old
+  copy until someone bumped it (Claude Code docs, plugins, "Versions and updates"). Auto-update for a third-party
+  marketplace is off by default; the README says how to turn it on. `nunchi --version` still prints package.json's
+  version. `test/plugin-manifest.test.mjs` fails if a version is pinned again.
 - *Found in the same rehearsal:* a marketplace install now has `node_modules` already (Claude Code installs a plugin's
   npm dependencies from its lockfile, with `--ignore-scripts`, when it caches it), so the first `nunchi setup` downloads
   Chromium only; `setup` still installs the packages where they are missing (a clone, a local-path marketplace). The

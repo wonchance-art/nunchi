@@ -77,7 +77,7 @@ jobs:
         run: node --test test/cli-runs.test.mjs test/setup.test.mjs
 
   plugin:
-    name: plugin manifests (claude plugin validate --strict)
+    name: plugin manifests (claude plugin validate, strict but for the unpinned version)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:

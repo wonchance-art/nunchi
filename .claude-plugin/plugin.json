@@ -1,6 +1,5 @@
 {
   "name": "nunchi",
-  "version": "0.0.2",
   "description": "Preview: captures every screen and state of your web app (phone and desktop, empty, error, slow, offline), finds UI defects with evidence, double-checks the AI findings, shows them on a live local board where you decide, and fixes what you decided on a branch, keeping a fix only when a re-capture shows the defect gone.",
   "author": {
     "name": "wonchance-art"
